@@ -1,2 +1,116 @@
 # campello_widgets
-A C++20 widgets library inspired by Flutter widgets.
+
+A C++20 UI framework inspired by Flutter's widget composition model, built on top of `campello_gpu` for rendering and `campello_input` for input handling.
+
+## Overview
+
+`campello_widgets` provides a declarative, composable approach to building graphical user interfaces in C++. The design philosophy mirrors Flutter's three-tree architecture — a **Widget tree**, an **Element tree**, and a **RenderObject tree** — giving you the expressiveness of a modern UI toolkit with the performance of native C++.
+
+The library is fully multiplatform and targets:
+
+- Windows
+- macOS
+- Linux
+- iOS
+- Android
+
+## Dependencies
+
+| Package | Role |
+|---|---|
+| `campello_gpu` | Graphics rendering backend (multiplatform) |
+| `campello_input` | Input event handling (keyboard, mouse, touch, gamepad) |
+
+## Architecture
+
+### Three-Tree Model
+
+The framework follows the same rendering pipeline as Flutter:
+
+```
+Widget Tree         Element Tree        RenderObject Tree
+(immutable          (mutable            (layout + paint)
+ descriptions)       instances)
+```
+
+- **Widget** — a lightweight, immutable description of a piece of UI. Cheap to create and discard.
+- **Element** — the live instance of a widget in the tree. Manages the widget lifecycle and reconciliation between rebuilds.
+- **RenderObject** — owns layout and painting. Communicates with `campello_gpu` to issue draw calls.
+
+### Widget Types
+
+```cpp
+// Describes UI without mutable state
+class StatelessWidget : public Widget { ... };
+
+// Owns mutable state; rebuilds when state changes
+class StatefulWidget : public Widget { ... };
+
+// Directly controls layout and painting
+class RenderObjectWidget : public Widget { ... };
+```
+
+### Layout Protocol
+
+Layout follows a **constraints-down, sizes-up** protocol identical to Flutter's box model:
+
+1. Parent passes `BoxConstraints` (min/max width and height) down to children.
+2. Each child computes its own size within those constraints.
+3. Parent uses the reported size to position the child.
+
+### Rendering
+
+All draw calls are issued through `campello_gpu`. The RenderObject tree is traversed each frame; dirty subtrees are repainted into GPU-backed layers that are then composited.
+
+### Input
+
+Input events (pointer, keyboard, touch) are received from `campello_input` and dispatched down the widget tree through a hit-testing pass on the RenderObject tree.
+
+## Basic Widgets
+
+| Widget | Description |
+|---|---|
+| `Container` | Box with optional padding, margin, decoration, and child |
+| `Row` / `Column` | Linear layout along horizontal / vertical axis |
+| `Stack` | Overlapping children with absolute or relative positioning |
+| `Padding` | Applies insets around a single child |
+| `Align` | Positions a child within itself using an alignment value |
+| `SizedBox` | Forces a child (or empty space) to a specific size |
+| `Text` | Renders a styled text string |
+| `Image` | Renders a GPU texture |
+| `GestureDetector` | Wraps a child and listens for pointer/touch gestures |
+| `Scaffold` | Top-level layout structure (background, layers) |
+
+## Example (Planned API)
+
+```cpp
+class MyApp : public StatelessWidget {
+public:
+    WidgetRef build(BuildContext& ctx) const override {
+        return Container::create({
+            .padding = EdgeInsets::all(16.0f),
+            .child = Column::create({
+                .children = {
+                    Text::create("Hello, campello_widgets!"),
+                    SizedBox::create({.height = 8.0f}),
+                    Text::create("Built with C++20"),
+                }
+            })
+        });
+    }
+};
+```
+
+## Build System
+
+The project uses CMake with C++20 as the minimum standard. `campello_gpu` and `campello_input` are consumed as CMake package dependencies.
+
+```cmake
+find_package(campello_gpu REQUIRED)
+find_package(campello_input REQUIRED)
+target_link_libraries(my_app PRIVATE campello_widgets)
+```
+
+## License
+
+See [LICENSE](LICENSE).

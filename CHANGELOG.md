@@ -1,0 +1,25 @@
+# Changelog
+
+All notable changes to campello_widgets will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.1.0] - 2026-03-22
+
+### Added
+
+- Project scaffolding: CMake build system (C++20), platform dispatchers for macOS, iOS, Android, Windows, and Linux; `FetchContent` wrappers for `campello_gpu` (v0.3.7), `campello_input`, `vector_math`, and GoogleTest
+- Core widget infrastructure: `Widget`, `WidgetRef`, `BuildContext`, `StatelessWidget`, `StatefulWidget`/`State<T>`/`StateBase`, `Element`, `StatelessElement`, `StatefulElement`, `RenderObjectElement`, `SingleChildRenderObjectElement`, `MultiChildRenderObjectElement`; full widget-tree reconciliation
+- Layout system: `BoxConstraints`, `Size`, `Offset`, `EdgeInsets`, `RenderObject`, `RenderBox`; constraints-down / sizes-up layout protocol
+- Rendering pipeline: `PaintContext`, `Canvas`, `DrawCommand` queue, dirty-region tracking, layer compositing, clip/transform stacks, frame loop via `Renderer`; premultiplied-alpha blend; `Canvas::setOpacity()` bakes opacity multiplicatively into draw commands
+- Basic render widgets: `RawRectangle`, `RawText`, `RawImage`, `RawCustomPaint` / `CustomPainter`
+- Composited widgets: `SizedBox`, `Padding`, `Align`, `Center`, `Container`, `Row`, `Column`, `Stack`/`Positioned`, `Text`, `Image`, `ColoredBox`, `Scaffold`; `Flex`/`Expanded`/`Flexible` with `MainAxisAlignment` and `CrossAxisAlignment`
+- Opacity compositing: `RenderOpacity`, `Opacity`, `AnimatedOpacity`
+- Input handling: `PointerEvent`, `PointerDispatcher` (hit-test on down, pointer capture, scroll), `HitTestResult`/`HitTestEntry` on `RenderBox`/`RenderFlex`/`RenderStack`; `GestureDetector` with tap, double-tap, long-press, pan, and scroll recognizers; `FocusNode`, `FocusManager` (tab traversal, key routing), `Focus` widget, `RenderFocus`, `KeyEvent`/`KeyCode`
+- Platform input wiring: macOS `CampelloMTKView` (mouse, scroll, keyboard); iOS UIKit touch via `UITouch*` identity map; Android `GameActivity` touch via pointer ID
+- Animation system: `TickerScheduler`, `AnimationController`, `Tween<T>` (float, double, `Color`, `Offset`, `Size`), `CurvedAnimation`, `Curves`, `AnimatedBuilder`, `AnimatedContainer`, `AnimatedOpacity`
+- Scrolling: `ScrollController`, `SingleChildScrollView`, `ListView` (virtualised), `GridView`, scroll physics (momentum, bounce, clamped)
+- Unit tests: `BoxConstraints`, `RenderAlign`, `RenderFlex`, `RenderListView`, `RenderPadding`, `RenderSizedBox`
+- Example applications: Hello World, Counter (StatefulWidget), ListView, Animated transitions (macOS)
+- Build and run scripts for macOS (Debug and Release); `test.sh` for universal and integration test runs

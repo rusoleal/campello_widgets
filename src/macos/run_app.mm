@@ -1,0 +1,468 @@
+#import <campello_widgets/macos/run_app.hpp>
+#import <campello_widgets/campello_widgets.hpp>
+#import <campello_widgets/widgets/element.hpp>
+#import <campello_widgets/widgets/render_object_element.hpp>
+#import <campello_widgets/ui/renderer.hpp>
+#import <campello_widgets/ui/render_box.hpp>
+#import <campello_widgets/ui/pointer_event.hpp>
+#import <campello_widgets/ui/pointer_dispatcher.hpp>
+#import <campello_widgets/ui/key_event.hpp>
+#import <campello_widgets/ui/focus_manager.hpp>
+#import <campello_widgets/ui/ticker.hpp>
+
+#import <campello_gpu/device.hpp>
+#import <campello_gpu/texture_view.hpp>
+#import <campello_gpu/constants/pixel_format.hpp>
+
+#import "metal_draw_backend.hpp"
+
+#import <Cocoa/Cocoa.h>
+#import <MetalKit/MetalKit.h>
+
+namespace GPU     = systems::leal::campello_gpu;
+namespace Widgets = systems::leal::campello_widgets;
+
+// ---------------------------------------------------------------------------
+// Internal state passed from runApp() to the delegates
+// ---------------------------------------------------------------------------
+namespace {
+    Widgets::WidgetRef gRootWidget;
+    std::string        gTitle;
+    float              gWidth  = 800.0f;
+    float              gHeight = 600.0f;
+}
+
+// ---------------------------------------------------------------------------
+// MTKView subclass — forwards mouse events to the PointerDispatcher
+// ---------------------------------------------------------------------------
+
+@interface CampelloMTKView : MTKView
+- (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher;
+- (void)setFocusManager:(Widgets::FocusManager*)focusManager;
+@end
+
+@implementation CampelloMTKView {
+    Widgets::PointerDispatcher* _dispatcher;
+    Widgets::FocusManager*      _focusManager;
+}
+
+- (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher
+{
+    _dispatcher = dispatcher;
+}
+
+- (void)setFocusManager:(Widgets::FocusManager*)focusManager
+{
+    _focusManager = focusManager;
+}
+
+- (BOOL)acceptsFirstResponder { return YES; }
+
+- (Widgets::Offset)pointerOffsetForEvent:(NSEvent*)event
+{
+    const CGPoint pt    = [self convertPoint:event.locationInWindow fromView:nil];
+    const CGFloat scale = self.window.backingScaleFactor;
+    return { (float)(pt.x * scale), (float)((self.bounds.size.height - pt.y) * scale) };
+}
+
+- (void)mouseDown:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::down, 0,
+        [self pointerOffsetForEvent:event], 1.0f});
+}
+
+- (void)mouseDragged:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::move, 0,
+        [self pointerOffsetForEvent:event], 1.0f});
+}
+
+- (void)mouseUp:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::up, 0,
+        [self pointerOffsetForEvent:event], 1.0f});
+}
+
+static Widgets::KeyCode macosKeyCodeToKeyCode(unsigned short kc)
+{
+    switch (kc) {
+        case 0:  return Widgets::KeyCode::a;
+        case 1:  return Widgets::KeyCode::s;
+        case 2:  return Widgets::KeyCode::d;
+        case 3:  return Widgets::KeyCode::f;
+        case 4:  return Widgets::KeyCode::h;
+        case 5:  return Widgets::KeyCode::g;
+        case 6:  return Widgets::KeyCode::z;
+        case 7:  return Widgets::KeyCode::x;
+        case 8:  return Widgets::KeyCode::c;
+        case 9:  return Widgets::KeyCode::v;
+        case 11: return Widgets::KeyCode::b;
+        case 12: return Widgets::KeyCode::q;
+        case 13: return Widgets::KeyCode::w;
+        case 14: return Widgets::KeyCode::e;
+        case 15: return Widgets::KeyCode::r;
+        case 16: return Widgets::KeyCode::y;
+        case 17: return Widgets::KeyCode::t;
+        case 18: return Widgets::KeyCode::digit_1;
+        case 19: return Widgets::KeyCode::digit_2;
+        case 20: return Widgets::KeyCode::digit_3;
+        case 21: return Widgets::KeyCode::digit_4;
+        case 22: return Widgets::KeyCode::digit_6;
+        case 23: return Widgets::KeyCode::digit_5;
+        case 25: return Widgets::KeyCode::digit_9;
+        case 26: return Widgets::KeyCode::digit_7;
+        case 28: return Widgets::KeyCode::digit_8;
+        case 29: return Widgets::KeyCode::digit_0;
+        case 31: return Widgets::KeyCode::o;
+        case 32: return Widgets::KeyCode::u;
+        case 34: return Widgets::KeyCode::i;
+        case 35: return Widgets::KeyCode::p;
+        case 36: return Widgets::KeyCode::enter;
+        case 37: return Widgets::KeyCode::l;
+        case 38: return Widgets::KeyCode::j;
+        case 40: return Widgets::KeyCode::k;
+        case 45: return Widgets::KeyCode::n;
+        case 46: return Widgets::KeyCode::m;
+        case 48: return Widgets::KeyCode::tab;
+        case 49: return Widgets::KeyCode::space;
+        case 51: return Widgets::KeyCode::backspace;
+        case 53: return Widgets::KeyCode::escape;
+        case 56: return Widgets::KeyCode::left_shift;
+        case 57: return Widgets::KeyCode::caps_lock;
+        case 58: return Widgets::KeyCode::left_alt;
+        case 59: return Widgets::KeyCode::left_ctrl;
+        case 60: return Widgets::KeyCode::right_shift;
+        case 61: return Widgets::KeyCode::right_alt;
+        case 62: return Widgets::KeyCode::right_ctrl;
+        case 117: return Widgets::KeyCode::delete_forward;
+        case 115: return Widgets::KeyCode::home;
+        case 116: return Widgets::KeyCode::page_up;
+        case 119: return Widgets::KeyCode::end;
+        case 121: return Widgets::KeyCode::page_down;
+        case 122: return Widgets::KeyCode::f1;
+        case 120: return Widgets::KeyCode::f2;
+        case 99:  return Widgets::KeyCode::f3;
+        case 118: return Widgets::KeyCode::f4;
+        case 96:  return Widgets::KeyCode::f5;
+        case 97:  return Widgets::KeyCode::f6;
+        case 98:  return Widgets::KeyCode::f7;
+        case 100: return Widgets::KeyCode::f8;
+        case 101: return Widgets::KeyCode::f9;
+        case 109: return Widgets::KeyCode::f10;
+        case 103: return Widgets::KeyCode::f11;
+        case 111: return Widgets::KeyCode::f12;
+        case 123: return Widgets::KeyCode::left;
+        case 124: return Widgets::KeyCode::right;
+        case 125: return Widgets::KeyCode::down;
+        case 126: return Widgets::KeyCode::up;
+        default:  return Widgets::KeyCode::unknown;
+    }
+}
+
+static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
+{
+    uint32_t mods = Widgets::KeyModifiers::none;
+    if (flags & NSEventModifierFlagShift)   mods |= Widgets::KeyModifiers::shift;
+    if (flags & NSEventModifierFlagControl) mods |= Widgets::KeyModifiers::ctrl;
+    if (flags & NSEventModifierFlagOption)  mods |= Widgets::KeyModifiers::alt;
+    if (flags & NSEventModifierFlagCommand) mods |= Widgets::KeyModifiers::meta;
+    return mods;
+}
+
+- (void)keyDown:(NSEvent*)event
+{
+    if (!_focusManager) return;
+    Widgets::KeyEvent ke;
+    ke.kind      = event.isARepeat ? Widgets::KeyEventKind::repeat
+                                   : Widgets::KeyEventKind::down;
+    ke.key_code  = macosKeyCodeToKeyCode(event.keyCode);
+    ke.modifiers = macosModifiersToKeyModifiers(event.modifierFlags);
+    NSString* chars = event.characters;
+    ke.character = (chars.length > 0) ? (uint32_t)[chars characterAtIndex:0] : 0u;
+    _focusManager->handleKeyEvent(ke);
+}
+
+- (void)keyUp:(NSEvent*)event
+{
+    if (!_focusManager) return;
+    Widgets::KeyEvent ke;
+    ke.kind      = Widgets::KeyEventKind::up;
+    ke.key_code  = macosKeyCodeToKeyCode(event.keyCode);
+    ke.modifiers = macosModifiersToKeyModifiers(event.modifierFlags);
+    ke.character = 0;
+    _focusManager->handleKeyEvent(ke);
+}
+
+- (void)scrollWheel:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    const Widgets::Offset pos   = [self pointerOffsetForEvent:event];
+    const CGFloat         scale = self.window.backingScaleFactor;
+    Widgets::PointerEvent e;
+    e.kind           = Widgets::PointerEventKind::scroll;
+    e.pointer_id     = 0;
+    e.position       = pos;
+    e.pressure       = 0.0f;
+    e.scroll_delta_x = (float)(event.scrollingDeltaX * scale);
+    e.scroll_delta_y = (float)(event.scrollingDeltaY * scale);
+    _dispatcher->handlePointerEvent(e);
+}
+
+@end
+
+// ---------------------------------------------------------------------------
+// MTKView delegate — per-frame rendering
+// ---------------------------------------------------------------------------
+
+@interface CampelloMTKDelegate : NSObject <MTKViewDelegate>
+- (instancetype)initWithDevice:(std::shared_ptr<GPU::Device>)device
+                      renderer:(std::shared_ptr<Widgets::Renderer>)renderer
+                   backendPtr:(Widgets::MetalDrawBackend*)backendPtr;
+@end
+
+@implementation CampelloMTKDelegate {
+    std::shared_ptr<GPU::Device>         _device;
+    std::shared_ptr<Widgets::Renderer>   _renderer;
+    Widgets::MetalDrawBackend*           _backendPtr;
+}
+
+- (instancetype)initWithDevice:(std::shared_ptr<GPU::Device>)device
+                      renderer:(std::shared_ptr<Widgets::Renderer>)renderer
+                   backendPtr:(Widgets::MetalDrawBackend*)backendPtr
+{
+    if (!(self = [super init])) return nil;
+    _device     = device;
+    _renderer   = renderer;
+    _backendPtr = backendPtr;
+    return self;
+}
+
+- (void)drawInMTKView:(MTKView *)view
+{
+    if (!_renderer) return;
+
+    id<CAMetalDrawable> drawable = view.currentDrawable;
+    if (!drawable) return;
+
+    CGSize sz = view.drawableSize;
+    float w = (float)sz.width;
+    float h = (float)sz.height;
+
+    _backendPtr->setViewport(w, h);
+
+    auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
+    bool rendered = colorView && _renderer->renderFrame(colorView, w, h);
+
+    if (rendered)
+        [drawable present];
+}
+
+- (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size
+{
+    (void)view;
+    (void)size;
+}
+
+@end
+
+// ---------------------------------------------------------------------------
+// Application delegate — creates the window and sets up the GPU
+// ---------------------------------------------------------------------------
+
+@interface CampelloAppDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@implementation CampelloAppDelegate {
+    NSWindow*                             _window;
+    CampelloMTKView*                      _metalView;
+    CampelloMTKDelegate*                  _mtkDelegate;
+
+    std::shared_ptr<GPU::Device>               _device;
+    std::shared_ptr<Widgets::Renderer>         _renderer;
+    std::shared_ptr<Widgets::Element>          _rootElement;
+    std::shared_ptr<Widgets::PointerDispatcher>  _dispatcher;
+    std::shared_ptr<Widgets::FocusManager>       _focusManager;
+    std::unique_ptr<Widgets::TickerScheduler>    _tickerScheduler;
+}
+
+- (void)applicationDidFinishLaunching:(NSNotification *)notification
+{
+    (void)notification;
+
+    [self buildMenuBar];
+
+    // -----------------------------------------------------------------------
+    // Create window
+    // -----------------------------------------------------------------------
+    NSRect frame = NSMakeRect(0, 0, (CGFloat)gWidth, (CGFloat)gHeight);
+    NSWindowStyleMask style =
+        NSWindowStyleMaskTitled         |
+        NSWindowStyleMaskClosable       |
+        NSWindowStyleMaskMiniaturizable |
+        NSWindowStyleMaskResizable;
+
+    _window = [[NSWindow alloc] initWithContentRect:frame
+                                          styleMask:style
+                                            backing:NSBackingStoreBuffered
+                                              defer:NO];
+    _window.title = [NSString stringWithUTF8String:gTitle.c_str()];
+
+    // -----------------------------------------------------------------------
+    // Create Metal view
+    // -----------------------------------------------------------------------
+    id<MTLDevice> mtlDevice = MTLCreateSystemDefaultDevice();
+    if (!mtlDevice) {
+        NSLog(@"campello_widgets: Metal is not available on this device");
+        return;
+    }
+
+    _metalView = [[CampelloMTKView alloc] initWithFrame:frame device:mtlDevice];
+    _metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
+    _metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
+    _metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
+    if (@available(macOS 12.0, *))
+        _metalView.preferredFramesPerSecond = NSScreen.mainScreen.maximumFramesPerSecond;
+    else
+        _metalView.preferredFramesPerSecond = 60;
+    _metalView.autoresizingMask         = NSViewWidthSizable | NSViewHeightSizable;
+
+    _window.contentView = _metalView;
+
+    // -----------------------------------------------------------------------
+    // Create campello_gpu device
+    // -----------------------------------------------------------------------
+    _device = GPU::Device::createDefaultDevice(nullptr);
+    if (!_device) {
+        NSLog(@"campello_widgets: failed to create campello_gpu device");
+        return;
+    }
+    NSLog(@"campello_widgets: device=%s  engine=%s",
+          _device->getName().c_str(),
+          GPU::Device::getEngineVersion().c_str());
+
+    // -----------------------------------------------------------------------
+    // Create PointerDispatcher and FocusManager early so render objects can
+    // register during widget tree mount.
+    // -----------------------------------------------------------------------
+    _dispatcher = std::make_shared<Widgets::PointerDispatcher>();
+    Widgets::PointerDispatcher::setActiveDispatcher(_dispatcher.get());
+    [_metalView setDispatcher:_dispatcher.get()];
+
+    _focusManager = std::make_shared<Widgets::FocusManager>();
+    Widgets::FocusManager::setActiveManager(_focusManager.get());
+    [_metalView setFocusManager:_focusManager.get()];
+
+    _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
+    Widgets::TickerScheduler::setActive(_tickerScheduler.get());
+
+    // -----------------------------------------------------------------------
+    // Mount the widget element tree and get the root RenderBox
+    // -----------------------------------------------------------------------
+    _rootElement = gRootWidget->createElement();
+    _rootElement->mount(nullptr);
+
+    auto* roe = _rootElement->findDescendantRenderObjectElement();
+    if (!roe) {
+        NSLog(@"campello_widgets: widget tree produced no RenderObjectElement");
+        return;
+    }
+
+    auto renderBox = std::dynamic_pointer_cast<Widgets::RenderBox>(
+        roe->sharedRenderObject());
+    if (!renderBox) {
+        NSLog(@"campello_widgets: root render object is not a RenderBox");
+        return;
+    }
+
+    // Now that the root RenderBox is known, wire it into the dispatcher.
+    _dispatcher->setRoot(renderBox);
+
+    // -----------------------------------------------------------------------
+    // Create MetalDrawBackend + Renderer
+    // -----------------------------------------------------------------------
+    const Widgets::Color bgColor = Widgets::Color::white();
+    const GPU::PixelFormat pixelFmt = GPU::PixelFormat::bgra8unorm;
+
+    auto backendOwned = std::make_unique<Widgets::MetalDrawBackend>(
+        _device, bgColor, pixelFmt);
+    Widgets::MetalDrawBackend* backendPtr = backendOwned.get();
+
+    _renderer = std::make_shared<Widgets::Renderer>(
+        _device, renderBox, bgColor);
+    _renderer->setDrawBackend(std::move(backendOwned));
+
+    // -----------------------------------------------------------------------
+    // Wire up the MTKView delegate
+    // -----------------------------------------------------------------------
+    _mtkDelegate = [[CampelloMTKDelegate alloc]
+        initWithDevice:_device
+              renderer:_renderer
+           backendPtr:backendPtr];
+    _metalView.delegate = _mtkDelegate;
+
+    // -----------------------------------------------------------------------
+    // Show window
+    // -----------------------------------------------------------------------
+    [_window center];
+    [_window makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)buildMenuBar
+{
+    NSMenu *menuBar  = [[NSMenu alloc] init];
+    NSMenuItem *appItem = [[NSMenuItem alloc] init];
+    [menuBar addItem:appItem];
+    NSMenu *appMenu = [[NSMenu alloc] init];
+    appItem.submenu = appMenu;
+    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@",
+                               [NSString stringWithUTF8String:gTitle.c_str()]]
+                       action:@selector(terminate:)
+                keyEquivalent:@"q"];
+    [NSApp setMainMenu:menuBar];
+}
+
+- (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
+{
+    (void)sender;
+    return YES;
+}
+
+@end
+
+// ---------------------------------------------------------------------------
+// runApp()
+// ---------------------------------------------------------------------------
+
+namespace systems::leal::campello_widgets
+{
+
+int runApp(WidgetRef   root_widget,
+           const char* title,
+           float       width,
+           float       height)
+{
+    gRootWidget = std::move(root_widget);
+    gTitle      = title ? title : "campello_widgets";
+    gWidth      = width;
+    gHeight     = height;
+
+    @autoreleasepool {
+        NSApplication *app      = [NSApplication sharedApplication];
+        [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+
+        CampelloAppDelegate *delegate = [[CampelloAppDelegate alloc] init];
+        [app setDelegate:delegate];
+
+        [app run];
+    }
+    return 0;
+}
+
+} // namespace systems::leal::campello_widgets
