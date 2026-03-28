@@ -140,10 +140,10 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 ## Phase 10 — Platform Integration
 
 - [ ] Window / surface creation per platform (delegate to `campello_gpu`)
-- [ ] iOS: UIKit integration, safe area insets
-- [x] Android: ANativeWindow integration
-- [x] macOS: NSView / CAMetalLayer integration
-- [ ] Windows: HWND / DXGI integration
+- [x] iOS: UIKit integration with safe area insets
+- [x] Android: ANativeWindow integration with safe area insets
+- [x] macOS: NSView / CAMetalLayer integration with safe area insets
+- [x] Windows: HWND / DXGI integration
 - [ ] Linux: XCB / Wayland integration
 - [ ] Platform channel / FFI abstraction for native calls
 
@@ -151,7 +151,7 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 
 ## Phase 11 — Developer Experience
 
-- [ ] Debug overlay (FPS counter, widget tree inspector)
+- [x] Debug overlay (FPS counter, paint size, repaint rainbow, debug banner)
 - [ ] Hot-reload friendly design (documented rebuild contract)
 - [x] Comprehensive unit tests for layout engine
 - [ ] Integration test harness (headless rendering)
@@ -163,11 +163,57 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 
 ---
 
+## Phase 12 — Canvas API (Flutter-compatible)
+
+Drawing API for custom painters and shape rendering.
+
+- [x] Define `Canvas` class with transform/clip state stack
+- [x] Drawing primitives:
+  - [x] `drawRect` — filled/stroked rectangle
+  - [x] `drawCircle` — circle with center and radius
+  - [x] `drawOval` — ellipse within bounding rect
+  - [x] `drawArc` — arc with start/sweep angles
+  - [x] `drawLine` — line segment between two points
+  - [x] `drawPath` — custom path rendering
+  - [x] `drawRRect` — rounded rectangle
+  - [x] `drawDRRect` — double rounded rectangle (outer/inner)
+  - [x] `drawPoints` — point cloud / lines
+  - [x] `drawColor` — solid color fill with blend mode
+- [x] Transform methods:
+  - [x] `translate`, `rotate`, `scale`, `skew`
+  - [x] Matrix4 integration from vector_math
+- [x] Clipping:
+  - [x] `clipRect`, `clipPath`, `clipRRect`
+- [x] State management:
+  - [x] `save`, `restore`, `restoreToCount`, `getSaveCount`
+- [x] `Path` class:
+  - [x] `moveTo`, `lineTo`, `cubicTo`, `quadraticTo`, `arcTo`, `close`
+  - [x] `getBounds`, `contains`, `transform`, `flatten`
+- [x] `RRect` (rounded rectangle) with per-corner radii
+- [x] `RRectComplex` for per-corner radii control
+- [x] `BlendMode` enum (srcOver, modulate, plus, etc.)
+- [x] `Paint` struct (color, style, strokeWidth, blendMode)
+- [x] DrawCommand variant system for GPU backend integration
+- [x] Fidelity tests for Canvas API:
+  - [x] Basic shapes (rect, circle, oval)
+  - [x] Lines and points
+  - [x] Path drawing with curves
+  - [x] Rounded rectangles (RRect/RRectComplex)
+  - [x] Arcs and pie charts
+  - [x] Transforms (translate, rotate, scale)
+  - [x] Clipping operations
+  - [x] Paint styles (fill, stroke, blend modes)
+  - [x] Complex scenes combining multiple operations
+  - [x] State management (save/restore)
+  - [x] Path operations (bounds, commands)
+
+---
+
 ## Backlog / Future
 
 - Theme system (colours, typography, spacing tokens)
 - Accessibility (semantic tree, screen reader support)
 - Internationalisation (text direction, locale)
-- Rich text / inline spans
-- Dialog / overlay / modal system
+- [x] Rich text / inline spans
+- [x] Dialog / overlay / modal system
 - Drag-and-drop

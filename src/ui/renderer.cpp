@@ -30,9 +30,17 @@ namespace systems::leal::campello_widgets
         , root_(std::move(root_render_object))
         , clear_color_(clear_color)
     {
+        // Register as current renderer for view insets queries.
+        detail::currentRenderer() = this;
     }
 
-    Renderer::~Renderer() = default;
+    Renderer::~Renderer()
+    {
+        // Unregister if we were the current renderer.
+        if (detail::currentRenderer() == this) {
+            detail::currentRenderer() = nullptr;
+        }
+    }
 
     // ------------------------------------------------------------------
     // Public API
@@ -103,8 +111,13 @@ namespace systems::leal::campello_widgets
     {
         if (!root_) return;
 
+        // Apply view insets (safe area) to reduce available space.
+        // The root widget is laid out within the "safe" area only.
+        const float safe_width  = viewport_width - view_insets_.horizontal();
+        const float safe_height = viewport_height - view_insets_.vertical();
+
         const BoxConstraints screen_constraints =
-            BoxConstraints::tight(viewport_width, viewport_height);
+            BoxConstraints::tight(safe_width, safe_height);
 
         RenderObject::setActiveBackend(draw_backend_.get());
         root_->layout(screen_constraints);
@@ -119,7 +132,8 @@ namespace systems::leal::campello_widgets
         if (!root_) return;
 
         PaintContext ctx(encoder, viewport_width, viewport_height);
-        root_->paint(ctx, Offset::zero());
+        // Offset by view insets so root widget paints within safe area.
+        root_->paint(ctx, Offset{view_insets_.left, view_insets_.top});
 
         if (DebugFlags::showPerformanceOverlay)
             paintPerformanceOverlay(ctx, viewport_width, viewport_height);

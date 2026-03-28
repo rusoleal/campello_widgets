@@ -47,6 +47,20 @@ namespace systems::leal::campello_widgets
             int                        index) const override;
 
         void clearRenderObjectChildren(RenderObject& parent) const override;
+
+        // Factory methods
+        static std::shared_ptr<Stack> create(std::vector<WidgetRef> children) {
+            auto s = std::make_shared<Stack>();
+            s->children = std::move(children);
+            return s;
+        }
+
+        static std::shared_ptr<Stack> create(StackFit fit, std::vector<WidgetRef> children) {
+            auto s = std::make_shared<Stack>();
+            s->fit = fit;
+            s->children = std::move(children);
+            return s;
+        }
     };
 
 } // namespace systems::leal::campello_widgets

@@ -38,7 +38,49 @@ struct WidgetSession
     std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
     std::shared_ptr<Widgets::FocusManager>       focus_manager;
     std::unique_ptr<Widgets::TickerScheduler>    ticker_scheduler;
+    android_app*                               app = nullptr;  // For accessing contentRect
 };
+
+// ---------------------------------------------------------------------------
+// Safe area / insets helper
+// ---------------------------------------------------------------------------
+
+/**
+ * @brief Updates the renderer's view insets based on the Android content rect.
+ * 
+ * The contentRect represents the area of the window that is not obscured by
+ * system UI (status bar, navigation bar, cutouts). We compute insets by
+ * comparing the content rect to the full window size.
+ */
+static void updateSafeAreaInsets(WidgetSession* session)
+{
+    if (!session || !session->renderer || !session->app) return;
+    
+    android_app* app = session->app;
+    
+    // Get the full window size from ANativeWindow
+    int32_t window_width  = ANativeWindow_getWidth(app->window);
+    int32_t window_height = ANativeWindow_getHeight(app->window);
+    
+    // contentRect is the safe area provided by native_app_glue
+    // Note: these are already in pixels
+    const ARect& content = app->contentRect;
+    
+    // Calculate insets in pixels
+    Widgets::EdgeInsets insets;
+    insets.left   = static_cast<float>(content.left);
+    insets.top    = static_cast<float>(content.top);
+    insets.right  = static_cast<float>(window_width - content.right);
+    insets.bottom = static_cast<float>(window_height - content.bottom);
+    
+    // Ensure non-negative insets
+    if (insets.left < 0.0f)   insets.left = 0.0f;
+    if (insets.top < 0.0f)    insets.top = 0.0f;
+    if (insets.right < 0.0f)  insets.right = 0.0f;
+    if (insets.bottom < 0.0f) insets.bottom = 0.0f;
+    
+    session->renderer->setViewInsets(insets);
+}
 
 // ---------------------------------------------------------------------------
 // Touch event processing
@@ -137,6 +179,7 @@ static std::unique_ptr<WidgetSession> createSession(
     android_app* app, const Widgets::WidgetRef& root_widget)
 {
     auto session = std::make_unique<WidgetSession>();
+    session->app = app;  // Store for later access to contentRect
 
     // Create dispatcher and focus manager before mounting.
     session->dispatcher = std::make_shared<Widgets::PointerDispatcher>();
@@ -219,6 +262,15 @@ void runApp(android_app* app, WidgetRef root_widget)
             }
             break;
 
+        case APP_CMD_WINDOW_INSETS_CHANGED:
+        case APP_CMD_CONTENT_RECT_CHANGED:
+            // Safe area / content rect changed (e.g., keyboard showed/hid)
+            if (session_ptr && *session_ptr)
+            {
+                updateSafeAreaInsets(session_ptr->get());
+            }
+            break;
+
         default:
             break;
         }
@@ -248,6 +300,10 @@ void runApp(android_app* app, WidgetRef root_widget)
         if (app->window && !session)
         {
             session = createSession(app, root_widget);
+            if (session)
+            {
+                updateSafeAreaInsets(session.get());
+            }
         }
 
         if (!session || !session->renderer) continue;

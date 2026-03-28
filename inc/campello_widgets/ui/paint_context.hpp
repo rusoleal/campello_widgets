@@ -36,6 +36,18 @@ namespace systems::leal::campello_widgets
             float viewport_width,
             float viewport_height);
 
+        /**
+         * @brief Headless constructor for testing (no GPU encoder required).
+         *
+         * This constructor creates a PaintContext suitable for capturing draw
+         * commands without an active GPU render pass. Used by the fidelity
+         * testing framework.
+         *
+         * @param viewport_width  Viewport width in logical pixels.
+         * @param viewport_height Viewport height in logical pixels.
+         */
+        PaintContext(float viewport_width, float viewport_height);
+
         ~PaintContext() = default;
 
         // Non-copyable, non-movable — tied to a single render-pass lifetime.
@@ -59,7 +71,7 @@ namespace systems::leal::campello_widgets
         // Frame-level accessors
         // ------------------------------------------------------------------
 
-        campello_gpu::RenderPassEncoder& encoder() noexcept { return encoder_; }
+        campello_gpu::RenderPassEncoder* encoder() noexcept { return encoder_; }
 
         float viewportWidth()  const noexcept { return viewport_width_;  }
         float viewportHeight() const noexcept { return viewport_height_; }
@@ -73,7 +85,7 @@ namespace systems::leal::campello_widgets
         const DrawList& commands() const noexcept { return canvas_.commands(); }
 
     private:
-        campello_gpu::RenderPassEncoder& encoder_;
+        campello_gpu::RenderPassEncoder* encoder_;
 
         float  viewport_width_;
         float  viewport_height_;

@@ -13,10 +13,20 @@ namespace systems::leal::campello_widgets
     class Center : public Align
     {
     public:
+        Center() { alignment = Alignment::center(); }
+
         explicit Center(WidgetRef child_widget)
         {
             alignment = Alignment::center();
             child     = std::move(child_widget);
+        }
+
+        // Factory method
+        static std::shared_ptr<Center> create(WidgetRef child = nullptr) {
+            auto c = std::make_shared<Center>();
+            c->alignment = Alignment::center();
+            c->child = std::move(child);
+            return c;
         }
     };
 

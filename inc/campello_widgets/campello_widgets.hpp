@@ -86,8 +86,14 @@
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/container.hpp>
 #include <campello_widgets/widgets/text.hpp>
+#include <campello_widgets/widgets/rich_text.hpp>
 #include <campello_widgets/widgets/image.hpp>
 #include <campello_widgets/widgets/scaffold.hpp>
+#include <campello_widgets/widgets/safe_area.hpp>
+
+// Rich text / inline spans
+#include <campello_widgets/ui/inline_span.hpp>
+#include <campello_widgets/ui/render_paragraph.hpp>
 
 // Phase 7 — Input
 #include <campello_widgets/ui/gesture_recognizer.hpp>
@@ -126,8 +132,18 @@
 #include <campello_widgets/widgets/opacity.hpp>
 #include <campello_widgets/widgets/animated_opacity.hpp>
 
+// Dialog / Overlay / Modal system
+#include <campello_widgets/widgets/overlay.hpp>
+#include <campello_widgets/widgets/modal_barrier.hpp>
+#include <campello_widgets/widgets/dialog.hpp>
+
 // Debug overlays
 #include <campello_widgets/ui/debug_flags.hpp>
+
+// Platform-specific entry points
+#ifdef CAMPHELLO_PLATFORM_WINDOWS
+#include <campello_widgets/windows/run_app.hpp>
+#endif
 
 // ---------------------------------------------------------------------------
 // Composition utility

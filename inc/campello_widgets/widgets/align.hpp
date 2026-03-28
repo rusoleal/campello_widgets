@@ -30,6 +30,14 @@ namespace systems::leal::campello_widgets
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
+
+        // Factory method
+        static std::shared_ptr<Align> create(Alignment alignment, WidgetRef child = nullptr) {
+            auto a = std::make_shared<Align>();
+            a->alignment = alignment;
+            a->child = std::move(child);
+            return a;
+        }
     };
 
 } // namespace systems::leal::campello_widgets

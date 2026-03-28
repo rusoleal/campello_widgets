@@ -30,6 +30,23 @@ namespace systems::leal::campello_widgets
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
+
+        // Factory methods
+        static std::shared_ptr<SizedBox> create(float w, float h, WidgetRef child = nullptr) {
+            auto s = std::make_shared<SizedBox>();
+            s->width = w;
+            s->height = h;
+            s->child = std::move(child);
+            return s;
+        }
+
+        static std::shared_ptr<SizedBox> expand(WidgetRef child = nullptr) {
+            auto s = std::make_shared<SizedBox>();
+            s->width = std::nullopt;
+            s->height = std::nullopt;
+            s->child = std::move(child);
+            return s;
+        }
     };
 
 } // namespace systems::leal::campello_widgets

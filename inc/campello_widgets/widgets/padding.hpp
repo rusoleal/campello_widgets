@@ -23,6 +23,14 @@ namespace systems::leal::campello_widgets
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
+
+        // Factory method
+        static std::shared_ptr<Padding> create(EdgeInsets insets, WidgetRef child = nullptr) {
+            auto p = std::make_shared<Padding>();
+            p->padding = std::move(insets);
+            p->child = std::move(child);
+            return p;
+        }
     };
 
 } // namespace systems::leal::campello_widgets

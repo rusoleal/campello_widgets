@@ -54,6 +54,9 @@ namespace systems::leal::campello_widgets
          */
         void setState(std::function<void()> fn);
 
+        /** @brief Returns the element associated with this state. */
+        StatefulElement* element() const { return element_; }
+
     protected:
         friend class StatefulElement;
 

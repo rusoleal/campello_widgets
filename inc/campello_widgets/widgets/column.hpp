@@ -13,6 +13,8 @@ namespace systems::leal::campello_widgets
     class Column : public Flex
     {
     public:
+        Column() { axis = Axis::vertical; }
+
         // children only — alignment defaults to start/start/max
         explicit Column(WidgetList ch)
         {
@@ -56,6 +58,21 @@ namespace systems::leal::campello_widgets
             cross_axis_alignment = cross;
             main_axis_size       = size;
             children             = ch;
+        }
+
+        // Factory methods
+        static std::shared_ptr<Column> create(std::vector<WidgetRef> children) {
+            auto c = std::make_shared<Column>();
+            c->axis = Axis::vertical;
+            c->children = std::move(children);
+            return c;
+        }
+
+        static std::shared_ptr<Column> create(WidgetList ch) {
+            auto c = std::make_shared<Column>();
+            c->axis = Axis::vertical;
+            c->children = ch;
+            return c;
         }
     };
 

@@ -3,6 +3,7 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.mm"
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|ios|windows|linux)/.*")
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 
 add_library(campello_widgets SHARED ${CAMPELLO_WIDGETS_SOURCES})
 

@@ -275,7 +275,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 // Application delegate — creates the window and sets up the GPU
 // ---------------------------------------------------------------------------
 
-@interface CampelloAppDelegate : NSObject <NSApplicationDelegate>
+@interface CampelloAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @end
 
 @implementation CampelloAppDelegate {
@@ -289,6 +289,21 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     std::shared_ptr<Widgets::PointerDispatcher>  _dispatcher;
     std::shared_ptr<Widgets::FocusManager>       _focusManager;
     std::unique_ptr<Widgets::TickerScheduler>    _tickerScheduler;
+}
+
+- (void)dealloc
+{
+    // Clean up KVO observer
+    if (@available(macOS 12.1, *)) {
+        @try {
+            [_window.contentView removeObserver:self forKeyPath:@"safeAreaInsets"];
+        } @catch (NSException *exception) {
+            // Observer may not have been added
+        }
+    }
+#if !__has_feature(objc_arc)
+    [super dealloc];
+#endif
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
@@ -333,6 +348,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _metalView.autoresizingMask         = NSViewWidthSizable | NSViewHeightSizable;
 
     _window.contentView = _metalView;
+    _window.delegate = self;  // For window resize notifications
 
     // -----------------------------------------------------------------------
     // Create campello_gpu device
@@ -407,6 +423,19 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _metalView.delegate = _mtkDelegate;
 
     // -----------------------------------------------------------------------
+    // Set up safe area handling
+    // -----------------------------------------------------------------------
+    [self updateSafeAreaInsets];
+    
+    // Observe safe area changes on macOS 12.1+
+    if (@available(macOS 12.1, *)) {
+        [_window.contentView addObserver:self
+                              forKeyPath:@"safeAreaInsets"
+                                 options:NSKeyValueObservingOptionNew
+                                 context:nullptr];
+    }
+
+    // -----------------------------------------------------------------------
     // Show window
     // -----------------------------------------------------------------------
     [_window center];
@@ -432,6 +461,53 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 {
     (void)sender;
     return YES;
+}
+
+// ---------------------------------------------------------------------------
+// Safe area handling (for notched MacBook Pros and future displays)
+// ---------------------------------------------------------------------------
+
+- (void)updateSafeAreaInsets
+{
+    if (!_renderer) return;
+    
+    Widgets::EdgeInsets insets = Widgets::EdgeInsets::zero();
+    
+    // macOS 12.1+ supports safeAreaInsets on NSView
+    if (@available(macOS 12.1, *)) {
+        // Get the content view's safeAreaInsets
+        NSEdgeInsets safeInsets = _window.contentView.safeAreaInsets;
+        CGFloat scale = _window.backingScaleFactor;
+        
+        insets.left   = static_cast<float>(safeInsets.left * scale);
+        insets.top    = static_cast<float>(safeInsets.top * scale);
+        insets.right  = static_cast<float>(safeInsets.right * scale);
+        insets.bottom = static_cast<float>(safeInsets.bottom * scale);
+    }
+    
+    _renderer->setViewInsets(insets);
+}
+
+// NSWindowDelegate method for frame changes
+- (void)windowDidResize:(NSNotification *)notification
+{
+    (void)notification;
+    [self updateSafeAreaInsets];
+}
+
+// KVO for safeAreaInsets changes (macOS 12.1+)
+- (void)observeValueForKeyPath:(NSString *)keyPath
+                      ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey,id> *)change
+                       context:(void *)context
+{
+    (void)object;
+    (void)change;
+    (void)context;
+    
+    if ([keyPath isEqualToString:@"safeAreaInsets"]) {
+        [self updateSafeAreaInsets];
+    }
 }
 
 @end

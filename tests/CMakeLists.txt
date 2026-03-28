@@ -5,8 +5,20 @@ file(GLOB_RECURSE UNIVERSAL_TEST_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/universal/*.cpp"
 )
 
+# Add testing sources (excluded from main library)
+set(TESTING_SOURCES 
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/fidelity.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/visual_fidelity.cpp"
+)
+
 if(UNIVERSAL_TEST_SOURCES)
-    add_executable(campello_widgets_tests ${UNIVERSAL_TEST_SOURCES})
+    add_executable(campello_widgets_tests ${UNIVERSAL_TEST_SOURCES} ${TESTING_SOURCES})
+    
+    # Include directories for stb headers
+    target_include_directories(campello_widgets_tests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+    )
+    
     target_link_libraries(campello_widgets_tests PRIVATE
         campello_widgets
         GTest::gtest_main

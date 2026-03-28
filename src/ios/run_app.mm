@@ -38,7 +38,7 @@ namespace {
 
 @interface CampelloMTKView : MTKView <MTKViewDelegate>
 - (instancetype)initWithFrame:(CGRect)frame device:(id<MTLDevice>)device;
-- (void)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
+- (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
                 rootWidget:(Widgets::WidgetRef)rootWidget;
 @end
 
@@ -64,7 +64,7 @@ namespace {
     return self;
 }
 
-- (void)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
+- (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
                 rootWidget:(Widgets::WidgetRef)rootWidget
 {
     _device = gpuDevice;
@@ -85,11 +85,11 @@ namespace {
     _rootElement->mount(nullptr);
 
     auto* roe = _rootElement->findDescendantRenderObjectElement();
-    if (!roe) return;
+    if (!roe) return nullptr;
 
     auto renderBox = std::dynamic_pointer_cast<Widgets::RenderBox>(
         roe->sharedRenderObject());
-    if (!renderBox) return;
+    if (!renderBox) return nullptr;
 
     _dispatcher->setRoot(renderBox);
 
@@ -103,6 +103,8 @@ namespace {
 
     _renderer = std::make_shared<Widgets::Renderer>(_device, renderBox, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
+    
+    return _renderer;
 }
 
 // ------------------------------------------------------------------
@@ -239,6 +241,10 @@ namespace {
 @end
 
 @implementation CampelloViewController
+{
+    std::shared_ptr<Widgets::Renderer> _renderer;
+    CampelloMTKView* _metalView;
+}
 
 - (void)viewDidLoad
 {
@@ -251,16 +257,16 @@ namespace {
         return;
     }
 
-    CampelloMTKView* metalView =
+    _metalView =
         [[CampelloMTKView alloc] initWithFrame:self.view.bounds device:mtlDevice];
-    metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
-    metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
-    metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
-    metalView.preferredFramesPerSecond = 60;
-    metalView.autoresizingMask         =
+    _metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
+    _metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
+    _metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
+    _metalView.preferredFramesPerSecond = 60;
+    _metalView.autoresizingMask         =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
-    [self.view addSubview:metalView];
+    [self.view addSubview:_metalView];
 
     auto gpuDevice = GPU::Device::createDefaultDevice(nullptr);
     if (!gpuDevice)
@@ -269,7 +275,41 @@ namespace {
         return;
     }
 
-    [metalView setupWithGPUDevice:gpuDevice rootWidget:gRootWidget];
+    _renderer = [_metalView setupWithGPUDevice:gpuDevice rootWidget:gRootWidget];
+    
+    // Initial safe area update
+    [self updateSafeAreaInsets];
+}
+
+- (void)viewSafeAreaInsetsDidChange
+{
+    [super viewSafeAreaInsetsDidChange];
+    [self updateSafeAreaInsets];
+}
+
+- (void)viewDidLayoutSubviews
+{
+    [super viewDidLayoutSubviews];
+    [self updateSafeAreaInsets];
+}
+
+- (void)updateSafeAreaInsets
+{
+    if (!_renderer) return;
+    
+    // Get safe area insets from the view.
+    // On iOS 11+, this accounts for notches, home indicators, etc.
+    UIEdgeInsets safeInsets = self.view.safeAreaInsets;
+    CGFloat scale = self.view.contentScaleFactor;
+    
+    // Convert to logical pixels (points) and apply to renderer.
+    Widgets::EdgeInsets insets;
+    insets.left   = static_cast<float>(safeInsets.left * scale);
+    insets.top    = static_cast<float>(safeInsets.top * scale);
+    insets.right  = static_cast<float>(safeInsets.right * scale);
+    insets.bottom = static_cast<float>(safeInsets.bottom * scale);
+    
+    _renderer->setViewInsets(insets);
 }
 
 @end

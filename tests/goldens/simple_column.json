@@ -1,0 +1,129 @@
+{
+  "description": "Simple Column with Padding and SizedBox - Flutter reference",
+  "viewport": {
+    "width": 400,
+    "height": 600
+  },
+  "layout": {
+    "type": "RenderFlex",
+    "size": {
+      "width": 400,
+      "height": 600
+    },
+    "offset": {
+      "x": 0,
+      "y": 0
+    },
+    "constraints": {
+      "min_width": 400,
+      "max_width": 400,
+      "min_height": 600,
+      "max_height": 600
+    },
+    "properties": {
+      "axis": "vertical",
+      "main_axis_size": "max"
+    },
+    "children": [
+      {
+        "type": "RenderPadding",
+        "size": {
+          "width": 400,
+          "height": 116
+        },
+        "offset": {
+          "x": 0,
+          "y": 0
+        },
+        "constraints": {
+          "min_width": 0,
+          "max_width": 400,
+          "min_height": 0,
+          "max_height": 600
+        },
+        "properties": {
+          "padding_left": 8,
+          "padding_top": 8,
+          "padding_right": 8,
+          "padding_bottom": 8
+        },
+        "children": [
+          {
+            "type": "RenderColoredBox",
+            "size": {
+              "width": 384,
+              "height": 100
+            },
+            "offset": {
+              "x": 8,
+              "y": 8
+            },
+            "constraints": {
+              "min_width": 0,
+              "max_width": 400,
+              "min_height": 0,
+              "max_height": 584
+            },
+            "properties": {
+              "color": "#FF2196F3"
+            }
+          }
+        ]
+      },
+      {
+        "type": "RenderSizedBox",
+        "size": {
+          "width": 400,
+          "height": 484
+        },
+        "offset": {
+          "x": 0,
+          "y": 116
+        },
+        "constraints": {
+          "min_width": 0,
+          "max_width": 400,
+          "min_height": 0,
+          "max_height": 484
+        },
+        "properties": {
+          "width": null,
+          "height": null
+        }
+      }
+    ]
+  },
+  "paint_commands": [
+    {
+      "type": "push_transform",
+      "matrix": [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        8, 8, 0, 1
+      ]
+    },
+    {
+      "type": "rect",
+      "rect": {
+        "left": 0,
+        "top": 0,
+        "right": 384,
+        "bottom": 100
+      },
+      "paint": {
+        "color": {
+          "r": 0.129,
+          "g": 0.588,
+          "b": 0.953,
+          "a": 1.0
+        },
+        "style": "fill",
+        "stroke_width": 0
+      }
+    },
+    {
+      "type": "pop_transform"
+    }
+  ]
+}

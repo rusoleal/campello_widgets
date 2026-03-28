@@ -1,0 +1,616 @@
+#include <campello_widgets/testing/visual_fidelity.hpp>
+#include <campello_widgets/ui/paint_context.hpp>
+#include <campello_widgets/ui/render_box.hpp>
+#include <campello_widgets/ui/color.hpp>
+#include <vector_math/matrix4.hpp>
+#include <campello_widgets/ui/rect.hpp>
+
+// stb_image for PNG loading
+#define STB_IMAGE_IMPLEMENTATION
+#include "../../tests/third_party/stb_image.h"
+
+// stb_image_write for PNG output
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../../tests/third_party/stb_image_write.h"
+
+#include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+
+namespace cw = systems::leal::campello_widgets;
+namespace cwt = systems::leal::campello_widgets::testing;
+namespace vm = systems::leal::vector_math;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+static int clamp(int x, int min, int max)
+{
+    if (x < min) return min;
+    if (x > max) return max;
+    return x;
+}
+
+static float clampf(float x, float min, float max)
+{
+    if (x < min) return min;
+    if (x > max) return max;
+    return x;
+}
+
+static uint8_t floatToByte(float f)
+{
+    return static_cast<uint8_t>(clamp(static_cast<int>(f * 255.0f), 0, 255));
+}
+
+static void blendPixel(uint8_t* pixel, const cw::Color& color)
+{
+    // Simple alpha blend: src over dst
+    float srcA = color.a;
+    float dstA = pixel[3] / 255.0f;
+    float outA = srcA + dstA * (1.0f - srcA);
+
+    if (outA > 0.001f) {
+        pixel[0] = floatToByte((color.r * srcA + pixel[0] / 255.0f * dstA * (1.0f - srcA)) / outA);
+        pixel[1] = floatToByte((color.g * srcA + pixel[1] / 255.0f * dstA * (1.0f - srcA)) / outA);
+        pixel[2] = floatToByte((color.b * srcA + pixel[2] / 255.0f * dstA * (1.0f - srcA)) / outA);
+        pixel[3] = floatToByte(outA);
+    }
+}
+
+// ============================================================================
+// ClipStack
+// ============================================================================
+
+bool cwt::VisualRenderer::ClipStack::isPointInside(float x, float y) const
+{
+    if (stack.empty()) return true;
+    
+    for (const auto& rect : stack) {
+        if (x < rect.left() || x >= rect.right() ||
+            y < rect.top() || y >= rect.bottom()) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ============================================================================
+// VisualRenderer
+// ============================================================================
+
+cwt::VisualRenderer::VisualRenderer(int width, int height)
+    : width_(width)
+    , height_(height)
+    , pixels_(width * height * 4, 0)
+{
+}
+
+cwt::VisualRenderer::~VisualRenderer() = default;
+
+void cwt::VisualRenderer::clear(const cw::Color& color)
+{
+    uint8_t r = floatToByte(color.r);
+    uint8_t g = floatToByte(color.g);
+    uint8_t b = floatToByte(color.b);
+    uint8_t a = floatToByte(color.a);
+
+    for (int i = 0; i < width_ * height_; ++i) {
+        pixels_[i * 4 + 0] = r;
+        pixels_[i * 4 + 1] = g;
+        pixels_[i * 4 + 2] = b;
+        pixels_[i * 4 + 3] = a;
+    }
+}
+
+void cwt::VisualRenderer::setPixel(int x, int y, const cw::Color& color)
+{
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) return;
+    int idx = (y * width_ + x) * 4;
+    blendPixel(&pixels_[idx], color);
+}
+
+void cwt::VisualRenderer::fillRect(int x1, int y1, int x2, int y2, const cw::Color& color)
+{
+    int startX = clamp(std::min(x1, x2), 0, width_ - 1);
+    int endX = clamp(std::max(x1, x2), 0, width_ - 1);
+    int startY = clamp(std::min(y1, y2), 0, height_ - 1);
+    int endY = clamp(std::max(y1, y2), 0, height_ - 1);
+
+    for (int y = startY; y <= endY; ++y) {
+        for (int x = startX; x <= endX; ++x) {
+            setPixel(x, y, color);
+        }
+    }
+}
+
+void cwt::VisualRenderer::strokeRect(int x1, int y1, int x2, int y2, int strokeWidth, const cw::Color& color)
+{
+    int halfStroke = strokeWidth / 2;
+    
+    // Top edge
+    fillRect(x1 - halfStroke, y1 - halfStroke, x2 + halfStroke, y1 + halfStroke, color);
+    // Bottom edge
+    fillRect(x1 - halfStroke, y2 - halfStroke, x2 + halfStroke, y2 + halfStroke, color);
+    // Left edge
+    fillRect(x1 - halfStroke, y1, x1 + halfStroke, y2, color);
+    // Right edge
+    fillRect(x2 - halfStroke, y1, x2 + halfStroke, y2, color);
+}
+
+void cwt::VisualRenderer::fillCircle(int cx, int cy, int radius, const cw::Color& color)
+{
+    int startX = clamp(cx - radius, 0, width_ - 1);
+    int endX = clamp(cx + radius, 0, width_ - 1);
+    int startY = clamp(cy - radius, 0, height_ - 1);
+    int endY = clamp(cy + radius, 0, height_ - 1);
+
+    int radiusSq = radius * radius;
+
+    for (int y = startY; y <= endY; ++y) {
+        for (int x = startX; x <= endX; ++x) {
+            int dx = x - cx;
+            int dy = y - cy;
+            if (dx * dx + dy * dy <= radiusSq) {
+                setPixel(x, y, color);
+            }
+        }
+    }
+}
+
+void cwt::VisualRenderer::fillRoundedRect(int x1, int y1, int x2, int y2, int radius, const cw::Color& color)
+{
+    // Clamp radius to fit in rect
+    int maxRadius = std::min(std::abs(x2 - x1), std::abs(y2 - y1)) / 2;
+    radius = std::min(radius, maxRadius);
+
+    int left = std::min(x1, x2);
+    int right = std::max(x1, x2);
+    int top = std::min(y1, y2);
+    int bottom = std::max(y1, y2);
+
+    // Fill center rect
+    fillRect(left + radius, top, right - radius, bottom, color);
+    fillRect(left, top + radius, left + radius, bottom - radius, color);
+    fillRect(right - radius, top + radius, right, bottom - radius, color);
+
+    // Fill corners as quarter circles
+    for (int dy = 0; dy <= radius; ++dy) {
+        for (int dx = 0; dx <= radius; ++dx) {
+            if (dx * dx + dy * dy <= radius * radius) {
+                // Top-left corner
+                setPixel(left + radius - dx, top + radius - dy, color);
+                // Top-right corner
+                setPixel(right - radius + dx, top + radius - dy, color);
+                // Bottom-left corner
+                setPixel(left + radius - dx, bottom - radius + dy, color);
+                // Bottom-right corner
+                setPixel(right - radius + dx, bottom - radius + dy, color);
+            }
+        }
+    }
+}
+
+void cwt::VisualRenderer::drawLine(int x1, int y1, int x2, int y2, int strokeWidth, const cw::Color& color)
+{
+    // Bresenham's line algorithm
+    int dx = std::abs(x2 - x1);
+    int dy = std::abs(y2 - y1);
+    int sx = (x1 < x2) ? 1 : -1;
+    int sy = (y1 < y2) ? 1 : -1;
+    int err = dx - dy;
+
+    int halfStroke = std::max(1, strokeWidth / 2);
+
+    while (true) {
+        // Draw a small square for thickness
+        fillRect(x1 - halfStroke, y1 - halfStroke, x1 + halfStroke, y1 + halfStroke, color);
+
+        if (x1 == x2 && y1 == y2) break;
+        int e2 = 2 * err;
+        if (e2 > -dy) {
+            err -= dy;
+            x1 += sx;
+        }
+        if (e2 < dx) {
+            err += dx;
+            y1 += sy;
+        }
+    }
+}
+
+// Visitor struct for DrawCommand processing
+struct DrawCommandVisitor {
+    cwt::VisualRenderer* renderer;
+    cwt::VisualRenderer::TransformStack* transforms;
+    cwt::VisualRenderer::ClipStack* clips;
+
+    void operator()(const cw::DrawRectCmd& c) {
+        auto tl = transforms->current() * vm::Vector4<float>(c.rect.left(), c.rect.top(), 0.0f, 1.0f);
+        auto br = transforms->current() * vm::Vector4<float>(c.rect.right(), c.rect.bottom(), 0.0f, 1.0f);
+
+        int x1 = static_cast<int>(tl.x());
+        int y1 = static_cast<int>(tl.y());
+        int x2 = static_cast<int>(br.x());
+        int y2 = static_cast<int>(br.y());
+
+        if (c.paint.style == cw::PaintStyle::fill) {
+            renderer->fillRect(x1, y1, x2, y2, c.paint.color);
+        } else {
+            renderer->strokeRect(x1, y1, x2, y2, static_cast<int>(c.paint.stroke_width), c.paint.color);
+        }
+    }
+
+    void operator()(const cw::DrawCircleCmd& c) {
+        auto center = transforms->current() * vm::Vector4<float>(c.center.x, c.center.y, 0.0f, 1.0f);
+        auto scaleVec = transforms->current() * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+        float scale = std::sqrt(scaleVec.x() * scaleVec.x() + scaleVec.y() * scaleVec.y());
+        int radius = static_cast<int>(c.radius * scale);
+        int cx = static_cast<int>(center.x());
+        int cy = static_cast<int>(center.y());
+
+        renderer->fillCircle(cx, cy, radius, c.paint.color);
+    }
+
+    void operator()(const cw::DrawRRectCmd& c) {
+        auto tl = transforms->current() * vm::Vector4<float>(c.rrect.rect.left(), c.rrect.rect.top(), 0.0f, 1.0f);
+        auto br = transforms->current() * vm::Vector4<float>(c.rrect.rect.right(), c.rrect.rect.bottom(), 0.0f, 1.0f);
+
+        int x1 = static_cast<int>(tl.x());
+        int y1 = static_cast<int>(tl.y());
+        int x2 = static_cast<int>(br.x());
+        int y2 = static_cast<int>(br.y());
+        int radius = static_cast<int>((c.rrect.radius_x + c.rrect.radius_y) / 2.0f);
+
+        renderer->fillRoundedRect(x1, y1, x2, y2, radius, c.paint.color);
+    }
+
+    void operator()(const cw::DrawLineCmd& c) {
+        auto p1 = transforms->current() * vm::Vector4<float>(c.p1.x, c.p1.y, 0.0f, 1.0f);
+        auto p2 = transforms->current() * vm::Vector4<float>(c.p2.x, c.p2.y, 0.0f, 1.0f);
+
+        int x1 = static_cast<int>(p1.x());
+        int y1 = static_cast<int>(p1.y());
+        int x2 = static_cast<int>(p2.x());
+        int y2 = static_cast<int>(p2.y());
+
+        renderer->drawLine(x1, y1, x2, y2, static_cast<int>(c.paint.stroke_width), c.paint.color);
+    }
+
+    void operator()(const cw::PushTransformCmd& c) {
+        transforms->push(c.transform);
+    }
+
+    void operator()(const cw::PopTransformCmd&) {
+        transforms->pop();
+    }
+
+    void operator()(const cw::PushClipRectCmd& c) {
+        clips->push(c.rect);
+    }
+
+    void operator()(const cw::PopClipRectCmd&) {
+        clips->pop();
+    }
+
+    void operator()(const cw::PushClipRRectCmd& c) {
+        clips->push(c.rrect.rect);
+    }
+
+    // Unhandled command types
+    void operator()(const cw::DrawOvalCmd&) {}
+    void operator()(const cw::DrawArcCmd&) {}
+    void operator()(const cw::DrawPointsCmd&) {}
+    void operator()(const cw::DrawPathCmd&) {}
+    void operator()(const cw::DrawShadowCmd&) {}
+    void operator()(const cw::DrawTextCmd&) {}
+    void operator()(const cw::DrawImageCmd&) {}
+    void operator()(const cw::PushClipPathCmd&) {}
+    void operator()(const cw::SaveLayerCmd&) {}
+};
+
+void cwt::VisualRenderer::renderDrawList(const cw::DrawList& commands)
+{
+    TransformStack transforms;
+    ClipStack clips;
+    clips.push(cw::Rect::fromLTWH(0, 0, static_cast<float>(width_), static_cast<float>(height_)));
+
+    DrawCommandVisitor visitor{this, &transforms, &clips};
+
+    for (const auto& cmd : commands) {
+        std::visit(visitor, cmd);
+    }
+}
+
+bool cwt::VisualRenderer::saveToPng(const std::string& filepath)
+{
+    // stbi_write_png expects rows from top to bottom, but our buffer is already in that order
+    int result = stbi_write_png(filepath.c_str(), width_, height_, 4, pixels_.data(), width_ * 4);
+    return result != 0;
+}
+
+// ============================================================================
+// Capture to PNG
+// ============================================================================
+
+bool cwt::captureToPng(
+    cw::RenderObject& root,
+    const cw::BoxConstraints& constraints,
+    float viewportWidth,
+    float viewportHeight,
+    const std::string& outputPath)
+{
+    try {
+        // Perform layout
+        root.layout(constraints);
+
+        // Capture paint commands
+        cw::PaintContext context(viewportWidth, viewportHeight);
+        root.paint(context, cw::Offset::zero());
+
+        // Render to PNG
+        VisualRenderer renderer(static_cast<int>(viewportWidth), static_cast<int>(viewportHeight));
+        renderer.clear(cw::Color::white());  // Default white background
+        renderer.renderDrawList(context.commands());
+        
+        return renderer.saveToPng(outputPath);
+    } catch (const std::exception& e) {
+        std::cerr << "captureToPng failed: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// ============================================================================
+// Directory Helpers
+// ============================================================================
+
+std::string cwt::getVisualFidelityDirectory()
+{
+    std::filesystem::path paths[] = {
+        "tests/visual_fidelity",
+        "../tests/visual_fidelity",
+        "../../tests/visual_fidelity",
+    };
+
+    for (const auto& p : paths) {
+        if (std::filesystem::exists(p)) {
+            return std::filesystem::absolute(p).string();
+        }
+    }
+
+    return std::filesystem::absolute("tests/visual_fidelity").string();
+}
+
+std::string cwt::getFlutterGoldensDirectory()
+{
+    return (std::filesystem::path(getVisualFidelityDirectory()) / "flutter_goldens").string();
+}
+
+std::string cwt::getCppOutputDirectory()
+{
+    auto path = std::filesystem::path(getVisualFidelityDirectory()) / "cpp_output";
+    std::filesystem::create_directories(path);
+    return path.string();
+}
+
+std::string cwt::getDiffDirectory()
+{
+    auto path = std::filesystem::path(getVisualFidelityDirectory()) / "diffs";
+    std::filesystem::create_directories(path);
+    return path.string();
+}
+
+// ============================================================================
+// Visual Diff Generation
+// ============================================================================
+
+static void generateVisualDiff(
+    const std::string& expectedPath,
+    const std::string& actualPath,
+    const std::string& outputPath,
+    int tolerance,
+    cwt::ImageComparisonResult& result)
+{
+    // Load expected image
+    int expWidth = 0, expHeight = 0, expChannels = 0;
+    unsigned char* expData = stbi_load(expectedPath.c_str(), &expWidth, &expHeight, &expChannels, 4);
+    if (!expData) {
+        result.errors.push_back("Failed to decode expected image: " + expectedPath);
+        return;
+    }
+    
+    // Load actual image
+    int actWidth = 0, actHeight = 0, actChannels = 0;
+    unsigned char* actData = stbi_load(actualPath.c_str(), &actWidth, &actHeight, &actChannels, 4);
+    if (!actData) {
+        stbi_image_free(expData);
+        result.errors.push_back("Failed to decode actual image: " + actualPath);
+        return;
+    }
+    
+    // Check dimensions
+    if (expWidth != actWidth || expHeight != actHeight) {
+        stbi_image_free(expData);
+        stbi_image_free(actData);
+        result.errors.push_back("Cannot generate diff: image dimensions differ (" +
+            std::to_string(expWidth) + "x" + std::to_string(expHeight) + " vs " +
+            std::to_string(actWidth) + "x" + std::to_string(actHeight) + ")");
+        return;
+    }
+    
+    const int width = expWidth;
+    const int height = expHeight;
+    const int totalPixels = width * height;
+    
+    // Create diff image (RGBA)
+    std::vector<unsigned char> diffPixels(totalPixels * 4);
+    
+    int diffPixelCount = 0;
+    int maxChannelDiff = 0;
+    
+    for (int i = 0; i < totalPixels; i++) {
+        const int idx = i * 4;
+        
+        unsigned char r1 = expData[idx];
+        unsigned char g1 = expData[idx + 1];
+        unsigned char b1 = expData[idx + 2];
+        unsigned char a1 = expData[idx + 3];
+        
+        unsigned char r2 = actData[idx];
+        unsigned char g2 = actData[idx + 1];
+        unsigned char b2 = actData[idx + 2];
+        unsigned char a2 = actData[idx + 3];
+        
+        // Calculate per-channel differences
+        int dr = std::abs(static_cast<int>(r1) - static_cast<int>(r2));
+        int dg = std::abs(static_cast<int>(g1) - static_cast<int>(g2));
+        int db = std::abs(static_cast<int>(b1) - static_cast<int>(b2));
+        int da = std::abs(static_cast<int>(a1) - static_cast<int>(a2));
+        
+        int maxDiff = std::max({dr, dg, db, da});
+        maxChannelDiff = std::max(maxChannelDiff, maxDiff);
+        
+        // Determine diff visualization
+        if (maxDiff <= tolerance) {
+            // Pixels match within tolerance - show darkened expected pixel
+            diffPixels[idx] = static_cast<unsigned char>(r1 * 0.3f);
+            diffPixels[idx + 1] = static_cast<unsigned char>(g1 * 0.3f);
+            diffPixels[idx + 2] = static_cast<unsigned char>(b1 * 0.3f);
+            diffPixels[idx + 3] = 255;
+        } else {
+            // Pixels differ - highlight in bright red/yellow
+            diffPixelCount++;
+            
+            // Scale difference intensity
+            int intensity = std::min(255, maxDiff * 2);
+            
+            // Red for differences, brighter = more different
+            diffPixels[idx] = 255;  // R
+            diffPixels[idx + 1] = static_cast<unsigned char>(255 - intensity);  // G
+            diffPixels[idx + 2] = static_cast<unsigned char>(255 - intensity);  // B
+            diffPixels[idx + 3] = 255;  // A
+        }
+    }
+    
+    result.maxChannelDiff = static_cast<double>(maxChannelDiff) / 255.0;
+    
+    // Add a 2-pixel yellow border to highlight differences
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            const int idx = (y * width + x) * 4;
+            
+            // Check if we're on the border
+            if (x < 2 || x >= width - 2 || y < 2 || y >= height - 2) {
+                // Only color border if there's a difference in this row/column
+                bool hasDiffInRow = false;
+                bool hasDiffInCol = false;
+                
+                // Check row for differences
+                for (int cx = 0; cx < width && !hasDiffInRow; cx++) {
+                    int cidx = (y * width + cx) * 4;
+                    if (diffPixels[cidx] == 255 && diffPixels[cidx + 1] < 255) {
+                        hasDiffInRow = true;
+                    }
+                }
+                
+                // Check column for differences
+                for (int cy = 0; cy < height && !hasDiffInCol; cy++) {
+                    int cidx = (cy * width + x) * 4;
+                    if (diffPixels[cidx] == 255 && diffPixels[cidx + 1] < 255) {
+                        hasDiffInCol = true;
+                    }
+                }
+                
+                if (hasDiffInRow || hasDiffInCol) {
+                    diffPixels[idx] = 255;      // Yellow border
+                    diffPixels[idx + 1] = 255;
+                    diffPixels[idx + 2] = 0;
+                    diffPixels[idx + 3] = 255;
+                }
+            }
+        }
+    }
+    
+    // Save diff image
+    int saveResult = stbi_write_png(outputPath.c_str(), width, height, 4, diffPixels.data(), width * 4);
+    
+    stbi_image_free(expData);
+    stbi_image_free(actData);
+    
+    if (saveResult == 0) {
+        result.errors.push_back("Failed to save diff image: " + outputPath);
+    }
+}
+
+// ============================================================================
+// Image Comparison
+// ============================================================================
+
+cwt::ImageComparisonResult cwt::comparePngImages(
+    const std::string& expectedPath,
+    const std::string& actualPath,
+    int tolerance,
+    bool generateDiff)
+{
+    ImageComparisonResult result;
+
+    // Read expected file
+    std::ifstream expectedFile(expectedPath, std::ios::binary);
+    if (!expectedFile) {
+        result.match = false;
+        result.errors.push_back("Failed to open expected image: " + expectedPath);
+        return result;
+    }
+
+    std::vector<uint8_t> expectedData(
+        (std::istreambuf_iterator<char>(expectedFile)),
+        std::istreambuf_iterator<char>()
+    );
+
+    // Read actual file
+    std::ifstream actualFile(actualPath, std::ios::binary);
+    if (!actualFile) {
+        result.match = false;
+        result.errors.push_back("Failed to open actual image: " + actualPath);
+        return result;
+    }
+
+    std::vector<uint8_t> actualData(
+        (std::istreambuf_iterator<char>(actualFile)),
+        std::istreambuf_iterator<char>()
+    );
+
+    // For now, do a simple binary comparison with tolerance
+    // In a full implementation, we'd decode the PNGs and compare pixel values
+    if (expectedData.size() != actualData.size()) {
+        result.match = false;
+        result.errors.push_back("Image sizes differ");
+    } else {
+        size_t diffCount = 0;
+        for (size_t i = 0; i < expectedData.size(); ++i) {
+            if (std::abs(static_cast<int>(expectedData[i]) - static_cast<int>(actualData[i])) > tolerance) {
+                diffCount++;
+            }
+        }
+        result.pixelDifference = static_cast<double>(diffCount) / expectedData.size() * 100.0;
+        if (diffCount > 0) {
+            result.match = false;
+            result.errors.push_back("Images differ by " + std::to_string(result.pixelDifference) + "%");
+        }
+    }
+
+    // Generate diff image if requested
+    if (generateDiff && !result.match) {
+        std::filesystem::path diffPath = std::filesystem::path(getDiffDirectory()) / 
+            (std::filesystem::path(expectedPath).stem().string() + "_diff.png");
+        result.diffImagePath = diffPath.string();
+        
+        // Decode both PNGs and create visual diff
+        generateVisualDiff(expectedPath, actualPath, result.diffImagePath, tolerance, result);
+    }
+
+    return result;
+}

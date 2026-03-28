@@ -28,6 +28,19 @@ namespace systems::leal::campello_widgets
         WidgetRef             child;
 
         WidgetRef build(BuildContext&) const override { return child; }
+
+        /**
+         * @brief Creates a Positioned that fills the Stack (all edges = 0).
+         */
+        static std::shared_ptr<Positioned> fill(const WidgetRef& child) {
+            auto p = std::make_shared<Positioned>();
+            p->left = 0;
+            p->top = 0;
+            p->right = 0;
+            p->bottom = 0;
+            p->child = child;
+            return p;
+        }
     };
 
 } // namespace systems::leal::campello_widgets

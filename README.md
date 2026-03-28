@@ -101,6 +101,37 @@ public:
 };
 ```
 
+## Testing
+
+### Unit Tests
+
+```bash
+./test.sh              # Run all unit tests
+./test.sh --fidelity   # Run Flutter fidelity tests
+```
+
+### Flutter Fidelity Testing
+
+Validate that campello_widgets renders identically to Flutter:
+
+```bash
+# Full workflow: generate Flutter goldens + run C++ tests
+./run_fidelity_tests.sh
+
+# C++ tests only (using existing goldens)
+./run_cpp_tests_only.sh
+
+# Specific test
+./run_fidelity_tests.sh --test SimpleColumn
+```
+
+The fidelity testing framework compares:
+- **Layout**: Render tree structure, sizes, positions
+- **Paint**: Draw commands emitted by Canvas
+- **Visual** (optional): Pixel-level comparison
+
+See [FIDELITY_TESTING.md](tests/FIDELITY_TESTING.md) for details.
+
 ## Build System
 
 The project uses CMake with C++20 as the minimum standard. `campello_gpu` and `campello_input` are consumed as CMake package dependencies.

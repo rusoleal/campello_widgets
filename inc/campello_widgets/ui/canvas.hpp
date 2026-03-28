@@ -7,6 +7,8 @@
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/text_span.hpp>
+#include <campello_widgets/ui/path.hpp>
+#include <campello_widgets/ui/rrect.hpp>
 
 namespace systems::leal::campello_gpu { class Texture; }
 
@@ -42,6 +44,50 @@ namespace systems::leal::campello_widgets
         /** @brief Fills or strokes an axis-aligned rectangle. */
         void drawRect(const Rect& rect, const Paint& paint);
 
+        /** @brief Draws a circle with the given center and radius. */
+        void drawCircle(const Offset& center, float radius, const Paint& paint);
+
+        /** @brief Draws an oval that fills the given rectangle. */
+        void drawOval(const Rect& rect, const Paint& paint);
+
+        /**
+         * @brief Draws an arc.
+         * 
+         * @param rect        The bounding rectangle of the full oval
+         * @param start_angle Start angle in radians (0 = 3 o'clock)
+         * @param sweep_angle Sweep angle in radians (positive = clockwise)
+         * @param use_center  If true, draws a pie wedge including center
+         * @param paint       The paint to use
+         */
+        void drawArc(const Rect& rect, float start_angle, float sweep_angle, 
+                     bool use_center, const Paint& paint);
+
+        /** @brief Draws a line between two points. */
+        void drawLine(const Offset& p1, const Offset& p2, const Paint& paint);
+
+        /** @brief Draws a rounded rectangle. */
+        void drawRRect(const RRect& rrect, const Paint& paint);
+
+        /** @brief Draws the difference of two rounded rectangles. */
+        void drawDRRect(const RRect& outer, const RRect& inner, const Paint& paint);
+
+        /** @brief Draws a path. */
+        void drawPath(const Path& path, const Paint& paint);
+
+        /** @brief Draws points according to the given mode. */
+        void drawPoints(PointMode mode, const std::vector<Offset>& points, const Paint& paint);
+
+        /**
+         * @brief Draws a shadow for a path.
+         * 
+         * @param path                The path casting the shadow
+         * @param color               The shadow color
+         * @param elevation           The material elevation
+         * @param transparent_occluder Whether the path is transparent
+         */
+        void drawShadow(const Path& path, const Color& color, float elevation, 
+                        bool transparent_occluder);
+
         /**
          * @brief Draws a text span with its top-left corner at `origin`.
          *
@@ -63,6 +109,12 @@ namespace systems::leal::campello_widgets
             const Rect& src_rect,
             const Rect& dst_rect);
 
+        /** @brief Fills the canvas with the given paint. */
+        void drawPaint(const Paint& paint);
+
+        /** @brief Fills the canvas with the given color using a blend mode. */
+        void drawColor(const Color& color, BlendMode blend_mode);
+
         // ------------------------------------------------------------------
         // State management
         // ------------------------------------------------------------------
@@ -76,12 +128,44 @@ namespace systems::leal::campello_widgets
         void save();
 
         /**
+         * @brief Saves and creates a new compositing layer.
+         * 
+         * This is similar to save() but also creates an offscreen buffer that
+         * subsequent draw calls will render into. When restore() is called,
+         * the layer is composited with the given paint's blend mode and color filter.
+         * 
+         * @param bounds Optional bounds for the layer (empty = use current clip).
+         * @param paint  Paint containing blend mode and color filter.
+         */
+        void saveLayer(const Rect& bounds, const Paint& paint);
+
+        /**
          * @brief Restores the transform and clip saved by the matching `save()`.
          *
          * Emits the necessary PopTransform and PopClipRect commands into the
          * DrawList to mirror the state changes made since the matching save.
          */
         void restore();
+
+        /**
+         * @brief Restores to a specific save count.
+         * 
+         * @param count The target save count (from getSaveCount).
+         */
+        void restoreToCount(int count);
+
+        /**
+         * @brief Returns the current save count.
+         * 
+         * The save count starts at 1 for a clean canvas. Each save() or saveLayer()
+         * increments it, and restore() decrements it.
+         */
+        int getSaveCount() const;
+
+        /**
+         * @brief Returns the current transform matrix.
+         */
+        Matrix4 getTransform() const { return current_transform_; };
 
         // ------------------------------------------------------------------
         // Transform modifiers
@@ -93,6 +177,30 @@ namespace systems::leal::campello_widgets
          * Equivalent to `transform(Matrix4::translate({dx, dy, 0.0f}))`.
          */
         void translate(float dx, float dy);
+
+        /**
+         * @brief Post-multiplies a rotation onto the current transform.
+         * 
+         * @param radians Angle in radians clockwise.
+         */
+        void rotate(float radians);
+
+        /**
+         * @brief Post-multiplies a scale onto the current transform.
+         * 
+         * @param sx Horizontal scale factor.
+         * @param sy Vertical scale factor (defaults to sx if not specified).
+         */
+        void scale(float sx, float sy);
+        void scale(float s) { scale(s, s); }
+
+        /**
+         * @brief Post-multiplies a skew onto the current transform.
+         * 
+         * @param sx Horizontal skew in radians.
+         * @param sy Vertical skew in radians.
+         */
+        void skew(float sx, float sy);
 
         /**
          * @brief Post-multiplies `matrix` onto the current transform.
@@ -113,6 +221,16 @@ namespace systems::leal::campello_widgets
          * Emits a PushClipRectCmd. Must be within a save/restore pair.
          */
         void clipRect(const Rect& rect);
+
+        /**
+         * @brief Intersects `rrect` with the current clip.
+         */
+        void clipRRect(const RRect& rrect);
+
+        /**
+         * @brief Intersects `path` with the current clip.
+         */
+        void clipPath(const Path& path);
 
         // ------------------------------------------------------------------
         // Opacity

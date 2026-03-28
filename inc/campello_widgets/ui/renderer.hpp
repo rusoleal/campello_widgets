@@ -8,6 +8,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/draw_backend.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
+#include <campello_widgets/ui/edge_insets.hpp>
 
 // campello_gpu forward declarations
 namespace systems::leal::campello_gpu
@@ -18,6 +19,18 @@ namespace systems::leal::campello_gpu
 
 namespace systems::leal::campello_widgets
 {
+
+    // Forward declaration for static accessor
+    class Renderer;
+
+    namespace detail {
+        // Internal accessor for widgets that need to query view insets.
+        // This is a temporary solution until MediaQuery is implemented.
+        inline Renderer*& currentRenderer() noexcept {
+            static Renderer* instance = nullptr;
+            return instance;
+        }
+    }
 
     /**
      * @brief Drives the per-frame render loop: layout → paint → GPU submit.
@@ -109,6 +122,35 @@ namespace systems::leal::campello_widgets
 
         campello_gpu::Device& device() noexcept { return *device_; }
 
+        // ------------------------------------------------------------------
+        // View insets (safe area, keyboard, etc.)
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Sets the view insets to apply around the root render object.
+         *
+         * View insets represent areas of the screen that are partially or fully
+         * obscured by system UI (status bar, notch, home indicator, keyboard).
+         * The renderer subtracts these insets from the viewport constraints
+         * passed to the root render object, effectively creating a "safe area"
+         * where content won't be obscured.
+         *
+         * Call this whenever the safe area changes (e.g., on orientation change,
+         * keyboard show/hide, or when entering/leaving multi-window mode).
+         *
+         * @param insets The insets to apply (left, top, right, bottom in logical pixels).
+         */
+        void setViewInsets(const EdgeInsets& insets) noexcept
+        {
+            if (!(view_insets_ == insets)) {
+                view_insets_ = insets;
+                if (root_) root_->markNeedsLayout();
+            }
+        }
+
+        /** @brief Returns the current view insets. */
+        EdgeInsets viewInsets() const noexcept { return view_insets_; }
+
     private:
         void layoutPass(float viewport_width, float viewport_height);
 
@@ -145,6 +187,9 @@ namespace systems::leal::campello_widgets
         int      perf_head_     = 0;  ///< next write slot
         int      perf_count_    = 0;  ///< number of valid samples (≤ kPerfSamples)
         uint64_t last_frame_ms_ = 0;  ///< timestamp of the previous renderFrame call
+
+        // --- view insets (safe area) ---
+        EdgeInsets view_insets_;
     };
 
 } // namespace systems::leal::campello_widgets

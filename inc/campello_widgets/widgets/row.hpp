@@ -13,6 +13,8 @@ namespace systems::leal::campello_widgets
     class Row : public Flex
     {
     public:
+        Row() { axis = Axis::horizontal; }
+
         // children only — alignment defaults to start/start/max
         explicit Row(WidgetList ch)
         {
