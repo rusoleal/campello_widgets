@@ -5,6 +5,15 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-03-28
+
+### Added
+
+- `Transform` widget and `RenderTransform` RenderBox: apply a `Matrix4` transform (rotate, scale, translate) to a child widget; pivot controlled by `Alignment`; layout-transparent (transform affects painting only)
+- Factory helpers on `Transform`: `Transform::rotate()`, `Transform::scale()`, `Transform::translate()`; static matrix builders `rotation()`, `scaling()`, `translation()` mirrored on both `Transform` and `RenderTransform`
+- `GpuVisualRenderer`: headless Metal-backed offscreen renderer for visual fidelity tests; renders a `DrawList` to an RGBA8 texture and exports PNG; falls back gracefully when no GPU is available (CI); stub implementation for non-Metal platforms
+- Visual fidelity test infrastructure: `test_visual_fidelity.cpp` and `test_fidelity.cpp` extended with GPU-rendered golden comparisons; `flutter_fidelity_tester` Flutter app generates reference goldens
+
 ## [0.1.1] - 2026-03-28
 
 ### Changed

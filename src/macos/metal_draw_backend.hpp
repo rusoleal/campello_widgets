@@ -48,6 +48,30 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawCircle(
+        const DrawCircleCmd&             cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawOval(
+        const DrawOvalCmd&               cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawRRect(
+        const DrawRRectCmd&              cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawLine(
+        const DrawLineCmd&               cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     void drawText(
         const DrawTextCmd&               cmd,
         const Matrix4&                   transform,
@@ -64,9 +88,18 @@ public:
 
     void setViewport(float w, float h) noexcept { vp_w_ = w; vp_h_ = h; }
 
+    /** Returns true if all render pipelines were successfully compiled. */
+    bool isValid() const noexcept { return rect_pipeline_ != nullptr; }
+
 private:
     void drawFilledRect(
         float x, float y, float w, float h,
+        const Color& color,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    void drawShape(
+        float x, float y, float w, float h,
+        float corner_r, float stroke_w, float kind,
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
@@ -81,6 +114,8 @@ private:
     Color                                          bg_color_;
 
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  shape_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_bgl_;
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;

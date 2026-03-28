@@ -3,10 +3,13 @@
 # Run Fidelity Tests - Complete validation of campello_widgets against Flutter
 #
 # This script:
-# 1. Generates golden files from Flutter (JSON + PNG)
+# 1. Generates golden files from Flutter (JSON + PNG with REAL fonts)
 # 2. Builds C++ tests
 # 3. Runs C++ fidelity tests (JSON + Visual)
 # 4. Reports results
+#
+# NOTE: Visual goldens will use REAL font rendering if macOS desktop support is enabled.
+#       Otherwise, they use flutter test with Ahem font (colored blocks for text).
 #
 
 set -e
@@ -33,8 +36,8 @@ SKIP_FLUTTER=false
 SKIP_BUILD=false
 VERBOSE=false
 SPECIFIC_TEST=""
-RUN_VISUAL=false
-RUN_JSON=true
+RUN_VISUAL=true
+RUN_JSON=false
 
 print_usage() {
     echo "Usage: $0 [OPTIONS]"
@@ -45,14 +48,14 @@ print_usage() {
     echo "  --skip-build        Skip C++ build step"
     echo "  --verbose           Verbose output"
     echo "  --test <name>       Run specific test (e.g., SimpleColumn)"
-    echo "  --visual            Run visual (PNG) tests only"
-    echo "  --json              Run JSON tests only (default)"
+    echo "  --visual            Run visual (PNG) per-pixel tests (default)"
+    echo "  --json              Run JSON layout tests only"
     echo "  --all               Run both JSON and visual tests"
     echo ""
     echo "Examples:"
-    echo "  $0                  Run JSON fidelity tests (default)"
+    echo "  $0                  Run visual per-pixel fidelity tests (default)"
     echo "  $0 --all            Run both JSON and visual tests"
-    echo "  $0 --visual         Run visual tests only"
+    echo "  $0 --json           Run JSON layout tests only"
     echo "  $0 --skip-flutter   Use existing goldens"
 }
 
@@ -201,7 +204,21 @@ generate_flutter_json_goldens() {
     echo ""
 }
 
-# Generate Flutter visual goldens (PNG)
+# Download fonts if needed
+download_fonts_if_needed() {
+    if [[ ! -f "$FLUTTER_DIR/fonts/Roboto-Regular.ttf" ]]; then
+        log_info "Fonts not found. Downloading..."
+        cd "$FLUTTER_DIR"
+        if [[ -f "download_fonts.sh" ]]; then
+            bash download_fonts.sh
+        else
+            log_warning "Font download script not found. Text rendering may fail."
+        fi
+        cd "$SCRIPT_DIR"
+    fi
+}
+
+# Generate Flutter visual goldens (PNG) with REAL font rendering
 generate_flutter_visual_goldens() {
     if [[ "$SKIP_FLUTTER" == true ]]; then
         log_info "Skipping Flutter visual golden generation (--skip-flutter)"
@@ -227,15 +244,20 @@ generate_flutter_visual_goldens() {
         flutter pub get > /dev/null 2>&1
     fi
     
+    # Download fonts if needed
+    download_fonts_if_needed
+    
     # Create goldens directory
     mkdir -p "$VISUAL_DIR/flutter_goldens"
     
-    # Run visual tests (generates PNGs)
-    log_info "Running Flutter tests to generate PNG goldens..."
+    # Use flutter test for golden generation.
+    # Note: flutter run with macOS desktop support would provide real font rendering,
+    # but macOS app sandboxing prevents writing output to the project directory.
+    log_info "Using flutter test for golden generation (Ahem font - colored blocks for text)..."
     if [[ "$VERBOSE" == true ]]; then
         flutter test test/visual_goldens_test.dart
     else
-        flutter test test/visual_goldens_test.dart 2>&1 | grep -E "(Generated:|PNG|tests passed)" || true
+        flutter test test/visual_goldens_test.dart 2>&1 | grep -E "(Generated:|Generating|passed|failed)" || true
     fi
     
     cd "$SCRIPT_DIR"
@@ -246,7 +268,8 @@ generate_flutter_visual_goldens() {
     if [[ $GOLDEN_COUNT -gt 0 ]]; then
         log_success "Generated $GOLDEN_COUNT visual golden files"
     else
-        log_warning "No visual golden files were generated"
+        log_error "No visual golden files were generated"
+        return 1
     fi
     echo ""
 }

@@ -26,8 +26,10 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <vector_math/vector4.hpp>
 
 namespace GPU = systems::leal::campello_gpu;
+namespace vm  = systems::leal::vector_math;
 
 using namespace systems::leal::campello_widgets;
 
@@ -47,6 +49,25 @@ struct alignas(16) QuadUniforms {
     float srcRect[4];   // u0, v0, u1, v1 (normalised UV)
     float viewport[2];  // width, height (pixels)
     float opacity;      // [0, 1] — scales all pixel channels
+    float _pad;
+};
+
+struct alignas(16) ShapeUniforms {
+    float rect[4];      // x, y, w, h  (bounding box, pixels)
+    float color[4];     // r, g, b, a
+    float viewport[2];  // w, h
+    float corner_r;     // corner radius (rrect); 0 for circle/oval
+    float stroke_w;     // 0 = fill, >0 = stroke width
+    float kind;         // 0 = rrect,  1 = circle/oval
+    float _pad[3];
+};
+
+struct alignas(16) LineUniforms {
+    float p1[4];        // xy: start (pixels), zw: unused
+    float p2[4];        // xy: end   (pixels), zw: unused
+    float color[4];
+    float viewport[2];
+    float stroke_w;
     float _pad;
 };
 
@@ -123,6 +144,60 @@ MetalDrawBackend::MetalDrawBackend(
         quad_pipeline_ = device_->createRenderPipeline(desc);
     }
 
+    // --- Shape pipeline (SDF circle/oval/rrect) — premultiplied-alpha blend ---
+    {
+        GPU::ColorState cs{};
+        cs.format    = pixel_format;
+        cs.writeMask = GPU::ColorWrite::all;
+        cs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "shapeVertex";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "shapeFragment";
+        frag.targets.push_back(cs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        shape_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Line pipeline — reuses rectFragment, custom lineVertex ---
+    {
+        GPU::ColorState cs{};
+        cs.format    = pixel_format;
+        cs.writeMask = GPU::ColorWrite::all;
+        cs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "lineVertex";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "rectFragment";
+        frag.targets.push_back(cs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        line_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
     // --- Bind group layout for textured quad (texture@0, sampler@1) ---
     {
         GPU::BindGroupLayoutDescriptor bglDesc{};
@@ -193,36 +268,184 @@ void MetalDrawBackend::drawFilledRect(
 
 void MetalDrawBackend::drawRect(
     const DrawRectCmd&    cmd,
-    const Matrix4&        /*transform*/,
+    const Matrix4&        transform,
     const Rect&           /*clip*/,
     GPU::RenderPassEncoder& encoder)
 {
     if (!rect_pipeline_) return;
 
+    // Transform the four corners and use their axis-aligned bounding box.
+    // This is exact for translate and scale transforms. For rotation the AABB
+    // will be larger than the actual rotated quad, but rotation of plain rects
+    // is intentionally avoided in those tests (use circles/lines instead).
+    auto c00 = transform * vm::Vector4<float>(cmd.rect.left(),  cmd.rect.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.rect.left(),  cmd.rect.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.bottom(), 0.0f, 1.0f);
+
+    const float min_x = std::min({c00.x(), c10.x(), c01.x(), c11.x()});
+    const float min_y = std::min({c00.y(), c10.y(), c01.y(), c11.y()});
+    const float max_x = std::max({c00.x(), c10.x(), c01.x(), c11.x()});
+    const float max_y = std::max({c00.y(), c10.y(), c01.y(), c11.y()});
+
     if (cmd.paint.style == PaintStyle::fill)
     {
-        drawFilledRect(cmd.rect.x, cmd.rect.y,
-                       cmd.rect.width, cmd.rect.height,
+        drawFilledRect(min_x, min_y, max_x - min_x, max_y - min_y,
                        cmd.paint.color, encoder);
     }
     else
     {
-        // Stroke: draw four thin filled rects along each edge.
+        // Stroke: four thin filled rects along each edge of the transformed AABB.
         const float sw = cmd.paint.stroke_width;
-        const float x  = cmd.rect.x;
-        const float y  = cmd.rect.y;
-        const float w  = cmd.rect.width;
-        const float h  = cmd.rect.height;
+        const float w  = max_x - min_x;
+        const float h  = max_y - min_y;
 
-        // Top
-        drawFilledRect(x, y, w, sw, cmd.paint.color, encoder);
-        // Bottom
-        drawFilledRect(x, y + h - sw, w, sw, cmd.paint.color, encoder);
-        // Left
-        drawFilledRect(x, y + sw, sw, h - 2.0f * sw, cmd.paint.color, encoder);
-        // Right
-        drawFilledRect(x + w - sw, y + sw, sw, h - 2.0f * sw, cmd.paint.color, encoder);
+        drawFilledRect(min_x,         min_y,         w,  sw, cmd.paint.color, encoder);
+        drawFilledRect(min_x,         max_y - sw,    w,  sw, cmd.paint.color, encoder);
+        drawFilledRect(min_x,         min_y + sw,    sw, h - 2.0f * sw, cmd.paint.color, encoder);
+        drawFilledRect(max_x - sw,    min_y + sw,    sw, h - 2.0f * sw, cmd.paint.color, encoder);
     }
+}
+
+// ---------------------------------------------------------------------------
+// drawShape — shared helper for circle, oval, and rounded rect
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawShape(
+    float x, float y, float w, float h,
+    float corner_r, float stroke_w, float kind,
+    const Color& color,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+
+    ShapeUniforms u{};
+    u.rect[0]     = x;
+    u.rect[1]     = y;
+    u.rect[2]     = w;
+    u.rect[3]     = h;
+    u.color[0]    = color.r;
+    u.color[1]    = color.g;
+    u.color[2]    = color.b;
+    u.color[3]    = color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.corner_r    = corner_r;
+    u.stroke_w    = stroke_w;
+    u.kind        = kind;
+
+    auto ubuf = device_->createBuffer(sizeof(ShapeUniforms), GPU::BufferUsage::vertex, &u);
+    if (!ubuf) return;
+
+    encoder.setPipeline(shape_pipeline_);
+    encoder.setVertexBuffer(0, ubuf);
+    encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// drawCircle
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawCircle(
+    const DrawCircleCmd&    cmd,
+    const Matrix4&          transform,
+    const Rect&             /*clip*/,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+
+    // Apply transform to center
+    auto tc = transform * vm::Vector4<float>(cmd.center.x, cmd.center.y, 0.0f, 1.0f);
+    // Scale: magnitude of transform applied to unit x-vector
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r = cmd.radius * scale;
+
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
+    drawShape(tc.x() - r, tc.y() - r, r * 2.0f, r * 2.0f,
+              0.0f, sw, 1.0f, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawOval
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawOval(
+    const DrawOvalCmd&      cmd,
+    const Matrix4&          transform,
+    const Rect&             /*clip*/,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+
+    auto tl = transform * vm::Vector4<float>(cmd.rect.left(), cmd.rect.top(), 0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.bottom(), 0.0f, 1.0f);
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width : 0.0f;
+    drawShape(tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
+              0.0f, sw, 1.0f, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawRRect
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawRRect(
+    const DrawRRectCmd&     cmd,
+    const Matrix4&          transform,
+    const Rect&             /*clip*/,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+
+    auto tl = transform * vm::Vector4<float>(cmd.rrect.rect.left(), cmd.rrect.rect.top(), 0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.rrect.rect.right(), cmd.rrect.rect.bottom(), 0.0f, 1.0f);
+    // Scale factor for corner radius
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r  = (cmd.rrect.radius_x + cmd.rrect.radius_y) * 0.5f * scale;
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
+    drawShape(tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
+              r, sw, 0.0f, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawLine
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawLine(
+    const DrawLineCmd&      cmd,
+    const Matrix4&          transform,
+    const Rect&             /*clip*/,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!line_pipeline_) return;
+
+    auto tp1 = transform * vm::Vector4<float>(cmd.p1.x, cmd.p1.y, 0.0f, 1.0f);
+    auto tp2 = transform * vm::Vector4<float>(cmd.p2.x, cmd.p2.y, 0.0f, 1.0f);
+    // Scale stroke width
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float sw = std::max(1.0f, cmd.paint.stroke_width * scale);
+
+    LineUniforms u{};
+    u.p1[0]       = tp1.x();
+    u.p1[1]       = tp1.y();
+    u.p2[0]       = tp2.x();
+    u.p2[1]       = tp2.y();
+    u.color[0]    = cmd.paint.color.r;
+    u.color[1]    = cmd.paint.color.g;
+    u.color[2]    = cmd.paint.color.b;
+    u.color[3]    = cmd.paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.stroke_w    = sw;
+
+    auto ubuf = device_->createBuffer(sizeof(LineUniforms), GPU::BufferUsage::vertex, &u);
+    if (!ubuf) return;
+
+    encoder.setPipeline(line_pipeline_);
+    encoder.setVertexBuffer(0, ubuf);
+    encoder.draw(6);
 }
 
 // ---------------------------------------------------------------------------

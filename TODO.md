@@ -91,6 +91,7 @@ Higher-level widgets built by composing the basics.
 - [x] `Text` (wraps `RawText` with text style)
 - [x] `Image` (wraps `RawImage`)
 - [x] `Scaffold` (root layout structure)
+- [x] `Transform` — applies a `Matrix4` (rotate, scale, translate) to a child; pivot via `Alignment`; layout-transparent
 
 ---
 
@@ -154,7 +155,7 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 - [x] Debug overlay (FPS counter, paint size, repaint rainbow, debug banner)
 - [ ] Hot-reload friendly design (documented rebuild contract)
 - [x] Comprehensive unit tests for layout engine
-- [ ] Integration test harness (headless rendering)
+- [x] Integration test harness (headless rendering) — `GpuVisualRenderer` (Metal, offscreen) with CPU fallback
 - [ ] Example applications:
   - [x] Hello World
   - [x] Counter app (StatefulWidget demo)
@@ -217,3 +218,16 @@ Drawing API for custom painters and shape rendering.
 - [x] Rich text / inline spans
 - [x] Dialog / overlay / modal system
 - Drag-and-drop
+
+---
+
+## Real GPU Rasterization for Visual Fidelity Tests
+
+**Resolved in v0.1.2.** `campello_gpu` v0.4.1 implemented `copyTextureToBuffer()` (Metal backend), closing
+the GPU→CPU readback pipeline. `GpuVisualRenderer` (`src/testing/gpu_visual_renderer.mm`) now provides a
+headless Metal renderer that renders a `DrawList` to an offscreen RGBA8 texture and exports PNG.
+`VisualRenderer` is kept as a CPU fallback for CI environments without a GPU.
+
+Remaining work for full cross-platform coverage:
+- Vulkan backend readback (`vkCmdCopyImageToBuffer`) for Android/Linux
+- DirectX 12 backend readback (`CopyTextureRegion` into readback heap) for Windows

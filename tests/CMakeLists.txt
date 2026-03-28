@@ -6,10 +6,19 @@ file(GLOB_RECURSE UNIVERSAL_TEST_SOURCES
 )
 
 # Add testing sources (excluded from main library)
-set(TESTING_SOURCES 
+set(TESTING_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/fidelity.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/visual_fidelity.cpp"
 )
+
+# GPU visual renderer: real Metal implementation on macOS, null stub elsewhere
+if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    list(APPEND TESTING_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/gpu_visual_renderer.mm")
+else()
+    list(APPEND TESTING_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/gpu_visual_renderer_stub.cpp")
+endif()
 
 if(UNIVERSAL_TEST_SOURCES)
     add_executable(campello_widgets_tests ${UNIVERSAL_TEST_SOURCES} ${TESTING_SOURCES})

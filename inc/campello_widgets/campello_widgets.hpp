@@ -132,6 +132,10 @@
 #include <campello_widgets/widgets/opacity.hpp>
 #include <campello_widgets/widgets/animated_opacity.hpp>
 
+// Transform
+#include <campello_widgets/ui/render_transform.hpp>
+#include <campello_widgets/widgets/transform.hpp>
+
 // Dialog / Overlay / Modal system
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/modal_barrier.hpp>

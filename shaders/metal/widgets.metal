@@ -107,3 +107,129 @@ fragment float4 quadFragment(
     // opacity preserves premultiplication and produces correct blending.
     return tex.sample(smp, in.uv) * in.opacity;
 }
+
+// ---------------------------------------------------------------------------
+// Shape pipeline — circle, oval, and rounded rect via signed distance field
+//
+// Uniforms at [[buffer(0)]]: ShapeUniforms (vertex stage only)
+// All SDF parameters are forwarded to the fragment stage via flat varyings.
+// ---------------------------------------------------------------------------
+
+struct ShapeUniforms {
+    float4 rect;       // x, y, w, h  — bounding box (pixels)
+    float4 color;      // r, g, b, a  — straight alpha
+    float2 viewport;   // framebuffer w, h (pixels)
+    float  corner_r;   // corner radius  (rrect);  0 for circle / oval
+    float  stroke_w;   // stroke width;  0 = fill
+    float  kind;       // 0 = rrect,  1 = circle / oval (ellipse SDF)
+    float  _pad0;
+    float  _pad1;
+    float  _pad2;
+};
+
+struct ShapeVertOut {
+    float4 pos       [[position]];
+    float4 color     [[flat]];    // straight alpha color
+    float4 rect_data [[flat]];    // x, y, w, h bounding box (pixels)
+    float  corner_r  [[flat]];
+    float  stroke_w  [[flat]];
+    float  kind      [[flat]];
+};
+
+vertex ShapeVertOut shapeVertex(
+    uint                 vid [[vertex_id]],
+    constant ShapeUniforms &u  [[buffer(0)]])
+{
+    float2 t  = kQuadCorners[vid];
+    float2 px = float2(u.rect.x + t.x * u.rect.z,
+                       u.rect.y + t.y * u.rect.w);
+    float2 ndc = (px / u.viewport) * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+
+    ShapeVertOut out;
+    out.pos      = float4(ndc, 0.0, 1.0);
+    out.color    = u.color;
+    out.rect_data = u.rect;
+    out.corner_r = u.corner_r;
+    out.stroke_w = u.stroke_w;
+    out.kind     = u.kind;
+    return out;
+}
+
+fragment float4 shapeFragment(ShapeVertOut in [[stage_in]])
+{
+    // Fragment position (in.pos.xy) is in framebuffer pixel coords with 0.5 center offset.
+    float2 center = float2(in.rect_data.x + in.rect_data.z * 0.5,
+                           in.rect_data.y + in.rect_data.w * 0.5);
+    float2 p  = in.pos.xy - center;
+    float2 hs = float2(in.rect_data.z, in.rect_data.w) * 0.5;
+
+    float d;
+    if (in.kind < 0.5) {
+        // Rounded-rect SDF
+        float r  = min(in.corner_r, min(hs.x, hs.y));
+        float2 q = abs(p) - hs + r;
+        d = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+    } else {
+        // Ellipse SDF  (circle when hs.x == hs.y)
+        float2 s = p / hs;
+        d = (length(s) - 1.0) * min(hs.x, hs.y);
+    }
+
+    const float aa = 0.5;
+    float alpha;
+    if (in.stroke_w <= 0.0) {
+        alpha = 1.0 - smoothstep(-aa, aa, d);
+    } else {
+        alpha = 1.0 - smoothstep(-aa, aa, abs(d) - in.stroke_w * 0.5);
+    }
+
+    float4 col = in.color;
+    col.a *= alpha;
+    return float4(col.rgb * col.a, col.a);   // premultiplied output
+}
+
+// ---------------------------------------------------------------------------
+// Line pipeline — arbitrary-angle line segment rendered as a rotated quad
+//
+// Uniforms at [[buffer(0)]]: LineUniforms
+// No vertex buffers — 6 vertices generated from vertex_id.
+// ---------------------------------------------------------------------------
+
+struct LineUniforms {
+    float4 p1;        // xy: start (pixels),  zw: unused
+    float4 p2;        // xy: end   (pixels),  zw: unused
+    float4 color;     // r, g, b, a
+    float2 viewport;  // framebuffer w, h
+    float  stroke_w;  // line thickness (pixels)
+    float  _pad;
+};
+
+vertex RectVertOut lineVertex(
+    uint               vid [[vertex_id]],
+    constant LineUniforms &u [[buffer(0)]])
+{
+    float2 dir = u.p2.xy - u.p1.xy;
+    float  len = length(dir);
+    if (len > 0.0001) dir /= len; else dir = float2(1.0, 0.0);
+    float2 perp = float2(-dir.y, dir.x) * (u.stroke_w * 0.5);
+
+    // 4 corners: [p1-perp, p1+perp, p2+perp, p2-perp]
+    uint   idx[6]     = {0, 1, 3, 1, 2, 3};
+    float2 corners[4] = {
+        u.p1.xy - perp,
+        u.p1.xy + perp,
+        u.p2.xy + perp,
+        u.p2.xy - perp,
+    };
+
+    float2 px  = corners[idx[vid]];
+    float2 ndc = (px / u.viewport) * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+
+    RectVertOut out;
+    out.pos   = float4(ndc, 0.0, 1.0);
+    out.color = u.color;
+    return out;
+}
+// lineFragment reuses rectFragment — same premultiplied solid-colour output.

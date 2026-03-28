@@ -444,3 +444,282 @@ TEST(FidelityGolden, CompareAgainstReferenceLayout)
     EXPECT_TRUE(result.match) << "Layout mismatch: " 
         << (result.differences.empty() ? "" : result.differences[0]);
 }
+
+// ============================================================================
+// Transform Fidelity Tests
+// ============================================================================
+
+#include <campello_widgets/ui/render_transform.hpp>
+#include <cmath>
+
+TEST(FidelityTransform, LayoutIsTransparent)
+{
+    // Transform should be layout-transparent: child size passes through unchanged
+    auto child = std::make_shared<cw::RenderSizedBox>();
+    child->width = 150.0f;
+    child->height = 100.0f;
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    transform->transform = cw::RenderTransform::rotation(0.5f);
+    transform->alignment = cw::Alignment::center();
+    transform->setChild(child);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *transform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    // Layout: Transform reports child's size, not affected by rotation
+    EXPECT_EQ(snapshot.layout.type, "RenderTransform");
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 150.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 100.0f);
+    
+    // Should have one child
+    ASSERT_EQ(snapshot.layout.children.size(), 1u);
+    EXPECT_EQ(snapshot.layout.children[0].type, "RenderSizedBox");
+    EXPECT_FLOAT_EQ(snapshot.layout.children[0].width, 150.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.children[0].height, 100.0f);
+}
+
+TEST(FidelityTransform, TranslationTransform)
+{
+    auto child = std::make_shared<cw::RenderColoredBox>();
+    child->color = cw::Color::fromRGB(1.0f, 0.0f, 0.0f);
+    
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width = 100.0f;
+    sized->height = 80.0f;
+    sized->setChild(child);
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    transform->transform = cw::RenderTransform::translation(50.0f, 30.0f);
+    transform->alignment = cw::Alignment::topLeft();  // No pivot for translate
+    transform->setChild(sized);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *transform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    // Verify layout
+    EXPECT_EQ(snapshot.layout.type, "RenderTransform");
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 100.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 80.0f);
+    
+    // Paint commands should include the transform
+    EXPECT_FALSE(snapshot.paint_commands.empty());
+}
+
+TEST(FidelityTransform, ScalingTransform)
+{
+    auto child = std::make_shared<cw::RenderColoredBox>();
+    child->color = cw::Color::fromRGB(0.0f, 1.0f, 0.0f);
+    
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width = 100.0f;
+    sized->height = 100.0f;
+    sized->setChild(child);
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    transform->transform = cw::RenderTransform::scaling(2.0f);
+    transform->alignment = cw::Alignment::center();
+    transform->setChild(sized);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *transform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    // Layout: child size unchanged (scale affects paint, not layout)
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 100.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 100.0f);
+}
+
+TEST(FidelityTransform, NonUniformScaling)
+{
+    auto child = std::make_shared<cw::RenderColoredBox>();
+    child->color = cw::Color::fromRGB(0.0f, 0.0f, 1.0f);
+    
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width = 100.0f;
+    sized->height = 50.0f;
+    sized->setChild(child);
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    transform->transform = cw::RenderTransform::scaling(1.5f, 0.8f);
+    transform->alignment = cw::Alignment::center();
+    transform->setChild(sized);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *transform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    // Layout unchanged
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 100.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 50.0f);
+}
+
+TEST(FidelityTransform, NestedTransforms)
+{
+    // Inner: scale 1.5x
+    auto innerBox = std::make_shared<cw::RenderColoredBox>();
+    innerBox->color = cw::Color::fromRGB(1.0f, 1.0f, 0.0f);
+    
+    auto innerSized = std::make_shared<cw::RenderSizedBox>();
+    innerSized->width = 80.0f;
+    innerSized->height = 60.0f;
+    innerSized->setChild(innerBox);
+    
+    auto innerTransform = std::make_shared<cw::RenderTransform>();
+    innerTransform->transform = cw::RenderTransform::scaling(1.5f);
+    innerTransform->alignment = cw::Alignment::center();
+    innerTransform->setChild(innerSized);
+    
+    // Outer: translate (30, 20)
+    auto outerTransform = std::make_shared<cw::RenderTransform>();
+    outerTransform->transform = cw::RenderTransform::translation(30.0f, 20.0f);
+    outerTransform->alignment = cw::Alignment::topLeft();
+    outerTransform->setChild(innerTransform);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *outerTransform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    // Layout: still reports innermost child's size
+    EXPECT_EQ(snapshot.layout.type, "RenderTransform");
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 80.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 60.0f);
+    
+    // Should have nested children in layout tree
+    ASSERT_EQ(snapshot.layout.children.size(), 1u);
+    EXPECT_EQ(snapshot.layout.children[0].type, "RenderTransform");
+    ASSERT_EQ(snapshot.layout.children[0].children.size(), 1u);
+    EXPECT_EQ(snapshot.layout.children[0].children[0].type, "RenderSizedBox");
+}
+
+TEST(FidelityTransform, AlignmentVariations)
+{
+    // Test different alignments for the transform pivot
+    std::vector<std::pair<cw::Alignment, std::string>> alignments = {
+        {cw::Alignment::topLeft(), "topLeft"},
+        {cw::Alignment::topCenter(), "topCenter"},
+        {cw::Alignment::topRight(), "topRight"},
+        {cw::Alignment::centerLeft(), "centerLeft"},
+        {cw::Alignment::center(), "center"},
+        {cw::Alignment::centerRight(), "centerRight"},
+        {cw::Alignment::bottomLeft(), "bottomLeft"},
+        {cw::Alignment::bottomCenter(), "bottomCenter"},
+        {cw::Alignment::bottomRight(), "bottomRight"},
+    };
+    
+    for (const auto& [alignment, name] : alignments) {
+        auto child = std::make_shared<cw::RenderSizedBox>();
+        child->width = 100.0f;
+        child->height = 80.0f;
+        
+        auto transform = std::make_shared<cw::RenderTransform>();
+        transform->transform = cw::RenderTransform::scaling(1.2f);
+        transform->alignment = alignment;
+        transform->setChild(child);
+        
+        auto snapshot = cwt::captureSnapshot(
+            *transform,
+            cw::BoxConstraints::loose(400.0f, 400.0f),
+            400.0f, 400.0f);
+        
+        // All alignments should produce same layout (scale doesn't affect size)
+        EXPECT_FLOAT_EQ(snapshot.layout.width, 100.0f) << "Alignment: " << name;
+        EXPECT_FLOAT_EQ(snapshot.layout.height, 80.0f) << "Alignment: " << name;
+    }
+}
+
+TEST(FidelityTransform, TransformInFlexLayout)
+{
+    // Column with a transformed child - tests that Transform integrates
+    // properly within Flex layout (layout is transparent)
+    auto root = std::make_shared<cw::RenderFlex>();
+    root->axis = cw::Axis::vertical;
+    root->main_axis_size = cw::MainAxisSize::max;
+    
+    // First child: normal box
+    auto box1 = std::make_shared<cw::RenderSizedBox>();
+    box1->width = 200.0f;
+    box1->height = 100.0f;
+    
+    // Second child: transformed box (same layout size)
+    auto box2Inner = std::make_shared<cw::RenderSizedBox>();
+    box2Inner->width = 200.0f;
+    box2Inner->height = 100.0f;
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    transform->transform = cw::RenderTransform::scaling(1.5f);
+    transform->alignment = cw::Alignment::center();
+    transform->setChild(box2Inner);
+    
+    root->insertChild(box1, 0, 0);
+    root->insertChild(transform, 1, 0);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *root,
+        cw::BoxConstraints::tight(400.0f, 600.0f),
+        400.0f, 600.0f);
+    
+    // Verify Flex layout captured
+    EXPECT_EQ(snapshot.layout.type, "RenderFlex");
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 400.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 600.0f);
+    
+    // Note: Flex children are not captured in current implementation
+    // because flex_children_ is private. This is consistent with other tests.
+    // The key assertion is that the layout completes without errors.
+    
+    // Verify paint commands were captured (shows both children rendered)
+    EXPECT_FALSE(snapshot.paint_commands.empty());
+}
+
+TEST(FidelityTransform, EmptyTransform)
+{
+    // Transform with identity matrix (no-op)
+    auto child = std::make_shared<cw::RenderSizedBox>();
+    child->width = 120.0f;
+    child->height = 90.0f;
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    // Default transform is identity
+    transform->setChild(child);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *transform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    EXPECT_EQ(snapshot.layout.type, "RenderTransform");
+    EXPECT_FLOAT_EQ(snapshot.layout.width, 120.0f);
+    EXPECT_FLOAT_EQ(snapshot.layout.height, 90.0f);
+}
+
+TEST(FidelityTransform, JsonSerialization)
+{
+    auto child = std::make_shared<cw::RenderSizedBox>();
+    child->width = 100.0f;
+    child->height = 100.0f;
+    
+    auto transform = std::make_shared<cw::RenderTransform>();
+    transform->transform = cw::RenderTransform::rotation(0.3f);
+    transform->alignment = cw::Alignment::center();
+    transform->setChild(child);
+    
+    auto snapshot = cwt::captureSnapshot(
+        *transform,
+        cw::BoxConstraints::loose(400.0f, 400.0f),
+        400.0f, 400.0f);
+    
+    // Verify JSON serialization
+    std::string json = snapshot.toJson();
+    EXPECT_FALSE(json.empty());
+    EXPECT_NE(json.find("RenderTransform"), std::string::npos);
+    EXPECT_NE(json.find("layout"), std::string::npos);
+    EXPECT_NE(json.find("paint_commands"), std::string::npos);
+}

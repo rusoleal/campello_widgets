@@ -16,3 +16,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  fonts:
+    - family: Roboto
+      fonts:
+        - asset: fonts/Roboto-Regular.ttf
+        - asset: fonts/Roboto-Bold.ttf
+          weight: 700
+    - family: Helvetica Neue
+      fonts:
+        - asset: fonts/helvetica_neue.ttf

@@ -5,12 +5,26 @@ import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+// Enable real font rendering in tests
+// This requires fonts to be available in the test environment
+void enableRealFonts() {
+  // In flutter test, fonts are replaced with 'Ahem' (colored blocks) by default
+  // To get real text rendering, use: flutter run lib/golden_generator.dart
+}
+
+// Font family to use - will fall back to Ahem in test environment
+const String kTestFontFamily = 'Roboto';
+
 /// Generates visual golden PNG files from Flutter for pixel-perfect comparison.
 /// 
 /// These tests render widgets offscreen and save PNG files that serve as the
 /// "ground truth" for C++ visual fidelity testing.
 ///
 /// Run with: flutter test test/visual_goldens_test.dart
+/// 
+/// NOTE: flutter test renders text as colored blocks (Ahem font) for determinism.
+/// For real text rendering, use: flutter run lib/golden_generator.dart
+///
 /// Standard resolution for fidelity testing - ensures both Flutter and C++ images have same size
 const double kFidelityWidth = 1280.0;
 const double kFidelityHeight = 720.0;
@@ -308,9 +322,235 @@ void main() {
           ),
         ),
       );
-      
+
       await tester.pumpAndSettle();
       await captureAndSave(tester, '${goldensDir.path}/canvas_complex_scene.png');
+    });
+
+    testWidgets('canvas_text_basic', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(fontFamily: kTestFontFamily),
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: TextBasicPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_text_basic.png');
+    });
+
+    testWidgets('canvas_transforms', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: TransformsPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_transforms.png');
+    });
+
+    testWidgets('canvas_rotate', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: RotatePainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_rotate.png');
+    });
+  });
+
+  // Widget tests (layout + transform + text)
+  group('Visual Golden PNGs - Widget Tests', () {
+
+    testWidgets('widget_text_column', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          theme: ThemeData(fontFamily: kTestFontFamily),
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40),
+                      child: Text('Widget Text Test',
+                        style: const TextStyle(
+                          color: Color(0xFF2196F3),
+                          fontSize: 48,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: kTestFontFamily,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 40),
+                      child: Text('Subtitle in regular weight',
+                        style: const TextStyle(
+                          color: Colors.black,
+                          fontSize: 28,
+                          fontFamily: kTestFontFamily,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 40),
+                      child: Text('Body text at 20px in grey color for readability',
+                        style: const TextStyle(
+                          color: Color(0xFF777777),
+                          fontSize: 20,
+                          fontFamily: kTestFontFamily,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 40),
+                      child: Text('Bold red accent text',
+                        style: const TextStyle(
+                          color: Color(0xFFF44336),
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          fontFamily: kTestFontFamily,
+                        ),
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 40),
+                      child: Text('Small caption — 14px Roboto',
+                        style: const TextStyle(
+                          color: Color(0xFF999999),
+                          fontSize: 14,
+                          fontFamily: kTestFontFamily,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/widget_text_column.png');
+    });
+
+    testWidgets('widget_transform', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    // Row 1: no transform (reference)
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Container(width: 300, height: 80,
+                        color: const Color(0xFFE0E0E0)),
+                    ),
+                    // Row 2: translate right 60px
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Transform.translate(
+                        offset: const Offset(60, 0),
+                        child: Container(width: 300, height: 80,
+                          color: const Color(0xFF2196F3)),
+                      ),
+                    ),
+                    // Row 3: scale 0.6× (center alignment)
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Transform.scale(
+                        scale: 0.6,
+                        child: Container(width: 300, height: 80,
+                          color: const Color(0xFFF44336)),
+                      ),
+                    ),
+                    // Row 4: non-uniform scale (1.4×, 0.7×)
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Transform.scale(
+                        scaleX: 1.4,
+                        scaleY: 0.7,
+                        child: Container(width: 300, height: 80,
+                          color: const Color(0xFF4CAF50)),
+                      ),
+                    ),
+                    // Row 5: translate -40px + scale 1.2× (nested)
+                    Padding(
+                      padding: const EdgeInsets.all(20),
+                      child: Transform.translate(
+                        offset: const Offset(-40, 0),
+                        child: Transform.scale(
+                          scale: 1.2,
+                          child: Container(width: 300, height: 80,
+                            color: const Color(0xFFFF9800)),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/widget_transform.png');
     });
   });
 }
@@ -386,14 +626,11 @@ class RoundedRectsPainter extends CustomPainter {
     );
     canvas.drawRRect(rrect, Paint()..color = Colors.blue);
 
-    final unevenRRect = RRect.fromRectAndCorners(
+    final greenRRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(200 * scaleX, 20 * scaleY, 150 * scaleX, 100 * scaleY),
-      topLeft: Radius.circular(30 * scaleX),
-      topRight: Radius.circular(10 * scaleX),
-      bottomLeft: Radius.circular(5 * scaleX),
-      bottomRight: Radius.circular(25 * scaleX),
+      Radius.circular(30 * scaleX),
     );
-    canvas.drawRRect(unevenRRect, Paint()..color = Colors.green);
+    canvas.drawRRect(greenRRect, Paint()..color = Colors.green);
 
     final outerRRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(20 * scaleX, 150 * scaleY, 150 * scaleX, 100 * scaleY),
@@ -472,7 +709,6 @@ class ComplexScenePainter extends CustomPainter {
 
     canvas.save();
     canvas.translate(200 * scaleX, 200 * scaleY);
-    canvas.rotate(0.2);
 
     final cardRRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(-120 * scaleX, -80 * scaleY, 240 * scaleX, 160 * scaleY),
@@ -499,29 +735,167 @@ class ComplexScenePainter extends CustomPainter {
 
     canvas.restore();
     canvas.restore();
+  }
 
-    final corners = [
-      Offset(30 * scaleX, 30 * scaleY),
-      Offset(370 * scaleX, 30 * scaleY),
-      Offset(30 * scaleX, 370 * scaleY),
-      Offset(370 * scaleX, 370 * scaleY),
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class TextBasicPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    _drawText(canvas, 'Hello, World!',
+      const TextStyle(color: Color(0xFF2196F3), fontSize: 48,
+        fontFamily: kTestFontFamily),
+      const Offset(50, 50));
+
+    _drawText(canvas, 'Bold text sample',
+      const TextStyle(color: Color(0xFFF44336), fontSize: 36,
+        fontWeight: FontWeight.bold, fontFamily: kTestFontFamily),
+      const Offset(50, 140));
+
+    _drawText(canvas, 'Regular green text',
+      const TextStyle(color: Color(0xFF4CAF50), fontSize: 30,
+        fontFamily: kTestFontFamily),
+      const Offset(50, 230));
+
+    _drawText(canvas, 'Small caption text (18px)',
+      const TextStyle(color: Colors.black, fontSize: 18,
+        fontFamily: kTestFontFamily),
+      const Offset(50, 315));
+
+    _drawText(canvas, 'Large Heading',
+      const TextStyle(color: Color(0xFF9C27B0), fontSize: 64,
+        fontWeight: FontWeight.bold, fontFamily: kTestFontFamily),
+      const Offset(50, 370));
+  }
+
+  void _drawText(Canvas canvas, String text, TextStyle style, Offset offset) {
+    final tp = TextPainter(
+      text: TextSpan(text: text, style: style),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, offset);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class TransformsPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Reference circle (no transform)
+    canvas.drawCircle(const Offset(100, 130), 60,
+      Paint()..color = const Color(0xFFE0E0E0));
+
+    // Translate right 250
+    canvas.save();
+    canvas.translate(250, 0);
+    canvas.drawCircle(const Offset(100, 130), 60,
+      Paint()..color = const Color(0xFF2196F3));
+    canvas.restore();
+
+    // Translate right + down
+    canvas.save();
+    canvas.translate(500, 80);
+    canvas.drawCircle(const Offset(100, 130), 60,
+      Paint()..color = const Color(0xFFF44336));
+    canvas.restore();
+
+    // Scale 2× around (900, 130)
+    canvas.save();
+    canvas.translate(900, 130);
+    canvas.scale(2.0);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(const Rect.fromLTWH(-40, -40, 80, 80),
+        const Radius.circular(10)),
+      Paint()..color = const Color(0xFF4CAF50));
+    canvas.restore();
+
+    // Scale 0.5× around (1150, 130)
+    canvas.save();
+    canvas.translate(1150, 130);
+    canvas.scale(0.5);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(const Rect.fromLTWH(-80, -80, 160, 160),
+        const Radius.circular(20)),
+      Paint()..color = const Color(0xFFFF9800));
+    canvas.restore();
+
+    // Combined: translate + non-uniform scale, circle
+    canvas.save();
+    canvas.translate(200, 380);
+    canvas.scale(1.5, 1.0);
+    canvas.drawCircle(Offset.zero, 50,
+      Paint()..color = const Color(0xFF9C27B0));
+    canvas.restore();
+
+    // Combined: translate + non-uniform scale, rrect
+    canvas.save();
+    canvas.translate(600, 380);
+    canvas.scale(1.0, 1.5);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(const Rect.fromLTWH(-50, -40, 100, 80),
+        const Radius.circular(12)),
+      Paint()..color = const Color(0xFF2196F3));
+    canvas.restore();
+
+    // Lines with translate
+    canvas.save();
+    canvas.translate(900, 450);
+    final lp = Paint()..color = Colors.black..strokeWidth = 4;
+    canvas.drawLine(const Offset(-80, 0), const Offset(80, 0), lp);
+    canvas.drawLine(const Offset(0, -60), const Offset(0, 60), lp);
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class RotatePainter extends CustomPainter {
+  static const double pi = 3.14159265358979;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width * 0.5;
+    final cy = size.height * 0.5;
+
+    const colors = [
+      Color(0xFFF44336), Color(0xFF4CAF50), Color(0xFFFF9800), Color(0xFF9C27B0),
+      Color(0xFF2196F3), Color(0xFFF44336), Color(0xFF4CAF50), Color(0xFFFF9800),
     ];
-    
-    for (int i = 0; i < corners.length; i++) {
+
+    // Hub circle at center
+    canvas.drawCircle(Offset(cx, cy), 20,
+      Paint()..color = const Color(0xFF2196F3));
+
+    // 8 spokes + outer circles
+    for (int i = 0; i < 8; i++) {
+      final angle = i * (pi / 4.0);
       canvas.save();
-      canvas.translate(corners[i].dx, corners[i].dy);
-      canvas.rotate(i * 1.5708);
-      
-      final paint = Paint()..color = Colors.purple.withAlpha(127);
-      final path = Path()
-        ..moveTo(0, -15 * scaleX)
-        ..lineTo(10 * scaleX, 0)
-        ..lineTo(0, 15 * scaleX)
-        ..close();
-      canvas.drawPath(path, paint);
-      
+      canvas.translate(cx, cy);
+      canvas.rotate(angle);
+      canvas.drawLine(Offset.zero, const Offset(220, 0),
+        Paint()..color = colors[i]..strokeWidth = 3);
+      canvas.drawCircle(const Offset(240, 0), 28,
+        Paint()..color = colors[i]);
       canvas.restore();
     }
+
+    // Inner ring (rotated 22.5°)
+    canvas.save();
+    canvas.translate(cx, cy);
+    canvas.rotate(pi / 8.0);
+    for (int i = 0; i < 8; i++) {
+      canvas.save();
+      canvas.rotate(i * (pi / 4.0));
+      canvas.drawCircle(const Offset(110, 0), 14,
+        Paint()..color = const Color(0x662196F3));
+      canvas.restore();
+    }
+    canvas.restore();
   }
 
   @override

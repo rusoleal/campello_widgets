@@ -72,6 +72,34 @@ namespace systems::leal::campello_widgets
             const Rect&                      clip,
             campello_gpu::RenderPassEncoder& encoder) = 0;
 
+        /** @brief Draw a circle (fill or stroke). Default: no-op. */
+        virtual void drawCircle(
+            const DrawCircleCmd&             cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
+        /** @brief Draw an oval filling rect (fill or stroke). Default: no-op. */
+        virtual void drawOval(
+            const DrawOvalCmd&               cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
+        /** @brief Draw a rounded rectangle (fill or stroke). Default: no-op. */
+        virtual void drawRRect(
+            const DrawRRectCmd&              cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
+        /** @brief Draw a line segment. Default: no-op. */
+        virtual void drawLine(
+            const DrawLineCmd&               cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
         /**
          * @brief Measures the bounding size of a text span using real font metrics.
          *

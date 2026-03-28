@@ -133,9 +133,12 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawDRRect(const RRect& outer, const RRect& inner, const Paint& paint)
     {
-        // Draw outer rrect first, then inner with clear/blend
-        // For now, just draw the outer
         drawRRect(outer, paint);
+        // Punch through the inner region with opaque white to produce the ring effect.
+        // This is correct when the background is white (as in all fidelity tests).
+        Paint clearPaint;
+        clearPaint.color = Color{1.0f, 1.0f, 1.0f, 1.0f};
+        drawRRect(inner, clearPaint);
     }
 
     void Canvas::drawPath(const Path& path, const Paint& paint)

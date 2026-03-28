@@ -1,4 +1,5 @@
 #include <campello_widgets/testing/visual_fidelity.hpp>
+#include <campello_widgets/testing/gpu_visual_renderer.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/color.hpp>
@@ -351,11 +352,23 @@ bool cwt::captureToPng(
         cw::PaintContext context(viewportWidth, viewportHeight);
         root.paint(context, cw::Offset::zero());
 
-        // Render to PNG
-        VisualRenderer renderer(static_cast<int>(viewportWidth), static_cast<int>(viewportHeight));
-        renderer.clear(cw::Color::white());  // Default white background
+        const int w = static_cast<int>(viewportWidth);
+        const int h = static_cast<int>(viewportHeight);
+
+        // Try GPU path first (macOS Metal; no-op stub on other platforms)
+        GpuVisualRenderer gpuRenderer(w, h);
+        if (gpuRenderer.isValid()) {
+            gpuRenderer.setClearColor(cw::Color::white());
+            if (gpuRenderer.renderDrawList(context.commands())) {
+                return gpuRenderer.saveToPng(outputPath);
+            }
+            // renderDrawList returned false → unsupported commands, fall through to CPU
+        }
+
+        // CPU software rasterizer fallback
+        VisualRenderer renderer(w, h);
+        renderer.clear(cw::Color::white());
         renderer.renderDrawList(context.commands());
-        
         return renderer.saveToPng(outputPath);
     } catch (const std::exception& e) {
         std::cerr << "captureToPng failed: " << e.what() << std::endl;
@@ -473,67 +486,24 @@ static void generateVisualDiff(
         int maxDiff = std::max({dr, dg, db, da});
         maxChannelDiff = std::max(maxChannelDiff, maxDiff);
         
-        // Determine diff visualization
         if (maxDiff <= tolerance) {
-            // Pixels match within tolerance - show darkened expected pixel
-            diffPixels[idx] = static_cast<unsigned char>(r1 * 0.3f);
-            diffPixels[idx + 1] = static_cast<unsigned char>(g1 * 0.3f);
-            diffPixels[idx + 2] = static_cast<unsigned char>(b1 * 0.3f);
+            // No difference — black pixel
+            diffPixels[idx]     = 0;
+            diffPixels[idx + 1] = 0;
+            diffPixels[idx + 2] = 0;
             diffPixels[idx + 3] = 255;
         } else {
-            // Pixels differ - highlight in bright red/yellow
+            // Real difference — amplify per-channel delta (×4) so small diffs are visible
             diffPixelCount++;
-            
-            // Scale difference intensity
-            int intensity = std::min(255, maxDiff * 2);
-            
-            // Red for differences, brighter = more different
-            diffPixels[idx] = 255;  // R
-            diffPixels[idx + 1] = static_cast<unsigned char>(255 - intensity);  // G
-            diffPixels[idx + 2] = static_cast<unsigned char>(255 - intensity);  // B
-            diffPixels[idx + 3] = 255;  // A
+            diffPixels[idx]     = static_cast<unsigned char>(std::min(255, dr * 4));
+            diffPixels[idx + 1] = static_cast<unsigned char>(std::min(255, dg * 4));
+            diffPixels[idx + 2] = static_cast<unsigned char>(std::min(255, db * 4));
+            diffPixels[idx + 3] = 255;
         }
     }
     
     result.maxChannelDiff = static_cast<double>(maxChannelDiff) / 255.0;
-    
-    // Add a 2-pixel yellow border to highlight differences
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            const int idx = (y * width + x) * 4;
-            
-            // Check if we're on the border
-            if (x < 2 || x >= width - 2 || y < 2 || y >= height - 2) {
-                // Only color border if there's a difference in this row/column
-                bool hasDiffInRow = false;
-                bool hasDiffInCol = false;
-                
-                // Check row for differences
-                for (int cx = 0; cx < width && !hasDiffInRow; cx++) {
-                    int cidx = (y * width + cx) * 4;
-                    if (diffPixels[cidx] == 255 && diffPixels[cidx + 1] < 255) {
-                        hasDiffInRow = true;
-                    }
-                }
-                
-                // Check column for differences
-                for (int cy = 0; cy < height && !hasDiffInCol; cy++) {
-                    int cidx = (cy * width + x) * 4;
-                    if (diffPixels[cidx] == 255 && diffPixels[cidx + 1] < 255) {
-                        hasDiffInCol = true;
-                    }
-                }
-                
-                if (hasDiffInRow || hasDiffInCol) {
-                    diffPixels[idx] = 255;      // Yellow border
-                    diffPixels[idx + 1] = 255;
-                    diffPixels[idx + 2] = 0;
-                    diffPixels[idx + 3] = 255;
-                }
-            }
-        }
-    }
-    
+
     // Save diff image
     int saveResult = stbi_write_png(outputPath.c_str(), width, height, 4, diffPixels.data(), width * 4);
     
@@ -557,58 +527,69 @@ cwt::ImageComparisonResult cwt::comparePngImages(
 {
     ImageComparisonResult result;
 
-    // Read expected file
-    std::ifstream expectedFile(expectedPath, std::ios::binary);
-    if (!expectedFile) {
+    // Decode expected image to raw RGBA pixels
+    int expWidth = 0, expHeight = 0, expChannels = 0;
+    unsigned char* expData = stbi_load(expectedPath.c_str(), &expWidth, &expHeight, &expChannels, 4);
+    if (!expData) {
         result.match = false;
-        result.errors.push_back("Failed to open expected image: " + expectedPath);
+        result.errors.push_back("Failed to decode expected image: " + expectedPath);
         return result;
     }
 
-    std::vector<uint8_t> expectedData(
-        (std::istreambuf_iterator<char>(expectedFile)),
-        std::istreambuf_iterator<char>()
-    );
-
-    // Read actual file
-    std::ifstream actualFile(actualPath, std::ios::binary);
-    if (!actualFile) {
+    // Decode actual image to raw RGBA pixels
+    int actWidth = 0, actHeight = 0, actChannels = 0;
+    unsigned char* actData = stbi_load(actualPath.c_str(), &actWidth, &actHeight, &actChannels, 4);
+    if (!actData) {
+        stbi_image_free(expData);
         result.match = false;
-        result.errors.push_back("Failed to open actual image: " + actualPath);
+        result.errors.push_back("Failed to decode actual image: " + actualPath);
         return result;
     }
 
-    std::vector<uint8_t> actualData(
-        (std::istreambuf_iterator<char>(actualFile)),
-        std::istreambuf_iterator<char>()
-    );
-
-    // For now, do a simple binary comparison with tolerance
-    // In a full implementation, we'd decode the PNGs and compare pixel values
-    if (expectedData.size() != actualData.size()) {
+    // Dimensions must match for a meaningful pixel comparison
+    if (expWidth != actWidth || expHeight != actHeight) {
+        stbi_image_free(expData);
+        stbi_image_free(actData);
         result.match = false;
-        result.errors.push_back("Image sizes differ");
-    } else {
-        size_t diffCount = 0;
-        for (size_t i = 0; i < expectedData.size(); ++i) {
-            if (std::abs(static_cast<int>(expectedData[i]) - static_cast<int>(actualData[i])) > tolerance) {
-                diffCount++;
-            }
-        }
-        result.pixelDifference = static_cast<double>(diffCount) / expectedData.size() * 100.0;
-        if (diffCount > 0) {
-            result.match = false;
-            result.errors.push_back("Images differ by " + std::to_string(result.pixelDifference) + "%");
-        }
+        result.errors.push_back("Image dimensions differ: expected " +
+            std::to_string(expWidth) + "x" + std::to_string(expHeight) +
+            ", actual " + std::to_string(actWidth) + "x" + std::to_string(actHeight));
+        return result;
     }
 
-    // Generate diff image if requested
-    if (generateDiff && !result.match) {
-        std::filesystem::path diffPath = std::filesystem::path(getDiffDirectory()) / 
+    const int totalPixels = expWidth * expHeight;
+    int diffCount = 0;
+    int maxChannelDiff = 0;
+
+    for (int i = 0; i < totalPixels; ++i) {
+        const int idx = i * 4;
+        int dr = std::abs((int)expData[idx]     - (int)actData[idx]);
+        int dg = std::abs((int)expData[idx + 1] - (int)actData[idx + 1]);
+        int db = std::abs((int)expData[idx + 2] - (int)actData[idx + 2]);
+        int da = std::abs((int)expData[idx + 3] - (int)actData[idx + 3]);
+        int maxDiff = std::max({dr, dg, db, da});
+        if (maxDiff > maxChannelDiff) maxChannelDiff = maxDiff;
+        if (maxDiff > tolerance) ++diffCount;
+    }
+
+    stbi_image_free(expData);
+    stbi_image_free(actData);
+
+    result.pixelDifference = static_cast<double>(diffCount) / totalPixels * 100.0;
+    result.maxChannelDiff  = static_cast<double>(maxChannelDiff) / 255.0;
+
+    if (diffCount > 0) {
+        result.match = false;
+        result.errors.push_back(std::to_string(diffCount) + " of " +
+            std::to_string(totalPixels) + " pixels (" +
+            std::to_string(result.pixelDifference) + "%) exceed channel tolerance " +
+            std::to_string(tolerance));
+    }
+
+    if (generateDiff) {
+        std::filesystem::path diffPath = std::filesystem::path(getDiffDirectory()) /
             (std::filesystem::path(expectedPath).stem().string() + "_diff.png");
         result.diffImagePath = diffPath.string();
-        
-        // Decode both PNGs and create visual diff
         generateVisualDiff(expectedPath, actualPath, result.diffImagePath, tolerance, result);
     }
 

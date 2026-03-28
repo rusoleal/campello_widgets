@@ -190,6 +190,22 @@ namespace systems::leal::campello_widgets
                 {
                     draw_backend_->drawImage(c, current_transform, current_clip, encoder);
                 }
+                else if constexpr (std::is_same_v<T, DrawCircleCmd>)
+                {
+                    draw_backend_->drawCircle(c, current_transform, current_clip, encoder);
+                }
+                else if constexpr (std::is_same_v<T, DrawOvalCmd>)
+                {
+                    draw_backend_->drawOval(c, current_transform, current_clip, encoder);
+                }
+                else if constexpr (std::is_same_v<T, DrawRRectCmd>)
+                {
+                    draw_backend_->drawRRect(c, current_transform, current_clip, encoder);
+                }
+                else if constexpr (std::is_same_v<T, DrawLineCmd>)
+                {
+                    draw_backend_->drawLine(c, current_transform, current_clip, encoder);
+                }
                 else if constexpr (std::is_same_v<T, PushTransformCmd>)
                 {
                     transform_stack.push_back(current_transform);
