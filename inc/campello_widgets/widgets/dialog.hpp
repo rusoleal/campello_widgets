@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace systems::leal::campello_widgets

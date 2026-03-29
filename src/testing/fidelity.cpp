@@ -1,4 +1,4 @@
-#include <campello_widgets/testing/fidelity.hpp>
+#include "fidelity.hpp"
 #include <campello_widgets/ui/canvas.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/render_flex.hpp>
@@ -14,7 +14,9 @@
 #include <cmath>
 #include <fstream>
 #include <filesystem>
+#ifndef _MSC_VER
 #include <cxxabi.h>
+#endif
 
 namespace cw = systems::leal::campello_widgets;
 namespace cwt = systems::leal::campello_widgets::testing;
@@ -25,20 +27,26 @@ namespace cwt = systems::leal::campello_widgets::testing;
 
 static std::string demangleTypeName(const char* name)
 {
+#ifdef _MSC_VER
+    // MSVC typeid().name() returns "class Foo" / "struct Foo" — already readable.
+    std::string result(name);
+    for (const char* kw : { "class ", "struct ", "enum " }) {
+        if (result.rfind(kw, 0) == 0) {
+            result = result.substr(strlen(kw));
+            break;
+        }
+    }
+#else
     int status = 0;
     char* demangled = abi::__cxa_demangle(name, nullptr, nullptr, &status);
-    if (status == 0 && demangled != nullptr) {
-        std::string result(demangled);
-        free(demangled);
-        // Remove namespace prefixes for readability
-        const std::string prefix = "systems::leal::campello_widgets::";
-        size_t pos = result.find(prefix);
-        if (pos != std::string::npos) {
-            result = result.substr(pos + prefix.length());
-        }
-        return result;
-    }
-    return std::string(name);
+    std::string result = (status == 0 && demangled) ? std::string(demangled) : std::string(name);
+    free(demangled);
+#endif
+    const std::string prefix = "systems::leal::campello_widgets::";
+    size_t pos = result.find(prefix);
+    if (pos != std::string::npos)
+        result = result.substr(pos + prefix.length());
+    return result;
 }
 
 // ---------------------------------------------------------------------

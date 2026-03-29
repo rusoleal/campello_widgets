@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cmath>
+#include <numbers>
 
 namespace systems::leal::campello_widgets
 {
@@ -81,7 +82,7 @@ namespace systems::leal::campello_widgets
             if (t == 0.0 || t == 1.0) return t;
             constexpr double p = 0.3;
             return std::pow(2.0, -10.0 * t) *
-                   std::sin((t - p / 4.0) * (2.0 * M_PI) / p) + 1.0;
+                   std::sin((t - p / 4.0) * (2.0 * std::numbers::pi) / p) + 1.0;
         }
     };
 

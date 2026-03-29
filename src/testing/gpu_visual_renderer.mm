@@ -1,4 +1,4 @@
-#import <campello_widgets/testing/gpu_visual_renderer.hpp>
+#import "gpu_visual_renderer.hpp"
 #import <campello_widgets/ui/draw_command.hpp>
 #import <campello_widgets/ui/color.hpp>
 #import <campello_widgets/ui/rect.hpp>

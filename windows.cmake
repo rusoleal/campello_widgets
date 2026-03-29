@@ -2,8 +2,10 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|linux)/.*")
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 
 add_library(campello_widgets SHARED ${CAMPELLO_WIDGETS_SOURCES})
+set_target_properties(campello_widgets PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
 target_include_directories(campello_widgets
     PUBLIC
@@ -32,4 +34,4 @@ target_link_libraries(campello_widgets
 target_compile_options(campello_widgets PRIVATE /W4)
 
 # Define Windows platform macro
-target_compile_definitions(campello_widgets PUBLIC CAMPHELLO_PLATFORM_WINDOWS)
+target_compile_definitions(campello_widgets PUBLIC CAMPELLO_PLATFORM_WINDOWS)

@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmd /c build.bat)",
+      "Bash(cmake -S . -B build/windows -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON)",
+      "Bash(call run_fidelity_tests.bat)",
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(powershell -Command \"& cmd.exe /c run_fidelity_tests.bat\")",
+      "Bash(powershell -Command \"Set-Location 'C:\\\\Users\\\\rusol\\\\source\\\\repos\\\\campello_widgets'; & cmd.exe /c 'C:\\\\Users\\\\rusol\\\\source\\\\repos\\\\campello_widgets\\\\run_fidelity_tests.bat' 2>&1\" 2>&1)"
+    ]
+  }
+}

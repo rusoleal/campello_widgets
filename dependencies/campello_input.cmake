@@ -6,7 +6,7 @@ include(FetchContent)
 FetchContent_Declare(
     campello_input
     GIT_REPOSITORY https://github.com/rusoleal/campello_input
-    GIT_TAG        main
+    GIT_TAG        v0.2.1
 )
 
 if(NOT campello_input_POPULATED)

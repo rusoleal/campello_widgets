@@ -1,5 +1,5 @@
 // Non-macOS stub — GPU visual renderer is not available on this platform.
-#include <campello_widgets/testing/gpu_visual_renderer.hpp>
+#include "gpu_visual_renderer.hpp"
 
 namespace systems::leal::campello_widgets::testing
 {

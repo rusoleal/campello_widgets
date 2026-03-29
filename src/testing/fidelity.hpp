@@ -34,7 +34,7 @@ namespace systems::leal::campello_widgets::testing
         float constraint_min_h = 0.0f;
         float constraint_max_h = 0.0f;
         std::vector<RenderNodeSnapshot> children;
-        
+
         // Additional properties specific to the render object type
         std::vector<std::pair<std::string, std::string>> properties;
 
@@ -85,13 +85,13 @@ namespace systems::leal::campello_widgets::testing
     struct DrawCommandSnapshot
     {
         std::string type;  // "rect", "text", "image", "push_clip", "pop_clip", etc.
-        
+
         // Rect commands
         float rect_left = 0.0f;
         float rect_top = 0.0f;
         float rect_right = 0.0f;
         float rect_bottom = 0.0f;
-        
+
         // Paint properties (for rect)
         float paint_red = 0.0f;
         float paint_green = 0.0f;
@@ -99,14 +99,14 @@ namespace systems::leal::campello_widgets::testing
         float paint_alpha = 1.0f;
         std::string paint_style;  // "fill" or "stroke"
         float stroke_width = 0.0f;
-        
+
         // Text commands
         std::string text_content;
         std::string text_style_family;
         float text_style_size = 0.0f;
         float text_origin_x = 0.0f;
         float text_origin_y = 0.0f;
-        
+
         // Image commands
         std::string image_texture_id;  // Identifier for comparison
         float image_src_left = 0.0f;
@@ -118,10 +118,10 @@ namespace systems::leal::campello_widgets::testing
         float image_dst_right = 0.0f;
         float image_dst_bottom = 0.0f;
         float image_opacity = 1.0f;
-        
+
         // Transform commands
         std::vector<float> transform_matrix;  // 16 floats for Matrix4
-        
+
         // Clip commands
         float clip_left = 0.0f;
         float clip_top = 0.0f;
@@ -158,7 +158,7 @@ namespace systems::leal::campello_widgets::testing
     {
         bool match = true;
         std::vector<std::string> differences;
-        
+
         void addDifference(const std::string& path, const std::string& expected, const std::string& actual);
     };
 
@@ -225,7 +225,7 @@ namespace systems::leal::campello_widgets::testing
         std::vector<DrawCommandSnapshot> paint_commands;
         float viewport_width = 0.0f;
         float viewport_height = 0.0f;
-        
+
         std::string toJson() const;
         static FidelitySnapshot fromJson(const std::string& json);
     };

@@ -1,5 +1,5 @@
 #include <gtest/gtest.h>
-#include <campello_widgets/testing/fidelity.hpp>
+#include "fidelity.hpp"
 #include <campello_widgets/ui/canvas.hpp>
 #include <campello_widgets/ui/path.hpp>
 #include <campello_widgets/ui/rrect.hpp>

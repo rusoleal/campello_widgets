@@ -5,6 +5,24 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-03-29
+
+### Added
+
+- `run_fidelity_tests.bat`: Windows batch script replicating `run_fidelity_tests.sh`; supports `--skip-flutter`, `--skip-build`, `--visual`, `--json`, `--all`, `--test <name>`, and `--verbose` flags
+
+### Changed
+
+- Testing headers (`fidelity.hpp`, `gpu_visual_renderer.hpp`, `visual_fidelity.hpp`) moved from `inc/campello_widgets/testing/` to `src/testing/` — they are internal test infrastructure, not part of the public API; `tests/CMakeLists.txt` updated to add `src/testing` as a private include path
+
+### Fixed
+
+- MSVC build (`curves.hpp`): replaced `_USE_MATH_DEFINES` + `M_PI` with `std::numbers::pi` (`<numbers>`) to avoid include-order sensitivity
+- MSVC build (`fidelity.cpp`): guarded `<cxxabi.h>` behind `#ifndef _MSC_VER`; added MSVC-compatible `demangleTypeName` using `typeid().name()` with keyword-prefix stripping
+- MSVC build (`d3d_draw_backend.cpp`): corrected `Matrix4` field access (`data` not `m`); fixed `setPipeline` call to pass `shared_ptr` by value rather than dereferencing it
+- Windows shared library (`windows.cmake`): added `WINDOWS_EXPORT_ALL_SYMBOLS ON` so MSVC generates the `.lib` import library required by the test linker
+- Windows test discovery (`tests/CMakeLists.txt`): switched `gtest_discover_tests` to `DISCOVERY_MODE PRE_TEST` and added a post-build step to copy `campello_widgets.dll` and `campello_gpu.dll` next to the test executable, preventing `0xc0000135` load failures at discovery time
+
 ## [0.1.2] - 2026-03-28
 
 ### Added

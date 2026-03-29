@@ -26,14 +26,29 @@ if(UNIVERSAL_TEST_SOURCES)
     # Include directories for stb headers
     target_include_directories(campello_widgets_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing"
     )
     
     target_link_libraries(campello_widgets_tests PRIVATE
         campello_widgets
         GTest::gtest_main
     )
+
+    # On Windows the DLLs must live next to the test EXE so it can load them.
+    if(WIN32)
+        add_custom_command(TARGET campello_widgets_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:campello_widgets>
+                $<TARGET_FILE_DIR:campello_widgets_tests>
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:campello_gpu>
+                $<TARGET_FILE_DIR:campello_widgets_tests>
+        )
+    endif()
+
     include(GoogleTest)
-    gtest_discover_tests(campello_widgets_tests)
+    # PRE_TEST defers discovery to ctest time so the post-build copy runs first.
+    gtest_discover_tests(campello_widgets_tests DISCOVERY_MODE PRE_TEST)
 endif()
 
 # Platform integration tests — require real GPU/input

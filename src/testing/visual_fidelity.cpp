@@ -1,5 +1,5 @@
-#include <campello_widgets/testing/visual_fidelity.hpp>
-#include <campello_widgets/testing/gpu_visual_renderer.hpp>
+#include "visual_fidelity.hpp"
+#include "gpu_visual_renderer.hpp"
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/color.hpp>

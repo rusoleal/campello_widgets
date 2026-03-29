@@ -82,10 +82,10 @@ void D3DDrawBackend::drawRect(
     float y2 = cmd.rect.bottom();
 
     // Apply transform (simple 2D transform)
-    float tx1 = transform.m[0] * x1 + transform.m[4] * y1 + transform.m[12];
-    float ty1 = transform.m[1] * x1 + transform.m[5] * y1 + transform.m[13];
-    float tx2 = transform.m[0] * x2 + transform.m[4] * y2 + transform.m[12];
-    float ty2 = transform.m[1] * x2 + transform.m[5] * y2 + transform.m[13];
+    float tx1 = transform.data[0] * x1 + transform.data[4] * y1 + transform.data[12];
+    float ty1 = transform.data[1] * x1 + transform.data[5] * y1 + transform.data[13];
+    float tx2 = transform.data[0] * x2 + transform.data[4] * y2 + transform.data[12];
+    float ty2 = transform.data[1] * x2 + transform.data[5] * y2 + transform.data[13];
 
     // Normalize to NDC (-1 to 1)
     float nx1 = (tx1 / vp_w_) * 2.0f - 1.0f;
@@ -108,7 +108,7 @@ void D3DDrawBackend::drawRect(
     // Submit to GPU via campello_gpu encoder
     // The encoder abstracts the actual D3D11/12 draw calls
     if (rect_pipeline_) {
-        encoder.setPipeline(*rect_pipeline_);
+        encoder.setPipeline(rect_pipeline_);
         // Note: Actual vertex buffer binding would go here
         // encoder.setVertexBuffer(0, vb);
         // encoder.draw(6);
@@ -154,10 +154,10 @@ void D3DDrawBackend::drawImage(
     float x2 = cmd.dst_rect.right();
     float y2 = cmd.dst_rect.bottom();
 
-    float tx1 = transform.m[0] * x1 + transform.m[4] * y1 + transform.m[12];
-    float ty1 = transform.m[1] * x1 + transform.m[5] * y1 + transform.m[13];
-    float tx2 = transform.m[0] * x2 + transform.m[4] * y2 + transform.m[12];
-    float ty2 = transform.m[1] * x2 + transform.m[5] * y2 + transform.m[13];
+    float tx1 = transform.data[0] * x1 + transform.data[4] * y1 + transform.data[12];
+    float ty1 = transform.data[1] * x1 + transform.data[5] * y1 + transform.data[13];
+    float tx2 = transform.data[0] * x2 + transform.data[4] * y2 + transform.data[12];
+    float ty2 = transform.data[1] * x2 + transform.data[5] * y2 + transform.data[13];
 
     float nx1 = (tx1 / vp_w_) * 2.0f - 1.0f;
     float ny1 = 1.0f - (ty1 / vp_h_) * 2.0f;
@@ -181,7 +181,7 @@ void D3DDrawBackend::drawImage(
     };
 
     if (quad_pipeline_ && quad_bgl_ && quad_sampler_) {
-        encoder.setPipeline(*quad_pipeline_);
+        encoder.setPipeline(quad_pipeline_);
         // Bind texture and sampler
         // encoder.setBindGroup(0, texture_bind_group);
         // encoder.draw(6);

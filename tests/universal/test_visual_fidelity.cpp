@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
-#include <campello_widgets/testing/visual_fidelity.hpp>
-#include <campello_widgets/testing/gpu_visual_renderer.hpp>
-#include <campello_widgets/testing/fidelity.hpp>
+#include "visual_fidelity.hpp"
+#include "gpu_visual_renderer.hpp"
+#include "fidelity.hpp"
 #include <campello_widgets/ui/render_flex.hpp>
 #include <campello_widgets/ui/render_padding.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
