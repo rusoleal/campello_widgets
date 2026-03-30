@@ -10,6 +10,8 @@
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/path.hpp>
 #include <campello_widgets/ui/rrect.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
+#include <campello_widgets/ui/shader.hpp>
 
 // campello_gpu forward declaration — avoids pulling the full GPU headers
 // into every widget translation unit.
@@ -102,6 +104,53 @@ namespace systems::leal::campello_widgets
         Paint paint;   // For color filter, blend mode
     };
 
+    // ------------------------------------------------------------------
+    // BackdropFilter commands
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief Marks the start of a BackdropFilter region.
+     *
+     * The Renderer captures the scene rendered *before* this point into an
+     * offscreen texture, blurs it using `filter`, and draws it as the
+     * background of the bounds.  Commands between this and
+     * DrawBackdropFilterEndCmd are the widget's children, which render on
+     * top of the blurred backdrop.
+     *
+     * During the backdrop-capture pass the child commands are skipped so
+     * that the source texture only contains the scene behind the widget.
+     */
+    struct DrawBackdropFilterBeginCmd
+    {
+        Rect        bounds;
+        ImageFilter filter;
+    };
+
+    /** @brief Marks the end of a BackdropFilter child scope. */
+    struct DrawBackdropFilterEndCmd {};
+
+    // ------------------------------------------------------------------
+    // ShaderMask commands
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief Marks the start of a ShaderMask region.
+     *
+     * Commands between this and DrawShaderMaskEndCmd are the widget's
+     * children.  The Renderer renders those children to an offscreen
+     * texture, evaluates `shader` as a mask, composites the two using
+     * `blend_mode`, and draws the result into the main target.
+     */
+    struct DrawShaderMaskBeginCmd
+    {
+        Rect      bounds;
+        Shader    shader;
+        BlendMode blend_mode = BlendMode::srcIn;
+    };
+
+    /** @brief Marks the end of a ShaderMask child scope. */
+    struct DrawShaderMaskEndCmd {};
+
     /** @brief Clip using a path. */
     struct PushClipPathCmd
     {
@@ -190,25 +239,33 @@ namespace systems::leal::campello_widgets
         DrawLineCmd,
         DrawRRectCmd,
         DrawPointsCmd,
-        
+
         // Complex shapes
         DrawPathCmd,
         DrawShadowCmd,
-        
+
         // Text and images
         DrawTextCmd,
         DrawImageCmd,
-        
+
         // Clipping
         PushClipRectCmd,
         PushClipRRectCmd,
         PushClipPathCmd,
         PopClipRectCmd,
-        
+
         // Transforms and state
         PushTransformCmd,
         PopTransformCmd,
-        SaveLayerCmd
+        SaveLayerCmd,
+
+        // BackdropFilter (begin/end pair wrapping child commands)
+        DrawBackdropFilterBeginCmd,
+        DrawBackdropFilterEndCmd,
+
+        // ShaderMask (begin/end pair wrapping child commands)
+        DrawShaderMaskBeginCmd,
+        DrawShaderMaskEndCmd
     >;
 
     using DrawList = std::vector<DrawCommand>;

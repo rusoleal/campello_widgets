@@ -323,4 +323,35 @@ namespace systems::leal::campello_widgets
             ++save_stack_.back().pushed_clips;
     }
 
+    // ------------------------------------------------------------------
+    // BackdropFilter scope
+    // ------------------------------------------------------------------
+
+    void Canvas::beginBackdropFilter(const Rect& bounds, const ImageFilter& filter)
+    {
+        commands_.push_back(DrawBackdropFilterBeginCmd{bounds, filter});
+    }
+
+    void Canvas::endBackdropFilter()
+    {
+        commands_.push_back(DrawBackdropFilterEndCmd{});
+    }
+
+    // ------------------------------------------------------------------
+    // ShaderMask scope
+    // ------------------------------------------------------------------
+
+    void Canvas::beginShaderMask(
+        const Rect&   bounds,
+        const Shader& shader,
+        BlendMode     blend_mode)
+    {
+        commands_.push_back(DrawShaderMaskBeginCmd{bounds, shader, blend_mode});
+    }
+
+    void Canvas::endShaderMask()
+    {
+        commands_.push_back(DrawShaderMaskEndCmd{});
+    }
+
 } // namespace systems::leal::campello_widgets

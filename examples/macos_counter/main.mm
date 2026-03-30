@@ -192,7 +192,7 @@ public:
 int main()
 {
     cw::DebugFlags::showDebugBanner        = false;
-    cw::DebugFlags::showPerformanceOverlay = false;
+    cw::DebugFlags::showPerformanceOverlay = true;
 
     return cw::runApp(
         std::make_shared<CounterApp>(),

@@ -2,6 +2,7 @@
 #import <campello_widgets/campello_widgets.hpp>
 #import <campello_widgets/widgets/element.hpp>
 #import <campello_widgets/widgets/render_object_element.hpp>
+#import <campello_widgets/widgets/platform_menu_delegate.hpp>
 #import <campello_widgets/ui/renderer.hpp>
 #import <campello_widgets/ui/render_box.hpp>
 #import <campello_widgets/ui/pointer_event.hpp>
@@ -18,6 +19,9 @@
 
 #import <Cocoa/Cocoa.h>
 #import <MetalKit/MetalKit.h>
+
+// Forward declaration for PlatformMenuDelegate initialization
+extern "C" void campello_widgets_initialize_macos_menu_delegate();
 
 namespace GPU     = systems::leal::campello_gpu;
 namespace Widgets = systems::leal::campello_widgets;
@@ -310,7 +314,8 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 {
     (void)notification;
 
-    [self buildMenuBar];
+    // Initialize the platform menu delegate
+    campello_widgets_initialize_macos_menu_delegate();
 
     // -----------------------------------------------------------------------
     // Create window
@@ -443,19 +448,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     [NSApp activateIgnoringOtherApps:YES];
 }
 
-- (void)buildMenuBar
-{
-    NSMenu *menuBar  = [[NSMenu alloc] init];
-    NSMenuItem *appItem = [[NSMenuItem alloc] init];
-    [menuBar addItem:appItem];
-    NSMenu *appMenu = [[NSMenu alloc] init];
-    appItem.submenu = appMenu;
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@",
-                               [NSString stringWithUTF8String:gTitle.c_str()]]
-                       action:@selector(terminate:)
-                keyEquivalent:@"q"];
-    [NSApp setMainMenu:menuBar];
-}
+
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
 {

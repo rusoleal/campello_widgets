@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <typeinfo>
+#include <campello_widgets/ui/key.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -24,6 +25,15 @@ namespace systems::leal::campello_widgets
     {
     public:
         virtual ~Widget() = default;
+
+        /**
+         * @brief Optional identity key.
+         *
+         * When set, the reconciler uses key equality (instead of position) to
+         * match this widget to an existing element. See `Key`, `ValueKey<T>`,
+         * `UniqueKey`, and `GlobalKey`.
+         */
+        std::shared_ptr<Key> key;
 
         /**
          * @brief Creates the Element that manages this widget's lifecycle in the tree.

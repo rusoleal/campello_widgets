@@ -2,6 +2,9 @@
 
 #include "campello_widgets_config.h"
 
+// Key system
+#include <campello_widgets/ui/key.hpp>
+
 // Core
 #include <campello_widgets/widgets/widget.hpp>
 #include <campello_widgets/widgets/build_context.hpp>
@@ -10,6 +13,8 @@
 #include <campello_widgets/widgets/stateless_element.hpp>
 #include <campello_widgets/widgets/stateful_widget.hpp>
 #include <campello_widgets/widgets/stateful_element.hpp>
+#include <campello_widgets/widgets/inherited_widget.hpp>
+#include <campello_widgets/widgets/inherited_element.hpp>
 
 // Layout
 #include <campello_widgets/ui/size.hpp>
@@ -141,7 +146,99 @@
 #include <campello_widgets/widgets/modal_barrier.hpp>
 #include <campello_widgets/widgets/dialog.hpp>
 
-// Debug overlays
+// Platform Menu Bar
+#include <campello_widgets/widgets/platform_menu.hpp>
+#include <campello_widgets/widgets/platform_menu_delegate.hpp>
+#include <campello_widgets/widgets/platform_menu_bar.hpp>
+
+// Phase 13 — Decoration
+#include <campello_widgets/ui/box_shadow.hpp>
+#include <campello_widgets/ui/box_border.hpp>
+#include <campello_widgets/ui/box_decoration.hpp>
+#include <campello_widgets/ui/render_decorated_box.hpp>
+#include <campello_widgets/widgets/decorated_box.hpp>
+
+// Phase 13 — Layout widgets
+#include <campello_widgets/ui/wrap_properties.hpp>
+#include <campello_widgets/ui/render_constrained_box.hpp>
+#include <campello_widgets/ui/render_aspect_ratio.hpp>
+#include <campello_widgets/ui/render_fractionally_sized_box.hpp>
+#include <campello_widgets/ui/render_intrinsic_width.hpp>
+#include <campello_widgets/ui/render_intrinsic_height.hpp>
+#include <campello_widgets/ui/render_wrap.hpp>
+#include <campello_widgets/ui/render_clip_rect.hpp>
+#include <campello_widgets/ui/render_clip_rrect.hpp>
+#include <campello_widgets/ui/render_clip_oval.hpp>
+#include <campello_widgets/ui/render_clip_path.hpp>
+#include <campello_widgets/widgets/constrained_box.hpp>
+#include <campello_widgets/widgets/aspect_ratio.hpp>
+#include <campello_widgets/widgets/fractionally_sized_box.hpp>
+#include <campello_widgets/widgets/intrinsic_width.hpp>
+#include <campello_widgets/widgets/intrinsic_height.hpp>
+#include <campello_widgets/widgets/wrap.hpp>
+#include <campello_widgets/widgets/clip_rect.hpp>
+#include <campello_widgets/widgets/clip_rrect.hpp>
+#include <campello_widgets/widgets/clip_oval.hpp>
+#include <campello_widgets/widgets/clip_path.hpp>
+
+// Animation transitions (explicit)
+#include <campello_widgets/widgets/fade_transition.hpp>
+#include <campello_widgets/widgets/scale_transition.hpp>
+#include <campello_widgets/widgets/slide_transition.hpp>
+#include <campello_widgets/widgets/rotation_transition.hpp>
+#include <campello_widgets/widgets/fractional_translation.hpp>
+
+// Animation transitions (implicit)
+#include <campello_widgets/ui/render_animated_size.hpp>
+#include <campello_widgets/widgets/animated_align.hpp>
+#include <campello_widgets/widgets/animated_positioned.hpp>
+#include <campello_widgets/widgets/animated_switcher.hpp>
+#include <campello_widgets/widgets/animated_size.hpp>
+
+// State Management
+#include <campello_widgets/ui/value_notifier.hpp>
+#include <campello_widgets/ui/async_snapshot.hpp>
+#include <campello_widgets/ui/stream.hpp>
+#include <campello_widgets/widgets/layout_builder.hpp>
+#include <campello_widgets/widgets/value_listenable_builder.hpp>
+#include <campello_widgets/widgets/future_builder.hpp>
+#include <campello_widgets/widgets/stream_builder.hpp>
+
+// Input / Forms
+#include <campello_widgets/ui/render_mouse_region.hpp>
+#include <campello_widgets/ui/render_slider.hpp>
+#include <campello_widgets/ui/render_text_field.hpp>
+#include <campello_widgets/ui/text_editing_controller.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
+#include <campello_widgets/widgets/checkbox.hpp>
+#include <campello_widgets/widgets/switch.hpp>
+#include <campello_widgets/widgets/slider.hpp>
+#include <campello_widgets/widgets/radio_group.hpp>
+#include <campello_widgets/widgets/radio.hpp>
+#include <campello_widgets/widgets/text_field.hpp>
+
+// Drag and drop
+#include <campello_widgets/ui/drag_details.hpp>
+#include <campello_widgets/widgets/draggable.hpp>
+#include <campello_widgets/widgets/drag_target.hpp>
+
+// Navigation
+#include <campello_widgets/widgets/navigator.hpp>
+
+// Utility widgets
+#include <campello_widgets/widgets/button.hpp>
+#include <campello_widgets/widgets/divider.hpp>
+#include <campello_widgets/widgets/circular_progress_indicator.hpp>
+#include <campello_widgets/widgets/linear_progress_indicator.hpp>
+#include <campello_widgets/widgets/tooltip.hpp>
+
+// Decoration widgets
+#include <campello_widgets/ui/image_filter.hpp>
+#include <campello_widgets/ui/shader.hpp>
+#include <campello_widgets/ui/render_backdrop_filter.hpp>
+#include <campello_widgets/ui/render_shader_mask.hpp>
+#include <campello_widgets/widgets/backdrop_filter.hpp>
+#include <campello_widgets/widgets/shader_mask.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
 
 // Platform-specific entry points

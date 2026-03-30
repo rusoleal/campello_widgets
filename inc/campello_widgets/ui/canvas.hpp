@@ -9,6 +9,8 @@
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/path.hpp>
 #include <campello_widgets/ui/rrect.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
+#include <campello_widgets/ui/shader.hpp>
 
 namespace systems::leal::campello_gpu { class Texture; }
 
@@ -270,6 +272,45 @@ namespace systems::leal::campello_widgets
 
         /** @brief The accumulated draw commands recorded so far. */
         const DrawList& commands() const noexcept { return commands_; }
+
+        // ------------------------------------------------------------------
+        // BackdropFilter scope
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Opens a backdrop-filter scope for `bounds` with `filter`.
+         *
+         * Draw commands issued after this call (until `endBackdropFilter()`)
+         * are treated as the filter's children and will render on top of the
+         * blurred backdrop.
+         *
+         * Must be balanced by a matching `endBackdropFilter()`.
+         */
+        void beginBackdropFilter(const Rect& bounds, const ImageFilter& filter);
+
+        /** @brief Closes a backdrop-filter scope opened with `beginBackdropFilter()`. */
+        void endBackdropFilter();
+
+        // ------------------------------------------------------------------
+        // ShaderMask scope
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Opens a shader-mask scope for `bounds`.
+         *
+         * Draw commands issued after this call (until `endShaderMask()`)
+         * are the mask's children; they are composited with the evaluated
+         * `shader` using `blend_mode` before being drawn to the target.
+         *
+         * Must be balanced by a matching `endShaderMask()`.
+         */
+        void beginShaderMask(
+            const Rect&   bounds,
+            const Shader& shader,
+            BlendMode     blend_mode = BlendMode::srcIn);
+
+        /** @brief Closes a shader-mask scope opened with `beginShaderMask()`. */
+        void endShaderMask();
 
     private:
         // Tracks how many Push commands were emitted inside a save() scope so

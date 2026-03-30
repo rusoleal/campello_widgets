@@ -6,7 +6,17 @@
       "Bash(call run_fidelity_tests.bat)",
       "Bash(echo \"EXIT:$?\")",
       "Bash(powershell -Command \"& cmd.exe /c run_fidelity_tests.bat\")",
-      "Bash(powershell -Command \"Set-Location 'C:\\\\Users\\\\rusol\\\\source\\\\repos\\\\campello_widgets'; & cmd.exe /c 'C:\\\\Users\\\\rusol\\\\source\\\\repos\\\\campello_widgets\\\\run_fidelity_tests.bat' 2>&1\" 2>&1)"
+      "Bash(powershell -Command \"Set-Location 'C:\\\\Users\\\\rusol\\\\source\\\\repos\\\\campello_widgets'; & cmd.exe /c 'C:\\\\Users\\\\rusol\\\\source\\\\repos\\\\campello_widgets\\\\run_fidelity_tests.bat' 2>&1\" 2>&1)",
+      "Bash(./build.sh darwin:*)",
+      "Bash(./test.sh)",
+      "Bash(ctest)",
+      "Bash(ctest -N)",
+      "Bash(./campello_widgets_tests --gtest_filter=\"VisualFidelity.SimpleColumn\")",
+      "Bash(/Users/rubenleal/Projects/campello_widgets/build/darwin_test/campello_widgets_tests --gtest_filter=\"VisualFidelity.SimpleColumn\")",
+      "Bash(/Users/rubenleal/Projects/campello_widgets/build/tests/campello_widgets_tests --gtest_filter=\"VisualFidelity.SimpleColumn\")",
+      "Bash(/Users/rubenleal/Projects/campello_widgets/build/darwin_test/tests/campello_widgets_tests --gtest_filter=\"VisualFidelity.SimpleColumn\")",
+      "Bash(bash build.sh darwin)",
+      "Bash(find /Users/rubenleal/Projects/campello_widgets -name *debug* -o -name *overlay* -o -name *fps* -o -name *perf*)"
     ]
   }
 }

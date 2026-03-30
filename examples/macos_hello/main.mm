@@ -220,6 +220,51 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// SecondScreen — second navigation route
+// ---------------------------------------------------------------------------
+
+class SecondScreen : public cw::StatelessWidget
+{
+public:
+    cw::WidgetRef build(cw::BuildContext& ctx) const override
+    {
+        auto* nav = cw::Navigator::of(ctx);
+
+        auto title_style    = makeStyle(28.0f, cw::Color::fromRGB(0.10f, 0.10f, 0.10f));
+        auto subtitle_style = makeStyle(16.0f, cw::Color::fromRGB(0.50f, 0.50f, 0.55f));
+        auto btn_style      = makeStyle(15.0f, cw::Color::white());
+
+        auto back_label = cw::make<cw::Center>(cw::make<cw::Text>("\xe2\x86\x90 Go Back", btn_style));
+
+        auto back_box = std::make_shared<cw::Container>();
+        back_box->color   = cw::Color::fromRGB(0.08f, 0.47f, 0.95f);
+        back_box->padding = cw::EdgeInsets::symmetric(24.0f, 12.0f);
+        back_box->child   = back_label;
+
+        auto back_tap = std::make_shared<cw::GestureDetector>();
+        back_tap->on_tap = [nav]() { if (nav) nav->pop(); };
+        back_tap->child  = back_box;
+
+        auto content = cw::make<cw::Column>(
+            cw::MainAxisAlignment::center,
+            cw::CrossAxisAlignment::center,
+            cw::WidgetList{
+                cw::make<cw::Text>("Second Screen", title_style),
+                cw::make<cw::Padding>(
+                    cw::EdgeInsets::only(0, 8, 0, 32),
+                    cw::make<cw::Text>("You navigated here!", subtitle_style)),
+                back_tap,
+            }
+        );
+
+        auto bg   = std::make_shared<cw::Container>();
+        bg->color = cw::Color::fromRGB(0.97f, 0.97f, 1.0f);
+        bg->child = cw::make<cw::Center>(content);
+        return bg;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // GestureApp — exercises every GestureDetector callback
 // ---------------------------------------------------------------------------
 
@@ -234,8 +279,10 @@ public:
         tap_count_ = 0;
     }
 
-    cw::WidgetRef build(cw::BuildContext&) override
+    cw::WidgetRef build(cw::BuildContext& ctx) override
     {
+        auto* nav = cw::Navigator::of(ctx);
+
         // --- gesture detector ---
         auto detector = std::make_shared<cw::GestureDetector>();
 
@@ -297,10 +344,38 @@ public:
         auto expanded_gesture = std::make_shared<cw::Expanded>(
             std::make_shared<cw::Center>(detector));
 
+        // --- navigation button bar ---
+        auto nav_label = cw::make<cw::Text>(
+            "Go to Second Screen \xe2\x86\x92",
+            makeStyle(14.0f, cw::Color::white()));
+
+        auto nav_box = std::make_shared<cw::Container>();
+        nav_box->padding = cw::EdgeInsets::symmetric(16.0f, 10.0f);
+        nav_box->child   = nav_label;
+
+        auto nav_tap = std::make_shared<cw::GestureDetector>();
+        nav_tap->on_tap = [nav]() {
+            if (nav) nav->push(std::make_shared<cw::PageRoute>(
+                [](cw::BuildContext&) -> cw::WidgetRef {
+                    return std::make_shared<SecondScreen>();
+                }));
+        };
+        nav_tap->child = nav_box;
+
+        auto nav_bar = std::make_shared<cw::Container>();
+        nav_bar->color   = cw::Color::fromRGB(0.08f, 0.47f, 0.95f);
+        nav_bar->padding = cw::EdgeInsets::symmetric(12.0f, 6.0f);
+        nav_bar->child   = cw::make<cw::Row>(
+            cw::MainAxisAlignment::end,
+            cw::CrossAxisAlignment::center,
+            cw::WidgetList{ nav_tap }
+        );
+
         auto root_col = cw::make<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
+                nav_bar,
                 expanded_gesture,
                 cw::make<AnimationSection>(),
                 cw::make<ScrollSection>(),
@@ -330,13 +405,19 @@ public:
 
 int main()
 {
-    cw::DebugFlags::paintSizeEnabled     = false;
+    cw::DebugFlags::paintSizeEnabled     = true;
     cw::DebugFlags::repaintRainbowEnabled = false;
     cw::DebugFlags::showDebugBanner       = false;
-    cw::DebugFlags::showPerformanceOverlay = false;
+    cw::DebugFlags::showPerformanceOverlay = true;
+
+    auto nav = std::make_shared<cw::Navigator>();
+    nav->initial_route = std::make_shared<cw::PageRoute>(
+        [](cw::BuildContext&) -> cw::WidgetRef {
+            return std::make_shared<GestureApp>();
+        });
 
     return cw::runApp(
-        std::make_shared<GestureApp>(),
+        nav,
         "campello_widgets — Gesture + Animation",
         640.0f,
         760.0f);

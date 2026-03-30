@@ -5,6 +5,22 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-03-30
+
+### Added
+
+- `TextField` widget + `TextEditingController`: full single-line text input with cursor, selection, placeholder, obscure-text mode, focus integration, and callbacks (`on_changed`, `on_submitted`)
+- `Draggable<T>` widget: type-safe drag source with feedback overlay (position-tracked via `ValueNotifier<Offset>`), `child_when_dragging`, and `on_drag_started`/`on_drag_ended` callbacks
+- `DragTarget<T>` widget: type-safe drop zone with `on_will_accept`, `on_accept`, and hover-aware `builder`
+- `DragManager`: global singleton coordinating drag sessions; handles target registration, enter/exit callbacks, and type-checked acceptance
+- 65 new unit tests across three suites: `TextEditingController` (25), `RenderTextField` (19), `DragManager` (13), and `Draggable`/`DragTarget` widget integration (8)
+
+### Changed
+
+- `campello_gpu` dependency upgraded from v0.4.1 to v0.5.0 (official GitHub tag)
+- Phase 13 (Advanced Widgets) marked complete in `TODO.md`
+- Hot-reload marked as not planned in `TODO.md`
+
 ## [0.1.3] - 2026-03-29
 
 ### Added

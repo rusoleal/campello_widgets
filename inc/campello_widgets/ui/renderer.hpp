@@ -1,20 +1,23 @@
 #pragma once
 
-#include <array>
-#include <cstdint>
 #include <memory>
+#include <campello_gpu/frame_time_sampler.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/draw_backend.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
 
 // campello_gpu forward declarations
 namespace systems::leal::campello_gpu
 {
     class Device;
     class TextureView;
+    class CommandEncoder;
+    class RenderPassEncoder;
+    class Texture;
 }
 
 namespace systems::leal::campello_widgets
@@ -123,6 +126,24 @@ namespace systems::leal::campello_widgets
         campello_gpu::Device& device() noexcept { return *device_; }
 
         // ------------------------------------------------------------------
+        // BackdropFilter support
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Called by RenderBackdropFilter during the layout pass.
+         *
+         * Tells the Renderer that at least one BackdropFilter exists in the
+         * scene this frame, and records the maximum blur sigma so the
+         * pre-computed backdrop texture uses the correct blur level.
+         */
+        void noteBackdropFilter(const ImageFilter& filter) noexcept
+        {
+            has_backdrop_filter_ = true;
+            if (filter.sigma_x > max_sigma_x_) max_sigma_x_ = filter.sigma_x;
+            if (filter.sigma_y > max_sigma_y_) max_sigma_y_ = filter.sigma_y;
+        }
+
+        // ------------------------------------------------------------------
         // View insets (safe area, keyboard, etc.)
         // ------------------------------------------------------------------
 
@@ -154,22 +175,38 @@ namespace systems::leal::campello_widgets
     private:
         void layoutPass(float viewport_width, float viewport_height);
 
-        void paintPass(
-            campello_gpu::RenderPassEncoder& encoder,
-            float viewport_width,
-            float viewport_height);
+        // Generates the draw list headlessly (no GPU encoder) so it can be
+        // replayed to multiple render passes in one frame.
+        DrawList generateDrawList(float viewport_width, float viewport_height);
 
+        // Flushes draw commands to `rpe`.
+        // backdrop_pass = true  → skips backdrop-filter child commands (capture mode).
+        // backdrop_pass = false → handles backdrop-filter commands normally.
+        // `rpe` may be replaced when a ShaderMask region is encountered.
         void flushDrawList(
-            const DrawList&                  commands,
-            campello_gpu::RenderPassEncoder& encoder);
+            const DrawList&                                    commands,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            float viewport_width,
+            float viewport_height,
+            bool  backdrop_pass = false);
+
+        // Applies a ShaderMask region: renders child commands to an offscreen
+        // texture, then composites with the gradient mask into the main pass.
+        void applyShaderMask(
+            const DrawShaderMaskBeginCmd&                      cmd,
+            const DrawList&                                    child_cmds,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            float viewport_width,
+            float viewport_height,
+            const Matrix4& transform,
+            const Rect&    clip);
+
+        // Restarts a render pass on frame_target_ with LoadOp::load (preserves
+        // existing content).  Used after an offscreen composite operation.
+        std::shared_ptr<campello_gpu::RenderPassEncoder> restartMainRenderPass();
 
         /**
          * @brief Draws the Flutter-style performance overlay.
-         *
-         * Called from paintPass() when DebugFlags::showPerformanceOverlay is
-         * true. Renders a scrolling bar chart (last kPerfSamples frames) plus
-         * a live FPS / ms-per-frame text label into the bottom-left corner of
-         * the viewport.
          */
         void paintPerformanceOverlay(
             PaintContext& ctx,
@@ -182,14 +219,25 @@ namespace systems::leal::campello_widgets
         std::unique_ptr<IDrawBackend>         draw_backend_;
 
         // --- performance overlay state ---
-        static constexpr int kPerfSamples = 64;
-        std::array<float, kPerfSamples> frame_times_ms_{};
-        int      perf_head_     = 0;  ///< next write slot
-        int      perf_count_    = 0;  ///< number of valid samples (≤ kPerfSamples)
-        uint64_t last_frame_ms_ = 0;  ///< timestamp of the previous renderFrame call
+        campello_gpu::FrameTimeSampler perf_sampler_;
 
         // --- view insets (safe area) ---
         EdgeInsets view_insets_;
+
+        // --- backdrop filter state (per-frame, reset in layoutPass) ---
+        bool  has_backdrop_filter_ = false;
+        float max_sigma_x_         = 0.0f;
+        float max_sigma_y_         = 0.0f;
+
+        // Offscreen textures for backdrop capture + blur (persistent, resized lazily).
+        std::shared_ptr<campello_gpu::Texture> backdrop_tex_;
+        std::shared_ptr<campello_gpu::Texture> blurred_backdrop_tex_;
+        uint32_t backdrop_tex_w_ = 0;
+        uint32_t backdrop_tex_h_ = 0;
+
+        // --- frame-scoped pointers (valid only during renderFrame) ---
+        campello_gpu::CommandEncoder*              frame_encoder_ = nullptr;
+        std::shared_ptr<campello_gpu::TextureView> frame_target_;
     };
 
 } // namespace systems::leal::campello_widgets

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/ui/animation_controller.hpp>
+#include <campello_widgets/ui/alignment.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/size.hpp>
@@ -42,6 +43,15 @@ namespace systems::leal::campello_widgets
     {
         return {a.x + static_cast<float>((b.x - a.x) * t),
                 a.y + static_cast<float>((b.y - a.y) * t)};
+    }
+
+    template<>
+    inline Alignment lerp(const Alignment& a, const Alignment& b, double t)
+    {
+        return {
+            a.x + static_cast<float>((b.x - a.x) * t),
+            a.y + static_cast<float>((b.y - a.y) * t)
+        };
     }
 
     template<>

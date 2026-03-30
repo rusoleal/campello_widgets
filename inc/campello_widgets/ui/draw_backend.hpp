@@ -5,8 +5,16 @@
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/text_span.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
+#include <campello_widgets/ui/shader.hpp>
+#include <campello_gpu/constants/pixel_format.hpp>
 
-namespace systems::leal::campello_gpu { class RenderPassEncoder; }
+namespace systems::leal::campello_gpu
+{
+    class RenderPassEncoder;
+    class CommandEncoder;
+    class Texture;
+}
 
 namespace systems::leal::campello_widgets
 {
@@ -113,6 +121,85 @@ namespace systems::leal::campello_widgets
             const float line_height = span.style.font_size * 1.2f;
             return Size{ char_width * static_cast<float>(span.text.size()), line_height };
         }
+
+        // ------------------------------------------------------------------
+        // Offscreen / compositing support (BackdropFilter, ShaderMask)
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Returns the pixel format used for offscreen render targets.
+         *
+         * The Renderer calls this when it needs to allocate backdrop/child
+         * textures whose format must match the swapchain.
+         */
+        virtual campello_gpu::PixelFormat offscreenPixelFormat() const noexcept
+        {
+            return campello_gpu::PixelFormat::bgra8unorm;
+        }
+
+        /**
+         * @brief Allocates (or reuses) an RGBA offscreen texture of the given size.
+         *
+         * The returned texture is suitable as a render-pass color attachment and
+         * as a sampled texture binding.  Returns nullptr if allocation fails.
+         */
+        virtual std::shared_ptr<campello_gpu::Texture> createOffscreenTexture(
+            uint32_t /*width*/, uint32_t /*height*/) { return nullptr; }
+
+        /**
+         * @brief Begins a render pass that targets `tex`.
+         *
+         * The pass clears the texture to transparent black.  The caller ends the
+         * returned encoder when all child commands have been flushed.
+         */
+        virtual std::shared_ptr<campello_gpu::RenderPassEncoder> beginOffscreenPass(
+            std::shared_ptr<campello_gpu::Texture> /*tex*/,
+            campello_gpu::CommandEncoder&          /*encoder*/) { return nullptr; }
+
+        /**
+         * @brief Applies a separable Gaussian blur to `source` and returns the result.
+         *
+         * Runs two render passes (horizontal then vertical).  The resulting texture
+         * is owned by the backend and lives until the next call to `blurTexture`.
+         * Returns nullptr if the backend does not support blur.
+         *
+         * @param source    Texture to blur (must be readable as a sampled texture).
+         * @param sigma_x   Horizontal blur radius (Gaussian sigma, pixels).
+         * @param sigma_y   Vertical   blur radius (Gaussian sigma, pixels).
+         * @param encoder   Active command encoder for recording the blur passes.
+         */
+        virtual std::shared_ptr<campello_gpu::Texture> blurTexture(
+            std::shared_ptr<campello_gpu::Texture> /*source*/,
+            float /*sigma_x*/, float /*sigma_y*/,
+            campello_gpu::CommandEncoder& /*encoder*/) { return nullptr; }
+
+        /**
+         * @brief Draws the pre-blurred backdrop into the current render pass.
+         *
+         * `blurred_source` is the texture produced by `blurTexture()`.  The
+         * implementation samples the region of `blurred_source` corresponding to
+         * `cmd.bounds` and draws it as a full-viewport-coordinate textured quad.
+         */
+        virtual void drawBackdropFilter(
+            const DrawBackdropFilterBeginCmd&             /*cmd*/,
+            std::shared_ptr<campello_gpu::Texture>        /*blurred_source*/,
+            const Matrix4&                                /*transform*/,
+            const Rect&                                   /*clip*/,
+            campello_gpu::RenderPassEncoder&              /*encoder*/) {}
+
+        /**
+         * @brief Composites `child_tex` with the gradient/shader mask from `cmd`.
+         *
+         * `child_tex` contains the children rendered to an offscreen buffer.
+         * The implementation evaluates `cmd.shader` as a gradient mask, multiplies
+         * it with `child_tex` according to `cmd.blend_mode`, and draws the result
+         * at `cmd.bounds` in the current render pass.
+         */
+        virtual void drawShaderMaskComposite(
+            std::shared_ptr<campello_gpu::Texture>        /*child_tex*/,
+            const DrawShaderMaskBeginCmd&                 /*cmd*/,
+            const Matrix4&                                /*transform*/,
+            campello_gpu::RenderPassEncoder&              /*encoder*/) {}
     };
 
 } // namespace systems::leal::campello_widgets

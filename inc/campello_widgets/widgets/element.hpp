@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <typeindex>
+#include <unordered_map>
 #include <campello_widgets/widgets/widget.hpp>
 #include <campello_widgets/widgets/build_context.hpp>
 
@@ -8,6 +10,8 @@ namespace systems::leal::campello_widgets
 {
 
     class RenderObjectElement;
+    class InheritedElement;
+    class InheritedWidget;
 
     /**
      * @brief Mutable instantiation of a Widget in the live widget tree.
@@ -33,6 +37,14 @@ namespace systems::leal::campello_widgets
         // ------------------------------------------------------------------
 
         const Widget& widget() const override;
+
+        /**
+         * @brief Looks up the nearest ancestor InheritedWidget of the given type,
+         *        registers this element as a dependent, and returns it.
+         *
+         *        Called internally by BuildContext::dependOnInheritedWidgetOfExactType.
+         */
+        const InheritedWidget* getInheritedWidget(const std::type_info& type) override;
 
         // ------------------------------------------------------------------
         // Lifecycle
@@ -126,12 +138,27 @@ namespace systems::leal::campello_widgets
         RenderObjectElement* findDescendantRenderObjectElement() noexcept;
 
     protected:
+        /**
+         * @brief Hook called after inherited_widgets_ is copied from parent
+         *        but before rebuild(). Override in InheritedElement to insert
+         *        itself into the map so descendants can find it during the
+         *        initial build.
+         */
+        virtual void onMountInheritance() {}
+
         /** @brief Produce (or update) this element's child subtree. */
         virtual void performBuild() = 0;
 
         WidgetRef widget_;
         Element*  parent_ = nullptr;
         bool      dirty_  = true;
+
+        /**
+         * @brief Map from widget type to the nearest ancestor InheritedElement of
+         *        that type. Populated during mount() by copying the parent's map.
+         *        InheritedElement adds itself during its own mount().
+         */
+        std::unordered_map<std::type_index, InheritedElement*> inherited_widgets_;
     };
 
 } // namespace systems::leal::campello_widgets

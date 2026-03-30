@@ -81,6 +81,7 @@ MetalDrawBackend::MetalDrawBackend(
     GPU::PixelFormat             pixel_format)
     : device_(std::move(device))
     , bg_color_(bg_color)
+    , pixel_format_(pixel_format)
 {
     using namespace systems::leal::campello_widgets::shaders;
 
@@ -233,6 +234,85 @@ MetalDrawBackend::MetalDrawBackend(
         sd.lodMaxClamp   = 1000.0;
         sd.maxAnisotropy = 1.0;
         quad_sampler_ = device_->createSampler(sd);
+    }
+
+    // --- Blur pipeline (reuses quad_bgl_: texture@0, sampler@1) ---
+    {
+        GPU::ColorState cs{};
+        cs.format    = pixel_format;
+        cs.writeMask = GPU::ColorWrite::all;
+        cs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "blurVertex";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "blurFragment";
+        frag.targets.push_back(cs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        blur_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- ShaderMask pipeline (child_tex@0, lut_tex@1, sampler@2) ---
+    {
+        // Bind group layout: 2 textures + 1 sampler.
+        GPU::BindGroupLayoutDescriptor bglDesc{};
+
+        GPU::EntryObject childTex{};
+        childTex.binding    = 0;
+        childTex.visibility = GPU::ShaderStage::fragment;
+        childTex.type       = GPU::EntryObjectType::texture;
+        childTex.data.texture.multisampled  = false;
+        childTex.data.texture.sampleType    = GPU::EntryObjectTextureType::ttFloat;
+        childTex.data.texture.viewDimension = GPU::TextureType::tt2d;
+        bglDesc.entries.push_back(childTex);
+
+        GPU::EntryObject lutTex = childTex;
+        lutTex.binding = 1;
+        bglDesc.entries.push_back(lutTex);
+
+        GPU::EntryObject sampEntry{};
+        sampEntry.binding    = 2;
+        sampEntry.visibility = GPU::ShaderStage::fragment;
+        sampEntry.type       = GPU::EntryObjectType::sampler;
+        sampEntry.data.sampler.type = GPU::EntryObjectSamplerType::filtering;
+        bglDesc.entries.push_back(sampEntry);
+
+        shader_mask_bgl_ = device_->createBindGroupLayout(bglDesc);
+
+        GPU::ColorState cs{};
+        cs.format    = pixel_format;
+        cs.writeMask = GPU::ColorWrite::all;
+        cs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "shaderMaskVertex";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "shaderMaskFragment";
+        frag.targets.push_back(cs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        shader_mask_pipeline_ = device_->createRenderPipeline(desc);
     }
 }
 
@@ -667,6 +747,324 @@ void MetalDrawBackend::drawTexturedQuad(
 
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bindGroup);
+    encoder.setVertexBuffer(0, ubuf);
+    encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// Offscreen / compositing support
+// ---------------------------------------------------------------------------
+
+struct alignas(16) BlurUniforms {
+    float dstRect[4];    // x, y, w, h (pixels, destination quad)
+    float srcRect[4];    // u0, v0, u1, v1 (normalised UV)
+    float viewport[2];   // framebuffer width, height
+    float sigma;
+    float horizontal;    // 1.0 = H pass, 0.0 = V pass
+    float tex_size[2];   // source texture width, height
+    float _pad[2];
+};
+
+struct alignas(16) ShaderMaskUniforms {
+    float dstRect[4];        // bounds in viewport pixels
+    float viewport[2];
+    float gradient_type;     // 0 = linear, 1 = radial
+    float _pad0;
+    float gradient_p1[4];    // linear: begin.xy; radial: center.xy
+    float gradient_p2[4];    // linear: end.xy;   radial: radius in [0]
+    float blend_mode;        // 0 = srcIn, 1 = modulate
+    float _pad1[3];
+};
+
+std::shared_ptr<GPU::Texture> MetalDrawBackend::createOffscreenTexture(
+    uint32_t width, uint32_t height)
+{
+    return device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_,
+        width, height, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copySrc)));
+}
+
+std::shared_ptr<GPU::RenderPassEncoder> MetalDrawBackend::beginOffscreenPass(
+    std::shared_ptr<GPU::Texture> tex,
+    GPU::CommandEncoder&          encoder)
+{
+    if (!tex) return nullptr;
+
+    auto view = tex->createView(pixel_format_);
+    if (!view) return nullptr;
+
+    GPU::ColorAttachment ca{};
+    ca.view             = view;
+    ca.loadOp           = GPU::LoadOp::clear;
+    ca.storeOp          = GPU::StoreOp::store;
+    ca.clearValue[0]    = 0.0f;
+    ca.clearValue[1]    = 0.0f;
+    ca.clearValue[2]    = 0.0f;
+    ca.clearValue[3]    = 0.0f;
+
+    GPU::BeginRenderPassDescriptor desc{};
+    desc.colorAttachments = {ca};
+
+    return encoder.beginRenderPass(desc);
+}
+
+void MetalDrawBackend::runBlurPass(
+    std::shared_ptr<GPU::Texture> src,
+    std::shared_ptr<GPU::Texture> dst,
+    float sigma,
+    bool  horizontal,
+    GPU::CommandEncoder& encoder)
+{
+    if (!blur_pipeline_ || !quad_bgl_ || !quad_sampler_ || !src || !dst) return;
+
+    const uint32_t tw = static_cast<uint32_t>(dst->getWidth());
+    const uint32_t th = static_cast<uint32_t>(dst->getHeight());
+
+    auto dst_view = dst->createView(pixel_format_);
+    if (!dst_view) return;
+
+    GPU::ColorAttachment ca{};
+    ca.view    = dst_view;
+    ca.loadOp  = GPU::LoadOp::clear;
+    ca.storeOp = GPU::StoreOp::store;
+
+    GPU::BeginRenderPassDescriptor desc{};
+    desc.colorAttachments = {ca};
+
+    auto rpe = encoder.beginRenderPass(desc);
+    if (!rpe) return;
+
+    BlurUniforms u{};
+    u.dstRect[0]  = 0.0f;
+    u.dstRect[1]  = 0.0f;
+    u.dstRect[2]  = static_cast<float>(tw);
+    u.dstRect[3]  = static_cast<float>(th);
+    u.srcRect[0]  = 0.0f;
+    u.srcRect[1]  = 0.0f;
+    u.srcRect[2]  = 1.0f;
+    u.srcRect[3]  = 1.0f;
+    u.viewport[0] = static_cast<float>(tw);
+    u.viewport[1] = static_cast<float>(th);
+    u.sigma       = sigma;
+    u.horizontal  = horizontal ? 1.0f : 0.0f;
+    u.tex_size[0] = static_cast<float>(src->getWidth());
+    u.tex_size[1] = static_cast<float>(src->getHeight());
+
+    auto ubuf = device_->createBuffer(sizeof(BlurUniforms), GPU::BufferUsage::vertex, &u);
+    if (!ubuf) { rpe->end(); return; }
+
+    GPU::BindGroupDescriptor bgDesc{};
+    bgDesc.layout  = quad_bgl_;
+    bgDesc.entries = {
+        GPU::BindGroupEntryDescriptor{0, src},
+        GPU::BindGroupEntryDescriptor{1, quad_sampler_},
+    };
+    auto bg = device_->createBindGroup(bgDesc);
+    if (!bg) { rpe->end(); return; }
+
+    rpe->setPipeline(blur_pipeline_);
+    rpe->setBindGroup(0, bg);
+    rpe->setVertexBuffer(0, ubuf);
+    rpe->draw(6);
+    rpe->end();
+}
+
+std::shared_ptr<GPU::Texture> MetalDrawBackend::blurTexture(
+    std::shared_ptr<GPU::Texture> source,
+    float sigma_x, float sigma_y,
+    GPU::CommandEncoder& encoder)
+{
+    if (!source || !blur_pipeline_) return nullptr;
+
+    const uint32_t tw = static_cast<uint32_t>(source->getWidth());
+    const uint32_t th = static_cast<uint32_t>(source->getHeight());
+
+    if (!blur_h_tex_ || blur_tex_w_ != tw || blur_tex_h_ != th)
+    {
+        blur_h_tex_ = device_->createTexture(
+            GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1,
+            static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding)));
+        blur_v_tex_ = device_->createTexture(
+            GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1,
+            static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding)));
+        blur_tex_w_ = tw;
+        blur_tex_h_ = th;
+    }
+
+    // Horizontal blur: source → blur_h_tex_
+    runBlurPass(source,      blur_h_tex_, sigma_x, /*horizontal=*/true,  encoder);
+    // Vertical blur:   blur_h_tex_ → blur_v_tex_
+    runBlurPass(blur_h_tex_, blur_v_tex_, sigma_y, /*horizontal=*/false, encoder);
+
+    return blur_v_tex_;
+}
+
+void MetalDrawBackend::drawBackdropFilter(
+    const DrawBackdropFilterBeginCmd&      cmd,
+    std::shared_ptr<GPU::Texture>          blurred_source,
+    const Matrix4&                         /*transform*/,
+    const Rect&                            /*clip*/,
+    GPU::RenderPassEncoder&                encoder)
+{
+    if (!blurred_source) return;
+
+    // Draw the blurred backdrop region as a textured quad at cmd.bounds.
+    // The UV maps the bounds portion of the blurred texture.
+    const float src_w = static_cast<float>(blurred_source->getWidth());
+    const float src_h = static_cast<float>(blurred_source->getHeight());
+
+    const float u0 = cmd.bounds.x      / src_w;
+    const float v0 = cmd.bounds.y      / src_h;
+    const float u1 = cmd.bounds.right()  / src_w;
+    const float v1 = cmd.bounds.bottom() / src_h;
+
+    drawTexturedQuad(
+        blurred_source,
+        cmd.bounds.x, cmd.bounds.y, cmd.bounds.width, cmd.bounds.height,
+        u0, v0, u1, v1,
+        1.0f,
+        encoder);
+}
+
+std::shared_ptr<GPU::Texture> MetalDrawBackend::buildGradientLUT(
+    const std::vector<Color>& colors,
+    const std::vector<float>& stops)
+{
+    if (colors.empty()) return nullptr;
+
+    constexpr int kLutSize = 256;
+    std::vector<uint8_t> data(kLutSize * 4);
+
+    for (int i = 0; i < kLutSize; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(kLutSize - 1);
+
+        // Find the two stops that bracket t.
+        Color c;
+        if (colors.size() == 1 || stops.empty())
+        {
+            c = colors[0];
+        }
+        else
+        {
+            int lo = 0;
+            int hi = static_cast<int>(colors.size()) - 1;
+            for (int s = 0; s < static_cast<int>(stops.size()) - 1; ++s)
+            {
+                if (t >= stops[s] && t <= stops[s + 1])
+                {
+                    lo = s;
+                    hi = s + 1;
+                    break;
+                }
+            }
+            const float range = stops[hi] - stops[lo];
+            const float f     = (range > 0.0001f) ? (t - stops[lo]) / range : 0.0f;
+            const Color& ca   = colors[lo];
+            const Color& cb   = colors[hi];
+            c = Color::fromRGBA(
+                ca.r + f * (cb.r - ca.r),
+                ca.g + f * (cb.g - ca.g),
+                ca.b + f * (cb.b - ca.b),
+                ca.a + f * (cb.a - ca.a));
+        }
+
+        // BGRA layout (matching Metal bgra8unorm).
+        data[i * 4 + 0] = static_cast<uint8_t>(c.b * 255.0f);
+        data[i * 4 + 1] = static_cast<uint8_t>(c.g * 255.0f);
+        data[i * 4 + 2] = static_cast<uint8_t>(c.r * 255.0f);
+        data[i * 4 + 3] = static_cast<uint8_t>(c.a * 255.0f);
+    }
+
+    auto lut = device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_,
+        kLutSize, 1, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copyDst)));
+    if (!lut) return nullptr;
+
+    lut->upload(0, static_cast<uint64_t>(kLutSize * 4), data.data());
+    return lut;
+}
+
+void MetalDrawBackend::drawShaderMaskComposite(
+    std::shared_ptr<GPU::Texture>   child_tex,
+    const DrawShaderMaskBeginCmd&   cmd,
+    const Matrix4&                  /*transform*/,
+    GPU::RenderPassEncoder&         encoder)
+{
+    if (!shader_mask_pipeline_ || !shader_mask_bgl_ || !quad_sampler_ || !child_tex)
+        return;
+
+    // Build gradient LUT from shader variant.
+    std::shared_ptr<GPU::Texture> lut_tex;
+    float gradient_type = 0.0f;
+    float p1[2] = {0.0f, 0.0f};
+    float p2[2] = {cmd.bounds.width, 0.0f};
+
+    std::visit([&](auto&& s) {
+        using S = std::decay_t<decltype(s)>;
+        if constexpr (std::is_same_v<S, LinearGradient>) {
+            gradient_type = 0.0f;
+            p1[0] = cmd.bounds.x + s.begin.x;
+            p1[1] = cmd.bounds.y + s.begin.y;
+            p2[0] = cmd.bounds.x + s.end.x;
+            p2[1] = cmd.bounds.y + s.end.y;
+            lut_tex = buildGradientLUT(s.colors, s.stops);
+        } else if constexpr (std::is_same_v<S, RadialGradient>) {
+            gradient_type = 1.0f;
+            p1[0] = cmd.bounds.x + s.center.x;
+            p1[1] = cmd.bounds.y + s.center.y;
+            p2[0] = s.radius;
+            p2[1] = 0.0f;
+            lut_tex = buildGradientLUT(s.colors, s.stops);
+        }
+    }, cmd.shader);
+
+    if (!lut_tex) return;
+
+    ShaderMaskUniforms u{};
+    u.dstRect[0]      = cmd.bounds.x;
+    u.dstRect[1]      = cmd.bounds.y;
+    u.dstRect[2]      = cmd.bounds.width;
+    u.dstRect[3]      = cmd.bounds.height;
+    u.viewport[0]     = vp_w_;
+    u.viewport[1]     = vp_h_;
+    u.gradient_type   = gradient_type;
+    u.gradient_p1[0]  = p1[0];
+    u.gradient_p1[1]  = p1[1];
+    u.gradient_p1[2]  = 0.0f;
+    u.gradient_p1[3]  = 0.0f;
+    u.gradient_p2[0]  = p2[0];
+    u.gradient_p2[1]  = p2[1];
+    u.gradient_p2[2]  = 0.0f;
+    u.gradient_p2[3]  = 0.0f;
+    u.blend_mode      = (cmd.blend_mode == BlendMode::modulate) ? 1.0f : 0.0f;
+
+    auto ubuf = device_->createBuffer(sizeof(ShaderMaskUniforms), GPU::BufferUsage::vertex, &u);
+    if (!ubuf) return;
+
+    GPU::BindGroupDescriptor bgDesc{};
+    bgDesc.layout  = shader_mask_bgl_;
+    bgDesc.entries = {
+        GPU::BindGroupEntryDescriptor{0, child_tex},
+        GPU::BindGroupEntryDescriptor{1, lut_tex},
+        GPU::BindGroupEntryDescriptor{2, quad_sampler_},
+    };
+    auto bg = device_->createBindGroup(bgDesc);
+    if (!bg) return;
+
+    encoder.setPipeline(shader_mask_pipeline_);
+    encoder.setBindGroup(0, bg);
     encoder.setVertexBuffer(0, ubuf);
     encoder.draw(6);
 }

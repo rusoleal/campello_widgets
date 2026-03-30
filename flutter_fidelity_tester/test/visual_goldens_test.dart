@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_test/flutter_test.dart';
 
 // Enable real font rendering in tests
@@ -551,6 +552,507 @@ void main() {
       );
       await tester.pumpAndSettle();
       await captureAndSave(tester, '${goldensDir.path}/widget_transform.png');
+    });
+  });
+
+  // Image widget tests
+  group('Visual Golden PNGs - Image Widget Tests', () {
+    
+    testWidgets('image_explicit_size', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Container(
+                  color: Colors.grey.shade200,
+                  child: Center(
+                    child: Container(
+                      width: 400,
+                      height: 300,
+                      color: Colors.blue,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_explicit_size.png');
+    });
+
+    testWidgets('image_fit_contain', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.all(50.0),
+                  child: Container(
+                    color: Colors.grey.shade200,
+                    child: Center(
+                      child: Container(
+                        width: 826.67,
+                        height: 620,
+                        color: Colors.green,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_fit_contain.png');
+    });
+
+    testWidgets('image_fit_cover', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.all(50.0),
+                  child: Container(
+                    color: Colors.red,
+                    child: Center(
+                      child: Container(
+                        width: 885,
+                        height: 620,
+                        color: Colors.blue,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_fit_cover.png');
+    });
+
+    testWidgets('image_fit_fill', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.all(50.0),
+                  child: Container(
+                    color: Colors.purple,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_fit_fill.png');
+    });
+
+    testWidgets('image_grid', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(child: Padding(padding: const EdgeInsets.all(10), child: Container(color: Colors.red))),
+                          Expanded(child: Padding(padding: const EdgeInsets.all(10), child: Container(color: Colors.green))),
+                          Expanded(child: Padding(padding: const EdgeInsets.all(10), child: Container(color: Colors.blue))),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(child: Padding(padding: const EdgeInsets.all(10), child: Container(color: Colors.orange))),
+                          Expanded(child: Padding(padding: const EdgeInsets.all(10), child: Container(color: Colors.purple))),
+                          Expanded(child: Padding(padding: const EdgeInsets.all(10), child: Container(color: Colors.cyan))),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_grid.png');
+    });
+
+    testWidgets('image_with_opacity', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Stack(
+                  children: [
+                    Container(color: const Color(0xFF333333)),
+                    Center(
+                      child: Opacity(
+                        opacity: 0.5,
+                        child: Container(
+                          width: 600,
+                          height: 400,
+                          color: Colors.blue,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_with_opacity.png');
+    });
+
+    testWidgets('image_alignment_variations', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Column(
+                  children: [
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              color: Colors.grey.shade200,
+                              child: Align(
+                                alignment: Alignment.topLeft,
+                                child: Container(width: 150, height: 100, color: Colors.red),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Container(
+                              color: Colors.grey.shade200,
+                              child: Align(
+                                alignment: Alignment.topCenter,
+                                child: Container(width: 150, height: 100, color: Colors.red),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Container(
+                              color: Colors.grey.shade200,
+                              child: Align(
+                                alignment: Alignment.topRight,
+                                child: Container(width: 150, height: 100, color: Colors.red),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Container(
+                              color: Colors.grey.shade200,
+                              child: Align(
+                                alignment: Alignment.centerLeft,
+                                child: Container(width: 150, height: 100, color: Colors.green),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Container(
+                              color: Colors.grey.shade200,
+                              child: Align(
+                                alignment: Alignment.center,
+                                child: Container(width: 150, height: 100, color: Colors.green),
+                              ),
+                            ),
+                          ),
+                          Expanded(
+                            child: Container(
+                              color: Colors.grey.shade200,
+                              child: Align(
+                                alignment: Alignment.centerRight,
+                                child: Container(width: 150, height: 100, color: Colors.green),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/image_alignment_variations.png');
+    });
+  });
+
+  // Real Image tests with actual downloaded images
+  group('Visual Golden PNGs - Real Image Tests', () {
+    
+    // NOTE: This test uses a simpler approach - real images have async loading
+    // challenges in widget tests. The C++ comparison tests validate image rendering.
+    testWidgets('real_image_explicit_size', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(440, 210, 440, 210),
+                  child: Container(
+                    color: Colors.grey.shade300,
+                    child: Image.asset(
+                      'assets/images/sample1.jpg',
+                      fit: BoxFit.fill,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      // Longer wait for image loading
+      await tester.pumpAndSettle(const Duration(seconds: 5));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_explicit_size.png');
+    });
+
+    testWidgets('real_image_fit_contain', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.all(50.0),
+                  child: Container(
+                    color: Colors.grey.shade300,
+                    child: Image.asset(
+                      'assets/images/sample1.jpg',
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      // Wait for image to load - critical for asset images
+      await tester.pump();
+      await tester.pumpAndSettle(const Duration(seconds: 3));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_fit_contain.png');
+    });
+
+    testWidgets('real_image_fit_cover', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Padding(
+                  padding: const EdgeInsets.all(50.0),
+                  child: Container(
+                    color: Colors.grey.shade300,
+                    child: Image.asset(
+                      'assets/images/sample1.jpg',  // Use sample1.jpg like other tests
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      // Wait for image to load - use multiple pumps to ensure async image loading completes
+      for (int i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 200));
+      }
+      await captureAndSave(tester, '${goldensDir.path}/real_image_fit_cover.png');
+    });
+
+    testWidgets('real_image_gallery', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Image.asset(
+                          'assets/images/sample1.jpg',
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Image.asset(
+                          'assets/images/sample2.jpg',
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.all(20.0),
+                        child: Image.asset(
+                          'assets/images/sample3.jpg',
+                          fit: BoxFit.cover,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      // Wait for images to load
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_gallery.png');
+    });
+
+    testWidgets('real_image_with_opacity', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Stack(
+                  children: [
+                    Container(color: const Color(0xFF334455)),
+                    Center(
+                      child: Opacity(
+                        opacity: 0.6,
+                        child: Image.asset(
+                          'assets/images/sample3.jpg',
+                          width: 600,
+                          height: 450,
+                          fit: BoxFit.fill,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      
+      // Wait for image to load
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_with_opacity.png');
     });
   });
 }

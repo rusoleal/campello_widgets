@@ -153,7 +153,7 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 ## Phase 11 — Developer Experience
 
 - [x] Debug overlay (FPS counter, paint size, repaint rainbow, debug banner)
-- [ ] Hot-reload friendly design (documented rebuild contract)
+- [~] Hot-reload friendly design (not planned)
 - [x] Comprehensive unit tests for layout engine
 - [x] Integration test harness (headless rendering) — `GpuVisualRenderer` (Metal, offscreen) with CPU fallback
 - [ ] Example applications:
@@ -207,6 +207,65 @@ Drawing API for custom painters and shape rendering.
   - [x] Complex scenes combining multiple operations
   - [x] State management (save/restore)
   - [x] Path operations (bounds, commands)
+
+---
+
+## Phase 13 — Pending Widgets (Flutter Gap Analysis)
+
+Widgets identified as missing after comparing against Flutter's widget catalog.
+
+### State Management / Data Flow
+- [x] `InheritedWidget` + `InheritedElement` — context-based data propagation; `BuildContext::dependOnInheritedWidgetOfExactType<T>()`
+- [x] `LayoutBuilder` — builds UI based on parent's constraints at layout time
+- [x] `ValueListenableBuilder` — rebuilds when a `ValueNotifier<T>` changes
+- [x] `FutureBuilder` — builds UI based on the result of a `std::shared_future<T>`
+- [x] `StreamBuilder` — builds UI based on a `Stream<T>` / `StreamController<T>`
+
+### Input / Forms
+- [x] `TextField` + `TextEditingController` — text input widget
+- [x] `Checkbox` — boolean toggle
+- [x] `Radio` + `RadioGroup` — single-selection from a group
+- [x] `Switch` — on/off toggle
+- [x] `Slider` — continuous value selector
+- [x] `MouseRegion` — hover detection (enter/exit/move callbacks)
+- [x] `Draggable` + `DragTarget` — drag-and-drop protocol
+
+### Layout
+- [x] `ConstrainedBox` — imposes additional `BoxConstraints` on a child
+- [x] `AspectRatio` — sizes child to a fixed aspect ratio
+- [x] `Wrap` — flows children into multiple rows or columns
+- [x] `FractionallySizedBox` — sizes child as a fraction of available space
+- [x] `IntrinsicWidth` / `IntrinsicHeight` — sizes to child's intrinsic dimensions
+- [x] `ClipRect` — clips child to its bounding box
+- [x] `ClipRRect` — clips child to a rounded rectangle
+- [x] `ClipOval` — clips child to an oval
+- [x] `ClipPath` — clips child to an arbitrary `Path`
+
+### Navigation / Routing
+- [x] `Navigator` — stack-based screen/route manager
+- [x] `Route` / `PageRoute` — represents a single screen/dialog route
+
+### Decoration / Painting
+- [x] `DecoratedBox` + `BoxDecoration` — borders, shadows, border-radius (`BoxShadow`, `BoxBorder`, `DecorationPosition`)
+- [x] `BackdropFilter` — applies an `ImageFilter` (blur, etc.) behind the child
+- [x] `ShaderMask` — applies a shader gradient mask over the child
+
+### Animation (Explicit Transitions)
+- [x] `AnimatedSwitcher` — animates between two widgets when the child changes
+- [x] `AnimatedSize` — animates its own size when the child's size changes
+- [x] `AnimatedPositioned` — implicitly animates `Positioned` properties in a `Stack`
+- [x] `AnimatedAlign` — implicitly animates `Alignment`
+- [x] `FadeTransition` — explicit opacity transition driven by an `Animation<float>`
+- [x] `ScaleTransition` — explicit scale transition
+- [x] `SlideTransition` — explicit slide transition (fractional offsets via `FractionalTranslation`)
+- [x] `RotationTransition` — explicit rotation transition
+
+### Composited / Utility
+- [x] `Button` (base interactive button widget)
+- [x] `CircularProgressIndicator` — spinning activity indicator
+- [x] `LinearProgressIndicator` — horizontal progress bar
+- [x] `Tooltip` — overlay label shown on long-press / hover
+- [x] `Divider` — thin horizontal rule
 
 ---
 

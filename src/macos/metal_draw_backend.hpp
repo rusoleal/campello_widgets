@@ -12,6 +12,8 @@ namespace systems::leal::campello_gpu
     class BindGroupLayout;
     class Sampler;
     class Texture;
+    class CommandEncoder;
+    class RenderPassEncoder;
 }
 
 namespace systems::leal::campello_widgets
@@ -86,6 +88,42 @@ public:
 
     Size measureText(const TextSpan& span) const override;
 
+    // ------------------------------------------------------------------
+    // Offscreen / compositing (BackdropFilter + ShaderMask)
+    // ------------------------------------------------------------------
+
+    campello_gpu::PixelFormat offscreenPixelFormat() const noexcept override
+    {
+        return pixel_format_;
+    }
+
+    std::shared_ptr<campello_gpu::Texture> createOffscreenTexture(
+        uint32_t width, uint32_t height) override;
+
+    std::shared_ptr<campello_gpu::RenderPassEncoder> beginOffscreenPass(
+        std::shared_ptr<campello_gpu::Texture> tex,
+        campello_gpu::CommandEncoder&          encoder) override;
+
+    std::shared_ptr<campello_gpu::Texture> blurTexture(
+        std::shared_ptr<campello_gpu::Texture> source,
+        float sigma_x, float sigma_y,
+        campello_gpu::CommandEncoder& encoder) override;
+
+    void drawBackdropFilter(
+        const DrawBackdropFilterBeginCmd&      cmd,
+        std::shared_ptr<campello_gpu::Texture> blurred_source,
+        const Matrix4&                         transform,
+        const Rect&                            clip,
+        campello_gpu::RenderPassEncoder&       encoder) override;
+
+    void drawShaderMaskComposite(
+        std::shared_ptr<campello_gpu::Texture> child_tex,
+        const DrawShaderMaskBeginCmd&          cmd,
+        const Matrix4&                         transform,
+        campello_gpu::RenderPassEncoder&       encoder) override;
+
+    // ------------------------------------------------------------------
+
     void setViewport(float w, float h) noexcept { vp_w_ = w; vp_h_ = h; }
 
     /** Returns true if all render pipelines were successfully compiled. */
@@ -110,8 +148,22 @@ private:
         float opacity,
         campello_gpu::RenderPassEncoder&        encoder);
 
+    // Utility: build and run a single-pass blur render into `dst`.
+    void runBlurPass(
+        std::shared_ptr<campello_gpu::Texture> src,
+        std::shared_ptr<campello_gpu::Texture> dst,
+        float sigma,
+        bool  horizontal,
+        campello_gpu::CommandEncoder& encoder);
+
+    // Build a 256×1 RGBA LUT texture from gradient colors/stops.
+    std::shared_ptr<campello_gpu::Texture> buildGradientLUT(
+        const std::vector<Color>& colors,
+        const std::vector<float>& stops);
+
     std::shared_ptr<campello_gpu::Device>         device_;
     Color                                          bg_color_;
+    campello_gpu::PixelFormat                      pixel_format_;
 
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  shape_pipeline_;
@@ -119,6 +171,19 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_bgl_;
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;
+
+    // Blur pipeline (reuses quad_bgl_ for texture+sampler binding).
+    std::shared_ptr<campello_gpu::RenderPipeline>  blur_pipeline_;
+
+    // ShaderMask pipeline (child tex + LUT tex + sampler).
+    std::shared_ptr<campello_gpu::RenderPipeline>  shader_mask_pipeline_;
+    std::shared_ptr<campello_gpu::BindGroupLayout>  shader_mask_bgl_;
+
+    // Persistent blur scratch textures (resized on demand).
+    std::shared_ptr<campello_gpu::Texture>          blur_h_tex_;
+    std::shared_ptr<campello_gpu::Texture>          blur_v_tex_;
+    uint32_t                                        blur_tex_w_ = 0;
+    uint32_t                                        blur_tex_h_ = 0;
 
     float vp_w_ = 800.0f;
     float vp_h_ = 600.0f;
