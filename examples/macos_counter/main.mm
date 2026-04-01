@@ -4,6 +4,15 @@
 
 namespace cw = systems::leal::campello_widgets;
 
+// Wraps a widget in a MouseRegion that shows the pointer cursor on hover.
+static cw::WidgetRef withPointerCursor(cw::WidgetRef child)
+{
+    auto region   = std::make_shared<cw::MouseRegion>();
+    region->cursor = cw::SystemMouseCursor::pointer;
+    region->child  = std::move(child);
+    return region;
+}
+
 // ---------------------------------------------------------------------------
 // Button — a pressable rectangle with a label
 // ---------------------------------------------------------------------------
@@ -60,11 +69,6 @@ cw::WidgetRef ButtonState::build(cw::BuildContext&)
     box->color   = bg;
     box->child   = cw::make<cw::Center>(cw::make<cw::Text>(btn.label, labelStyle));
 
-    auto tap = std::make_shared<cw::GestureDetector>();
-    tap->on_tap = btn.on_press;
-    tap->on_pan_update = [this](cw::Offset) {};
-    tap->child = box;
-
     // Track press state for visual feedback
     auto detector = std::make_shared<cw::GestureDetector>();
     detector->on_pan_update = [this](cw::Offset) {
@@ -79,7 +83,7 @@ cw::WidgetRef ButtonState::build(cw::BuildContext&)
     };
     detector->child = box;
 
-    return detector;
+    return withPointerCursor(detector);
 }
 
 // ---------------------------------------------------------------------------

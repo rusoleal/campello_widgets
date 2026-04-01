@@ -10,6 +10,7 @@ namespace systems::leal::campello_widgets
         r->on_enter   = on_enter;
         r->on_exit    = on_exit;
         r->on_hover   = on_hover;
+        r->cursor     = cursor;
         return r;
     }
 
@@ -19,6 +20,7 @@ namespace systems::leal::campello_widgets
         r.on_enter    = on_enter;
         r.on_exit     = on_exit;
         r.on_hover    = on_hover;
+        r.cursor      = cursor;
     }
 
 } // namespace systems::leal::campello_widgets

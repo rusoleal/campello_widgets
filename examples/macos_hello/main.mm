@@ -8,6 +8,15 @@
 
 namespace cw = systems::leal::campello_widgets;
 
+// Wraps a widget in a MouseRegion that shows the pointer cursor on hover.
+static cw::WidgetRef withPointerCursor(cw::WidgetRef child)
+{
+    auto region    = std::make_shared<cw::MouseRegion>();
+    region->cursor = cw::SystemMouseCursor::pointer;
+    region->child  = std::move(child);
+    return region;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -104,7 +113,7 @@ public:
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
-                tap,
+                withPointerCursor(tap),
                 cw::make<cw::Padding>(cw::EdgeInsets::only(0, 6, 0, 0),
                     cw::make<cw::Text>("tap to toggle", hintStyle)),
             }
@@ -253,7 +262,7 @@ public:
                 cw::make<cw::Padding>(
                     cw::EdgeInsets::only(0, 8, 0, 32),
                     cw::make<cw::Text>("You navigated here!", subtitle_style)),
-                back_tap,
+                withPointerCursor(back_tap),
             }
         );
 
@@ -368,7 +377,7 @@ public:
         nav_bar->child   = cw::make<cw::Row>(
             cw::MainAxisAlignment::end,
             cw::CrossAxisAlignment::center,
-            cw::WidgetList{ nav_tap }
+            cw::WidgetList{ withPointerCursor(nav_tap) }
         );
 
         auto root_col = cw::make<cw::Column>(

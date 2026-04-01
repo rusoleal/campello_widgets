@@ -1,5 +1,6 @@
 #import <campello_widgets/macos/run_app.hpp>
 #import <campello_widgets/campello_widgets.hpp>
+#import <campello_widgets/ui/system_mouse_cursor.hpp>
 #import <campello_widgets/widgets/element.hpp>
 #import <campello_widgets/widgets/render_object_element.hpp>
 #import <campello_widgets/widgets/platform_menu_delegate.hpp>
@@ -64,9 +65,10 @@ namespace {
 
 - (Widgets::Offset)pointerOffsetForEvent:(NSEvent*)event
 {
-    const CGPoint pt    = [self convertPoint:event.locationInWindow fromView:nil];
-    const CGFloat scale = self.window.backingScaleFactor;
-    return { (float)(pt.x * scale), (float)((self.bounds.size.height - pt.y) * scale) };
+    // Return coordinates in logical pixels (points), not physical pixels.
+    // The Renderer converts to physical pixels internally using DPR.
+    const CGPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
+    return { (float)pt.x, (float)(self.bounds.size.height - pt.y) };
 }
 
 - (void)mouseDown:(NSEvent*)event
@@ -75,6 +77,14 @@ namespace {
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::down, 0,
         [self pointerOffsetForEvent:event], 1.0f});
+}
+
+- (void)mouseMoved:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::move, 0,
+        [self pointerOffsetForEvent:event], 0.0f});
 }
 
 - (void)mouseDragged:(NSEvent*)event
@@ -206,15 +216,15 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 - (void)scrollWheel:(NSEvent*)event
 {
     if (!_dispatcher) return;
-    const Widgets::Offset pos   = [self pointerOffsetForEvent:event];
-    const CGFloat         scale = self.window.backingScaleFactor;
+    const Widgets::Offset pos = [self pointerOffsetForEvent:event];
+    // Scroll deltas are in logical pixels (points), matching pointer coordinates.
     Widgets::PointerEvent e;
     e.kind           = Widgets::PointerEventKind::scroll;
     e.pointer_id     = 0;
     e.position       = pos;
     e.pressure       = 0.0f;
-    e.scroll_delta_x = (float)(event.scrollingDeltaX * scale);
-    e.scroll_delta_y = (float)(event.scrollingDeltaY * scale);
+    e.scroll_delta_x = (float)event.scrollingDeltaX;
+    e.scroll_delta_y = (float)event.scrollingDeltaY;
     _dispatcher->handlePointerEvent(e);
 }
 
@@ -254,10 +264,16 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!drawable) return;
 
-    CGSize sz = view.drawableSize;
-    float w = (float)sz.width;
-    float h = (float)sz.height;
+    CGFloat scale = view.window.backingScaleFactor;
+    CGSize drawableSize = view.drawableSize;
 
+    // Use drawableSize (physical pixels) for both renderer and backend.
+    // The Renderer internally divides by DPR to get logical constraints,
+    // but the draw commands and viewport must be in the same coordinate system.
+    float w = (float)drawableSize.width;
+    float h = (float)drawableSize.height;
+
+    _renderer->setDevicePixelRatio(static_cast<float>(scale));
     _backendPtr->setViewport(w, h);
 
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
@@ -383,9 +399,16 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     Widgets::TickerScheduler::setActive(_tickerScheduler.get());
 
     // -----------------------------------------------------------------------
-    // Mount the widget element tree and get the root RenderBox
+    // Wrap root widget with MediaQuery and mount the element tree
     // -----------------------------------------------------------------------
-    _rootElement = gRootWidget->createElement();
+    Widgets::MediaQueryData mediaData;
+    mediaData.device_pixel_ratio = static_cast<float>(_window.backingScaleFactor);
+    
+    // Wrap the root widget with MediaQuery
+    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+        mediaData, gRootWidget);
+    
+    _rootElement = wrappedRoot->createElement();
     _rootElement->mount(nullptr);
 
     auto* roe = _rootElement->findDescendantRenderObjectElement();
@@ -445,7 +468,28 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // -----------------------------------------------------------------------
     [_window center];
     [_window makeKeyAndOrderFront:nil];
+    [_window setAcceptsMouseMovedEvents:YES];
     [NSApp activateIgnoringOtherApps:YES];
+
+    // Register the macOS cursor handler
+    Widgets::registerCursorHandler([](Widgets::SystemMouseCursor c) {
+        NSCursor* cursor = nil;
+        switch (c) {
+            case Widgets::SystemMouseCursor::pointer:
+                cursor = [NSCursor pointingHandCursor]; break;
+            case Widgets::SystemMouseCursor::text:
+                cursor = [NSCursor IBeamCursor]; break;
+            case Widgets::SystemMouseCursor::forbidden:
+                cursor = [NSCursor operationNotAllowedCursor]; break;
+            case Widgets::SystemMouseCursor::resize_ns:
+                cursor = [NSCursor resizeUpDownCursor]; break;
+            case Widgets::SystemMouseCursor::resize_ew:
+                cursor = [NSCursor resizeLeftRightCursor]; break;
+            default:
+                cursor = [NSCursor arrowCursor]; break;
+        }
+        [cursor set];
+    });
 }
 
 
@@ -469,13 +513,13 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // macOS 12.1+ supports safeAreaInsets on NSView
     if (@available(macOS 12.1, *)) {
         // Get the content view's safeAreaInsets
+        // These are in logical points already; no need to multiply by scale
         NSEdgeInsets safeInsets = _window.contentView.safeAreaInsets;
-        CGFloat scale = _window.backingScaleFactor;
         
-        insets.left   = static_cast<float>(safeInsets.left * scale);
-        insets.top    = static_cast<float>(safeInsets.top * scale);
-        insets.right  = static_cast<float>(safeInsets.right * scale);
-        insets.bottom = static_cast<float>(safeInsets.bottom * scale);
+        insets.left   = static_cast<float>(safeInsets.left);
+        insets.top    = static_cast<float>(safeInsets.top);
+        insets.right  = static_cast<float>(safeInsets.right);
+        insets.bottom = static_cast<float>(safeInsets.bottom);
     }
     
     _renderer->setViewInsets(insets);

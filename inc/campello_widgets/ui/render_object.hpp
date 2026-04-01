@@ -127,6 +127,29 @@ namespace systems::leal::campello_widgets
         /** @brief Returns the draw backend set for the current layout pass, or nullptr. */
         static IDrawBackend* activeBackend() noexcept { return s_active_backend_; }
 
+        // ------------------------------------------------------------------
+        // Device pixel ratio access
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Set the device pixel ratio for the current layout/paint pass.
+         *
+         * Called by Renderer before layout() and paint() so that render objects
+         * (e.g. RenderText) can scale text to physical pixels during painting.
+         */
+        static void setActiveDevicePixelRatio(float dpr) noexcept
+        {
+            s_active_dpr_ = dpr;
+        }
+
+        /**
+         * @brief Returns the device pixel ratio for the current pass.
+         *
+         * Text render objects use this to scale font_size to physical pixels
+         * before passing to the draw backend, ensuring crisp text rendering.
+         */
+        static float activeDevicePixelRatio() noexcept { return s_active_dpr_; }
+
     protected:
         BoxConstraints  constraints_;
         Size            size_;
@@ -136,6 +159,7 @@ namespace systems::leal::campello_widgets
 
     private:
         static IDrawBackend* s_active_backend_;
+        static float         s_active_dpr_;
     };
 
 } // namespace systems::leal::campello_widgets

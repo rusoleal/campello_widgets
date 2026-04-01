@@ -175,6 +175,17 @@ static bool motion_event_filter(const GameActivityMotionEvent* ev)
     return source_class == AINPUT_SOURCE_CLASS_POINTER;
 }
 
+static float getDevicePixelRatio(android_app* app)
+{
+    // Get the density from the configuration
+    // ACONFIGURATION_DENSITY_DEFAULT is 160 DPI (mdpi)
+    int32_t density = AConfiguration_getDensity(app->config);
+    if (density <= 0) density = ACONFIGURATION_DENSITY_DEFAULT;
+    
+    // DPR = density / 160 (mdpi baseline)
+    return static_cast<float>(density) / 160.0f;
+}
+
 static std::unique_ptr<WidgetSession> createSession(
     android_app* app, const Widgets::WidgetRef& root_widget)
 {
@@ -191,8 +202,15 @@ static std::unique_ptr<WidgetSession> createSession(
     session->ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(session->ticker_scheduler.get());
 
+    // Wrap root widget with MediaQuery
+    Widgets::MediaQueryData mediaData;
+    mediaData.device_pixel_ratio = getDevicePixelRatio(app);
+    
+    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+        mediaData, root_widget);
+
     // Mount widget tree.
-    session->root_element = root_widget->createElement();
+    session->root_element = wrappedRoot->createElement();
     session->root_element->mount(nullptr);
 
     auto* roe = session->root_element->findDescendantRenderObjectElement();
@@ -225,7 +243,11 @@ static std::unique_ptr<WidgetSession> createSession(
     session->renderer = std::make_shared<Widgets::Renderer>(
         session->device, render_box, Widgets::Color::black());
 
-    LOGI("campello_widgets session created");
+    // Set initial device pixel ratio
+    float dpr = getDevicePixelRatio(app);
+    session->renderer->setDevicePixelRatio(dpr);
+
+    LOGI("campello_widgets session created (DPR=%.2f)", dpr);
     return session;
 }
 
@@ -268,6 +290,16 @@ void runApp(android_app* app, WidgetRef root_widget)
             if (session_ptr && *session_ptr)
             {
                 updateSafeAreaInsets(session_ptr->get());
+            }
+            break;
+
+        case APP_CMD_CONFIG_CHANGED:
+            // Configuration changed (e.g., density/DPR changed)
+            if (session_ptr && *session_ptr && (*session_ptr)->renderer)
+            {
+                float dpr = getDevicePixelRatio(a);
+                (*session_ptr)->renderer->setDevicePixelRatio(dpr);
+                LOGI("DPR updated to %.2f", dpr);
             }
             break;
 

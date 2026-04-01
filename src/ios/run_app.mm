@@ -80,8 +80,15 @@ namespace {
     _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(_tickerScheduler.get());
 
+    // Wrap root widget with MediaQuery
+    Widgets::MediaQueryData mediaData;
+    mediaData.device_pixel_ratio = static_cast<float>(self.contentScaleFactor);
+    
+    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+        mediaData, rootWidget);
+
     // Mount widget tree.
-    _rootElement = rootWidget->createElement();
+    _rootElement = wrappedRoot->createElement();
     _rootElement->mount(nullptr);
 
     auto* roe = _rootElement->findDescendantRenderObjectElement();
@@ -118,14 +125,23 @@ namespace {
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!drawable) return;
 
-    const CGSize sz = view.drawableSize;
-    const float  w  = (float)sz.width;
-    const float  h  = (float)sz.height;
+    CGFloat scale = self.contentScaleFactor;
+    CGRect bounds = self.bounds;
+    CGSize drawableSize = view.drawableSize;
 
-    if (_backendPtr) _backendPtr->setViewport(w, h);
+    // The Renderer expects LOGICAL viewport dimensions (in points).
+    // It internally divides by DPR to get logical constraints for layout.
+    // The Metal drawable and backend need PHYSICAL dimensions (in pixels).
+    float logical_width  = (float)bounds.size.width;
+    float logical_height = (float)bounds.size.height;
+    float physical_width = (float)drawableSize.width;
+    float physical_height= (float)drawableSize.height;
+
+    _renderer->setDevicePixelRatio(static_cast<float>(scale));
+    if (_backendPtr) _backendPtr->setViewport(physical_width, physical_height);
 
     auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
-    if (colorView) _renderer->renderFrame(colorView, w, h);
+    if (colorView) _renderer->renderFrame(colorView, logical_width, logical_height);
 
     [drawable present];
 }
@@ -157,9 +173,10 @@ namespace {
 
 - (Widgets::Offset)offsetForTouch:(UITouch*)touch
 {
-    const CGPoint   pt    = [touch locationInView:self];
-    const CGFloat   scale = self.contentScaleFactor;
-    return { (float)(pt.x * scale), (float)(pt.y * scale) };
+    // Return coordinates in logical pixels (points), not physical pixels.
+    // The Renderer converts to physical pixels internally using DPR.
+    const CGPoint pt = [touch locationInView:self];
+    return { (float)pt.x, (float)pt.y };
 }
 
 - (float)pressureForTouch:(UITouch*)touch
@@ -299,15 +316,14 @@ namespace {
     
     // Get safe area insets from the view.
     // On iOS 11+, this accounts for notches, home indicators, etc.
+    // safeAreaInsets are already in logical points; no need to multiply by scale
     UIEdgeInsets safeInsets = self.view.safeAreaInsets;
-    CGFloat scale = self.view.contentScaleFactor;
     
-    // Convert to logical pixels (points) and apply to renderer.
     Widgets::EdgeInsets insets;
-    insets.left   = static_cast<float>(safeInsets.left * scale);
-    insets.top    = static_cast<float>(safeInsets.top * scale);
-    insets.right  = static_cast<float>(safeInsets.right * scale);
-    insets.bottom = static_cast<float>(safeInsets.bottom * scale);
+    insets.left   = static_cast<float>(safeInsets.left);
+    insets.top    = static_cast<float>(safeInsets.top);
+    insets.right  = static_cast<float>(safeInsets.right);
+    insets.bottom = static_cast<float>(safeInsets.bottom);
     
     _renderer->setViewInsets(insets);
 }

@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
@@ -124,6 +125,7 @@ namespace systems::leal::campello_widgets
         std::unordered_map<int32_t, ActivePointer>       active_pointers_;
         std::unordered_map<RenderBox*, Handler>          handlers_;
         std::unordered_map<RenderBox*, TickHandler>      tick_handlers_;
+        std::vector<RenderBox*>                          last_hover_path_;
 
         static PointerDispatcher* s_active_dispatcher_;
     };

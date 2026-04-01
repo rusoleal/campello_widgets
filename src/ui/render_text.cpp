@@ -95,9 +95,15 @@ namespace systems::leal::campello_widgets
 
     void RenderText::performPaint(PaintContext& context, const Offset& offset)
     {
+        // Scale font size by DPR for physical pixel rasterization.
+        // Layout is done in logical pixels; only the final paint scales text.
+        const float dpr = activeDevicePixelRatio();
+        TextStyle scaled_style = span_.style;
+        scaled_style.font_size *= dpr;
+
         for (std::size_t i = 0; i < lines_.size(); ++i) {
             const Offset line_offset{offset.x, offset.y + line_height_ * static_cast<float>(i)};
-            context.canvas().drawText(TextSpan{lines_[i], span_.style}, line_offset);
+            context.canvas().drawText(TextSpan{lines_[i], scaled_style}, line_offset);
         }
     }
 

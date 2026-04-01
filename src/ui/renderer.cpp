@@ -48,6 +48,19 @@ namespace systems::leal::campello_widgets
     // Public API
     // ------------------------------------------------------------------
 
+    void Renderer::setDevicePixelRatio(float dpr) noexcept
+    {
+        // Clamp to reasonable range to avoid division by zero or nonsense values
+        if (dpr < 0.1f) dpr = 0.1f;
+        if (dpr > 10.0f) dpr = 10.0f;
+        
+        if (device_pixel_ratio_ != dpr) {
+            device_pixel_ratio_ = dpr;
+            // Mark root as needing layout since the coordinate system changed
+            if (root_) root_->markNeedsLayout();
+        }
+    }
+
     bool Renderer::renderFrame(
         std::shared_ptr<campello_gpu::TextureView> target,
         float viewport_width,
@@ -174,15 +187,26 @@ namespace systems::leal::campello_widgets
         max_sigma_x_         = 0.0f;
         max_sigma_y_         = 0.0f;
 
-        const float safe_width  = viewport_width  - view_insets_.horizontal();
-        const float safe_height = viewport_height - view_insets_.vertical();
+        // Convert physical viewport dimensions to logical pixels for layout.
+        // All widget layout operates in logical (device-independent) pixels.
+        const float logical_viewport_width  = viewport_width  / device_pixel_ratio_;
+        const float logical_viewport_height = viewport_height / device_pixel_ratio_;
+
+        // view_insets_ is already in logical points (set from platform
+        // safeAreaInsets which are in points, not physical pixels).
+        const EdgeInsets& logical_insets = view_insets_;
+
+        const float safe_width  = logical_viewport_width  - logical_insets.horizontal();
+        const float safe_height = logical_viewport_height - logical_insets.vertical();
 
         const BoxConstraints screen_constraints =
             BoxConstraints::tight(safe_width, safe_height);
 
         RenderObject::setActiveBackend(draw_backend_.get());
+        RenderObject::setActiveDevicePixelRatio(device_pixel_ratio_);
         root_->layout(screen_constraints);
         RenderObject::setActiveBackend(nullptr);
+        RenderObject::setActiveDevicePixelRatio(1.0f);
     }
 
     DrawList Renderer::generateDrawList(float viewport_width, float viewport_height)
@@ -191,7 +215,9 @@ namespace systems::leal::campello_widgets
 
         // Headless PaintContext: collects draw commands without a GPU encoder.
         PaintContext ctx(viewport_width, viewport_height);
+        RenderObject::setActiveDevicePixelRatio(device_pixel_ratio_);
         root_->paint(ctx, Offset{view_insets_.left, view_insets_.top});
+        RenderObject::setActiveDevicePixelRatio(1.0f);
 
         if (DebugFlags::showPerformanceOverlay)
             paintPerformanceOverlay(ctx, viewport_width, viewport_height);
@@ -223,7 +249,12 @@ namespace systems::leal::campello_widgets
     {
         if (!draw_backend_) return;
 
-        Matrix4              current_transform = Matrix4::identity();
+        // Seed the transform with the DPR scale so all logical draw-command
+        // coordinates are converted to physical pixels before the Metal
+        // shaders divide by the physical viewport to produce NDC.
+        Matrix4 current_transform = Matrix4::identity();
+        current_transform.data[0] = device_pixel_ratio_;
+        current_transform.data[5] = device_pixel_ratio_;
         Rect                 current_clip      = Rect::fromLTWH(0, 0, 1e9f, 1e9f);
         std::vector<Matrix4> transform_stack;
         std::vector<Rect>    clip_stack;
@@ -367,15 +398,17 @@ namespace systems::leal::campello_widgets
         const DrawShaderMaskBeginCmd&                      cmd,
         const DrawList&                                    child_cmds,
         std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
-        float viewport_width,
-        float viewport_height,
-        const Matrix4& /*transform*/,
+        float /*viewport_width*/,
+        float /*viewport_height*/,
+        const Matrix4& transform,
         const Rect&    /*clip*/)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
 
-        const uint32_t tw = static_cast<uint32_t>(std::ceil(cmd.bounds.width));
-        const uint32_t th = static_cast<uint32_t>(std::ceil(cmd.bounds.height));
+        // Offscreen texture must be in physical pixels so that the DPR-scaled
+        // draw commands (from flushDrawList's initial DPR transform) fill it correctly.
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(cmd.bounds.width  * device_pixel_ratio_));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(cmd.bounds.height * device_pixel_ratio_));
         if (tw == 0 || th == 0) return;
 
         auto child_tex = draw_backend_->createOffscreenTexture(tw, th);
@@ -389,6 +422,8 @@ namespace systems::leal::campello_widgets
         if (child_rpe)
         {
             // Translate child commands so they paint at (0,0) in the offscreen tex.
+            // The translation is in logical pixels; flushDrawList's DPR initial
+            // transform scales it to physical pixels automatically.
             Matrix4 offset_mat = Matrix4::identity();
             offset_mat.data[12] = -cmd.bounds.x;
             offset_mat.data[13] = -cmd.bounds.y;
@@ -399,7 +434,7 @@ namespace systems::leal::campello_widgets
             translated.push_back(PopTransformCmd{});
 
             flushDrawList(translated, child_rpe,
-                          cmd.bounds.width, cmd.bounds.height,
+                          static_cast<float>(tw), static_cast<float>(th),
                           /*backdrop_pass=*/false);
             child_rpe->end();
         }
@@ -408,10 +443,11 @@ namespace systems::leal::campello_widgets
         rpe = restartMainRenderPass();
 
         // Composite child_tex × shader mask → main pass.
+        // Pass the DPR transform so the compositor places the result in physical pixels.
         if (child_rpe)
         {
             draw_backend_->drawShaderMaskComposite(
-                child_tex, cmd, Matrix4::identity(), *rpe);
+                child_tex, cmd, transform, *rpe);
         }
     }
 

@@ -15,6 +15,7 @@
 #include <campello_widgets/widgets/stateful_element.hpp>
 #include <campello_widgets/widgets/inherited_widget.hpp>
 #include <campello_widgets/widgets/inherited_element.hpp>
+#include <campello_widgets/widgets/media_query.hpp>
 
 // Layout
 #include <campello_widgets/ui/size.hpp>
@@ -205,6 +206,7 @@
 #include <campello_widgets/widgets/stream_builder.hpp>
 
 // Input / Forms
+#include <campello_widgets/ui/system_mouse_cursor.hpp>
 #include <campello_widgets/ui/render_mouse_region.hpp>
 #include <campello_widgets/ui/render_slider.hpp>
 #include <campello_widgets/ui/render_text_field.hpp>
@@ -240,6 +242,17 @@
 #include <campello_widgets/widgets/backdrop_filter.hpp>
 #include <campello_widgets/widgets/shader_mask.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
+
+// High-priority composited widgets
+#include <campello_widgets/widgets/card.hpp>
+#include <campello_widgets/widgets/list_tile.hpp>
+#include <campello_widgets/widgets/floating_action_button.hpp>
+#include <campello_widgets/widgets/snack_bar.hpp>
+#include <campello_widgets/widgets/popup_menu_button.hpp>
+#include <campello_widgets/widgets/dropdown_button.hpp>
+#include <campello_widgets/widgets/tab_bar.hpp>
+#include <campello_widgets/ui/render_page_view.hpp>
+#include <campello_widgets/widgets/page_view.hpp>
 
 // Platform-specific entry points
 #ifdef CAMPHELLO_PLATFORM_WINDOWS

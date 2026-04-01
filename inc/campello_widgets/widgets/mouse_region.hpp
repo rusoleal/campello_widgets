@@ -2,6 +2,7 @@
 
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/ui/offset.hpp>
+#include <campello_widgets/ui/system_mouse_cursor.hpp>
 
 #include <functional>
 
@@ -28,6 +29,7 @@ namespace systems::leal::campello_widgets
         std::function<void()>        on_enter;
         std::function<void()>        on_exit;
         std::function<void(Offset)>  on_hover;
+        SystemMouseCursor            cursor = SystemMouseCursor::arrow;
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;

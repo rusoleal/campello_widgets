@@ -5,6 +5,35 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-04-01
+
+### Added
+
+- **Phase 14 — Logical Pixels**: all layout, input, and rendering now operate in device-independent logical pixels; DPR is applied only at the GPU boundary
+  - `Renderer::setDevicePixelRatio(float)` / `device_pixel_ratio` field; `layoutPass()` divides viewport dimensions by DPR before building `BoxConstraints`
+  - `RenderObject::activeDevicePixelRatio()` / `setActiveDevicePixelRatio(float)` static — set by `Renderer` around layout/paint passes so render objects can scale rasterised assets
+  - `RenderText` and `RenderParagraph` multiply `font_size` by DPR at paint time for physical-resolution text
+  - Platform adapters wired: `backingScaleFactor` (macOS), `contentScaleFactor` (iOS), `GetDpiForWindow/96` (Windows); DPR updated on display-change events
+  - Pointer coordinates converted to logical pixels in all platform adapters (removed `* backingScaleFactor` / `* contentScaleFactor` multiplications); scroll deltas adjusted on Windows
+  - Safe area insets stored in `Renderer::view_insets_` are now in logical pixels (removed `* scale` from macOS and iOS adapters)
+- `MediaQueryData` struct (`logical_size`, `device_pixel_ratio`, `padding`, `view_insets`, `physicalSize()`) and `MediaQuery` `InheritedWidget` injected above the root widget by `Renderer`; `MediaQuery::of(BuildContext&)` static accessor
+- `SystemMouseCursor` enum (`arrow`, `pointer`, `text`, `forbidden`, `resize_ns`, `resize_ew`); `registerCursorHandler()` / `setSystemCursor()` / `resetSystemCursor()` global API; macOS platform adapter wires `NSCursor` shapes
+- `MouseRegion` extended with `cursor` field (`SystemMouseCursor`) — sets the system cursor on enter and resets it on exit
+- `Card` — `StatelessWidget` wrapping `DecoratedBox` with configurable elevation shadow, border radius, and clip behaviour
+- `ListTile` — `StatelessWidget` with `leading`, `title`, `subtitle`, and `trailing` slots; tap callback via `GestureDetector`
+- `FloatingActionButton` — circular `StatelessWidget` with icon, background colour, elevation shadow, and `on_pressed` callback
+- `SnackBar` — `Overlay`-based bottom notification bar with auto-dismiss driven by `AnimationController`; `showSnackBar()` / `hideSnackBar()` free functions
+- `PopupMenuButton` — `StatefulWidget` that opens an `Overlay` popup menu above/below the anchor; `ModalBarrier` for tap-outside dismissal; typed `PopupMenuItem<T>` entries
+- `DropdownButton<T>` — template `StatefulWidget` (header-only) that opens an `Overlay` dropdown with typed items; selected-value display and `on_changed` callback
+- `DefaultTabController` + `TabScope` (`InheritedWidget`) + `TabBar` + `TabBarView` — complete tab navigation system with animated indicator and coordinated scrolling
+- `PageView` + `PageController` + `RenderPageView` — horizontally swipeable pages with snap physics and programmatic `animateToPage()` / `jumpToPage()`
+- 14 new unit tests in `test_logical_pixels.cpp` covering `RenderObject::activeDevicePixelRatio`, `MediaQueryData` equality / `physicalSize`, `MediaQuery` widget `updateShouldNotify`, pointer-event logical coordinates, and `EdgeInsets` helpers
+
+### Changed
+
+- All four macOS examples updated to use logical-pixel dimensions after the DPR switch
+- Phase 14 (Logical Pixels) marked complete in `TODO.md`
+
 ## [0.1.4] - 2026-03-30
 
 ### Added

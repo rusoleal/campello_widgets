@@ -1,5 +1,6 @@
 #include <campello_widgets/ui/render_mouse_region.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/system_mouse_cursor.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -45,28 +46,32 @@ namespace systems::leal::campello_widgets
 
     void RenderMouseRegion::onPointerEvent(const PointerEvent& event)
     {
+        if (event.kind == PointerEventKind::cancel)
+        {
+            if (hovered_)
+            {
+                hovered_ = false;
+                resetSystemCursor();
+                if (on_exit) on_exit();
+            }
+            return;
+        }
+
         if (event.kind != PointerEventKind::move) return;
 
-        hovered_this_tick_ = true;
+        if (!hovered_)
+        {
+            hovered_ = true;
+            setSystemCursor(cursor);
+            if (on_enter) on_enter();
+        }
         if (on_hover) on_hover(event.position);
     }
 
     void RenderMouseRegion::onTick(uint64_t /*now_ms*/)
     {
-        if (hovered_this_tick_)
-        {
-            if (!hovered_)
-            {
-                hovered_ = true;
-                if (on_enter) on_enter();
-            }
-        }
-        else if (hovered_)
-        {
-            hovered_ = false;
-            if (on_exit) on_exit();
-        }
-        hovered_this_tick_ = false;
+        // Enter/exit are driven entirely by pointer events and cancel events
+        // from PointerDispatcher. No tick-based logic needed.
     }
 
 } // namespace systems::leal::campello_widgets

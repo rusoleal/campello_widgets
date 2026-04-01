@@ -268,6 +268,9 @@ namespace systems::leal::campello_widgets
 
     void RenderParagraph::performPaint(PaintContext& context, const Offset& offset)
     {
+        // Scale font size by DPR for physical pixel rasterization.
+        const float dpr = activeDevicePixelRatio();
+
         float y_offset = 0.0f;
 
         for (const auto& line : lines_) {
@@ -276,7 +279,9 @@ namespace systems::leal::campello_widgets
                     offset.x + span.x_offset,
                     offset.y + y_offset
                 };
-                context.canvas().drawText(TextSpan{span.text, span.style}, span_offset);
+                TextStyle scaled_style = span.style;
+                scaled_style.font_size *= dpr;
+                context.canvas().drawText(TextSpan{span.text, scaled_style}, span_offset);
             }
             y_offset += line.height;
         }

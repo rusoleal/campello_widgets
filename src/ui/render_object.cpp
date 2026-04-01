@@ -24,6 +24,7 @@ namespace systems::leal::campello_widgets
     }
 
     IDrawBackend* RenderObject::s_active_backend_ = nullptr;
+    float         RenderObject::s_active_dpr_     = 1.0f;
 
     void RenderObject::markNeedsLayout() noexcept
     {

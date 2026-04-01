@@ -1,4 +1,5 @@
 build/
+build_debug/
 .cache/
 cmake-build-*/
 *.user

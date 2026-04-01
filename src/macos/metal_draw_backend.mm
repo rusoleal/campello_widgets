@@ -577,19 +577,26 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
 
 void MetalDrawBackend::drawText(
     const DrawTextCmd&    cmd,
-    const Matrix4&        /*transform*/,
+    const Matrix4&        transform,
     const Rect&           /*clip*/,
     GPU::RenderPassEncoder& encoder)
 {
     if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
     if (cmd.span.text.empty()) return;
 
+    // Transform the logical origin to physical pixels.
+    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+
     @autoreleasepool {
         NSString *nsText = [NSString stringWithUTF8String:cmd.span.text.c_str()];
         if (!nsText || nsText.length == 0) return;
 
-        const float fontSize = cmd.span.style.font_size > 0.0f
-                               ? cmd.span.style.font_size : 14.0f;
+        // The font_size stored in the span has already been scaled to physical
+        // pixels by RenderText/RenderParagraph (they multiply by
+        // activeDevicePixelRatio() before emitting the DrawTextCmd).
+        // We use it directly so the CoreText bitmap is in physical pixels.
+        const float physicalFontSize = cmd.span.style.font_size > 0.0f
+                                       ? cmd.span.style.font_size : 14.0f;
 
         // Build font
         NSString *family = cmd.span.style.font_family.empty()
@@ -597,7 +604,7 @@ void MetalDrawBackend::drawText(
                            : [NSString stringWithUTF8String:cmd.span.style.font_family.c_str()];
 
         CTFontRef ctFont = CTFontCreateWithName(
-            (__bridge CFStringRef)family, (CGFloat)fontSize, nullptr);
+            (__bridge CFStringRef)family, (CGFloat)physicalFontSize, nullptr);
         if (!ctFont) return;
 
         // Text color
@@ -631,13 +638,13 @@ void MetalDrawBackend::drawText(
 
         if (fitSize.width <= 0.0 || fitSize.height <= 0.0) return;
 
-        // Texture dimensions (add small padding for anti-aliasing)
+        // Texture dimensions in physical pixels (add small padding for anti-aliasing)
         uint32_t texW = (uint32_t)ceil(fitSize.width)  + 2;
         uint32_t texH = (uint32_t)ceil(fitSize.height) + 2;
 
         // Compute baseline offset: CoreText uses Quartz coords (y+ up)
         CTFontRef measureFont = CTFontCreateWithName(
-            (__bridge CFStringRef)family, (CGFloat)fontSize, nullptr);
+            (__bridge CFStringRef)family, (CGFloat)physicalFontSize, nullptr);
         CGFloat descent = fabs(CTFontGetDescent(measureFont));
         CFRelease(measureFont);
 
@@ -670,12 +677,12 @@ void MetalDrawBackend::drawText(
         if (!texture) return;
         texture->upload(0, (uint64_t)pixels.size(), pixels.data());
 
-        // CGBitmapContext stores rows top-to-bottom in memory (its y+ up
-        // coordinate system maps CG y=height-1 → row 0), matching Metal's
-        // UV convention (0,0) = top-left.  No V-flip needed.
+        // Place the quad at the physical-pixel origin.  The texture is already
+        // in physical pixels, so its pixel dimensions are the correct quad size.
+        // Subtract the 1-physical-pixel padding used above on each side.
         drawTexturedQuad(
             texture,
-            cmd.origin.x - 1.0f, cmd.origin.y - 1.0f,
+            t_origin.x() - 1.0f, t_origin.y() - 1.0f,
             (float)texW, (float)texH,
             0.0f, 0.0f, 1.0f, 1.0f,
             1.0f,  // text colour alpha is already baked into the glyph texture
@@ -689,17 +696,21 @@ void MetalDrawBackend::drawText(
 
 void MetalDrawBackend::drawImage(
     const DrawImageCmd&   cmd,
-    const Matrix4&        /*transform*/,
+    const Matrix4&        transform,
     const Rect&           /*clip*/,
     GPU::RenderPassEncoder& encoder)
 {
     if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
     if (!cmd.texture) return;
 
+    // Apply the current transform (which includes the DPR scale) to the
+    // destination rect so the quad lands in physical pixels.
+    auto tl = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+
     drawTexturedQuad(
         cmd.texture,
-        cmd.dst_rect.x, cmd.dst_rect.y,
-        cmd.dst_rect.width, cmd.dst_rect.height,
+        tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
         cmd.src_rect.x, cmd.src_rect.y,
         cmd.src_rect.right(), cmd.src_rect.bottom(),
         cmd.opacity,
@@ -910,25 +921,28 @@ std::shared_ptr<GPU::Texture> MetalDrawBackend::blurTexture(
 void MetalDrawBackend::drawBackdropFilter(
     const DrawBackdropFilterBeginCmd&      cmd,
     std::shared_ptr<GPU::Texture>          blurred_source,
-    const Matrix4&                         /*transform*/,
+    const Matrix4&                         transform,
     const Rect&                            /*clip*/,
     GPU::RenderPassEncoder&                encoder)
 {
     if (!blurred_source) return;
 
-    // Draw the blurred backdrop region as a textured quad at cmd.bounds.
-    // The UV maps the bounds portion of the blurred texture.
+    // Transform the logical bounds to physical pixels.
+    auto tl = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+
+    // UV maps the physical-pixel bounds region of the blurred texture.
     const float src_w = static_cast<float>(blurred_source->getWidth());
     const float src_h = static_cast<float>(blurred_source->getHeight());
 
-    const float u0 = cmd.bounds.x      / src_w;
-    const float v0 = cmd.bounds.y      / src_h;
-    const float u1 = cmd.bounds.right()  / src_w;
-    const float v1 = cmd.bounds.bottom() / src_h;
+    const float u0 = tl.x() / src_w;
+    const float v0 = tl.y() / src_h;
+    const float u1 = br.x() / src_w;
+    const float v1 = br.y() / src_h;
 
     drawTexturedQuad(
         blurred_source,
-        cmd.bounds.x, cmd.bounds.y, cmd.bounds.width, cmd.bounds.height,
+        tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
         u0, v0, u1, v1,
         1.0f,
         encoder);
@@ -999,32 +1013,44 @@ std::shared_ptr<GPU::Texture> MetalDrawBackend::buildGradientLUT(
 void MetalDrawBackend::drawShaderMaskComposite(
     std::shared_ptr<GPU::Texture>   child_tex,
     const DrawShaderMaskBeginCmd&   cmd,
-    const Matrix4&                  /*transform*/,
+    const Matrix4&                  transform,
     GPU::RenderPassEncoder&         encoder)
 {
     if (!shader_mask_pipeline_ || !shader_mask_bgl_ || !quad_sampler_ || !child_tex)
         return;
 
+    // Transform the logical bounds to physical pixels.
+    auto tl = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+
     // Build gradient LUT from shader variant.
     std::shared_ptr<GPU::Texture> lut_tex;
     float gradient_type = 0.0f;
     float p1[2] = {0.0f, 0.0f};
-    float p2[2] = {cmd.bounds.width, 0.0f};
+    float p2[2] = {br.x() - tl.x(), 0.0f};
 
     std::visit([&](auto&& s) {
         using S = std::decay_t<decltype(s)>;
         if constexpr (std::is_same_v<S, LinearGradient>) {
             gradient_type = 0.0f;
-            p1[0] = cmd.bounds.x + s.begin.x;
-            p1[1] = cmd.bounds.y + s.begin.y;
-            p2[0] = cmd.bounds.x + s.end.x;
-            p2[1] = cmd.bounds.y + s.end.y;
+            auto tp1 = transform * vm::Vector4<float>(cmd.bounds.x + s.begin.x,
+                                                       cmd.bounds.y + s.begin.y, 0.0f, 1.0f);
+            auto tp2 = transform * vm::Vector4<float>(cmd.bounds.x + s.end.x,
+                                                       cmd.bounds.y + s.end.y,   0.0f, 1.0f);
+            p1[0] = tp1.x();
+            p1[1] = tp1.y();
+            p2[0] = tp2.x();
+            p2[1] = tp2.y();
             lut_tex = buildGradientLUT(s.colors, s.stops);
         } else if constexpr (std::is_same_v<S, RadialGradient>) {
             gradient_type = 1.0f;
-            p1[0] = cmd.bounds.x + s.center.x;
-            p1[1] = cmd.bounds.y + s.center.y;
-            p2[0] = s.radius;
+            auto tc = transform * vm::Vector4<float>(cmd.bounds.x + s.center.x,
+                                                      cmd.bounds.y + s.center.y, 0.0f, 1.0f);
+            auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+            float sc = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+            p1[0] = tc.x();
+            p1[1] = tc.y();
+            p2[0] = s.radius * sc;
             p2[1] = 0.0f;
             lut_tex = buildGradientLUT(s.colors, s.stops);
         }
@@ -1033,10 +1059,10 @@ void MetalDrawBackend::drawShaderMaskComposite(
     if (!lut_tex) return;
 
     ShaderMaskUniforms u{};
-    u.dstRect[0]      = cmd.bounds.x;
-    u.dstRect[1]      = cmd.bounds.y;
-    u.dstRect[2]      = cmd.bounds.width;
-    u.dstRect[3]      = cmd.bounds.height;
+    u.dstRect[0]      = tl.x();
+    u.dstRect[1]      = tl.y();
+    u.dstRect[2]      = br.x() - tl.x();
+    u.dstRect[3]      = br.y() - tl.y();
     u.viewport[0]     = vp_w_;
     u.viewport[1]     = vp_h_;
     u.gradient_type   = gradient_type;

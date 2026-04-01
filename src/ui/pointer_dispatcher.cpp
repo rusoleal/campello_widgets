@@ -81,12 +81,27 @@ namespace systems::leal::campello_widgets
                 HitTestResult result;
                 if (root_) root_->hitTest(result, event.position);
 
-                std::vector<RenderBox*> path;
-                path.reserve(result.path().size());
+                std::vector<RenderBox*> new_path;
+                new_path.reserve(result.path().size());
                 for (const auto& entry : result.path())
-                    path.push_back(entry.target);
+                    new_path.push_back(entry.target);
 
-                dispatch(path, event);
+                // Send cancel to boxes that were hovered last time but are no longer.
+                std::unordered_set<RenderBox*> new_set(new_path.begin(), new_path.end());
+                PointerEvent cancel_event = event;
+                cancel_event.kind = PointerEventKind::cancel;
+                for (RenderBox* box : last_hover_path_)
+                {
+                    if (new_set.find(box) == new_set.end())
+                    {
+                        auto hit = handlers_.find(box);
+                        if (hit != handlers_.end())
+                            hit->second(cancel_event);
+                    }
+                }
+
+                dispatch(new_path, event);
+                last_hover_path_ = std::move(new_path);
             }
             break;
         }

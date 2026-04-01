@@ -7,6 +7,15 @@
 
 namespace cw = systems::leal::campello_widgets;
 
+// Wraps a widget in a MouseRegion that shows the pointer cursor on hover.
+static cw::WidgetRef withPointerCursor(cw::WidgetRef child)
+{
+    auto region    = std::make_shared<cw::MouseRegion>();
+    region->cursor = cw::SystemMouseCursor::pointer;
+    region->child  = std::move(child);
+    return region;
+}
+
 // ---------------------------------------------------------------------------
 // Sample data
 // ---------------------------------------------------------------------------
@@ -159,7 +168,7 @@ public:
                 });
             };
             tap->child = cell;
-            return tap;
+            return withPointerCursor(tap);
         };
 
         auto root_col = cw::make<cw::Column>(

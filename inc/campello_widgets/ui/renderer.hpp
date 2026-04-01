@@ -110,6 +110,22 @@ namespace systems::leal::campello_widgets
         Color clearColor() const noexcept { return clear_color_; }
 
         /**
+         * @brief Sets the device pixel ratio (DPR) for logical-to-physical pixel conversion.
+         *
+         * The DPR is the ratio of physical pixels to logical pixels. For example,
+         * on a Retina display with 2x scaling, the DPR would be 2.0.
+         *
+         * The Renderer uses this to convert physical viewport dimensions to logical
+         * pixels for layout, keeping all widget layout in device-independent units.
+         *
+         * @param dpr The device pixel ratio (must be > 0, typically 1.0, 2.0, 3.0, etc.)
+         */
+        void setDevicePixelRatio(float dpr) noexcept;
+
+        /** @brief Returns the current device pixel ratio. */
+        float devicePixelRatio() const noexcept { return device_pixel_ratio_; }
+
+        /**
          * @brief Registers the platform-specific draw backend.
          *
          * Must be set before the first `renderFrame()` call for GPU drawing
@@ -223,6 +239,9 @@ namespace systems::leal::campello_widgets
 
         // --- view insets (safe area) ---
         EdgeInsets view_insets_;
+
+        // --- device pixel ratio ---
+        float device_pixel_ratio_ = 1.0f;
 
         // --- backdrop filter state (per-frame, reset in layoutPass) ---
         bool  has_backdrop_filter_ = false;

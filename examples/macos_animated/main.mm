@@ -21,7 +21,15 @@ static const cw::Color kBlue   = cw::Color::fromRGB(0.08f, 0.47f, 0.95f);
 static const cw::Color kOrange = cw::Color::fromRGB(0.95f, 0.40f, 0.10f);
 static const cw::Color kGreen  = cw::Color::fromRGB(0.10f, 0.70f, 0.40f);
 static const cw::Color kPurple = cw::Color::fromRGB(0.60f, 0.20f, 0.80f);
-static const cw::Color kGray   = cw::Color::fromRGB(0.88f, 0.88f, 0.92f);
+
+// Wraps a widget in a MouseRegion that shows the pointer cursor on hover.
+static cw::WidgetRef withPointerCursor(cw::WidgetRef child)
+{
+    auto region    = std::make_shared<cw::MouseRegion>();
+    region->cursor = cw::SystemMouseCursor::pointer;
+    region->child  = std::move(child);
+    return region;
+}
 
 // ---------------------------------------------------------------------------
 // Section 1 — Tween bar (explicit AnimationController + forward/reverse)
@@ -56,9 +64,6 @@ public:
             return bar;
         };
 
-        const bool running = ctrl_->status() == cw::AnimationStatus::forward
-                          || ctrl_->status() == cw::AnimationStatus::reverse;
-
         auto col = cw::make<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
@@ -71,6 +76,11 @@ public:
             }
         );
 
+        auto box = std::make_shared<cw::Container>();
+        box->padding = cw::EdgeInsets::all(16.0f);
+        box->color   = cw::Color::fromRGB(0.97f, 0.97f, 1.0f);
+        box->child   = col;
+
         auto tap = std::make_shared<cw::GestureDetector>();
         tap->on_tap = [this] {
             if (ctrl_->status() == cw::AnimationStatus::completed ||
@@ -79,13 +89,8 @@ public:
             else
                 ctrl_->forward();
         };
-
-        auto box = std::make_shared<cw::Container>();
-        box->padding = cw::EdgeInsets::all(16.0f);
-        box->color   = cw::Color::fromRGB(0.97f, 0.97f, 1.0f);
-        box->child   = col;
-        tap->child   = box;
-        return tap;
+        tap->child = box;
+        return withPointerCursor(tap);
     }
 
 private:
@@ -139,7 +144,7 @@ public:
                     labelStyle(12.0f, cw::Color::fromRGB(0.5f, 0.5f, 0.55f))),
                 cw::make<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f),
-                    tap),
+                    withPointerCursor(tap)),
             }
         );
 
@@ -209,7 +214,7 @@ public:
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{
-                tap,
+                withPointerCursor(tap),
                 cw::make<cw::SizedBox>(16.0f),
                 target,
             }
@@ -296,15 +301,6 @@ public:
                 bar_builder));
         }
 
-        auto tap = std::make_shared<cw::GestureDetector>();
-        tap->on_tap = [this] {
-            if (ctrl_->status() == cw::AnimationStatus::completed ||
-                ctrl_->status() == cw::AnimationStatus::forward)
-                ctrl_->reverse();
-            else
-                ctrl_->forward();
-        };
-
         auto bars_col = cw::make<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
@@ -315,7 +311,16 @@ public:
         bars_box->padding = cw::EdgeInsets::all(12.0f);
         bars_box->color   = cw::Color::fromRGB(0.96f, 0.96f, 0.99f);
         bars_box->child   = bars_col;
-        tap->child        = bars_box;
+
+        auto tap = std::make_shared<cw::GestureDetector>();
+        tap->on_tap = [this] {
+            if (ctrl_->status() == cw::AnimationStatus::completed ||
+                ctrl_->status() == cw::AnimationStatus::forward)
+                ctrl_->reverse();
+            else
+                ctrl_->forward();
+        };
+        tap->child = bars_box;
 
         auto col = cw::make<cw::Column>(
             cw::MainAxisAlignment::start,
@@ -325,7 +330,7 @@ public:
                     labelStyle(12.0f, cw::Color::fromRGB(0.5f, 0.5f, 0.55f))),
                 cw::make<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f),
-                    tap),
+                    withPointerCursor(tap)),
             }
         );
 

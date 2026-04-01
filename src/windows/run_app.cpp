@@ -434,8 +434,16 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(state.ticker_scheduler.get());
 
+    // Wrap root widget with MediaQuery
+    UINT dpi = GetDpiForWindow(state.hwnd);
+    Widgets::MediaQueryData mediaData;
+    mediaData.device_pixel_ratio = static_cast<float>(dpi) / 96.0f;
+    
+    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+        mediaData, gRootWidget);
+
     // Mount widget tree
-    state.root_element = gRootWidget->createElement();
+    state.root_element = wrappedRoot->createElement();
     state.root_element->mount(nullptr);
 
     auto* roe = state.root_element->findDescendantRenderObjectElement();
@@ -492,6 +500,12 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         int client_height = client_rect.bottom - client_rect.top;
 
         if (client_width > 0 && client_height > 0) {
+            // Update device pixel ratio from window DPI
+            // Standard DPI is 96; DPR = DPI / 96
+            UINT dpi = GetDpiForWindow(state.hwnd);
+            float dpr = static_cast<float>(dpi) / 96.0f;
+            state.renderer->setDevicePixelRatio(dpr);
+
             // Update draw backend viewport
             if (state.draw_backend) {
                 state.draw_backend->setViewport(
