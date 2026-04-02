@@ -5,6 +5,17 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-04-02
+
+### Added
+
+- `KeyboardListener` widget — observes keyboard events via a `FocusNode` without consuming them; provides `on_key_event` callback for `KeyEvent` data
+- macOS keyboard example (`examples/macos_keyboard/`) — interactive demo showing key presses, event kinds (down/up/repeat), modifiers, and typed text accumulation
+
+### Changed
+
+- **Breaking**: renamed `make<T>()` helper to `mw<T>()` (shorter alias for `std::make_shared<T>`); all examples updated
+
 ## [0.1.5] - 2026-04-01
 
 ### Added

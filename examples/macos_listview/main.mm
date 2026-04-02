@@ -87,7 +87,7 @@ public:
         auto header_box = std::make_shared<cw::Container>();
         header_box->color   = cw::Color::fromRGB(0.95f, 0.95f, 0.98f);
         header_box->padding = cw::EdgeInsets::symmetric(16.0f, 12.0f);
-        header_box->child   = cw::make<cw::Text>(
+        header_box->child   = cw::mw<cw::Text>(
             std::string("Contacts  (") + std::to_string(kContacts.size()) + ")",
             headerStyle);
 
@@ -101,7 +101,7 @@ public:
             ? cw::Color::fromRGB(0.88f, 0.94f, 1.0f)
             : cw::Color::fromRGB(0.97f, 0.97f, 0.99f);
         sel_box->padding = cw::EdgeInsets::symmetric(16.0f, 10.0f);
-        sel_box->child   = cw::make<cw::Text>(sel_text, selectedStyle);
+        sel_box->child   = cw::mw<cw::Text>(sel_text, selectedStyle);
 
         // Contact list
         auto list = std::make_shared<cw::ListView>();
@@ -124,31 +124,31 @@ public:
             avatar->width  = 40.0f;
             avatar->height = 40.0f;
             avatar->color  = c.color;
-            avatar->child  = cw::make<cw::Center>(
-                cw::make<cw::Text>(std::string(1, c.name[0]), avatarStyle));
+            avatar->child  = cw::mw<cw::Center>(
+                cw::mw<cw::Text>(std::string(1, c.name[0]), avatarStyle));
 
             // Name + role column
             cw::TextStyle name_style = titleStyle;
             if (selected) name_style.color = cw::Color::fromRGB(0.05f, 0.35f, 0.85f);
 
-            auto text_col = cw::make<cw::Column>(
+            auto text_col = cw::mw<cw::Column>(
                 cw::MainAxisAlignment::center,
                 cw::CrossAxisAlignment::start,
                 cw::WidgetList{
-                    cw::make<cw::Text>(c.name, name_style),
-                    cw::make<cw::Padding>(
+                    cw::mw<cw::Text>(c.name, name_style),
+                    cw::mw<cw::Padding>(
                         cw::EdgeInsets::only(0.0f, 3.0f, 0.0f, 0.0f),
-                        cw::make<cw::Text>(c.role, subStyle)),
+                        cw::mw<cw::Text>(c.role, subStyle)),
                 }
             );
 
-            auto row = cw::make<cw::Row>(
+            auto row = cw::mw<cw::Row>(
                 cw::MainAxisAlignment::start,
                 cw::CrossAxisAlignment::center,
                 cw::WidgetList{
                     avatar,
-                    cw::make<cw::SizedBox>(14.0f),
-                    cw::make<cw::Expanded>(text_col),
+                    cw::mw<cw::SizedBox>(14.0f),
+                    cw::mw<cw::Expanded>(text_col),
                 }
             );
 
@@ -171,13 +171,13 @@ public:
             return withPointerCursor(tap);
         };
 
-        auto root_col = cw::make<cw::Column>(
+        auto root_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
                 header_box,
                 sel_box,
-                cw::make<cw::Expanded>(list),
+                cw::mw<cw::Expanded>(list),
             }
         );
 

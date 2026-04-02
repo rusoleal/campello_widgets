@@ -1,0 +1,129 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel any in-flight run for the same ref when a new push arrives.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # macOS / Linux / Windows — build + universal tests
+  # ---------------------------------------------------------------------------
+  test:
+    name: Test / ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            os: macos-latest
+            platform: darwin
+
+          - name: Linux
+            os: ubuntu-latest
+            platform: linux
+
+          - name: Windows
+            os: windows-latest
+            platform: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # campello_gpu on Linux requires Vulkan headers to compile.
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan-dev
+
+      # Cache FetchContent dependency sources across runs.
+      # Key is invalidated whenever a dependency version pin changes.
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: build/${{ matrix.platform }}_test/_deps
+          key: deps-${{ matrix.platform }}-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-${{ matrix.platform }}-
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build/${{ matrix.platform }}_test \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON
+
+      - name: Build
+        shell: bash
+        run: cmake --build build/${{ matrix.platform }}_test --config Debug
+
+      - name: Test
+        shell: bash
+        run: |
+          ctest --test-dir build/${{ matrix.platform }}_test \
+            --output-on-failure \
+            -C Debug
+
+  # ---------------------------------------------------------------------------
+  # iOS — cross-compilation check (build only, no test execution)
+  # ---------------------------------------------------------------------------
+  build-ios:
+    name: Build / iOS
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: build/ios/_deps
+          key: deps-ios-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-ios-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/ios \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/ios --config Release
+
+  # ---------------------------------------------------------------------------
+  # Android — cross-compilation check (build only, no test execution)
+  # ---------------------------------------------------------------------------
+  build-android:
+    name: Build / Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache dependency sources
+        uses: actions/cache@v4
+        with:
+          path: build/android/_deps
+          key: deps-android-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-android-
+
+      # ubuntu-latest runners have the NDK pre-installed at $ANDROID_NDK_HOME.
+      - name: Configure
+        run: |
+          cmake -S . -B build/android \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/android --config Release

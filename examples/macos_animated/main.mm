@@ -64,13 +64,13 @@ public:
             return bar;
         };
 
-        auto col = cw::make<cw::Column>(
+        auto col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
             cw::WidgetList{
-                cw::make<cw::Text>("Tween bar — tap to toggle",
+                cw::mw<cw::Text>("Tween bar — tap to toggle",
                     labelStyle(12.0f, cw::Color::fromRGB(0.5f, 0.5f, 0.55f))),
-                cw::make<cw::Padding>(
+                cw::mw<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f),
                     bar_builder),
             }
@@ -127,8 +127,8 @@ public:
             : cw::Color::fromRGB(0.93f, 0.93f, 0.97f);
         card->width       = expanded_ ? 280.0f : 160.0f;
         card->height      = expanded_ ? 80.0f  : 40.0f;
-        card->child       = cw::make<cw::Center>(
-            cw::make<cw::Text>(
+        card->child       = cw::mw<cw::Center>(
+            cw::mw<cw::Text>(
                 expanded_ ? "shrink me" : "expand me",
                 labelStyle(13.0f, cw::Color::fromRGB(0.2f, 0.2f, 0.4f))));
 
@@ -136,13 +136,13 @@ public:
         tap->on_tap = [this] { setState([this] { expanded_ = !expanded_; }); };
         tap->child  = card;
 
-        auto col = cw::make<cw::Column>(
+        auto col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
             cw::WidgetList{
-                cw::make<cw::Text>("AnimatedContainer — tap card",
+                cw::mw<cw::Text>("AnimatedContainer — tap card",
                     labelStyle(12.0f, cw::Color::fromRGB(0.5f, 0.5f, 0.55f))),
-                cw::make<cw::Padding>(
+                cw::mw<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f),
                     withPointerCursor(tap)),
             }
@@ -193,7 +193,7 @@ public:
         hello_box->width  = 120.0f;
         hello_box->height = 48.0f;
         hello_box->color  = kGreen;
-        hello_box->child  = cw::make<cw::Center>(cw::make<cw::Text>("hello!", helloStyle));
+        hello_box->child  = cw::mw<cw::Center>(cw::mw<cw::Text>("hello!", helloStyle));
         target->child = hello_box;
 
         cw::TextStyle btnStyle{};
@@ -204,29 +204,29 @@ public:
         auto toggle_btn = std::make_shared<cw::Container>();
         toggle_btn->padding = cw::EdgeInsets::symmetric(12.0f, 6.0f);
         toggle_btn->color   = kPurple;
-        toggle_btn->child   = cw::make<cw::Text>(visible_ ? "fade out" : "fade in", btnStyle);
+        toggle_btn->child   = cw::mw<cw::Text>(visible_ ? "fade out" : "fade in", btnStyle);
 
         auto tap = std::make_shared<cw::GestureDetector>();
         tap->on_tap = [this] { setState([this] { visible_ = !visible_; }); };
         tap->child  = toggle_btn;
 
-        auto row = cw::make<cw::Row>(
+        auto row = cw::mw<cw::Row>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{
                 withPointerCursor(tap),
-                cw::make<cw::SizedBox>(16.0f),
+                cw::mw<cw::SizedBox>(16.0f),
                 target,
             }
         );
 
-        auto col = cw::make<cw::Column>(
+        auto col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
             cw::WidgetList{
-                cw::make<cw::Text>("AnimatedOpacity — press button",
+                cw::mw<cw::Text>("AnimatedOpacity — press button",
                     labelStyle(12.0f, cw::Color::fromRGB(0.5f, 0.5f, 0.55f))),
-                cw::make<cw::Padding>(cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f), row),
+                cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f), row),
             }
         );
 
@@ -296,12 +296,12 @@ public:
                 return bar;
             };
 
-            bars.push_back(cw::make<cw::Padding>(
+            bars.push_back(cw::mw<cw::Padding>(
                 cw::EdgeInsets::only(0.0f, i > 0 ? 6.0f : 0.0f, 0.0f, 0.0f),
                 bar_builder));
         }
 
-        auto bars_col = cw::make<cw::Column>(
+        auto bars_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
             bars
@@ -322,13 +322,13 @@ public:
         };
         tap->child = bars_box;
 
-        auto col = cw::make<cw::Column>(
+        auto col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
             cw::WidgetList{
-                cw::make<cw::Text>("Different curves — tap to toggle",
+                cw::mw<cw::Text>("Different curves — tap to toggle",
                     labelStyle(12.0f, cw::Color::fromRGB(0.5f, 0.5f, 0.55f))),
-                cw::make<cw::Padding>(
+                cw::mw<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 10.0f, 0.0f, 0.0f),
                     withPointerCursor(tap)),
             }
@@ -371,7 +371,7 @@ public:
         auto title_bar = std::make_shared<cw::Container>();
         title_bar->padding = cw::EdgeInsets::symmetric(16.0f, 14.0f);
         title_bar->color   = cw::Color::fromRGB(0.93f, 0.93f, 0.97f);
-        title_bar->child   = cw::make<cw::Text>("Animation Gallery", titleStyle);
+        title_bar->child   = cw::mw<cw::Text>("Animation Gallery", titleStyle);
 
         auto divider = std::make_shared<cw::Container>();
         divider->height = 1.0f;
@@ -379,27 +379,27 @@ public:
 
         auto scroll = std::make_shared<cw::SingleChildScrollView>();
         scroll->physics = std::make_shared<cw::BouncingScrollPhysics>();
-        scroll->child   = cw::make<cw::Column>(
+        scroll->child   = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
-                cw::make<TweenSection>(),
-                cw::make<cw::SizedBox>(std::nullopt, 2.0f),
-                cw::make<ImplicitSection>(),
-                cw::make<cw::SizedBox>(std::nullopt, 2.0f),
-                cw::make<OpacitySection>(),
-                cw::make<cw::SizedBox>(std::nullopt, 2.0f),
-                cw::make<StaggerSection>(),
+                cw::mw<TweenSection>(),
+                cw::mw<cw::SizedBox>(std::nullopt, 2.0f),
+                cw::mw<ImplicitSection>(),
+                cw::mw<cw::SizedBox>(std::nullopt, 2.0f),
+                cw::mw<OpacitySection>(),
+                cw::mw<cw::SizedBox>(std::nullopt, 2.0f),
+                cw::mw<StaggerSection>(),
             }
         );
 
-        auto root = cw::make<cw::Column>(
+        auto root = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
                 title_bar,
                 divider,
-                cw::make<cw::Expanded>(scroll),
+                cw::mw<cw::Expanded>(scroll),
             }
         );
 

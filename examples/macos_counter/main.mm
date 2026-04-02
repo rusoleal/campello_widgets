@@ -67,7 +67,7 @@ cw::WidgetRef ButtonState::build(cw::BuildContext&)
     box->width   = btn.width;
     box->height  = btn.height;
     box->color   = bg;
-    box->child   = cw::make<cw::Center>(cw::make<cw::Text>(btn.label, labelStyle));
+    box->child   = cw::mw<cw::Center>(cw::mw<cw::Text>(btn.label, labelStyle));
 
     // Track press state for visual feedback
     auto detector = std::make_shared<cw::GestureDetector>();
@@ -117,15 +117,15 @@ public:
         hintStyle.color       = cw::Color::fromRGB(0.65f, 0.65f, 0.65f);
 
         // Counter display
-        auto counter_col = cw::make<cw::Column>(
+        auto counter_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::center,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{
-                cw::make<cw::Text>("tap count", titleStyle),
-                cw::make<cw::Padding>(
+                cw::mw<cw::Text>("tap count", titleStyle),
+                cw::mw<cw::Padding>(
                     cw::EdgeInsets::symmetric(0.0f, 16.0f),
-                    cw::make<cw::Text>(std::to_string(count_), countStyle)),
-                cw::make<cw::Text>(count_ == 0 ? "press + to start"
+                    cw::mw<cw::Text>(std::to_string(count_), countStyle)),
+                cw::mw<cw::Text>(count_ == 0 ? "press + to start"
                                   : count_ == 1 ? "1 press so far"
                                   : std::to_string(count_) + " presses so far",
                                   hintStyle),
@@ -137,34 +137,34 @@ public:
         const cw::Color rst_color = cw::Color::fromRGB(0.50f, 0.50f, 0.55f);
         const cw::Color inc_color = cw::Color::fromRGB(0.08f, 0.47f, 0.95f);
 
-        auto dec_btn = cw::make<Button>("-", dec_color, 64.0f, 64.0f,
+        auto dec_btn = cw::mw<Button>("-", dec_color, 64.0f, 64.0f,
             [this] { setState([this] { --count_; }); });
 
-        auto rst_btn = cw::make<Button>("0", rst_color, 64.0f, 64.0f,
+        auto rst_btn = cw::mw<Button>("0", rst_color, 64.0f, 64.0f,
             [this] { setState([this] { count_ = 0; }); });
 
-        auto inc_btn = cw::make<Button>("+", inc_color, 64.0f, 64.0f,
+        auto inc_btn = cw::mw<Button>("+", inc_color, 64.0f, 64.0f,
             [this] { setState([this] { ++count_; }); });
 
-        auto buttons_row = cw::make<cw::Row>(
+        auto buttons_row = cw::mw<cw::Row>(
             cw::MainAxisAlignment::center,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{
                 dec_btn,
-                cw::make<cw::SizedBox>(24.0f),
+                cw::mw<cw::SizedBox>(24.0f),
                 rst_btn,
-                cw::make<cw::SizedBox>(24.0f),
+                cw::mw<cw::SizedBox>(24.0f),
                 inc_btn,
             }
         );
 
-        auto root_col = cw::make<cw::Column>(
+        auto root_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::center,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{
-                cw::make<cw::Expanded>(
-                    cw::make<cw::Center>(counter_col)),
-                cw::make<cw::Padding>(
+                cw::mw<cw::Expanded>(
+                    cw::mw<cw::Center>(counter_col)),
+                cw::mw<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 0.0f, 0.0f, 40.0f),
                     buttons_row),
             }

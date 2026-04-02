@@ -113,6 +113,7 @@
 #include <campello_widgets/ui/render_focus.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/focus.hpp>
+#include <campello_widgets/widgets/keyboard_listener.hpp>
 
 // Phase 9 — Scrolling
 #include <campello_widgets/ui/scroll_physics.hpp>
@@ -268,11 +269,11 @@ namespace systems::leal::campello_widgets
      * @brief Short alias for std::make_shared<T> — reduces noise in widget trees.
      *
      * @code
-     *   make<Padding>(EdgeInsets::all(8), make<Text>("hello"))
+     *   mw<Padding>(EdgeInsets::all(8), mw<Text>("hello"))
      * @endcode
      */
     template<typename T, typename... Args>
-    std::shared_ptr<T> make(Args&&... args)
+    std::shared_ptr<T> mw(Args&&... args)
     {
         return std::make_shared<T>(std::forward<Args>(args)...);
     }

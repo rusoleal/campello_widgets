@@ -86,12 +86,12 @@ public:
             : cw::Color::fromRGB(0.93f, 0.93f, 0.97f);
         card->height      = expanded_ ? 130.0f : 80.0f;
         card->padding     = cw::EdgeInsets::all(16.0f);
-        card->child = cw::make<cw::Column>(
+        card->child = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::start,
             cw::WidgetList{
-                cw::make<cw::Text>("animation demo", labelStyle),
-                cw::make<cw::Padding>(cw::EdgeInsets::only(0, 8, 0, 0), bar_builder),
+                cw::mw<cw::Text>("animation demo", labelStyle),
+                cw::mw<cw::Padding>(cw::EdgeInsets::only(0, 8, 0, 0), bar_builder),
             }
         );
 
@@ -109,13 +109,13 @@ public:
         };
         tap->child = card;
 
-        auto col = cw::make<cw::Column>(
+        auto col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
                 withPointerCursor(tap),
-                cw::make<cw::Padding>(cw::EdgeInsets::only(0, 6, 0, 0),
-                    cw::make<cw::Text>("tap to toggle", hintStyle)),
+                cw::mw<cw::Padding>(cw::EdgeInsets::only(0, 6, 0, 0),
+                    cw::mw<cw::Text>("tap to toggle", hintStyle)),
             }
         );
 
@@ -177,24 +177,24 @@ public:
             dot->color  = dot_color;
 
             // Text column
-            auto text_col = cw::make<cw::Column>(
+            auto text_col = cw::mw<cw::Column>(
                 cw::MainAxisAlignment::center,
                 cw::CrossAxisAlignment::start,
                 cw::WidgetList{
-                    cw::make<cw::Text>("Item " + std::to_string(i + 1), titleStyle),
-                    cw::make<cw::Padding>(cw::EdgeInsets::only(0, 2, 0, 0),
-                        cw::make<cw::Text>(
+                    cw::mw<cw::Text>("Item " + std::to_string(i + 1), titleStyle),
+                    cw::mw<cw::Padding>(cw::EdgeInsets::only(0, 2, 0, 0),
+                        cw::mw<cw::Text>(
                             "Scroll me — row " + std::to_string(i + 1) + " of 30", subStyle)),
                 }
             );
 
-            auto row = cw::make<cw::Row>(
+            auto row = cw::mw<cw::Row>(
                 cw::MainAxisAlignment::start,
                 cw::CrossAxisAlignment::center,
                 cw::WidgetList{
                     dot,
-                    cw::make<cw::SizedBox>(12.0f),
-                    cw::make<cw::Expanded>(text_col),
+                    cw::mw<cw::SizedBox>(12.0f),
+                    cw::mw<cw::Expanded>(text_col),
                 }
             );
 
@@ -208,14 +208,14 @@ public:
         };
 
         // Fixed-height container for the list
-        auto list_box = cw::make<cw::SizedBox>(std::nullopt, 200.0f, list);
+        auto list_box = cw::mw<cw::SizedBox>(std::nullopt, 200.0f, list);
 
-        auto section_col = cw::make<cw::Column>(
+        auto section_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
-                cw::make<cw::Padding>(cw::EdgeInsets::only(0, 0, 0, 6),
-                    cw::make<cw::Text>("scroll list (30 items, bounce physics)", headerStyle)),
+                cw::mw<cw::Padding>(cw::EdgeInsets::only(0, 0, 0, 6),
+                    cw::mw<cw::Text>("scroll list (30 items, bounce physics)", headerStyle)),
                 list_box,
             }
         );
@@ -243,7 +243,7 @@ public:
         auto subtitle_style = makeStyle(16.0f, cw::Color::fromRGB(0.50f, 0.50f, 0.55f));
         auto btn_style      = makeStyle(15.0f, cw::Color::white());
 
-        auto back_label = cw::make<cw::Center>(cw::make<cw::Text>("\xe2\x86\x90 Go Back", btn_style));
+        auto back_label = cw::mw<cw::Center>(cw::mw<cw::Text>("\xe2\x86\x90 Go Back", btn_style));
 
         auto back_box = std::make_shared<cw::Container>();
         back_box->color   = cw::Color::fromRGB(0.08f, 0.47f, 0.95f);
@@ -254,21 +254,21 @@ public:
         back_tap->on_tap = [nav]() { if (nav) nav->pop(); };
         back_tap->child  = back_box;
 
-        auto content = cw::make<cw::Column>(
+        auto content = cw::mw<cw::Column>(
             cw::MainAxisAlignment::center,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{
-                cw::make<cw::Text>("Second Screen", title_style),
-                cw::make<cw::Padding>(
+                cw::mw<cw::Text>("Second Screen", title_style),
+                cw::mw<cw::Padding>(
                     cw::EdgeInsets::only(0, 8, 0, 32),
-                    cw::make<cw::Text>("You navigated here!", subtitle_style)),
+                    cw::mw<cw::Text>("You navigated here!", subtitle_style)),
                 withPointerCursor(back_tap),
             }
         );
 
         auto bg   = std::make_shared<cw::Container>();
         bg->color = cw::Color::fromRGB(0.97f, 0.97f, 1.0f);
-        bg->child = cw::make<cw::Center>(content);
+        bg->child = cw::mw<cw::Center>(content);
         return bg;
     }
 };
@@ -333,14 +333,14 @@ public:
         auto countStyle  = makeStyle(72.0f, cw::Color::fromRGB(0.08f, 0.47f, 0.95f));
         auto statusStyle = makeStyle(18.0f, cw::Color::fromRGB(0.15f, 0.15f, 0.15f));
 
-        auto gesture_col = cw::make<cw::Column>(
+        auto gesture_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::center,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
-                cw::make<cw::Text>("tap count", titleStyle),
-                cw::make<cw::Padding>(cw::EdgeInsets::only(0, 8, 0, 24),
-                    cw::make<cw::Text>(std::to_string(tap_count_), countStyle)),
-                cw::make<cw::Text>(status_, statusStyle),
+                cw::mw<cw::Text>("tap count", titleStyle),
+                cw::mw<cw::Padding>(cw::EdgeInsets::only(0, 8, 0, 24),
+                    cw::mw<cw::Text>(std::to_string(tap_count_), countStyle)),
+                cw::mw<cw::Text>(status_, statusStyle),
             }
         );
 
@@ -354,7 +354,7 @@ public:
             std::make_shared<cw::Center>(detector));
 
         // --- navigation button bar ---
-        auto nav_label = cw::make<cw::Text>(
+        auto nav_label = cw::mw<cw::Text>(
             "Go to Second Screen \xe2\x86\x92",
             makeStyle(14.0f, cw::Color::white()));
 
@@ -374,20 +374,20 @@ public:
         auto nav_bar = std::make_shared<cw::Container>();
         nav_bar->color   = cw::Color::fromRGB(0.08f, 0.47f, 0.95f);
         nav_bar->padding = cw::EdgeInsets::symmetric(12.0f, 6.0f);
-        nav_bar->child   = cw::make<cw::Row>(
+        nav_bar->child   = cw::mw<cw::Row>(
             cw::MainAxisAlignment::end,
             cw::CrossAxisAlignment::center,
             cw::WidgetList{ withPointerCursor(nav_tap) }
         );
 
-        auto root_col = cw::make<cw::Column>(
+        auto root_col = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
                 nav_bar,
                 expanded_gesture,
-                cw::make<AnimationSection>(),
-                cw::make<ScrollSection>(),
+                cw::mw<AnimationSection>(),
+                cw::mw<ScrollSection>(),
             }
         );
 
