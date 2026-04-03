@@ -439,7 +439,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = static_cast<float>(dpi) / 96.0f;
     
-    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+    auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(
         mediaData, gRootWidget);
 
     // Mount widget tree
