@@ -38,11 +38,12 @@ jobs:
       - uses: actions/checkout@v4
 
       # campello_gpu on Linux requires Vulkan headers to compile.
+      # campello_input requires libevdev for input handling.
       - name: Install Linux system dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev
+          sudo apt-get install -y libvulkan-dev libevdev-dev
 
       # Cache FetchContent dependency sources across runs.
       # Key is invalidated whenever a dependency version pin changes.
