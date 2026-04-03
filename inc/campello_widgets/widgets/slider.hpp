@@ -39,6 +39,18 @@ namespace systems::leal::campello_widgets
         float track_height = 4.0f;
         float thumb_radius = 10.0f;
 
+        Slider() = default;
+        explicit Slider(float val, std::function<void(float)> on_change = nullptr)
+            : value(val), on_changed(std::move(on_change))
+        {}
+        explicit Slider(
+            float val,
+            float minimum,
+            float maximum,
+            std::function<void(float)> on_change = nullptr)
+            : value(val), min(minimum), max(maximum), on_changed(std::move(on_change))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

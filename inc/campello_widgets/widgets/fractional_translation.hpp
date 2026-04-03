@@ -88,6 +88,13 @@ namespace systems::leal::campello_widgets
     public:
         Offset translation;  ///< Fractional offset ({-1,0} = one width left)
 
+        FractionalTranslation() = default;
+        explicit FractionalTranslation(Offset trans, WidgetRef c = nullptr)
+            : translation(trans)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override
         {
             return std::make_shared<RenderFractionalTranslation>(translation);

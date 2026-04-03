@@ -33,6 +33,21 @@ namespace systems::leal::campello_widgets
         float              run_spacing           = 0.0f;
         WrapCrossAlignment cross_axis_alignment  = WrapCrossAlignment::start;
 
+        Wrap() = default;
+        explicit Wrap(WidgetList ch)
+        {
+            children = ch;
+        }
+        explicit Wrap(std::vector<WidgetRef> ch)
+        {
+            children = std::move(ch);
+        }
+        explicit Wrap(Axis dir, float space, float run_space, WidgetList ch)
+            : direction(dir), spacing(space), run_spacing(run_space)
+        {
+            children = ch;
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
 

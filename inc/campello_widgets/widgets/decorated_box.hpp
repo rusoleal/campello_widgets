@@ -26,6 +26,18 @@ namespace systems::leal::campello_widgets
         BoxDecoration      decoration;
         DecorationPosition position = DecorationPosition::background;
 
+        DecoratedBox() = default;
+        explicit DecoratedBox(BoxDecoration dec, WidgetRef c = nullptr)
+            : decoration(std::move(dec))
+        {
+            child = std::move(c);
+        }
+        explicit DecoratedBox(BoxDecoration dec, DecorationPosition pos, WidgetRef c = nullptr)
+            : decoration(std::move(dec)), position(pos)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
     };

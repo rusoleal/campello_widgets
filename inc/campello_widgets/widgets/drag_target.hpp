@@ -202,6 +202,16 @@ namespace systems::leal::campello_widgets
         /** @brief Called when a compatible drag is dropped here. */
         std::function<void(const T&)> on_accept;
 
+        DragTarget() = default;
+        explicit DragTarget(std::function<WidgetRef(BuildContext&, bool)> b)
+            : builder(std::move(b))
+        {}
+        explicit DragTarget(
+            std::function<WidgetRef(BuildContext&, bool)> b,
+            std::function<void(const T&)> on_acc)
+            : builder(std::move(b)), on_accept(std::move(on_acc))
+        {}
+
         std::unique_ptr<StateBase> createState() const override
         {
             return std::make_unique<DragTargetState<T>>();

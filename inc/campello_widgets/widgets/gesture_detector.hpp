@@ -39,6 +39,22 @@ namespace systems::leal::campello_widgets
 
         GestureDetector() = default;
         explicit GestureDetector(WidgetRef c) { child = std::move(c); }
+        explicit GestureDetector(WidgetRef c, std::function<void()> tap)
+            : on_tap(std::move(tap))
+        {
+            child = std::move(c);
+        }
+        explicit GestureDetector(
+            WidgetRef c,
+            std::function<void()> tap,
+            std::function<void()> double_tap,
+            std::function<void()> long_press = nullptr)
+            : on_tap(std::move(tap))
+            , on_double_tap(std::move(double_tap))
+            , on_long_press(std::move(long_press))
+        {
+            child = std::move(c);
+        }
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;

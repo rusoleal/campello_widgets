@@ -29,6 +29,21 @@ namespace systems::leal::campello_widgets
         Container() = default;
         explicit Container(WidgetRef c) : child(std::move(c)) {}
 
+        /** @brief Full constructor for mw<>() convenience. */
+        explicit Container(std::optional<float> w,
+                           std::optional<float> h,
+                           std::optional<Color> c,
+                           std::optional<EdgeInsets> p,
+                           std::optional<Alignment> a,
+                           WidgetRef child_widget)
+            : child(std::move(child_widget))
+            , width(w)
+            , height(h)
+            , color(c)
+            , padding(std::move(p))
+            , alignment(std::move(a))
+        {}
+
         WidgetRef build(BuildContext& context) const override;
     };
 

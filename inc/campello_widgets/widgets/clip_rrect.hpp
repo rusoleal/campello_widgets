@@ -22,6 +22,13 @@ namespace systems::leal::campello_widgets
     public:
         float border_radius = 0.0f;
 
+        ClipRRect() = default;
+        explicit ClipRRect(float radius, WidgetRef c = nullptr)
+            : border_radius(radius)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

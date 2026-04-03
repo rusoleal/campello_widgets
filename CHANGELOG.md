@@ -5,6 +5,33 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-04-03
+
+### Added
+
+- **Comprehensive Constructor Support** — 50+ widgets now have full constructors supporting the `mw<>()` pattern:
+  - Layout: `ConstrainedBox`, `DecoratedBox`, `AspectRatio`, `FractionallySizedBox`, `ClipRRect`, `ClipOval`, `ClipPath`, `SingleChildScrollView`, `IntrinsicWidth`, `IntrinsicHeight`, `Wrap`
+  - Interactive: `Button`, `GestureDetector`, `ListTile`, `MouseRegion`, `Tooltip`
+  - Forms: `Checkbox`, `Switch`, `Slider`, `TextField`
+  - Display: `Divider`, `CircularProgressIndicator`, `LinearProgressIndicator`
+  - Effects: `ShaderMask`, `FractionalTranslation`
+  - Animated: `AnimatedContainer`, `AnimatedOpacity`, `AnimatedAlign`, `AnimatedPositioned`, `AnimatedSize`, `AnimatedSwitcher`, `AnimatedBuilder`
+  - Transitions: `FadeTransition`, `ScaleTransition`, `SlideTransition`, `RotationTransition`
+  - Navigation: `PageView`, `DefaultTabController`, `TabBar`, `TabBarView`
+  - Menus: `DropdownButton`, `PopupMenuButton`
+  - Builders: `LayoutBuilder`, `FutureBuilder`, `StreamBuilder`, `ValueListenableBuilder`
+  - Drag & Drop: `Draggable`, `DragTarget`
+- `Container` full constructor `(w, h, color, padding, alignment, child)` for `mw<>()` convenience
+- `Positioned` full constructor `(l, t, r, b, w, h, child)` for `mw<>()` convenience
+- `Expanded` constructors: `Expanded()`, `Expanded(child)`, `Expanded(flex, child)`
+- `Text` default constructor for `mw<>()` convenience
+- macOS PlatformMenu test example (`examples/macos_menu_test/`) — demonstrates standard menu bar with File, Edit, View, Format, Window, Help menus
+- macOS PlatformMenu integration tests (`tests/platform/test_macos_platform_menu.mm`) — comprehensive test suite for native menu bar functionality
+
+### Fixed
+
+- **macOS PlatformMenu crash** — fixed use-after-free when AppKit's async `_NSMenuShortcutUpdater` accesses menu items after the menu bar is replaced; all menu objects are now intentionally retained to prevent crashes
+
 ## [0.1.6] - 2026-04-02
 
 ### Added

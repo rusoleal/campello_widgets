@@ -29,6 +29,22 @@ namespace systems::leal::campello_widgets
         std::optional<float> height_factor;
         Alignment            alignment = Alignment::center();
 
+        FractionallySizedBox() = default;
+        explicit FractionallySizedBox(float w_factor, float h_factor, WidgetRef c = nullptr)
+            : width_factor(w_factor), height_factor(h_factor)
+        {
+            child = std::move(c);
+        }
+        explicit FractionallySizedBox(
+            float w_factor,
+            float h_factor,
+            Alignment align,
+            WidgetRef c = nullptr)
+            : width_factor(w_factor), height_factor(h_factor), alignment(align)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

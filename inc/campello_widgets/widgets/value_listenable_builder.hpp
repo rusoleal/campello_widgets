@@ -95,6 +95,19 @@ namespace systems::leal::campello_widgets
         std::function<WidgetRef(BuildContext&, const T&, WidgetRef)>    builder;
         WidgetRef                                                        child;
 
+        ValueListenableBuilder() = default;
+        explicit ValueListenableBuilder(
+            std::shared_ptr<ValueNotifier<T>> listenable,
+            std::function<WidgetRef(BuildContext&, const T&, WidgetRef)> b)
+            : valueListenable(std::move(listenable)), builder(std::move(b))
+        {}
+        explicit ValueListenableBuilder(
+            std::shared_ptr<ValueNotifier<T>> listenable,
+            std::function<WidgetRef(BuildContext&, const T&, WidgetRef)> b,
+            WidgetRef c)
+            : valueListenable(std::move(listenable)), builder(std::move(b)), child(std::move(c))
+        {}
+
         std::unique_ptr<StateBase> createState() const override
         {
             return std::make_unique<ValueListenableBuilderState<T>>();

@@ -65,6 +65,21 @@ namespace systems::leal::campello_widgets
         bool                             reverse = false;
 
         PageView() = default;
+        explicit PageView(WidgetList ch)
+        {
+            children = ch;
+        }
+        explicit PageView(std::vector<WidgetRef> ch)
+        {
+            children = std::move(ch);
+        }
+        explicit PageView(
+            std::shared_ptr<PageController> ctrl,
+            WidgetList ch)
+            : controller(std::move(ctrl))
+        {
+            children = ch;
+        }
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;

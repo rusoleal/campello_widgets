@@ -63,6 +63,15 @@ namespace systems::leal::campello_widgets
         WidgetRef child;
 
         DefaultTabController() = default;
+        explicit DefaultTabController(int len, WidgetRef c = nullptr)
+            : length(len), child(std::move(c))
+        {}
+        explicit DefaultTabController(
+            int len,
+            int init_idx,
+            WidgetRef c = nullptr)
+            : length(len), initial_index(init_idx), child(std::move(c))
+        {}
 
         std::unique_ptr<StateBase> createState() const override;
     };
@@ -104,6 +113,9 @@ namespace systems::leal::campello_widgets
         Color            background_color        = Color::transparent();
 
         TabBar() = default;
+        explicit TabBar(std::vector<Tab> t)
+            : tabs(std::move(t))
+        {}
 
         WidgetRef build(BuildContext& ctx) const override;
     };
@@ -129,6 +141,9 @@ namespace systems::leal::campello_widgets
         std::vector<WidgetRef> children;
 
         TabBarView() = default;
+        explicit TabBarView(std::vector<WidgetRef> ch)
+            : children(std::move(ch))
+        {}
 
         WidgetRef build(BuildContext& ctx) const override;
     };

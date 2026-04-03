@@ -38,6 +38,14 @@ namespace systems::leal::campello_widgets
         float       border_radius    = 4.0f;
         float       elevation        = 2.0f;
 
+        Button() = default;
+        explicit Button(WidgetRef c, std::function<void()> on_press = nullptr)
+            : child(std::move(c)), on_pressed(std::move(on_press))
+        {}
+        explicit Button(WidgetRef c, std::function<void()> on_press, Color bg)
+            : child(std::move(c)), on_pressed(std::move(on_press)), background_color(bg)
+        {}
+
         WidgetRef build(BuildContext& ctx) const override;
     };
 

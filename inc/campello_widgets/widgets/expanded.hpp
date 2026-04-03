@@ -14,9 +14,17 @@ namespace systems::leal::campello_widgets
     class Expanded : public Flexible
     {
     public:
+        Expanded() { flex = 1; }
+
         explicit Expanded(WidgetRef child_widget)
         {
             flex  = 1;
+            child = std::move(child_widget);
+        }
+
+        explicit Expanded(int flex_value, WidgetRef child_widget)
+        {
+            flex  = flex_value;
             child = std::move(child_widget);
         }
     };

@@ -33,6 +33,13 @@ namespace systems::leal::campello_widgets
     public:
         std::function<Path(Size)> clip_path_builder;
 
+        ClipPath() = default;
+        explicit ClipPath(std::function<Path(Size)> builder, WidgetRef c = nullptr)
+            : clip_path_builder(std::move(builder))
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

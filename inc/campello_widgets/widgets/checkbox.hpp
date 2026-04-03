@@ -33,6 +33,11 @@ namespace systems::leal::campello_widgets
         float size          = 18.0f;
         float border_radius = 2.0f;
 
+        Checkbox() = default;
+        explicit Checkbox(bool val, std::function<void(bool)> on_change = nullptr)
+            : value(val), on_changed(std::move(on_change))
+        {}
+
         WidgetRef build(BuildContext& ctx) const override;
     };
 

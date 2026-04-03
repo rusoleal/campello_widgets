@@ -36,6 +36,28 @@ namespace systems::leal::campello_widgets
         /// Scroll physics (defaults to ClampingScrollPhysics when null).
         std::shared_ptr<ScrollPhysics> physics;
 
+        SingleChildScrollView() = default;
+        explicit SingleChildScrollView(WidgetRef c)
+        {
+            child = std::move(c);
+        }
+        explicit SingleChildScrollView(WidgetRef c, Axis axis)
+            : scroll_axis(axis)
+        {
+            child = std::move(c);
+        }
+        explicit SingleChildScrollView(
+            WidgetRef c,
+            Axis axis,
+            std::shared_ptr<ScrollController> ctrl,
+            std::shared_ptr<ScrollPhysics> phys = nullptr)
+            : scroll_axis(axis)
+            , controller(std::move(ctrl))
+            , physics(std::move(phys))
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
     };

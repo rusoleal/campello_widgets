@@ -405,7 +405,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     mediaData.device_pixel_ratio = static_cast<float>(_window.backingScaleFactor);
     
     // Wrap the root widget with MediaQuery
-    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+    auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, gRootWidget);
     
     _rootElement = wrappedRoot->createElement();

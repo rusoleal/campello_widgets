@@ -36,6 +36,17 @@ namespace systems::leal::campello_widgets
         double                        duration_ms = 300.0;
         std::function<double(double)> curve       = Curves::easeInOut;
 
+        AnimatedOpacity() = default;
+        explicit AnimatedOpacity(float op, WidgetRef c = nullptr)
+            : opacity(op), child(std::move(c))
+        {}
+        explicit AnimatedOpacity(
+            float op,
+            double duration,
+            WidgetRef c = nullptr)
+            : opacity(op), child(std::move(c)), duration_ms(duration)
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

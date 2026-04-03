@@ -14,6 +14,9 @@ namespace systems::leal::campello_widgets
     class ClipOval : public SingleChildRenderObjectWidget
     {
     public:
+        ClipOval() = default;
+        explicit ClipOval(WidgetRef c) { child = std::move(c); }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

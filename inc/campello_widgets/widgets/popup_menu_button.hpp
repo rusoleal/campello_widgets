@@ -51,6 +51,14 @@ namespace systems::leal::campello_widgets
         float                          elevation     = 8.0f;
 
         PopupMenuButton() = default;
+        explicit PopupMenuButton(std::vector<PopupMenuItem> itms)
+            : items(std::move(itms))
+        {}
+        explicit PopupMenuButton(
+            WidgetRef c,
+            std::vector<PopupMenuItem> itms)
+            : child(std::move(c)), items(std::move(itms))
+        {}
 
         std::unique_ptr<StateBase> createState() const override;
     };

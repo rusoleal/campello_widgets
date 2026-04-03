@@ -34,6 +34,11 @@ namespace systems::leal::campello_widgets
         float width  = 44.0f;
         float height = 24.0f;
 
+        Switch() = default;
+        explicit Switch(bool val, std::function<void(bool)> on_change = nullptr)
+            : value(val), on_changed(std::move(on_change))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

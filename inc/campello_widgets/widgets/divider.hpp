@@ -33,6 +33,17 @@ namespace systems::leal::campello_widgets
         /** Line colour. Defaults to a subtle 12 % black. */
         Color color       = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.12f);
 
+        Divider() = default;
+        explicit Divider(float thick)
+            : thickness(thick)
+        {}
+        explicit Divider(float thick, float ind, float end_ind = 0.0f)
+            : thickness(thick), indent(ind), end_indent(end_ind)
+        {}
+        explicit Divider(float thick, float ind, float end_ind, Color col)
+            : thickness(thick), indent(ind), end_indent(end_ind), color(col)
+        {}
+
         WidgetRef build(BuildContext& ctx) const override;
     };
 

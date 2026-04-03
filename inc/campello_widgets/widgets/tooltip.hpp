@@ -36,6 +36,19 @@ namespace systems::leal::campello_widgets
         EdgeInsets padding          = EdgeInsets::symmetric(8.0f, 4.0f);
         float      font_size        = 12.0f;
 
+        Tooltip() = default;
+        explicit Tooltip(std::string msg, WidgetRef c)
+            : child(std::move(c)), message(std::move(msg))
+        {}
+        explicit Tooltip(
+            std::string msg,
+            WidgetRef c,
+            double duration_ms)
+            : child(std::move(c))
+            , message(std::move(msg))
+            , display_duration_ms(duration_ms)
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

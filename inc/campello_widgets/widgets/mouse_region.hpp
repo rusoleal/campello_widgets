@@ -31,6 +31,22 @@ namespace systems::leal::campello_widgets
         std::function<void(Offset)>  on_hover;
         SystemMouseCursor            cursor = SystemMouseCursor::arrow;
 
+        MouseRegion() = default;
+        explicit MouseRegion(WidgetRef c) { child = std::move(c); }
+        explicit MouseRegion(WidgetRef c, SystemMouseCursor cur)
+            : cursor(cur)
+        {
+            child = std::move(c);
+        }
+        explicit MouseRegion(
+            WidgetRef c,
+            std::function<void()> enter,
+            std::function<void()> exit = nullptr)
+            : on_enter(std::move(enter)), on_exit(std::move(exit))
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

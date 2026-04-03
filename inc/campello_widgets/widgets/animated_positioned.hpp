@@ -39,6 +39,19 @@ namespace systems::leal::campello_widgets
         std::function<double(double)> curve       = Curves::easeInOut;
         WidgetRef                     child;
 
+        AnimatedPositioned() = default;
+        explicit AnimatedPositioned(WidgetRef c)
+            : child(std::move(c))
+        {}
+        explicit AnimatedPositioned(
+            std::optional<float> l,
+            std::optional<float> t,
+            std::optional<float> r,
+            std::optional<float> b,
+            WidgetRef c = nullptr)
+            : left(l), top(t), right(r), bottom(b), child(std::move(c))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

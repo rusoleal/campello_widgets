@@ -24,6 +24,13 @@ namespace systems::leal::campello_widgets
     public:
         BoxConstraints additional_constraints;
 
+        ConstrainedBox() = default;
+        explicit ConstrainedBox(BoxConstraints constraints, WidgetRef c = nullptr)
+            : additional_constraints(std::move(constraints))
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

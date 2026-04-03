@@ -44,6 +44,18 @@ namespace systems::leal::campello_widgets
         double                          duration_ms = 300.0;
         std::function<double(double)>   curve       = Curves::easeInOut;
 
+        AnimatedContainer() = default;
+        explicit AnimatedContainer(WidgetRef c)
+            : child(std::move(c))
+        {}
+        explicit AnimatedContainer(
+            std::optional<float> w,
+            std::optional<float> h,
+            std::optional<Color> c,
+            WidgetRef ch = nullptr)
+            : width(w), height(h), color(c), child(std::move(ch))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

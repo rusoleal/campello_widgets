@@ -36,6 +36,17 @@ namespace systems::leal::campello_widgets
         };
         BlendMode blend_mode = BlendMode::srcIn;
 
+        ShaderMask() = default;
+        explicit ShaderMask(Shader s, WidgetRef c = nullptr)
+            : shader(std::move(s))
+        {
+            child = std::move(c);
+        }
+        explicit ShaderMask(Shader s, BlendMode mode, WidgetRef c = nullptr)
+            : shader(std::move(s)), blend_mode(mode)
+        {
+            child = std::move(c);
+        }
 
         std::shared_ptr<RenderObject> createRenderObject() const override
         {

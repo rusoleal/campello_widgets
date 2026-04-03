@@ -31,6 +31,14 @@ namespace systems::leal::campello_widgets
         double                        duration_ms = 300.0;
         std::function<double(double)> curve       = Curves::easeInOut;
 
+        AnimatedSwitcher() = default;
+        explicit AnimatedSwitcher(WidgetRef c)
+            : child(std::move(c))
+        {}
+        explicit AnimatedSwitcher(WidgetRef c, double duration)
+            : child(std::move(c)), duration_ms(duration)
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

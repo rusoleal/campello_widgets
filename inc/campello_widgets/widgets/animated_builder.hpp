@@ -36,6 +36,13 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<AnimationController>    animation;
         std::function<WidgetRef(BuildContext&)> builder;
 
+        AnimatedBuilder() = default;
+        explicit AnimatedBuilder(
+            std::shared_ptr<AnimationController> ctrl,
+            std::function<WidgetRef(BuildContext&)> b)
+            : animation(std::move(ctrl)), builder(std::move(b))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

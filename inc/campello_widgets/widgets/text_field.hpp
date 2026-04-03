@@ -64,6 +64,23 @@ namespace systems::leal::campello_widgets
         float border_width  = 1.0f;
         float min_height    = 36.0f;
 
+        TextField() = default;
+        explicit TextField(std::string place_holder)
+            : placeholder(std::move(place_holder))
+        {}
+        explicit TextField(
+            std::string place_holder,
+            std::function<void(const std::string&)> on_change)
+            : on_changed(std::move(on_change))
+            , placeholder(std::move(place_holder))
+        {}
+        explicit TextField(
+            std::shared_ptr<TextEditingController> ctrl,
+            std::string place_holder = "")
+            : controller(std::move(ctrl))
+            , placeholder(std::move(place_holder))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

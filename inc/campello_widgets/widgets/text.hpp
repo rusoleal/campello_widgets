@@ -18,6 +18,8 @@ namespace systems::leal::campello_widgets
     public:
         TextSpan span;
 
+        Text() = default;
+
         /** @brief Convenience constructor for plain text with an optional style. */
         explicit Text(std::string text, TextStyle style = {})
             : span{std::move(text), std::move(style)}

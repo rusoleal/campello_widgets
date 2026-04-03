@@ -36,6 +36,14 @@ namespace systems::leal::campello_widgets
         float  min_height       = 4.0f;
         double duration_ms      = 1600.0;   ///< Indeterminate animation period
 
+        LinearProgressIndicator() = default;
+        explicit LinearProgressIndicator(float val)
+            : value(val)
+        {}
+        explicit LinearProgressIndicator(float val, Color val_color)
+            : value(val), value_color(val_color)
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

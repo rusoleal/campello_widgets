@@ -300,6 +300,14 @@ namespace systems::leal::campello_widgets
         std::function<void()>       on_drag_started;          ///< Called when drag begins
         std::function<void(bool)>   on_drag_ended;            ///< Called when drag ends (accepted?)
 
+        Draggable() = default;
+        explicit Draggable(T d, WidgetRef c)
+            : data(std::move(d)), child(std::move(c))
+        {}
+        explicit Draggable(T d, WidgetRef c, WidgetRef fb)
+            : data(std::move(d)), child(std::move(c)), feedback(std::move(fb))
+        {}
+
         std::unique_ptr<StateBase> createState() const override
         {
             return std::make_unique<DraggableState<T>>();

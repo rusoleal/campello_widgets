@@ -43,6 +43,30 @@ namespace systems::leal::campello_widgets
         EdgeInsets            content_padding  = EdgeInsets::symmetric(16.0f, 0.0f);
 
         ListTile() = default;
+        explicit ListTile(WidgetRef tile_title)
+            : title(std::move(tile_title))
+        {}
+        explicit ListTile(WidgetRef tile_title, WidgetRef tile_trailing)
+            : title(std::move(tile_title)), trailing(std::move(tile_trailing))
+        {}
+        explicit ListTile(
+            WidgetRef tile_leading,
+            WidgetRef tile_title,
+            WidgetRef tile_trailing)
+            : leading(std::move(tile_leading))
+            , title(std::move(tile_title))
+            , trailing(std::move(tile_trailing))
+        {}
+        explicit ListTile(
+            WidgetRef tile_leading,
+            WidgetRef tile_title,
+            WidgetRef tile_subtitle,
+            WidgetRef tile_trailing)
+            : leading(std::move(tile_leading))
+            , title(std::move(tile_title))
+            , subtitle(std::move(tile_subtitle))
+            , trailing(std::move(tile_trailing))
+        {}
 
         WidgetRef build(BuildContext& ctx) const override;
     };

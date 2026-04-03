@@ -150,6 +150,19 @@ namespace systems::leal::campello_widgets
         std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)>  builder;
         std::optional<T>                                           initialData;
 
+        FutureBuilder() = default;
+        explicit FutureBuilder(
+            std::shared_future<T> fut,
+            std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b)
+            : future(std::move(fut)), builder(std::move(b))
+        {}
+        explicit FutureBuilder(
+            std::shared_future<T> fut,
+            std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b,
+            T init_data)
+            : future(std::move(fut)), builder(std::move(b)), initialData(std::move(init_data))
+        {}
+
         std::unique_ptr<StateBase> createState() const override
         {
             return std::make_unique<FutureBuilderState<T>>();

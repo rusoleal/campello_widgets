@@ -27,6 +27,25 @@ namespace systems::leal::campello_widgets
         std::optional<float> height;
         WidgetRef             child;
 
+        Positioned() = default;
+
+        /** @brief Full constructor for mw<>() convenience. */
+        explicit Positioned(std::optional<float> l,
+                            std::optional<float> t,
+                            std::optional<float> r,
+                            std::optional<float> b,
+                            std::optional<float> w,
+                            std::optional<float> h,
+                            WidgetRef            c)
+            : left(l)
+            , top(t)
+            , right(r)
+            , bottom(b)
+            , width(w)
+            , height(h)
+            , child(std::move(c))
+        {}
+
         WidgetRef build(BuildContext&) const override { return child; }
 
         /**

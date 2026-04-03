@@ -32,6 +32,14 @@ namespace systems::leal::campello_widgets
         std::function<double(double)> curve       = Curves::easeInOut;
         Alignment                     alignment   = Alignment::center();
 
+        AnimatedSize() = default;
+        explicit AnimatedSize(WidgetRef c) { child = std::move(c); }
+        explicit AnimatedSize(double duration, WidgetRef c = nullptr)
+            : duration_ms(duration)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override
         {
             return std::make_shared<RenderAnimatedSize>(

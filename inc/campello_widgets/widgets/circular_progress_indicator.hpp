@@ -35,6 +35,14 @@ namespace systems::leal::campello_widgets
         float size             = 36.0f;   ///< Diameter in logical pixels
         double duration_ms     = 1200.0;  ///< Indeterminate rotation period
 
+        CircularProgressIndicator() = default;
+        explicit CircularProgressIndicator(float val)
+            : value(val)
+        {}
+        explicit CircularProgressIndicator(float val, Color val_color)
+            : value(val), value_color(val_color)
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

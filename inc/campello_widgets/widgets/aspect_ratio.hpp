@@ -23,6 +23,13 @@ namespace systems::leal::campello_widgets
     public:
         float aspect_ratio = 1.0f;
 
+        AspectRatio() = default;
+        explicit AspectRatio(float ratio, WidgetRef c = nullptr)
+            : aspect_ratio(ratio)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

@@ -32,6 +32,11 @@ namespace systems::leal::campello_widgets
     public:
         std::function<WidgetRef(BuildContext&, BoxConstraints)> builder;
 
+        LayoutBuilder() = default;
+        explicit LayoutBuilder(std::function<WidgetRef(BuildContext&, BoxConstraints)> b)
+            : builder(std::move(b))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

@@ -72,6 +72,15 @@ namespace systems::leal::campello_widgets
         float                            elevation      = 8.0f;
 
         DropdownButton() = default;
+        explicit DropdownButton(std::vector<DropdownMenuItem<T>> itms)
+            : items(std::move(itms))
+        {}
+        explicit DropdownButton(
+            std::vector<DropdownMenuItem<T>> itms,
+            T val,
+            std::function<void(T)> on_change)
+            : items(std::move(itms)), value(val), on_changed(std::move(on_change))
+        {}
 
         // ------------------------------------------------------------------
         // State

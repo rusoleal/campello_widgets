@@ -38,6 +38,19 @@ namespace systems::leal::campello_widgets
         Alignment                            alignment = Alignment::center();
         WidgetRef                            child;
 
+        ScaleTransition() = default;
+        explicit ScaleTransition(
+            std::shared_ptr<AnimationController> ctrl,
+            WidgetRef c = nullptr)
+            : controller(std::move(ctrl)), child(std::move(c))
+        {}
+        explicit ScaleTransition(
+            std::shared_ptr<AnimationController> ctrl,
+            Tween<float> scl,
+            WidgetRef c = nullptr)
+            : controller(std::move(ctrl)), scale(scl), child(std::move(c))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

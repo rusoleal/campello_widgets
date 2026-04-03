@@ -41,6 +41,19 @@ namespace systems::leal::campello_widgets
         Tween<Offset>                        offset = {{-1.0f, 0.0f}, {0.0f, 0.0f}};
         WidgetRef                            child;
 
+        SlideTransition() = default;
+        explicit SlideTransition(
+            std::shared_ptr<AnimationController> ctrl,
+            WidgetRef c = nullptr)
+            : controller(std::move(ctrl)), child(std::move(c))
+        {}
+        explicit SlideTransition(
+            std::shared_ptr<AnimationController> ctrl,
+            Tween<Offset> off,
+            WidgetRef c = nullptr)
+            : controller(std::move(ctrl)), offset(off), child(std::move(c))
+        {}
+
         std::unique_ptr<StateBase> createState() const override;
     };
 

@@ -20,6 +20,14 @@ namespace systems::leal::campello_widgets
     public:
         float step_height = 0.0f;
 
+        IntrinsicHeight() = default;
+        explicit IntrinsicHeight(WidgetRef c) { child = std::move(c); }
+        explicit IntrinsicHeight(float step, WidgetRef c = nullptr)
+            : step_height(step)
+        {
+            child = std::move(c);
+        }
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

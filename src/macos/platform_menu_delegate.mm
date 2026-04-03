@@ -103,21 +103,59 @@ namespace systems::leal::campello_widgets
         
         NSString* convertLabelToNSString(const std::string& label);
         NSString* convertShortcutToKeyEquivalent(const std::string& shortcut, uint32_t* outModifiers);
+        
+        // Defers cleanup of old menu resources to avoid use-after-free
+        // when AppKit's async keyboard shortcut updater accesses them
+        void deferCleanup(NSObject* object);
 
         NSMutableArray<CampelloMenuItemTarget*>* _targets;
+        NSMutableArray* _retainedOldObjects;  // Old objects kept alive to prevent crashes
         bool _has_custom_menus = false;
     };
 
     MacOSPlatformMenuDelegate::MacOSPlatformMenuDelegate()
         : _targets([NSMutableArray array])
+        , _retainedOldObjects([NSMutableArray array])
     {
-        // Retain the targets array
+        // Retain the arrays
         [_targets retain];
+        [_retainedOldObjects retain];
     }
 
     MacOSPlatformMenuDelegate::~MacOSPlatformMenuDelegate()
     {
-        [_targets release];
+        // Intentionally leak retained objects to prevent AppKit's async
+        // keyboard-shortcut updater from accessing deallocated objects.
+        // This is a workaround for a known AppKit issue where _NSMenuShortcutUpdater
+        // holds references to menu items after the menu bar is replaced.
+    }
+    
+    void MacOSPlatformMenuDelegate::deferCleanup(NSObject* object)
+    {
+        // Retain the object to prevent it from being deallocated immediately.
+        // We never release these - they are intentionally leaked to avoid
+        // use-after-free crashes when AppKit's async updater accesses them.
+        if (object) {
+            [_retainedOldObjects addObject:object];
+        }
+    }
+    
+    // Recursively retain all menus and menu items to prevent use-after-free
+    static void retainMenuRecursively(NSMenu* menu, NSMutableArray* retainedObjects)
+    {
+        if (!menu || !retainedObjects) return;
+        
+        [retainedObjects addObject:menu];
+        
+        for (NSMenuItem* item in [menu itemArray]) {
+            [retainedObjects addObject:item];
+            
+            // Retain the submenu if present
+            NSMenu* submenu = [item submenu];
+            if (submenu) {
+                retainMenuRecursively(submenu, retainedObjects);
+            }
+        }
     }
 
     void MacOSPlatformMenuDelegate::setMenus(const std::vector<PlatformMenuRef>& menus)
@@ -125,8 +163,13 @@ namespace systems::leal::campello_widgets
         // Clear existing callbacks
         clear_menu_callbacks();
         
-        // Release old targets
-        [_targets removeAllObjects];
+        // Retain the old menu bar and all its items before replacing it.
+        // This prevents use-after-free crashes when AppKit's async keyboard
+        // shortcut updater accesses menu items after the menu bar is replaced.
+        NSMenu* oldMenuBar = [NSApp mainMenu];
+        if (oldMenuBar) {
+            retainMenuRecursively(oldMenuBar, _retainedOldObjects);
+        }
         
         buildMenuBar(menus);
         _has_custom_menus = !menus.empty();
@@ -135,7 +178,6 @@ namespace systems::leal::campello_widgets
     void MacOSPlatformMenuDelegate::clearMenus()
     {
         clear_menu_callbacks();
-        [_targets removeAllObjects];
         
         // Reset to a basic menu bar with just the app menu
         NSMenu* menuBar = [[NSMenu alloc] init];
@@ -143,17 +185,17 @@ namespace systems::leal::campello_widgets
         // Add basic app menu
         NSMenuItem* appItem = [[NSMenuItem alloc] init];
         NSMenu* appMenu = [[NSMenu alloc] init];
-        [appMenu addItemWithTitle:@"Quit"
-                           action:@selector(terminate:)
-                    keyEquivalent:@"q"];
+        NSMenuItem* quitItem = [[NSMenuItem alloc] 
+            initWithTitle:@"Quit"
+                   action:@selector(terminate:)
+            keyEquivalent:@"q"];
+        [appMenu addItem:quitItem];
         appItem.submenu = appMenu;
         [menuBar addItem:appItem];
         
         [NSApp setMainMenu:menuBar];
         
-        [menuBar release];
-        [appItem release];
-        [appMenu release];
+        // NOTE: Intentionally not releasing menu objects
         
         _has_custom_menus = false;
     }
@@ -169,31 +211,41 @@ namespace systems::leal::campello_widgets
         NSMenu* appMenu = [[NSMenu alloc] initWithTitle:appName];
         
         // Add About item
-        [appMenu addItemWithTitle:[NSString stringWithFormat:@"About %@", appName]
-                           action:@selector(orderFrontStandardAboutPanel:)
-                    keyEquivalent:@""];
+        NSMenuItem* aboutItem = [[NSMenuItem alloc] 
+            initWithTitle:[NSString stringWithFormat:@"About %@", appName]
+                   action:@selector(orderFrontStandardAboutPanel:)
+            keyEquivalent:@""];
+        [appMenu addItem:aboutItem];
         [appMenu addItem:[NSMenuItem separatorItem]];
         
         // Add Preferences if available
         // (Could be provided by the user menu structure)
         
         // Hide/Show items
-        [appMenu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", appName]
-                           action:@selector(hide:)
-                    keyEquivalent:@"h"];
-        [appMenu addItemWithTitle:@"Hide Others"
-                           action:@selector(hideOtherApplications:)
-                    keyEquivalent:@"h"];
-        [appMenu itemAtIndex:[appMenu numberOfItems] - 1].keyEquivalentModifierMask = NSEventModifierFlagOption | NSEventModifierFlagCommand;
-        [appMenu addItemWithTitle:@"Show All"
-                           action:@selector(unhideAllApplications:)
-                    keyEquivalent:@""];
+        NSMenuItem* hideItem = [[NSMenuItem alloc] 
+            initWithTitle:[NSString stringWithFormat:@"Hide %@", appName]
+                   action:@selector(hide:)
+            keyEquivalent:@"h"];
+        NSMenuItem* hideOthersItem = [[NSMenuItem alloc] 
+            initWithTitle:@"Hide Others"
+                   action:@selector(hideOtherApplications:)
+            keyEquivalent:@"h"];
+        hideOthersItem.keyEquivalentModifierMask = NSEventModifierFlagOption | NSEventModifierFlagCommand;
+        NSMenuItem* showAllItem = [[NSMenuItem alloc] 
+            initWithTitle:@"Show All"
+                   action:@selector(unhideAllApplications:)
+            keyEquivalent:@""];
+        [appMenu addItem:hideItem];
+        [appMenu addItem:hideOthersItem];
+        [appMenu addItem:showAllItem];
         [appMenu addItem:[NSMenuItem separatorItem]];
         
         // Quit item
-        [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", appName]
-                           action:@selector(terminate:)
-                    keyEquivalent:@"q"];
+        NSMenuItem* quitItem = [[NSMenuItem alloc] 
+            initWithTitle:[NSString stringWithFormat:@"Quit %@", appName]
+                   action:@selector(terminate:)
+            keyEquivalent:@"q"];
+        [appMenu addItem:quitItem];
         
         appItem.submenu = appMenu;
         [menuBar addItem:appItem];
@@ -205,22 +257,28 @@ namespace systems::leal::campello_widgets
             NSMenuItem* item = [[NSMenuItem alloc] init];
             item.submenu = createMenu(*menu);
             [menuBar addItem:item];
-            [item release];
+            // NOTE: Intentionally not releasing item - see above
         }
         
         // Window menu (standard macOS menu)
         NSMenuItem* windowItem = [[NSMenuItem alloc] init];
         NSMenu* windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
-        [windowMenu addItemWithTitle:@"Minimize"
-                              action:@selector(performMiniaturize:)
-                       keyEquivalent:@"m"];
-        [windowMenu addItemWithTitle:@"Zoom"
-                              action:@selector(performZoom:)
-                       keyEquivalent:@""];
+        NSMenuItem* minimizeItem = [[NSMenuItem alloc] 
+            initWithTitle:@"Minimize"
+                   action:@selector(performMiniaturize:)
+            keyEquivalent:@"m"];
+        NSMenuItem* zoomItem = [[NSMenuItem alloc] 
+            initWithTitle:@"Zoom"
+                   action:@selector(performZoom:)
+            keyEquivalent:@""];
+        NSMenuItem* bringFrontItem = [[NSMenuItem alloc] 
+            initWithTitle:@"Bring All to Front"
+                   action:@selector(arrangeInFront:)
+            keyEquivalent:@""];
+        [windowMenu addItem:minimizeItem];
+        [windowMenu addItem:zoomItem];
         [windowMenu addItem:[NSMenuItem separatorItem]];
-        [windowMenu addItemWithTitle:@"Bring All to Front"
-                              action:@selector(arrangeInFront:)
-                       keyEquivalent:@""];
+        [windowMenu addItem:bringFrontItem];
         windowItem.submenu = windowMenu;
         [NSApp setWindowsMenu:windowMenu];
         [menuBar addItem:windowItem];
@@ -228,12 +286,9 @@ namespace systems::leal::campello_widgets
         // Set the main menu
         [NSApp setMainMenu:menuBar];
         
-        // Clean up
-        [menuBar release];
-        [appItem release];
-        [appMenu release];
-        [windowItem release];
-        [windowMenu release];
+        // NOTE: Intentionally not releasing menu objects to prevent use-after-free
+        // crashes when AppKit's async keyboard shortcut updater accesses them.
+        // These objects are small and only created once per menu structure change.
     }
 
     NSMenu* MacOSPlatformMenuDelegate::createMenu(const PlatformMenu& menu)
@@ -246,7 +301,9 @@ namespace systems::leal::campello_widgets
             NSMenuItem* nsItem = createMenuItem(item.get());
             if (nsItem) {
                 [nsMenu addItem:nsItem];
-                [nsItem release];
+                // NOTE: Intentionally not releasing nsItem to prevent use-after-free
+                // when AppKit's async keyboard shortcut updater accesses it.
+                // The menu will be leaked but this prevents crashes.
             }
         }
         
@@ -263,7 +320,7 @@ namespace systems::leal::campello_widgets
             NSMenuItem* nsItem = createMenuItem(item.get());
             if (nsItem) {
                 [nsMenu addItem:nsItem];
-                [nsItem release];
+                // NOTE: Intentionally not releasing nsItem - see createMenu() above
             }
         }
         
@@ -326,6 +383,7 @@ namespace systems::leal::campello_widgets
         
         nsItem.enabled = item->enabled ? YES : NO;
         nsItem.submenu = createMenuFromSubmenu(*item);
+        // NOTE: Intentionally not releasing submenu - menu items are leaked to prevent crashes
         
         return nsItem;
     }
@@ -544,6 +602,9 @@ namespace systems::leal::campello_widgets
 
     void initializeMacOSPlatformMenuDelegate()
     {
+        static bool initialized = false;
+        if (initialized) return;
+        initialized = true;
         PlatformMenuDelegate::setInstance(std::make_unique<MacOSPlatformMenuDelegate>());
     }
 

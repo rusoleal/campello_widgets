@@ -128,6 +128,19 @@ namespace systems::leal::campello_widgets
         std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)>      builder;
         std::optional<T>                                               initialData;
 
+        StreamBuilder() = default;
+        explicit StreamBuilder(
+            std::shared_ptr<Stream<T>> s,
+            std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b)
+            : stream(std::move(s)), builder(std::move(b))
+        {}
+        explicit StreamBuilder(
+            std::shared_ptr<Stream<T>> s,
+            std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b,
+            T init_data)
+            : stream(std::move(s)), builder(std::move(b)), initialData(std::move(init_data))
+        {}
+
         std::unique_ptr<StateBase> createState() const override
         {
             return std::make_unique<StreamBuilderState<T>>();
