@@ -43,7 +43,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev libevdev-dev
+          sudo apt-get install -y libvulkan-dev libevdev-dev libudev-dev
 
       # Cache FetchContent dependency sources across runs.
       # Key is invalidated whenever a dependency version pin changes.
