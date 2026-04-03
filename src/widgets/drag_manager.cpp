@@ -5,8 +5,6 @@
 namespace systems::leal::campello_widgets
 {
 
-    DragManager* DragManager::s_instance_ = nullptr;
-
     // -------------------------------------------------------------------------
 
     void DragManager::startSession(std::type_index type, const void* data, Offset pos)

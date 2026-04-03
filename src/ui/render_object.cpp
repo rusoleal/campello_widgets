@@ -23,9 +23,6 @@ namespace systems::leal::campello_widgets
         return kColors[idx++ % 6];
     }
 
-    IDrawBackend* RenderObject::s_active_backend_ = nullptr;
-    float         RenderObject::s_active_dpr_     = 1.0f;
-
     void RenderObject::markNeedsLayout() noexcept
     {
         if (!needs_layout_)

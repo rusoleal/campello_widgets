@@ -158,8 +158,8 @@ namespace systems::leal::campello_widgets
         RenderObject*   parent_       = nullptr;
 
     private:
-        static IDrawBackend* s_active_backend_;
-        static float         s_active_dpr_;
+        inline static IDrawBackend* s_active_backend_ = nullptr;
+        inline static float s_active_dpr_ = 1.0f;
     };
 
 } // namespace systems::leal::campello_widgets

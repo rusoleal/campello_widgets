@@ -125,7 +125,7 @@ namespace systems::leal::campello_widgets
 
         std::vector<TargetRecord> targets_;
 
-        static DragManager* s_instance_;
+        inline static DragManager* s_instance_ = nullptr;
     };
 
 } // namespace systems::leal::campello_widgets
