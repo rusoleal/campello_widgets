@@ -5,6 +5,31 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-04-03
+
+### Added
+
+- **Two-Dimensional Scrollables** — new widgets for complex data visualization:
+  - `TableView` — scrollable table with rows and columns supporting:
+    - Bidirectional scrolling (horizontal + vertical)
+    - Pinned rows and columns that remain fixed during scroll
+    - Lazy cell virtualization (only visible cells mounted)
+    - Configurable row heights and column widths via `TableSpan`
+    - Scroll wheel navigation with natural macOS direction
+    - Aggressive clipping for optimal performance
+  - `TreeView` — hierarchical tree display with:
+    - Two-dimensional scrolling (vertical through rows, horizontal for deep nesting)
+    - Expandable/collapsible nodes via `TreeController`
+    - Lazy row building (only visible rows mounted)
+    - Configurable indentation and row height
+    - Animation support for expand/collapse transitions
+  - `TreeNode` — immutable tree node structure for TreeView
+  - `TreeController` — manages expansion state independently from node tree
+  - `TableSpan` — configuration for row/column extents and pinning
+- macOS TableView example (`examples/macos_table_view/`) — spreadsheet-like demo with 1000×26 cells, pinned header row and column
+- macOS TreeView example (`examples/macos_tree_view/`) — file explorer-like demo with expandable folders
+- Launch scripts: `run_macos_table_view.sh`, `run_macos_table_view_release.sh`, `run_macos_tree_view.sh`, `run_macos_tree_view_release.sh`
+
 ## [0.1.7] - 2026-04-03
 
 ### Added

@@ -125,6 +125,14 @@
 #include <campello_widgets/widgets/list_view.hpp>
 #include <campello_widgets/widgets/grid_view.hpp>
 
+// Two-dimensional scrollables (TableView, TreeView)
+#include <campello_widgets/ui/span.hpp>
+#include <campello_widgets/ui/tree_node.hpp>
+#include <campello_widgets/ui/render_table_view.hpp>
+#include <campello_widgets/ui/render_tree_view.hpp>
+#include <campello_widgets/widgets/table_view.hpp>
+#include <campello_widgets/widgets/tree_view.hpp>
+
 // Phase 8 — Animation
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
