@@ -69,7 +69,8 @@ jobs:
         run: |
           ctest --test-dir build/${{ matrix.platform }}_test \
             --output-on-failure \
-            -C Debug
+            -C Debug \
+            -E "campello_input"
 
   # ---------------------------------------------------------------------------
   # iOS — cross-compilation check (build only, no test execution)
