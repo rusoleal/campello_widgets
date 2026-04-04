@@ -218,13 +218,17 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     if (!_dispatcher) return;
     const Widgets::Offset pos = [self pointerOffsetForEvent:event];
     // Scroll deltas are in logical pixels (points), matching pointer coordinates.
+    // Note: On macOS, scrollingDeltaY is positive when scrolling down (with Natural
+    // Scrolling enabled). We negate the values to match the framework's expectation
+    // that positive delta = scroll up (consistent with Windows and the internal
+    // applyScrollDelta logic which adds the delta to the scroll offset).
     Widgets::PointerEvent e;
     e.kind           = Widgets::PointerEventKind::scroll;
     e.pointer_id     = 0;
     e.position       = pos;
     e.pressure       = 0.0f;
-    e.scroll_delta_x = (float)event.scrollingDeltaX;
-    e.scroll_delta_y = (float)event.scrollingDeltaY;
+    e.scroll_delta_x = -(float)event.scrollingDeltaX;
+    e.scroll_delta_y = -(float)event.scrollingDeltaY;
     _dispatcher->handlePointerEvent(e);
 }
 
@@ -275,6 +279,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 
     _renderer->setDevicePixelRatio(static_cast<float>(scale));
     _backendPtr->setViewport(w, h);
+    _backendPtr->setDevicePixelRatio(static_cast<float>(scale));
 
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
     bool rendered = colorView && _renderer->renderFrame(colorView, w, h);

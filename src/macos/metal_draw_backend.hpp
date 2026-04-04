@@ -125,11 +125,15 @@ public:
     // ------------------------------------------------------------------
 
     void setViewport(float w, float h) noexcept { vp_w_ = w; vp_h_ = h; }
+    void setDevicePixelRatio(float dpr) noexcept { dpr_ = dpr; }
 
     /** Returns true if all render pipelines were successfully compiled. */
     bool isValid() const noexcept { return rect_pipeline_ != nullptr; }
 
 private:
+    // Returns false if the clip is empty — callers must skip the draw in that case.
+    bool applyScissor(const Rect& clip, campello_gpu::RenderPassEncoder& encoder);
+
     void drawFilledRect(
         float x, float y, float w, float h,
         const Color& color,
@@ -187,6 +191,7 @@ private:
 
     float vp_w_ = 800.0f;
     float vp_h_ = 600.0f;
+    float dpr_  = 1.0f;
 };
 
 } // namespace systems::leal::campello_widgets

@@ -5,6 +5,19 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-04-04
+
+### Fixed
+
+- **macOS GPU scissor clipping** — the Metal draw backend was silently ignoring the `clip` parameter (`/*clip*/`) in every draw function (`drawRect`, `drawCircle`, `drawOval`, `drawRRect`, `drawLine`, `drawText`, `drawImage`, `drawBackdropFilter`), meaning no widget that relied on clipping produced correct visual output on macOS. All clipping widgets are now correctly scissored on the GPU:
+  - `ClipRect`, `ClipRRect`, `ClipOval`, `ClipPath`
+  - `ListView`, `GridView`, `SingleChildScrollView`, `PageView`
+  - `TableView`, `TreeView`
+  - `TextField` (cursor/content clipping)
+  - `AnimatedSize` and any other widget using `canvas.clipRect()`
+- **Metal crash on empty clip rect** — when a scrollable widget scrolled a child fully out of the viewport, the clip intersection produced a zero-sized `Rect`, which was passed to `MTLRenderCommandEncoder::setScissorRect` with `width=0`/`height=0`. Metal requires both dimensions ≥ 1; passing zero caused undefined behaviour and a crash on the GPU completion queue (`MTLIOAccelPooledResourceRelease`). Draw calls are now skipped entirely when the scissor rect is degenerate after viewport clamping.
+- `MetalDrawBackend::setDevicePixelRatio(float)` added so the backend converts logical-point clip rects to physical pixels correctly on Retina displays
+
 ## [0.2.0] - 2026-04-03
 
 ### Added

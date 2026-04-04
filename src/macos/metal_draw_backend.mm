@@ -23,6 +23,7 @@
 
 #import "shaders/metal_widgets.h"
 
+#include <algorithm>
 #include <vector>
 #include <cmath>
 #include <cstring>
@@ -317,6 +318,36 @@ MetalDrawBackend::MetalDrawBackend(
 }
 
 // ---------------------------------------------------------------------------
+// applyScissor — converts the logical-point clip rect to physical pixels and
+// sets it as the encoder's scissor rect before issuing a draw call.
+// ---------------------------------------------------------------------------
+
+bool MetalDrawBackend::applyScissor(const Rect& clip, GPU::RenderPassEncoder& encoder)
+{
+    // Convert from logical points to physical pixels.
+    float x = clip.x      * dpr_;
+    float y = clip.y      * dpr_;
+    float w = clip.width  * dpr_;
+    float h = clip.height * dpr_;
+
+    // Clamp to the viewport so the scissor is always within drawable bounds.
+    const float rx = std::min(x + w, vp_w_);
+    const float by = std::min(y + h, vp_h_);
+    x = std::max(0.0f, x);
+    y = std::max(0.0f, y);
+    w = std::max(0.0f, rx - x);
+    h = std::max(0.0f, by - y);
+
+    // Metal requires width >= 1 and height >= 1. Skip the draw if the clip
+    // region is empty (fully scrolled out of view or zero-sized intersection).
+    if (w < 1.0f || h < 1.0f)
+        return false;
+
+    encoder.setScissorRect(x, y, w, h);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
 // drawRect
 // ---------------------------------------------------------------------------
 
@@ -349,10 +380,11 @@ void MetalDrawBackend::drawFilledRect(
 void MetalDrawBackend::drawRect(
     const DrawRectCmd&    cmd,
     const Matrix4&        transform,
-    const Rect&           /*clip*/,
+    const Rect&           clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!rect_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
 
     // Transform the four corners and use their axis-aligned bounding box.
     // This is exact for translate and scale transforms. For rotation the AABB
@@ -429,10 +461,11 @@ void MetalDrawBackend::drawShape(
 void MetalDrawBackend::drawCircle(
     const DrawCircleCmd&    cmd,
     const Matrix4&          transform,
-    const Rect&             /*clip*/,
+    const Rect&             clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!shape_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
 
     // Apply transform to center
     auto tc = transform * vm::Vector4<float>(cmd.center.x, cmd.center.y, 0.0f, 1.0f);
@@ -453,10 +486,11 @@ void MetalDrawBackend::drawCircle(
 void MetalDrawBackend::drawOval(
     const DrawOvalCmd&      cmd,
     const Matrix4&          transform,
-    const Rect&             /*clip*/,
+    const Rect&             clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!shape_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
 
     auto tl = transform * vm::Vector4<float>(cmd.rect.left(), cmd.rect.top(), 0.0f, 1.0f);
     auto br = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.bottom(), 0.0f, 1.0f);
@@ -472,10 +506,11 @@ void MetalDrawBackend::drawOval(
 void MetalDrawBackend::drawRRect(
     const DrawRRectCmd&     cmd,
     const Matrix4&          transform,
-    const Rect&             /*clip*/,
+    const Rect&             clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!shape_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
 
     auto tl = transform * vm::Vector4<float>(cmd.rrect.rect.left(), cmd.rrect.rect.top(), 0.0f, 1.0f);
     auto br = transform * vm::Vector4<float>(cmd.rrect.rect.right(), cmd.rrect.rect.bottom(), 0.0f, 1.0f);
@@ -495,10 +530,11 @@ void MetalDrawBackend::drawRRect(
 void MetalDrawBackend::drawLine(
     const DrawLineCmd&      cmd,
     const Matrix4&          transform,
-    const Rect&             /*clip*/,
+    const Rect&             clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!line_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
 
     auto tp1 = transform * vm::Vector4<float>(cmd.p1.x, cmd.p1.y, 0.0f, 1.0f);
     auto tp2 = transform * vm::Vector4<float>(cmd.p2.x, cmd.p2.y, 0.0f, 1.0f);
@@ -578,11 +614,12 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
 void MetalDrawBackend::drawText(
     const DrawTextCmd&    cmd,
     const Matrix4&        transform,
-    const Rect&           /*clip*/,
+    const Rect&           clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
     if (cmd.span.text.empty()) return;
+    if (!applyScissor(clip, encoder)) return;
 
     // Transform the logical origin to physical pixels.
     auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
@@ -697,11 +734,12 @@ void MetalDrawBackend::drawText(
 void MetalDrawBackend::drawImage(
     const DrawImageCmd&   cmd,
     const Matrix4&        transform,
-    const Rect&           /*clip*/,
+    const Rect&           clip,
     GPU::RenderPassEncoder& encoder)
 {
     if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
     if (!cmd.texture) return;
+    if (!applyScissor(clip, encoder)) return;
 
     // Apply the current transform (which includes the DPR scale) to the
     // destination rect so the quad lands in physical pixels.
@@ -922,10 +960,11 @@ void MetalDrawBackend::drawBackdropFilter(
     const DrawBackdropFilterBeginCmd&      cmd,
     std::shared_ptr<GPU::Texture>          blurred_source,
     const Matrix4&                         transform,
-    const Rect&                            /*clip*/,
+    const Rect&                            clip,
     GPU::RenderPassEncoder&                encoder)
 {
     if (!blurred_source) return;
+    if (!applyScissor(clip, encoder)) return;
 
     // Transform the logical bounds to physical pixels.
     auto tl = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);

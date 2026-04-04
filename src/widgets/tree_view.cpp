@@ -53,6 +53,19 @@ namespace systems::leal::campello_widgets
 
         void update(WidgetRef new_widget) override
         {
+            // Unmount all currently mounted rows so they get rebuilt with the
+            // updated row_builder. This is necessary because performBuild()
+            // skips already-mounted rows, which means selection changes (or
+            // any other row_builder update) would not be reflected visually.
+            auto& rv = renderTreeView();
+            for (auto& [idx, elem] : row_elements_)
+            {
+                if (elem) elem->unmount();
+                rv.removeRowBox(idx);
+            }
+            row_elements_.clear();
+            last_total_rows_ = -1;
+
             RenderObjectElement::update(std::move(new_widget));
             wireCallback();
             wireController();

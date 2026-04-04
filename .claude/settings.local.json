@@ -16,7 +16,9 @@
       "Bash(/Users/rubenleal/Projects/campello_widgets/build/tests/campello_widgets_tests --gtest_filter=\"VisualFidelity.SimpleColumn\")",
       "Bash(/Users/rubenleal/Projects/campello_widgets/build/darwin_test/tests/campello_widgets_tests --gtest_filter=\"VisualFidelity.SimpleColumn\")",
       "Bash(bash build.sh darwin)",
-      "Bash(find /Users/rubenleal/Projects/campello_widgets -name *debug* -o -name *overlay* -o -name *fps* -o -name *perf*)"
+      "Bash(find /Users/rubenleal/Projects/campello_widgets -name *debug* -o -name *overlay* -o -name *fps* -o -name *perf*)",
+      "Bash(cmake --build build/darwin --target campello_widgets_macos_tree_view)",
+      "Bash(cmake --build build/darwin)"
     ]
   }
 }
