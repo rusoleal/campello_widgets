@@ -205,8 +205,9 @@ namespace systems::leal::campello_widgets
         RenderObject::setActiveBackend(draw_backend_.get());
         RenderObject::setActiveDevicePixelRatio(device_pixel_ratio_);
         root_->layout(screen_constraints);
-        RenderObject::setActiveBackend(nullptr);
-        RenderObject::setActiveDevicePixelRatio(1.0f);
+        // Note: We don't clear the backend here because it's needed for text
+        // measurement during hit testing (e.g., TextField cursor positioning).
+        // The backend pointer remains valid for the lifetime of the Renderer.
     }
 
     DrawList Renderer::generateDrawList(float viewport_width, float viewport_height)
@@ -214,10 +215,18 @@ namespace systems::leal::campello_widgets
         if (!root_) return {};
 
         // Headless PaintContext: collects draw commands without a GPU encoder.
+        // The backend must be active during paint so that render objects that call
+        // measureText() (e.g. RenderTextField for cursor/selection positioning)
+        // get real metrics instead of the fallback estimate.
         PaintContext ctx(viewport_width, viewport_height);
+        // Backend and DPR are already set from layoutPass, but we set them again
+        // in case layoutPass was skipped.
+        RenderObject::setActiveBackend(draw_backend_.get());
         RenderObject::setActiveDevicePixelRatio(device_pixel_ratio_);
         root_->paint(ctx, Offset{view_insets_.left, view_insets_.top});
-        RenderObject::setActiveDevicePixelRatio(1.0f);
+        // Note: We don't clear the backend here because it's needed for text
+        // measurement during hit testing (e.g., TextField cursor positioning).
+        // The backend pointer remains valid for the lifetime of the Renderer.
 
         if (DebugFlags::showPerformanceOverlay)
             paintPerformanceOverlay(ctx, viewport_width, viewport_height);

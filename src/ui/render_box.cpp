@@ -1,14 +1,18 @@
 #include <campello_widgets/ui/render_box.hpp>
 
+#include <iostream>
+
 namespace systems::leal::campello_widgets
 {
 
     void RenderBox::setChild(std::shared_ptr<RenderBox> child) noexcept
     {
+        std::cerr << "[RenderBox] setChild: old=" << child_.get() << " new=" << child.get() << " this=" << this << "\n";
         if (child_) child_->setParent(nullptr);
         child_ = std::move(child);
         if (child_) child_->setParent(this);
         markNeedsLayout();
+        std::cerr << "[RenderBox] setChild done, marked needs layout\n";
     }
 
     Size RenderBox::layoutChild(RenderBox& child, const BoxConstraints& constraints)

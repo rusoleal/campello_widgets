@@ -94,6 +94,14 @@
 #include <campello_widgets/widgets/text.hpp>
 #include <campello_widgets/widgets/rich_text.hpp>
 #include <campello_widgets/widgets/image.hpp>
+
+// Image loading infrastructure
+#include <campello_widgets/ui/image_provider.hpp>
+#include <campello_widgets/ui/image_cache.hpp>
+#include <campello_widgets/ui/image_loader.hpp>
+#include <campello_widgets/ui/http_client.hpp>
+#include <campello_widgets/widgets/image_widget.hpp>
+
 #include <campello_widgets/widgets/scaffold.hpp>
 #include <campello_widgets/widgets/safe_area.hpp>
 

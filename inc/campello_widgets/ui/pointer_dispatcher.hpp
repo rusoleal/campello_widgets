@@ -113,6 +113,27 @@ namespace systems::leal::campello_widgets
         /** @brief Returns the dispatcher set for the current session, or nullptr. */
         static PointerDispatcher* activeDispatcher() noexcept;
 
+        /**
+         * @brief Marks a pointer as captured by a specific render box.
+         * When captured, only the capturing box receives events for this pointer.
+         */
+        void capturePointer(int32_t pointer_id, RenderBox* box);
+
+        /**
+         * @brief Releases a captured pointer.
+         */
+        void releasePointer(int32_t pointer_id);
+
+        /**
+         * @brief Returns true if the given pointer is captured by any box.
+         */
+        bool isPointerCaptured(int32_t pointer_id) const;
+
+        /**
+         * @brief Returns the box that captured the given pointer, or nullptr.
+         */
+        RenderBox* getCapturingBox(int32_t pointer_id) const;
+
     private:
         struct ActivePointer
         {
@@ -126,6 +147,7 @@ namespace systems::leal::campello_widgets
         std::unordered_map<RenderBox*, Handler>          handlers_;
         std::unordered_map<RenderBox*, TickHandler>      tick_handlers_;
         std::vector<RenderBox*>                          last_hover_path_;
+        std::unordered_map<int32_t, RenderBox*>          captured_pointers_;  ///< pointer_id -> capturing box
 
         static PointerDispatcher* s_active_dispatcher_;
     };

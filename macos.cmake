@@ -21,6 +21,7 @@ target_link_libraries(campello_widgets
         campello_gpu
         campello_input
         vector_math
+        campello_image
     PRIVATE
         "-framework Cocoa"
         "-framework Metal"
@@ -28,6 +29,12 @@ target_link_libraries(campello_widgets
         "-framework CoreText"
         "-framework CoreGraphics"
         "-framework Foundation"
+        "-framework CFNetwork"
+        "-framework CoreFoundation"
 )
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)
+
+# Disable unity build for campello_widgets - it contains .mm (Objective-C++) files
+# that cannot be combined with regular C++ files in a unity build
+set_target_properties(campello_widgets PROPERTIES UNITY_BUILD OFF)

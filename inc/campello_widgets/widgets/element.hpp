@@ -137,6 +137,21 @@ namespace systems::leal::campello_widgets
          */
         RenderObjectElement* findDescendantRenderObjectElement() noexcept;
 
+        /**
+         * @brief Called when a descendant element has replaced its child with a
+         *        different widget type, potentially producing a new RenderObject.
+         *
+         * The default implementation propagates the notification upward to the
+         * parent element. SingleChildRenderObjectElement overrides this to call
+         * syncChildRenderObject() and stop propagation.
+         *
+         * This allows StatefulElement to notify ancestor render-object elements
+         * to re-wire their child render objects when setState() causes the built
+         * subtree to change structure (e.g., loading indicator → image widget).
+         */
+        virtual void onDescendantRenderObjectChanged();
+
+
     protected:
         /**
          * @brief Hook called after inherited_widgets_ is copied from parent

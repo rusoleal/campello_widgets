@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22.1)
 
-project(campello_widgets VERSION 0.2.1 LANGUAGES CXX)
+project(campello_widgets VERSION 0.2.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,9 +11,19 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_TESTS            "Build universal tests (no GPU required)"       OFF)
 option(BUILD_INTEGRATION_TESTS "Build platform-specific integration tests"   OFF)
 option(BUILD_EXAMPLES         "Build example applications"                    OFF)
+option(ENABLE_UNITY_BUILD     "Enable Unity Build for faster compilation"     ON)
 
 if(BUILD_INTEGRATION_TESTS)
     set(BUILD_TESTS ON)
+endif()
+
+# ---------------------------------------------------------------------------
+# Unity Build configuration
+# ---------------------------------------------------------------------------
+if(ENABLE_UNITY_BUILD)
+    set(CMAKE_UNITY_BUILD ON)
+    set(CMAKE_UNITY_BUILD_BATCH_SIZE 16)
+    message(STATUS "Unity Build enabled (batch size: ${CMAKE_UNITY_BUILD_BATCH_SIZE})")
 endif()
 
 # ---------------------------------------------------------------------------
@@ -30,6 +40,7 @@ configure_file(
 include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/campello_gpu.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/campello_input.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/vector_math.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/campello_image.cmake)
 
 # ---------------------------------------------------------------------------
 # Platform-specific build

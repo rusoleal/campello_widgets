@@ -188,6 +188,20 @@ namespace systems::leal::campello_widgets
         /** @brief Returns the current view insets. */
         EdgeInsets viewInsets() const noexcept { return view_insets_; }
 
+        /**
+         * @brief Forces a full refresh of the widget tree.
+         *
+         * Marks the root render object as needing both layout and paint.
+         * Call this when global rendering flags change (e.g., debug overlays).
+         */
+        void forceRefresh()
+        {
+            if (root_) {
+                root_->markNeedsLayout();
+                root_->markNeedsPaint();
+            }
+        }
+
     private:
         void layoutPass(float viewport_width, float viewport_height);
 

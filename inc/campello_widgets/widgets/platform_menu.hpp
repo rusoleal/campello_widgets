@@ -65,6 +65,9 @@ namespace systems::leal::campello_widgets
         /** @brief Whether this item is enabled (clickable). */
         bool enabled = true;
 
+        /** @brief Whether this item shows a checkmark (toggle state). */
+        bool checked = false;
+
         PlatformMenuItemLabel() = default;
         explicit PlatformMenuItemLabel(std::string lbl)
             : label(std::move(lbl))
@@ -82,6 +85,8 @@ namespace systems::leal::campello_widgets
         static PlatformMenuItemRef create(std::string label);
         static PlatformMenuItemRef create(std::string label, std::function<void()> on_selected);
         static PlatformMenuItemRef create(std::string label, std::string shortcut, std::function<void()> on_selected);
+        static PlatformMenuItemRef create(std::string label, std::string shortcut, bool checked, std::function<void()> on_selected);
+        static PlatformMenuItemRef create(std::string label, bool checked, std::function<void()> on_selected);
     };
 
     /**

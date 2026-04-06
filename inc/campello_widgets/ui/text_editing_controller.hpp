@@ -16,6 +16,9 @@ namespace systems::leal::campello_widgets
      * The TextField syncs its display to the controller's state and calls
      * the controller's mutating methods in response to user input.
      *
+     * Supports IME (Input Method Editor) composition for entering complex
+     * characters like accented letters (é, ñ) and CJK text.
+     *
      * Typical use:
      * @code
      * auto ctrl = std::make_shared<TextEditingController>();
@@ -81,6 +84,74 @@ namespace systems::leal::campello_widgets
         void deleteForward();
 
         // ------------------------------------------------------------------
+        // IME Composition (Input Method Editor support)
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Returns true if there is an active IME composition in progress.
+         * 
+         * When composing, the composing range indicates the text currently being
+         * composed. This text is typically displayed with an underline and can be
+         * modified by the IME until the user confirms the composition.
+         */
+        bool isComposing() const noexcept { return composing_start_ >= 0; }
+
+        /** @brief Start of the composing range, or -1 if not composing. */
+        int composingStart() const noexcept { return composing_start_; }
+
+        /** @brief End of the composing range, or -1 if not composing. */
+        int composingEnd() const noexcept { return composing_end_; }
+
+        /**
+         * @brief Returns the current composing text, or empty string if not composing.
+         */
+        std::string composingText() const;
+
+        /**
+         * @brief Begins a new IME composition at the current cursor position.
+         * 
+         * This is called by the platform when the user starts typing a composed
+         * character (e.g., pressing a dead key like ´ for accents).
+         */
+        void beginComposing();
+
+        /**
+         * @brief Updates the composing text.
+         * 
+         * Replaces the current composing range with the new text and adjusts
+         * the selection to be at the end of the composing text.
+         * 
+         * @param text The new composing text
+         */
+        void updateComposingText(std::string_view text);
+
+        /**
+         * @brief Sets the composing range and selection within it.
+         * 
+         * @param start Start of composing range (byte offset)
+         * @param end End of composing range (byte offset)
+         * @param selection_offset Selection offset from composing start
+         */
+        void setComposingRange(int start, int end, int selection_offset);
+
+        /**
+         * @brief Commits the current composing text.
+         * 
+         * The composing text becomes regular text and the composing state ends.
+         * This is called when the user confirms the composition (e.g., pressing
+         * Space or Enter).
+         */
+        void commitComposing();
+
+        /**
+         * @brief Cancels the current composition.
+         * 
+         * Removes the composing text and restores the selection to where
+         * composition began.
+         */
+        void cancelComposing();
+
+        // ------------------------------------------------------------------
         // Listener API
         // ------------------------------------------------------------------
 
@@ -99,6 +170,10 @@ namespace systems::leal::campello_widgets
         std::string text_;
         int selection_start_ = 0;
         int selection_end_   = 0;
+
+        // IME composition state: -1 means not composing
+        int composing_start_ = -1;
+        int composing_end_   = -1;
 
         uint64_t next_listener_id_ = 1;
         std::vector<std::pair<uint64_t, std::function<void()>>> listeners_;

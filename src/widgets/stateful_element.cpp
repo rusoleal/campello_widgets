@@ -43,7 +43,14 @@ namespace systems::leal::campello_widgets
     void StatefulElement::performBuild()
     {
         WidgetRef built = state_->build(*this);
+        auto old_child  = child_;
         child_          = updateChild(child_, std::move(built), this);
+
+        // When the child element is replaced with a different type, a new RenderObject
+        // is created but the ancestor SingleChildRenderObjectElement still holds a
+        // reference to the old one. Propagate upward so it re-syncs its child pointer.
+        if (child_ != old_child && parent_)
+            parent_->onDescendantRenderObjectChanged();
     }
 
 } // namespace systems::leal::campello_widgets

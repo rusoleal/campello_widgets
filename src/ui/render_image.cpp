@@ -5,6 +5,7 @@
 #include <campello_gpu/texture.hpp>
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 
 namespace systems::leal::campello_widgets
 {
@@ -12,6 +13,7 @@ namespace systems::leal::campello_widgets
     void RenderImage::setTexture(
         std::shared_ptr<campello_gpu::Texture> texture) noexcept
     {
+        std::cerr << "[RenderImage] setTexture: old=" << texture_.get() << " new=" << texture.get() << "\n";
         texture_ = std::move(texture);
         markNeedsPaint();
     }
@@ -56,18 +58,31 @@ namespace systems::leal::campello_widgets
             const float h = std::isinf(constraints_.max_height) ? 0.0f : constraints_.max_height;
             size_ = constraints_.constrain(Size{w, h});
         }
+        // Force a minimum size for debugging
+        if (size_.width <= 0) size_.width = 100;
+        if (size_.height <= 0) size_.height = 100;
+        std::cerr << "[RenderImage] performLayout: size=" << size_.width << "x" << size_.height << "\n";
     }
 
     void RenderImage::performPaint(PaintContext& context, const Offset& offset)
     {
-        if (!texture_) return;
+        if (!texture_) {
+            std::cerr << "[RenderImage] No texture!\n";
+            return;
+        }
 
         const float bw = size_.width;
         const float bh = size_.height;
         const float tw = static_cast<float>(texture_->getWidth());
         const float th = static_cast<float>(texture_->getHeight());
 
-        if (bw <= 0.0f || bh <= 0.0f || tw <= 0.0f || th <= 0.0f) return;
+        std::cerr << "[RenderImage] Paint: box=" << bw << "x" << bh 
+                  << " tex=" << tw << "x" << th << " offset=" << offset.x << "," << offset.y << "\n";
+
+        if (bw <= 0.0f || bh <= 0.0f || tw <= 0.0f || th <= 0.0f) {
+            std::cerr << "[RenderImage] Invalid sizes, skipping\n";
+            return;
+        }
 
         // Normalized full-texture source rect
         Rect src = Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f);
@@ -144,6 +159,9 @@ namespace systems::leal::campello_widgets
 
         auto& canvas = context.canvas();
 
+        std::cerr << "[RenderImage] Drawing image: src=" << src.x << "," << src.y << " " << src.width << "x" << src.height
+                  << " dst=" << dst.x << "," << dst.y << " " << dst.width << "x" << dst.height << "\n";
+
         canvas.save();
         if (opacity_ < 1.0f)
             canvas.setOpacity(opacity_);
@@ -151,6 +169,8 @@ namespace systems::leal::campello_widgets
             canvas.clipRect(Rect::fromOffsetAndSize(offset, size_));
         canvas.drawImage(texture_, src, dst);
         canvas.restore();
+        
+        std::cerr << "[RenderImage] Draw call issued\n";
     }
 
 } // namespace systems::leal::campello_widgets

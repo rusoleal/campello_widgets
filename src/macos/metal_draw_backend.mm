@@ -1,5 +1,7 @@
 #import "metal_draw_backend.hpp"
 
+#include <iostream>
+
 #import <campello_gpu/device.hpp>
 #import <campello_gpu/render_pass_encoder.hpp>
 #import <campello_gpu/texture.hpp>
@@ -595,15 +597,20 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
         NSAttributedString *attrStr =
             [[NSAttributedString alloc] initWithString:nsText attributes:attrs];
 
-        CTFramesetterRef framesetter =
-            CTFramesetterCreateWithAttributedString(
-                (__bridge CFAttributedStringRef)attrStr);
-        CGSize fitSize = CTFramesetterSuggestFrameSizeWithConstraints(
-            framesetter, CFRangeMake(0, 0), nullptr,
-            CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX), nullptr);
-        CFRelease(framesetter);
+        // Use CTLine instead of CTFramesetter to get proper width including trailing whitespace.
+        // CTFramesetterSuggestFrameSizeWithConstraints excludes trailing whitespace,
+        // which causes cursor positioning issues when typing spaces.
+        CTLineRef line = CTLineCreateWithAttributedString(
+            (__bridge CFAttributedStringRef)attrStr);
+        
+        CGFloat ascent, descent, leading;
+        double width = CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+        CFRelease(line);
 
-        return Size{ (float)fitSize.width, (float)fitSize.height };
+        // Height is ascent + descent + leading (line gap)
+        CGFloat height = ascent + descent + leading;
+
+        return Size{ (float)width, (float)height };
     }
 }
 
@@ -664,14 +671,16 @@ void MetalDrawBackend::drawText(
         NSAttributedString *attrStr =
             [[NSAttributedString alloc] initWithString:nsText attributes:attrs];
 
-        // Measure
-        CTFramesetterRef framesetter =
-            CTFramesetterCreateWithAttributedString(
-                (__bridge CFAttributedStringRef)attrStr);
-        CGSize fitSize = CTFramesetterSuggestFrameSizeWithConstraints(
-            framesetter, CFRangeMake(0, 0), nullptr,
-            CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX), nullptr);
-        CFRelease(framesetter);
+        // Measure using CTLine to match measureText() and include trailing whitespace.
+        // CTFramesetterSuggestFrameSizeWithConstraints excludes trailing whitespace
+        // which would cause misalignment between rendered text and cursor position.
+        CTLineRef measureLine = CTLineCreateWithAttributedString(
+            (__bridge CFAttributedStringRef)attrStr);
+        CGFloat ascent, descent, leading;
+        double width = CTLineGetTypographicBounds(measureLine, &ascent, &descent, &leading);
+        CFRelease(measureLine);
+        
+        CGSize fitSize = CGSizeMake((CGFloat)width, ascent + descent + leading);
 
         if (fitSize.width <= 0.0 || fitSize.height <= 0.0) return;
 
@@ -680,10 +689,8 @@ void MetalDrawBackend::drawText(
         uint32_t texH = (uint32_t)ceil(fitSize.height) + 2;
 
         // Compute baseline offset: CoreText uses Quartz coords (y+ up)
-        CTFontRef measureFont = CTFontCreateWithName(
-            (__bridge CFStringRef)family, (CGFloat)physicalFontSize, nullptr);
-        CGFloat descent = fabs(CTFontGetDescent(measureFont));
-        CFRelease(measureFont);
+        // Reuse the descent from CTLineGetTypographicBounds above.
+        CGFloat fontDescent = fabs(descent);
 
         // Allocate BGRA8 pixel buffer
         std::vector<uint8_t> pixels(texW * texH * 4, 0);
@@ -700,7 +707,7 @@ void MetalDrawBackend::drawText(
         CGContextSetTextMatrix(cgCtx, CGAffineTransformIdentity);
         CTLineRef line = CTLineCreateWithAttributedString(
             (__bridge CFAttributedStringRef)attrStr);
-        CGContextSetTextPosition(cgCtx, 1.0, descent + 1.0);
+        CGContextSetTextPosition(cgCtx, 1.0, fontDescent + 1.0);
         CTLineDraw(line, cgCtx);
         CFRelease(line);
         CGContextRelease(cgCtx);
@@ -766,6 +773,14 @@ void MetalDrawBackend::drawTexturedQuad(
     float opacity,
     GPU::RenderPassEncoder&        encoder)
 {
+    std::cerr << "[MetalDrawBackend] drawTexturedQuad: tex=" << texture.get() 
+              << " dst=" << dst_x << "," << dst_y << " " << dst_w << "x" << dst_h
+              << " uv=" << src_u0 << "," << src_v0 << "-" << src_u1 << "," << src_v1 << "\n";
+    
+    if (!quad_pipeline_) { std::cerr << "[MetalDrawBackend] No pipeline!\n"; return; }
+    if (!quad_bgl_) { std::cerr << "[MetalDrawBackend] No bind group layout!\n"; return; }
+    if (!quad_sampler_) { std::cerr << "[MetalDrawBackend] No sampler!\n"; return; }
+    
     // Build bind group for this texture
     GPU::BindGroupDescriptor bgDesc{};
     bgDesc.layout  = quad_bgl_;
@@ -774,7 +789,7 @@ void MetalDrawBackend::drawTexturedQuad(
         GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
     };
     auto bindGroup = device_->createBindGroup(bgDesc);
-    if (!bindGroup) return;
+    if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return; }
 
     // Fill uniform buffer
     QuadUniforms u{};
@@ -798,6 +813,8 @@ void MetalDrawBackend::drawTexturedQuad(
     encoder.setBindGroup(0, bindGroup);
     encoder.setVertexBuffer(0, ubuf);
     encoder.draw(6);
+    
+    std::cerr << "[MetalDrawBackend] Draw call submitted\n";
 }
 
 // ---------------------------------------------------------------------------

@@ -356,6 +356,7 @@ namespace systems::leal::campello_widgets
         
         nsItem.keyEquivalentModifierMask = modifiers;
         nsItem.enabled = item->enabled ? YES : NO;
+        nsItem.state = item->checked ? NSControlStateValueOn : NSControlStateValueOff;
         
         // Register callback if present
         if (item->on_selected) {

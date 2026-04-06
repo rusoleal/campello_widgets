@@ -68,6 +68,11 @@ namespace systems::leal::campello_widgets
         performBuild();
     }
 
+    void Element::onDescendantRenderObjectChanged()
+    {
+        if (parent_) parent_->onDescendantRenderObjectChanged();
+    }
+
     RenderObjectElement* Element::findDescendantRenderObjectElement() noexcept
     {
         if (auto* roe = nearestRenderObjectElement()) return roe;

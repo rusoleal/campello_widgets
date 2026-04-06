@@ -5,6 +5,44 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] - 2026-04-06
+
+### Added
+
+- **Unity Build Support** — new `ENABLE_UNITY_BUILD` CMake option (default ON) for faster compilation; combines source files into batches of 16 to reduce compilation time
+- **IME (Input Method Editor) Support on macOS** — full implementation for entering complex characters:
+  - Accented characters: `´` + `e` → `é`, `` ` `` + `a` → `à`, `~` + `n` → `ñ`
+  - CJK (Chinese/Japanese/Korean) input methods
+  - Emoji picker support (Ctrl+Cmd+Space)
+  - Visual feedback: composing text displayed with underline
+  - `TextEditingController` extended with `isComposing()`, `composingStart()`, `composingEnd()`, `beginComposing()`, `updateComposingText()`, `commitComposing()`, `cancelComposing()`
+  - `TextInputManager` — bridge between platform IME and widget system
+  - macOS `CampelloMTKView` implements `NSTextInputClient` protocol with full method suite (`setMarkedText:`, `unmarkText`, `insertText:`, `hasMarkedText`, `markedRange`, `selectedRange`, `firstRectForCharacterRange:`)
+- **Image Loading and Caching** — integrated `campello_image` dependency (v0.3.1) for cross-platform image loading:
+  - `ImageProvider` — abstract image source interface
+  - `ImageCache` — LRU cache for decoded images with configurable size limits
+  - `ImageLoader` — asynchronous image loading with priority queue
+  - `NetworkImage` — widget for displaying images from URLs with loading states
+  - `ImageWidget` — widget for displaying loaded images with fit modes (cover, contain, fill)
+  - `HTTPClient` — cross-platform HTTP client (macOS/iOS via `NSURLSession`, Windows via WinHTTP, Linux via libcurl, Android via JNI)
+  - Support for JPEG, PNG, BMP, TGA, GIF, and WebP formats
+- **New Examples**:
+  - `macos_textfield` — TextField demo with IME composition showcase
+  - `macos_image` — image loading demo with NetworkImage and local assets
+  - `macos_gestures` — gesture detection demo with pan, scale, and tap gestures
+
+### Fixed
+
+- **Unity Build Compilation Errors** — fixed symbol conflicts when unity build is enabled:
+  - `campello_gpu` — disabled unity build due to naming conflicts between `campello_gpu::Device`/`Buffer` and Apple's `MTL::Device`/`MTL::Buffer`
+  - `campello_input` — disabled unity build due to Objective-C++ (`.mm`) files incompatible with C++ unity batches
+  - `campello_widgets` — disabled unity build due to Objective-C++ platform files
+  - `libwebp` (via `campello_image`) — disabled unity build for `sharpyuv`, `webpencode`, `webpdecode`, `webpdspdecode`, `webputilsdecode` targets due to static function name conflicts (`clip()`, `GetPSNR()`, `Shift()`)
+
+### Changed
+
+- **Dependencies** — added `campello_image` v0.3.1 for image loading capabilities
+
 ## [0.2.1] - 2026-04-04
 
 ### Fixed

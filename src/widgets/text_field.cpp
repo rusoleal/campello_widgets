@@ -1,6 +1,7 @@
 #include <campello_widgets/widgets/text_field.hpp>
 #include <campello_widgets/ui/render_text_field.hpp>
 #include <campello_widgets/ui/text_editing_controller.hpp>
+#include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
@@ -34,6 +35,9 @@ namespace systems::leal::campello_widgets
         float       min_height    = 36.0f;
         bool        focused       = false;
         bool        obscure_text  = false;
+        int         max_lines     = 1;
+        int         min_lines     = 1;
+        bool        expands       = false;
 
         std::function<void(const std::string&)> on_changed;
         std::function<void(const std::string&)> on_submitted;
@@ -48,8 +52,21 @@ namespace systems::leal::campello_widgets
 
         void updateRenderObject(RenderObject& ro) const override
         {
-            applyTo(static_cast<RenderTextField&>(ro));
-            static_cast<RenderTextField&>(ro).markNeedsPaint();
+            auto& r = static_cast<RenderTextField&>(ro);
+            bool was_multiline = r.isMultiline();
+            int old_max_lines = r.max_lines;
+            int old_min_lines = r.min_lines;
+            bool old_expands = r.expands;
+            applyTo(r);
+            // If multiline state or line configuration changed, we need relayout
+            if (was_multiline != r.isMultiline() ||
+                old_max_lines != r.max_lines ||
+                old_min_lines != r.min_lines ||
+                old_expands != r.expands) {
+                r.markNeedsLayout();
+            } else {
+                r.markNeedsPaint();
+            }
         }
 
     private:
@@ -69,6 +86,9 @@ namespace systems::leal::campello_widgets
             r.min_height           = min_height;
             r.focused              = focused;
             r.obscure_text         = obscure_text;
+            r.max_lines            = max_lines;
+            r.min_lines            = min_lines;
+            r.expands              = expands;
             r.on_changed           = on_changed;
             r.on_submitted         = on_submitted;
             r.on_tap               = on_tap;
@@ -114,8 +134,32 @@ namespace systems::leal::campello_widgets
             });
 
             // Listen for focus changes → rebuild (border color, cursor visibility)
+            // and register/unregister with TextInputManager for IME support
             focus_node_->on_focus_changed = [this](bool has_focus) {
                 setState([this, has_focus]() { focused_ = has_focus; });
+                
+                // Register/unregister with TextInputManager for IME composition
+                if (auto* tim = TextInputManager::activeManager())
+                {
+                    if (has_focus)
+                    {
+                        TextInputManager::InputTarget target;
+                        target.controller = ctrl_.get();
+                        // TODO: Add get_character_rect callback for IME candidate positioning
+                        tim->registerInputTarget(target);
+                    }
+                    else
+                    {
+                        // Cancel any ongoing composition when losing focus
+                        if (ctrl_->isComposing())
+                        {
+                            ctrl_->commitComposing();
+                        }
+                        tim->unregisterInputTarget();
+                        printf("[TextField] Unregistered from TextInputManager\n");
+                    }
+                }
+                // TextInputManager not available - IME won't work
             };
 
             // Handle keyboard events directly in the State
@@ -128,6 +172,16 @@ namespace systems::leal::campello_widgets
 
         void dispose() override
         {
+            // Unregister from TextInputManager
+            if (auto* tim = TextInputManager::activeManager())
+            {
+                if (ctrl_->isComposing())
+                {
+                    ctrl_->commitComposing();
+                }
+                tim->unregisterInputTarget();
+            }
+            
             if (ctrl_ && ctrl_listener_id_ != 0)
                 ctrl_->removeListener(ctrl_listener_id_);
             focus_node_->on_key           = nullptr;
@@ -159,15 +213,55 @@ namespace systems::leal::campello_widgets
 
             if (new_fn.get() != focus_node_.get())
             {
+                // Unregister old focus node
+                if (auto* tim = TextInputManager::activeManager())
+                {
+                    if (ctrl_->isComposing())
+                    {
+                        ctrl_->commitComposing();
+                    }
+                    tim->unregisterInputTarget();
+                }
+                
                 focus_node_->on_key           = nullptr;
                 focus_node_->on_focus_changed = nullptr;
                 focus_node_ = new_fn;
                 focus_node_->on_focus_changed = [this](bool has_focus) {
                     setState([this, has_focus]() { focused_ = has_focus; });
+                    
+                    // Register/unregister with TextInputManager for IME composition
+                    if (auto* tim = TextInputManager::activeManager())
+                    {
+                        if (has_focus)
+                        {
+                            TextInputManager::InputTarget target;
+                            target.controller = ctrl_.get();
+                            tim->registerInputTarget(target);
+                        }
+                        else
+                        {
+                            if (ctrl_->isComposing())
+                            {
+                                ctrl_->commitComposing();
+                            }
+                            tim->unregisterInputTarget();
+                        }
+                    }
                 };
                 focus_node_->on_key = [this](const KeyEvent& event) -> bool {
                     return handleKey(event);
                 };
+                
+                // If new focus node already has focus, register it
+                if (focus_node_->hasFocus())
+                {
+                    if (auto* tim = TextInputManager::activeManager())
+                    {
+                        TextInputManager::InputTarget target;
+                        target.controller = ctrl_.get();
+                        tim->registerInputTarget(target);
+                    }
+                }
             }
         }
 
@@ -190,6 +284,9 @@ namespace systems::leal::campello_widgets
             proxy->min_height           = w.min_height;
             proxy->focused              = focused_;
             proxy->obscure_text         = w.obscure_text;
+            proxy->max_lines            = w.max_lines;
+            proxy->min_lines            = w.min_lines;
+            proxy->expands              = w.expands;
             proxy->on_changed           = w.on_changed;
             proxy->on_submitted         = w.on_submitted;
             proxy->on_tap               = [this]() { focus_node_->requestFocus(); };
@@ -211,6 +308,8 @@ namespace systems::leal::campello_widgets
             const bool ctrl  = (event.modifiers & KeyModifiers::ctrl)  != 0
                             || (event.modifiers & KeyModifiers::meta)  != 0;
 
+            const bool multiline = widget().isMultiline();
+
             switch (event.key_code)
             {
             case KeyCode::backspace:
@@ -224,8 +323,17 @@ namespace systems::leal::campello_widgets
                 return true;
 
             case KeyCode::enter:
-                if (widget().on_submitted)
+                if (multiline && !ctrl)
+                {
+                    // Multi-line: Insert newline
+                    ctrl_->insertText("\n");
+                    notifyChanged();
+                }
+                else if (widget().on_submitted)
+                {
+                    // Single-line, or multi-line with Ctrl+Enter: Submit
                     widget().on_submitted(ctrl_->text());
+                }
                 return true;
 
             case KeyCode::left:
@@ -263,14 +371,91 @@ namespace systems::leal::campello_widgets
                 return true;
             }
 
+            case KeyCode::up:
+                if (multiline)
+                {
+                    // TODO: Move cursor up one line (requires RenderTextField cooperation)
+                    // For now, move to previous paragraph
+                    int pos = ctrl_->selectionEnd();
+                    const auto& t = ctrl_->text();
+                    // Find start of current line
+                    int lineStart = pos;
+                    while (lineStart > 0 && t[static_cast<size_t>(lineStart - 1)] != '\n') --lineStart;
+                    if (lineStart > 0)
+                    {
+                        // Move to previous line
+                        int prevLineStart = lineStart - 1;
+                        while (prevLineStart > 0 && t[static_cast<size_t>(prevLineStart - 1)] != '\n') --prevLineStart;
+                        int col = pos - lineStart;
+                        int prevLineEnd = lineStart - 1;
+                        int newPos = std::min(prevLineStart + col, prevLineEnd);
+                        ctrl_->setSelection(shift ? ctrl_->selectionStart() : newPos, newPos);
+                    }
+                    return true;
+                }
+                break;
+
+            case KeyCode::down:
+                if (multiline)
+                {
+                    // TODO: Move cursor down one line (requires RenderTextField cooperation)
+                    // For now, move to next paragraph
+                    int pos = ctrl_->selectionEnd();
+                    const auto& t = ctrl_->text();
+                    // Find start of current line
+                    int lineStart = pos;
+                    while (lineStart > 0 && t[static_cast<size_t>(lineStart - 1)] != '\n') --lineStart;
+                    int col = pos - lineStart;
+                    // Find end of current line
+                    int lineEnd = pos;
+                    int sz = static_cast<int>(t.size());
+                    while (lineEnd < sz && t[static_cast<size_t>(lineEnd)] != '\n') ++lineEnd;
+                    if (lineEnd < sz)
+                    {
+                        // Move to next line
+                        int nextLineStart = lineEnd + 1;
+                        int nextLineEnd = nextLineStart;
+                        while (nextLineEnd < sz && t[static_cast<size_t>(nextLineEnd)] != '\n') ++nextLineEnd;
+                        int newPos = std::min(nextLineStart + col, nextLineEnd);
+                        ctrl_->setSelection(shift ? ctrl_->selectionStart() : newPos, newPos);
+                    }
+                    return true;
+                }
+                break;
+
             case KeyCode::home:
-                ctrl_->setSelection(shift ? ctrl_->selectionStart() : 0, 0);
+                if (multiline)
+                {
+                    // Move to start of current line
+                    int pos = ctrl_->selectionEnd();
+                    const auto& t = ctrl_->text();
+                    int lineStart = pos;
+                    while (lineStart > 0 && t[static_cast<size_t>(lineStart - 1)] != '\n') --lineStart;
+                    ctrl_->setSelection(shift ? ctrl_->selectionStart() : lineStart, lineStart);
+                }
+                else
+                {
+                    ctrl_->setSelection(shift ? ctrl_->selectionStart() : 0, 0);
+                }
                 return true;
 
             case KeyCode::end:
             {
-                int end = static_cast<int>(ctrl_->text().size());
-                ctrl_->setSelection(shift ? ctrl_->selectionStart() : end, end);
+                if (multiline)
+                {
+                    // Move to end of current line
+                    int pos = ctrl_->selectionEnd();
+                    const auto& t = ctrl_->text();
+                    int sz = static_cast<int>(t.size());
+                    int lineEnd = pos;
+                    while (lineEnd < sz && t[static_cast<size_t>(lineEnd)] != '\n') ++lineEnd;
+                    ctrl_->setSelection(shift ? ctrl_->selectionStart() : lineEnd, lineEnd);
+                }
+                else
+                {
+                    int end = static_cast<int>(ctrl_->text().size());
+                    ctrl_->setSelection(shift ? ctrl_->selectionStart() : end, end);
+                }
                 return true;
             }
 

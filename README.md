@@ -20,6 +20,8 @@ The library is fully multiplatform and targets:
 |---|---|
 | `campello_gpu` | Graphics rendering backend (multiplatform) |
 | `campello_input` | Input event handling (keyboard, mouse, touch, gamepad) |
+| `campello_image` | Image loading (JPEG, PNG, WebP, GIF, BMP, TGA) |
+| `vector_math` | SIMD-optimized vector and matrix math |
 
 ## Architecture
 
@@ -66,6 +68,30 @@ All draw calls are issued through `campello_gpu`. The RenderObject tree is trave
 
 Input events (pointer, keyboard, touch) are received from `campello_input` and dispatched down the widget tree through a hit-testing pass on the RenderObject tree.
 
+### IME (Input Method Editor)
+
+Full IME support on macOS enables entering complex characters:
+
+- **Accented characters**: `´` + `e` → `é`, `` ` `` + `a` → `à`, `~` + `n` → `ñ`
+- **CJK input**: Chinese, Japanese, Korean character composition
+- **Emoji picker**: System emoji picker integration (Ctrl+Cmd+Space on macOS)
+
+Composing text is visually indicated with an underline. The `TextEditingController` provides methods to interact with the composition state (`isComposing()`, `beginComposing()`, `commitComposing()`, etc.).
+
+### Image Loading
+
+Integrated `campello_image` provides asynchronous image loading with caching:
+
+```cpp
+// Display image from URL
+auto image = NetworkImage::create("https://example.com/photo.jpg");
+
+// Display local image
+auto image = ImageWidget::create(ImageProvider::fromFile("assets/logo.png"));
+```
+
+Supported formats: JPEG, PNG, WebP, GIF, BMP, TGA. Images are decoded asynchronously and cached in memory with an LRU eviction policy.
+
 ## Basic Widgets
 
 | Widget | Description |
@@ -78,6 +104,9 @@ Input events (pointer, keyboard, touch) are received from `campello_input` and d
 | `SizedBox` | Forces a child (or empty space) to a specific size |
 | `Text` | Renders a styled text string |
 | `Image` | Renders a GPU texture |
+| `ImageWidget` | Displays images from files or network with caching |
+| `NetworkImage` | Downloads and displays images from URLs |
+| `TextField` | Editable text input with IME support (accents, CJK) |
 | `GestureDetector` | Wraps a child and listens for pointer/touch gestures |
 | `Scaffold` | Top-level layout structure (background, layers) |
 
@@ -134,11 +163,33 @@ See [FIDELITY_TESTING.md](tests/FIDELITY_TESTING.md) for details.
 
 ## Build System
 
-The project uses CMake with C++20 as the minimum standard. `campello_gpu` and `campello_input` are consumed as CMake package dependencies.
+The project uses CMake with C++20 as the minimum standard. Dependencies are automatically fetched via CMake's `FetchContent`.
+
+```bash
+# Standard build
+cmake -B build -DBUILD_EXAMPLES=ON
+cmake --build build
+
+# With Unity Build for faster compilation (default ON)
+cmake -B build -DENABLE_UNITY_BUILD=ON -DBUILD_EXAMPLES=ON
+cmake --build build
+
+# Disable Unity Build if you encounter issues
+cmake -B build -DENABLE_UNITY_BUILD=OFF -DBUILD_EXAMPLES=ON
+```
+
+### CMake Options
+
+| Option | Default | Description |
+|---|---|---|
+| `BUILD_EXAMPLES` | OFF | Build example applications |
+| `BUILD_TESTS` | OFF | Build unit tests |
+| `ENABLE_UNITY_BUILD` | ON | Enable unity build for faster compilation |
+
+### Consume as Dependency
 
 ```cmake
-find_package(campello_gpu REQUIRED)
-find_package(campello_input REQUIRED)
+find_package(campello_widgets REQUIRED)
 target_link_libraries(my_app PRIVATE campello_widgets)
 ```
 

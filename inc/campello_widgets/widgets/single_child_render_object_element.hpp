@@ -21,6 +21,7 @@ namespace systems::leal::campello_widgets
 
         void update(WidgetRef new_widget) override;
         void unmount() override;
+        void onDescendantRenderObjectChanged() override;
 
         Element* firstChildElement() const noexcept override
         {

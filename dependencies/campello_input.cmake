@@ -19,4 +19,10 @@ if(NOT campello_input_POPULATED)
     include_directories(${campello_input_SOURCE_DIR}/inc)
     add_subdirectory(${campello_input_SOURCE_DIR} ${campello_input_BINARY_DIR} EXCLUDE_FROM_ALL)
     set(BUILD_TESTS ${BUILD_TESTS_SAVED})
+    
+    # Disable unity build for campello_input - it contains .mm (Objective-C++) files
+    # that cannot be combined with regular C++ files in a unity build
+    if(TARGET campello_input)
+        set_target_properties(campello_input PROPERTIES UNITY_BUILD OFF)
+    endif()
 endif()

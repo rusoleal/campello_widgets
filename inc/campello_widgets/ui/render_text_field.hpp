@@ -15,7 +15,7 @@ namespace systems::leal::campello_widgets
     class TextEditingController;
 
     /**
-     * @brief RenderBox that draws a single-line text input and handles input.
+     * @brief RenderBox that draws a text input (single or multi-line) and handles input.
      *
      * RenderTextField registers with PointerDispatcher for tap-to-place-cursor
      * and with the tick mechanism for cursor blinking. Keyboard events are
@@ -24,6 +24,13 @@ namespace systems::leal::campello_widgets
      * The cursor blink period is 530 ms on / 530 ms off. The cursor is always
      * shown (and the blink timer restarted) immediately after any text change
      * or focus gain.
+     *
+     * ## Multi-line support
+     * When max_lines != 1, the text field supports multi-line editing:
+     * - Text wraps to multiple lines
+     * - Vertical scrolling when content exceeds viewport
+     * - Cursor navigation across lines (up/down arrows)
+     * - Newlines inserted via Enter key
      */
     class RenderTextField : public RenderBox
     {
@@ -48,10 +55,15 @@ namespace systems::leal::campello_widgets
         bool focused      = false; ///< Synced from TextFieldState each rebuild
         bool obscure_text = false; ///< Draw bullets instead of characters
 
+        // Multi-line configuration
+        int  max_lines = 1;  ///< 1 = single-line, >1 = multi-line with limit, 0 = unlimited
+        int  min_lines = 1;  ///< Minimum number of lines to show (multi-line only)
+        bool expands   = false; ///< Whether to expand to fill parent (multi-line only)
+
         /** Called after each text change (controller is already updated). */
         std::function<void(const std::string&)> on_changed;
 
-        /** Called when Enter is pressed. */
+        /** Called when Enter is pressed (single-line) or Ctrl+Enter (multi-line). */
         std::function<void(const std::string&)> on_submitted;
 
         /** Called on pointer-down tap so the owning State can request focus. */
@@ -72,23 +84,47 @@ namespace systems::leal::campello_widgets
         /** @brief Reset the blink timer and show the cursor immediately. */
         void resetCursorBlink();
 
+        /** @brief Returns true if this is a multi-line text field. */
+        bool isMultiline() const { return max_lines != 1; }
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);
 
-        /** @brief Pixel width of text[0..byte_end). */
+        // Text measurement helpers
         float measurePrefix(int byte_end) const;
+        float measureText(const std::string& text) const;
+        float textHeight() const;
+        float lineHeight() const;
 
-        /** @brief Returns the character byte-index closest to local x. */
-        int hitTestText(float local_x) const;
+        // Layout helpers for multi-line
+        void layoutMultiline();
+        int  getLineCount() const;
+        int  getLineForPosition(int byte_pos) const;
+        int  getPositionForLine(int line) const;
+        float getLineWidth(int line) const;
 
-        /** @brief Returns the display string (may replace chars with bullets). */
+        // Hit testing
+        int hitTestText(float local_x, float local_y) const;
+        int hitTestSingleLine(float local_x) const;
+
+        // Drawing helpers
         std::string displayText() const;
+        void drawTextLine(PaintContext& ctx, const std::string& line, const Offset& offset, float y);
+        void drawCursor(PaintContext& ctx, float x, float y);
+        void drawSelection(PaintContext& ctx, int sel_start, int sel_end, float y, float line_h);
 
         Offset   global_offset_;    ///< Latched in performPaint for pointer coords
         uint64_t last_blink_ms_  = 0;
         bool     cursor_visible_ = true;
         bool     pressed_        = false; ///< True while pointer is down
+        int32_t  pointer_id_     = 0;      ///< Pointer ID that pressed this field
+
+        // Multi-line state
+        mutable std::vector<std::string> lines_; ///< Cached wrapped lines
+        float scroll_offset_y_ = 0.0f;           ///< Vertical scroll offset
+
+        void applyScrollDelta(float delta);
     };
 
 } // namespace systems::leal::campello_widgets

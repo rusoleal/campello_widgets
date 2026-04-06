@@ -1,6 +1,8 @@
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
 
+#include <iostream>
+
 namespace systems::leal::campello_widgets
 {
 
@@ -28,7 +30,11 @@ namespace systems::leal::campello_widgets
         if (!needs_layout_)
         {
             needs_layout_ = true;
-            if (parent_) parent_->markNeedsLayout();
+            if (parent_) {
+                parent_->markNeedsLayout();
+            } else {
+                std::cerr << "[RenderObject] markNeedsLayout with no parent: this=" << this << "\n";
+            }
         }
         markNeedsPaint();
     }
@@ -44,9 +50,15 @@ namespace systems::leal::campello_widgets
     {
         const bool constraints_changed = !(constraints == constraints_);
 
-        if (!needs_layout_ && !constraints_changed)
+        if (!needs_layout_ && !constraints_changed) {
+            std::cerr << "[RenderObject] layout skipped: needs_layout=" << needs_layout_ 
+                      << " constraints_changed=" << constraints_changed << " this=" << this << "\n";
             return;
+        }
 
+        std::cerr << "[RenderObject] layout running: constraints_changed=" << constraints_changed 
+                  << " this=" << this << "\n";
+        
         const bool must_repaint = constraints_changed;
         constraints_  = constraints;
         needs_layout_ = false;

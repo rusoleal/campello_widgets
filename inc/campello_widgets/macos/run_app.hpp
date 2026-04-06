@@ -39,4 +39,13 @@ namespace systems::leal::campello_widgets
                float        width  = 800.0f,
                float        height = 600.0f);
 
+    /**
+     * @brief Request a full refresh and redraw of the widget tree.
+     *
+     * Forces the entire widget tree to be relaid out and repainted.
+     * Call this when toggling debug overlays or other global rendering flags
+     * that affect how widgets are displayed.
+     */
+    void requestRefresh();
+
 } // namespace systems::leal::campello_widgets

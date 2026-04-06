@@ -17,6 +17,9 @@ target_link_libraries(campello_widgets
         campello_gpu
         campello_input
         vector_math
+        campello_image
+    PRIVATE
+        curl
 )
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)

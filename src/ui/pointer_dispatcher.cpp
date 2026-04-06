@@ -138,12 +138,49 @@ namespace systems::leal::campello_widgets
     void PointerDispatcher::dispatch(
         const std::vector<RenderBox*>& path, const PointerEvent& event)
     {
+        // Check if this pointer is captured by a specific box
+        auto capture_it = captured_pointers_.find(event.pointer_id);
+        if (capture_it != captured_pointers_.end())
+        {
+            // Only dispatch to the capturing box
+            RenderBox* capturing_box = capture_it->second;
+            auto handler_it = handlers_.find(capturing_box);
+            if (handler_it != handlers_.end())
+                handler_it->second(event);
+            return;
+        }
+
+        // Normal dispatch to all handlers in path
         for (RenderBox* box : path)
         {
             auto it = handlers_.find(box);
             if (it != handlers_.end())
                 it->second(event);
         }
+    }
+
+    void PointerDispatcher::capturePointer(int32_t pointer_id, RenderBox* box)
+    {
+        if (box)
+            captured_pointers_[pointer_id] = box;
+    }
+
+    void PointerDispatcher::releasePointer(int32_t pointer_id)
+    {
+        captured_pointers_.erase(pointer_id);
+    }
+
+    bool PointerDispatcher::isPointerCaptured(int32_t pointer_id) const
+    {
+        return captured_pointers_.find(pointer_id) != captured_pointers_.end();
+    }
+
+    RenderBox* PointerDispatcher::getCapturingBox(int32_t pointer_id) const
+    {
+        auto it = captured_pointers_.find(pointer_id);
+        if (it != captured_pointers_.end())
+            return it->second;
+        return nullptr;
     }
 
 } // namespace systems::leal::campello_widgets

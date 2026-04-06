@@ -10,6 +10,7 @@
 #import <campello_widgets/ui/pointer_dispatcher.hpp>
 #import <campello_widgets/ui/key_event.hpp>
 #import <campello_widgets/ui/focus_manager.hpp>
+#import <campello_widgets/ui/text_input_manager.hpp>
 #import <campello_widgets/ui/ticker.hpp>
 
 #import <campello_gpu/device.hpp>
@@ -35,20 +36,24 @@ namespace {
     std::string        gTitle;
     float              gWidth  = 800.0f;
     float              gHeight = 600.0f;
+    MTKView*           gMetalView = nullptr;  // Global access for requestRefresh()
+    std::shared_ptr<Widgets::Renderer> gRenderer;  // Global access for requestRefresh()
 }
 
 // ---------------------------------------------------------------------------
 // MTKView subclass — forwards mouse events to the PointerDispatcher
 // ---------------------------------------------------------------------------
 
-@interface CampelloMTKView : MTKView
+@interface CampelloMTKView : MTKView <NSTextInputClient>
 - (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher;
 - (void)setFocusManager:(Widgets::FocusManager*)focusManager;
+- (void)setTextInputManager:(Widgets::TextInputManager*)textInputManager;
 @end
 
 @implementation CampelloMTKView {
     Widgets::PointerDispatcher* _dispatcher;
     Widgets::FocusManager*      _focusManager;
+    Widgets::TextInputManager*  _textInputManager;
 }
 
 - (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher
@@ -59,6 +64,11 @@ namespace {
 - (void)setFocusManager:(Widgets::FocusManager*)focusManager
 {
     _focusManager = focusManager;
+}
+
+- (void)setTextInputManager:(Widgets::TextInputManager*)textInputManager
+{
+    _textInputManager = textInputManager;
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -191,15 +201,77 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 
 - (void)keyDown:(NSEvent*)event
 {
-    if (!_focusManager) return;
-    Widgets::KeyEvent ke;
-    ke.kind      = event.isARepeat ? Widgets::KeyEventKind::repeat
-                                   : Widgets::KeyEventKind::down;
-    ke.key_code  = macosKeyCodeToKeyCode(event.keyCode);
-    ke.modifiers = macosModifiersToKeyModifiers(event.modifierFlags);
-    NSString* chars = event.characters;
-    ke.character = (chars.length > 0) ? (uint32_t)[chars characterAtIndex:0] : 0u;
-    _focusManager->handleKeyEvent(ke);
+    // For IME (Input Method Editor) support, we route text input through
+    // the NSTextInputClient protocol by calling interpretKeyEvents:.
+    // This allows proper handling of dead keys, accented characters, and CJK input.
+    
+    if (_textInputManager && _textInputManager->hasInputTarget())
+    {
+        // Check if this is a special key that should NOT go through IME
+        // Arrow keys, Escape, Enter, Tab, Function keys, etc. should be handled directly
+        Widgets::KeyCode keyCode = macosKeyCodeToKeyCode(event.keyCode);
+        
+        BOOL isNavigationKey = (keyCode == Widgets::KeyCode::left ||
+                                keyCode == Widgets::KeyCode::right ||
+                                keyCode == Widgets::KeyCode::up ||
+                                keyCode == Widgets::KeyCode::down ||
+                                keyCode == Widgets::KeyCode::home ||
+                                keyCode == Widgets::KeyCode::end ||
+                                keyCode == Widgets::KeyCode::page_up ||
+                                keyCode == Widgets::KeyCode::page_down);
+        
+        BOOL isSpecialKey = (keyCode == Widgets::KeyCode::escape ||
+                             keyCode == Widgets::KeyCode::tab ||
+                             keyCode == Widgets::KeyCode::enter ||
+                             keyCode == Widgets::KeyCode::backspace ||
+                             keyCode == Widgets::KeyCode::delete_forward ||
+                             keyCode == Widgets::KeyCode::f1 ||
+                             keyCode == Widgets::KeyCode::f2 ||
+                             keyCode == Widgets::KeyCode::f3 ||
+                             keyCode == Widgets::KeyCode::f4 ||
+                             keyCode == Widgets::KeyCode::f5 ||
+                             keyCode == Widgets::KeyCode::f6 ||
+                             keyCode == Widgets::KeyCode::f7 ||
+                             keyCode == Widgets::KeyCode::f8 ||
+                             keyCode == Widgets::KeyCode::f9 ||
+                             keyCode == Widgets::KeyCode::f10 ||
+                             keyCode == Widgets::KeyCode::f11 ||
+                             keyCode == Widgets::KeyCode::f12);
+        
+        // If it's a navigation or special key, handle directly
+        if (isNavigationKey || isSpecialKey)
+        {
+            if (_focusManager)
+            {
+                Widgets::KeyEvent ke;
+                ke.kind      = event.isARepeat ? Widgets::KeyEventKind::repeat
+                                               : Widgets::KeyEventKind::down;
+                ke.key_code  = keyCode;
+                ke.modifiers = macosModifiersToKeyModifiers(event.modifierFlags);
+                ke.character = 0;
+                _focusManager->handleKeyEvent(ke);
+            }
+            return;
+        }
+        
+        // Route text input through NSTextInputClient protocol
+        // This will call setMarkedText:, insertText:, unmarkText, etc.
+        [self interpretKeyEvents:@[event]];
+        return;
+    }
+    
+    // No text input target, use regular key handling
+    if (_focusManager)
+    {
+        Widgets::KeyEvent ke;
+        ke.kind      = event.isARepeat ? Widgets::KeyEventKind::repeat
+                                       : Widgets::KeyEventKind::down;
+        ke.key_code  = macosKeyCodeToKeyCode(event.keyCode);
+        ke.modifiers = macosModifiersToKeyModifiers(event.modifierFlags);
+        NSString* chars = event.characters;
+        ke.character = (chars.length > 0) ? (uint32_t)[chars characterAtIndex:0] : 0u;
+        _focusManager->handleKeyEvent(ke);
+    }
 }
 
 - (void)keyUp:(NSEvent*)event
@@ -230,6 +302,271 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     e.scroll_delta_x = -(float)event.scrollingDeltaX;
     e.scroll_delta_y = -(float)event.scrollingDeltaY;
     _dispatcher->handlePointerEvent(e);
+}
+
+// ============================================================================
+// NSTextInputClient Protocol Implementation (for IME support)
+// ============================================================================
+
+/**
+ * Returns YES if the receiver has marked text (is in the middle of a composition).
+ * The marked text is the text currently being composed by the IME.
+ */
+- (BOOL)hasMarkedText
+{
+    if (!_textInputManager) return NO;
+    return _textInputManager->isComposing();
+}
+
+/**
+ * Returns the range of the marked text (composition in progress).
+ * Returns {NSNotFound, 0} if there is no marked text.
+ */
+- (NSRange)markedRange
+{
+    if (!_textInputManager) return NSMakeRange(NSNotFound, 0);
+    
+    auto* controller = _textInputManager->activeController();
+    if (!controller || !controller->isComposing())
+    {
+        return NSMakeRange(NSNotFound, 0);
+    }
+    
+    int start = controller->composingStart();
+    int end = controller->composingEnd();
+    return NSMakeRange(static_cast<NSUInteger>(start), static_cast<NSUInteger>(end - start));
+}
+
+/**
+ * Returns the range of the selected text.
+ */
+- (NSRange)selectedRange
+{
+    if (!_textInputManager) return NSMakeRange(NSNotFound, 0);
+    
+    auto* controller = _textInputManager->activeController();
+    if (!controller) return NSMakeRange(NSNotFound, 0);
+    
+    int start = controller->selectionStart();
+    int end = controller->selectionEnd();
+    return NSMakeRange(static_cast<NSUInteger>(start), static_cast<NSUInteger>(end - start));
+}
+
+/**
+ * Replaces a specified range in the receiver's text storage with the given string
+ * and sets the selection.
+ * 
+ * This is called by the IME to update the composition text as the user types
+ * dead keys or uses CJK input methods.
+ */
+- (void)setMarkedText:(id)string
+        selectedRange:(NSRange)selectedRange
+       replacementRange:(NSRange)replacementRange
+{
+    if (!_textInputManager) return;
+    
+    // Extract the string
+    NSString* markedText;
+    if ([string isKindOfClass:[NSAttributedString class]])
+    {
+        markedText = [(NSAttributedString*)string string];
+    }
+    else
+    {
+        markedText = (NSString*)string;
+    }
+    
+    // Check if this is a standalone dead key character
+    // Dead keys are accent characters that should not be inserted standalone
+    if (markedText.length == 1)
+    {
+        unichar c = [markedText characterAtIndex:0];
+        BOOL isDeadKey = (c == 0x00B4 || // ´ (acute accent)
+                          c == 0x0060 || // ` (grave accent)
+                          c == 0x005E || // ^ (circumflex)
+                          c == 0x007E || // ~ (tilde)
+                          c == 0x00A8 || // ¨ (diaeresis/umlaut)
+                          c == 0x02C6 || // ˆ (modifier letter circumflex)
+                          c == 0x02DC || // ˜ (small tilde)
+                          c == 0x02D9 || // ˙ (dot above)
+                          c == 0x00B8 || // ¸ (cedilla)
+                          c == 0x02CA || // ˊ (modifier letter acute accent)
+                          c == 0x02CB);  // ˋ (modifier letter grave accent)
+        
+        if (isDeadKey)
+        {
+            return;
+        }
+    }
+    
+    // Convert to UTF-8 and update composing text
+    std::string utf8Text = [markedText UTF8String];
+    _textInputManager->updateComposingText(utf8Text);
+}
+
+/**
+ * Unmarks the marked text.
+ * 
+ * Called by the IME when the composition is committed (e.g., user presses
+ * Return or Space to confirm the composed character).
+ */
+- (void)unmarkText
+{
+    if (!_textInputManager) return;
+    _textInputManager->commitComposing();
+}
+
+/**
+ * Returns an array of attribute names recognized by the receiver.
+ * We don't support any special attributes for marked text.
+ */
+- (NSArray*)validAttributesForMarkedText
+{
+    return @[];
+}
+
+/**
+ * Returns the first logical boundary rectangle for characters in the given range.
+ * 
+ * This is used by the IME to position the candidate window (where the user
+ * selects from composition options).
+ */
+- (NSRect)firstRectForCharacterRange:(NSRange)range
+                          actualRange:(NSRangePointer)actualRange
+{
+    if (!_textInputManager) return NSZeroRect;
+    
+    // Get the rect from the text input manager
+    auto rect = _textInputManager->getCharacterRect(static_cast<int>(range.location));
+    
+    // Convert from view coordinates to window coordinates
+    NSRect result = NSMakeRect(rect[0], rect[1], rect[2], rect[3]);
+    
+    // Adjust for view position
+    result = [self convertRect:result toView:nil];
+    
+    if (actualRange)
+    {
+        *actualRange = range;
+    }
+    
+    return result;
+}
+
+/**
+ * Returns an attributed string derived from the given range in the receiver's
+ * text storage.
+ * 
+ * Optional method - we return nil as we don't store attributed text.
+ */
+- (NSAttributedString*)attributedSubstringForProposedRange:(NSRange)range
+                                                actualRange:(NSRangePointer)actualRange
+{
+    // We don't support attributed text, return nil
+    if (actualRange)
+    {
+        *actualRange = NSMakeRange(NSNotFound, 0);
+    }
+    return nil;
+}
+
+/**
+ * Returns the index of the character whose bounding rectangle includes the given point.
+ * 
+ * Optional method for precise cursor positioning.
+ */
+- (NSUInteger)characterIndexForPoint:(NSPoint)point
+{
+    // Not implemented - return NSNotFound
+    return NSNotFound;
+}
+
+/**
+ * Returns the fraction of the distance from the left side of the character to
+ * the right side that a given point lies.
+ * 
+ * Optional method for precise cursor positioning within characters.
+ */
+- (CGFloat)fractionOfDistanceThroughGlyphForPoint:(NSPoint)point
+{
+    return 0.5; // Default: point is in the middle of the character
+}
+
+/**
+ * Returns the window level of the receiver.
+ * 
+ * Optional method - we return the normal window level.
+ */
+- (NSInteger)windowLevel
+{
+    return NSNormalWindowLevel;
+}
+
+/**
+ * Invokes the action specified by the given selector.
+ * 
+ * This is called for special key combinations that the IME doesn't handle.
+ */
+- (void)doCommandBySelector:(SEL)selector
+{
+    // Pass through to the responder chain
+    [super doCommandBySelector:selector];
+}
+
+/**
+ * Inserts the given string into the receiver, replacing the specified content.
+ * 
+ * This is called for direct text insertion (e.g., when the user confirms
+ * composition with the Return key, or pastes text).
+ */
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange
+{
+    if (!_textInputManager) return;
+    
+    // Extract the string from either NSString or NSAttributedString
+    NSString* text;
+    if ([string isKindOfClass:[NSAttributedString class]])
+    {
+        text = [(NSAttributedString*)string string];
+    }
+    else
+    {
+        text = (NSString*)string;
+    }
+    
+    // Check if this is a standalone dead key character that shouldn't be inserted
+    // When a dead key is pressed, macOS may call insertText with just the accent,
+    // then immediately start composition. We should skip the standalone accent.
+    if (text.length == 1 && !_textInputManager->isComposing())
+    {
+        unichar c = [text characterAtIndex:0];
+        // Check for common accent characters that are typically dead keys
+        if (c == 0x00B4 || // ´ (acute accent)
+            c == 0x0060 || // ` (grave accent)
+            c == 0x005E || // ^ (circumflex)
+            c == 0x007E || // ~ (tilde)
+            c == 0x00A8 || // ¨ (diaeresis/umlaut)
+            c == 0x02C6 || // ˆ (modifier letter circumflex)
+            c == 0x02DC || // ˜ (small tilde)
+            c == 0x02D9 || // ˙ (dot above)
+            c == 0x00B8 || // ¸ (cedilla)
+            c == 0x02CA || // ˊ (modifier letter acute accent)
+            c == 0x02CB)   // ˋ (modifier letter grave accent)
+        {
+            return;
+        }
+    }
+    
+    // Convert to UTF-8 and insert
+    std::string utf8Text = [text UTF8String];
+    
+    // If we were composing, commit first
+    if (_textInputManager->isComposing())
+    {
+        _textInputManager->commitComposing();
+    }
+    
+    _textInputManager->insertText(utf8Text);
 }
 
 @end
@@ -313,6 +650,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     std::shared_ptr<Widgets::Element>          _rootElement;
     std::shared_ptr<Widgets::PointerDispatcher>  _dispatcher;
     std::shared_ptr<Widgets::FocusManager>       _focusManager;
+    std::shared_ptr<Widgets::TextInputManager>   _textInputManager;
     std::unique_ptr<Widgets::TickerScheduler>    _tickerScheduler;
 }
 
@@ -364,6 +702,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     }
 
     _metalView = [[CampelloMTKView alloc] initWithFrame:frame device:mtlDevice];
+    gMetalView = _metalView;  // Store globally for requestRefresh()
     _metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
     _metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
     _metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
@@ -399,6 +738,10 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _focusManager = std::make_shared<Widgets::FocusManager>();
     Widgets::FocusManager::setActiveManager(_focusManager.get());
     [_metalView setFocusManager:_focusManager.get()];
+
+    _textInputManager = std::make_shared<Widgets::TextInputManager>();
+    Widgets::TextInputManager::setActiveManager(_textInputManager.get());
+    [_metalView setTextInputManager:_textInputManager.get()];
 
     _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(_tickerScheduler.get());
@@ -445,6 +788,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _renderer = std::make_shared<Widgets::Renderer>(
         _device, renderBox, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
+    gRenderer = _renderer;  // Store globally for requestRefresh()
 
     // -----------------------------------------------------------------------
     // Wire up the MTKView delegate
@@ -581,6 +925,18 @@ int runApp(WidgetRef   root_widget,
         [app run];
     }
     return 0;
+}
+
+void requestRefresh()
+{
+    // Force widget tree refresh (layout + paint)
+    if (gRenderer) {
+        gRenderer->forceRefresh();
+    }
+    // Trigger immediate redraw
+    if (gMetalView) {
+        [gMetalView draw];
+    }
 }
 
 } // namespace systems::leal::campello_widgets

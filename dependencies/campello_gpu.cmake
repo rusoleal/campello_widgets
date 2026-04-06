@@ -23,4 +23,10 @@ if(NOT campello_gpu_POPULATED)
     add_subdirectory(${campello_gpu_SOURCE_DIR} ${campello_gpu_BINARY_DIR} EXCLUDE_FROM_ALL)
     set(BUILD_TESTS "${_saved_BUILD_TESTS}" CACHE BOOL "" FORCE)
     set(BUILD_INTEGRATION_TESTS "${_saved_BUILD_INTEGRATION_TESTS}" CACHE BOOL "" FORCE)
+    
+    # Disable unity build for campello_gpu - it has naming conflicts with Metal's
+    # MTL::Device and MTL::Buffer when using 'using namespace' directives
+    if(TARGET campello_gpu)
+        set_target_properties(campello_gpu PROPERTIES UNITY_BUILD OFF)
+    endif()
 endif()

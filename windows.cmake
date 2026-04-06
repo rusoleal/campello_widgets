@@ -21,6 +21,7 @@ target_link_libraries(campello_widgets
         campello_gpu
         campello_input
         vector_math
+        campello_image
     PRIVATE
         user32
         gdi32
@@ -29,6 +30,7 @@ target_link_libraries(campello_widgets
         dxgi
         d3d11
         d3d12
+        winhttp
 )
 
 target_compile_options(campello_widgets PRIVATE /W4)

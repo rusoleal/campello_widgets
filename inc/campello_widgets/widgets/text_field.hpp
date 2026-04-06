@@ -14,19 +14,34 @@ namespace systems::leal::campello_widgets
     class FocusNode;
 
     /**
-     * @brief A single-line text input field.
+     * @brief A text input field supporting both single-line and multi-line modes.
      *
      * TextField is a controlled widget: text and selection state live in a
      * TextEditingController. If `controller` is null the TextField creates
      * and owns one internally. If `focus_node` is null, an internal FocusNode
      * is created and managed.
      *
+     * ## Single-line mode (default)
+     * - max_lines = 1 (default)
+     * - Enter key triggers on_submitted
+     *
+     * ## Multi-line mode
+     * - max_lines > 1 or max_lines = 0 (unlimited)
+     * - Enter key inserts newlines
+     * - on_submitted is called when Ctrl+Enter is pressed
+     *
      * @code
+     * // Single-line
      * auto ctrl = std::make_shared<TextEditingController>("Hello");
      * auto tf   = std::make_shared<TextField>();
      * tf->controller    = ctrl;
      * tf->placeholder   = "Type here…";
      * tf->on_submitted  = [](const std::string& v) { submit(v); };
+     *
+     * // Multi-line
+     * auto multi = std::make_shared<TextField>();
+     * multi->max_lines = 10;
+     * multi->min_lines = 3;
      * @endcode
      */
     class TextField : public StatefulWidget
@@ -41,7 +56,7 @@ namespace systems::leal::campello_widgets
         /** @brief Called each time the text changes. */
         std::function<void(const std::string&)> on_changed;
 
-        /** @brief Called when the user presses Enter. */
+        /** @brief Called when the user presses Enter (single-line) or Ctrl+Enter (multi-line). */
         std::function<void(const std::string&)> on_submitted;
 
         /** @brief Hint text shown when the field is empty. */
@@ -52,6 +67,31 @@ namespace systems::leal::campello_widgets
 
         /** @brief Text style (font size, color, weight, …). */
         TextStyle style;
+
+        /**
+         * @brief Maximum number of lines to show.
+         *
+         * - 1 (default): Single-line mode
+         * - > 1: Multi-line mode with scroll after max_lines
+         * - 0: Multi-line mode with unlimited lines (expands to content)
+         */
+        int max_lines = 1;
+
+        /**
+         * @brief Minimum number of lines to show.
+         *
+         * The field will be at least tall enough to show this many lines.
+         * Only applies when max_lines != 1.
+         */
+        int min_lines = 1;
+
+        /**
+         * @brief If true and max_lines is unlimited (0), expands to fill parent.
+         *
+         * When true, the field takes all available vertical space.
+         * When false (default), the field sizes to its content.
+         */
+        bool expands = false;
 
         Color fill_color           = Color::white();
         Color border_color         = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.38f);
@@ -80,6 +120,9 @@ namespace systems::leal::campello_widgets
             : controller(std::move(ctrl))
             , placeholder(std::move(place_holder))
         {}
+
+        /** @brief Returns true if this is a multi-line text field. */
+        bool isMultiline() const { return max_lines != 1; }
 
         std::unique_ptr<StateBase> createState() const override;
     };
