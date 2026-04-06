@@ -30,19 +30,13 @@ namespace systems::leal::campello_widgets
 
     PlatformMenuItemRef PlatformMenuItemLabel::create(std::string label, std::string shortcut, std::function<void()> on_selected)
     {
-        return std::make_shared<PlatformMenuItemLabel>(std::move(label), std::move(shortcut), std::move(on_selected));
+        auto result = std::make_shared<PlatformMenuItemLabel>(std::move(label), std::move(shortcut), std::move(on_selected));
+        return result;
     }
 
     PlatformMenuItemRef PlatformMenuItemLabel::create(std::string label, std::string shortcut, bool checked, std::function<void()> on_selected)
     {
         auto item = std::make_shared<PlatformMenuItemLabel>(std::move(label), std::move(shortcut), std::move(on_selected));
-        item->checked = checked;
-        return item;
-    }
-
-    PlatformMenuItemRef PlatformMenuItemLabel::create(std::string label, bool checked, std::function<void()> on_selected)
-    {
-        auto item = std::make_shared<PlatformMenuItemLabel>(std::move(label), std::move(on_selected));
         item->checked = checked;
         return item;
     }

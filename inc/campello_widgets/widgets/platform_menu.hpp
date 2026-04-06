@@ -86,7 +86,6 @@ namespace systems::leal::campello_widgets
         static PlatformMenuItemRef create(std::string label, std::function<void()> on_selected);
         static PlatformMenuItemRef create(std::string label, std::string shortcut, std::function<void()> on_selected);
         static PlatformMenuItemRef create(std::string label, std::string shortcut, bool checked, std::function<void()> on_selected);
-        static PlatformMenuItemRef create(std::string label, bool checked, std::function<void()> on_selected);
     };
 
     /**
