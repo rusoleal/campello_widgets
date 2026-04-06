@@ -18,7 +18,8 @@
 
 #import <vector_math/vector4.hpp>
 
-// stb_image_write — implementation lives in visual_fidelity.cpp (same link target)
+// stb_image_write — implementation included here
+#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "../../tests/third_party/stb_image_write.h"
 
 #include <variant>

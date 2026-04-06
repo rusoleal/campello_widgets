@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `campello_input` — disabled unity build due to Objective-C++ (`.mm`) files incompatible with C++ unity batches
   - `campello_widgets` — disabled unity build due to Objective-C++ platform files
   - `libwebp` (via `campello_image`) — disabled unity build for `sharpyuv`, `webpencode`, `webpdecode`, `webpdspdecode`, `webputilsdecode` targets due to static function name conflicts (`clip()`, `GetPSNR()`, `Shift()`)
+  - **Test files** — extracted shared helper functions (`flutterGoldenExists`, `getFlutterGoldenPath`, `getCppOutputPath`, `goldenFileExists`, `loadGolden`) and constants (`kFidelityWidth`, `kFidelityHeight`) into `tests/universal/visual_fidelity_helpers.hpp` to prevent redefinition errors when test files are combined in unity builds
 
 ### Changed
 

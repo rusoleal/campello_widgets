@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "fidelity.hpp"
+#include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/render_flex.hpp>
 #include <campello_widgets/ui/render_padding.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
@@ -21,20 +22,8 @@
 namespace cw = systems::leal::campello_widgets;
 namespace cwt = systems::leal::campello_widgets::testing;
 
-// ---------------------------------------------------------------------------
-// Helper to check if a golden file exists
-// ---------------------------------------------------------------------------
-
-static bool goldenFileExists(const std::string& name)
-{
-    std::ifstream file(cwt::getGoldensDirectory() + "/" + name);
-    return file.good();
-}
-
-static std::string loadGolden(const std::string& name)
-{
-    return cwt::loadGoldenFile(name);
-}
+using cwt::goldenFileExists;
+using cwt::loadGolden;
 
 // ---------------------------------------------------------------------------
 // Flutter Golden Validation Tests

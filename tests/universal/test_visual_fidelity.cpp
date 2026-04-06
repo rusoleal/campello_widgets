@@ -2,6 +2,7 @@
 #include "visual_fidelity.hpp"
 #include "gpu_visual_renderer.hpp"
 #include "fidelity.hpp"
+#include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/render_flex.hpp>
 #include <campello_widgets/ui/render_padding.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
@@ -25,29 +26,11 @@
 namespace cw = systems::leal::campello_widgets;
 namespace cwt = systems::leal::campello_widgets::testing;
 
-// ----------------------------------------------------------------------------
-// Helper: Check if Flutter golden exists
-// ----------------------------------------------------------------------------
-
-static bool flutterGoldenExists(const std::string& name)
-{
-    std::filesystem::path path = std::filesystem::path(cwt::getFlutterGoldensDirectory()) / name;
-    return std::filesystem::exists(path);
-}
-
-static std::string getFlutterGoldenPath(const std::string& name)
-{
-    return (std::filesystem::path(cwt::getFlutterGoldensDirectory()) / name).string();
-}
-
-static std::string getCppOutputPath(const std::string& name)
-{
-    return (std::filesystem::path(cwt::getCppOutputDirectory()) / name).string();
-}
-
-// Standard resolution for fidelity testing
-constexpr float kFidelityWidth = 1280.0f;
-constexpr float kFidelityHeight = 720.0f;
+using cwt::kFidelityWidth;
+using cwt::kFidelityHeight;
+using cwt::flutterGoldenExists;
+using cwt::getFlutterGoldenPath;
+using cwt::getCppOutputPath;
 
 // ----------------------------------------------------------------------------
 // Visual Fidelity Tests - Layout

@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "fidelity.hpp"
+#include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/canvas.hpp>
 #include <campello_widgets/ui/path.hpp>
 #include <campello_widgets/ui/rrect.hpp>
@@ -10,24 +11,10 @@
 namespace cw = systems::leal::campello_widgets;
 namespace cwt = systems::leal::campello_widgets::testing;
 
-// ---------------------------------------------------------------------------
-// Helper to check if a golden file exists
-// ---------------------------------------------------------------------------
-
-// Standard resolution for fidelity testing (matches visual fidelity tests)
-constexpr float kFidelityWidth = 1280.0f;
-constexpr float kFidelityHeight = 720.0f;
-
-static bool goldenFileExists(const std::string& name)
-{
-    std::ifstream file(cwt::getGoldensDirectory() + "/" + name);
-    return file.good();
-}
-
-static std::string loadGolden(const std::string& name)
-{
-    return cwt::loadGoldenFile(name);
-}
+using cwt::kFidelityWidth;
+using cwt::kFidelityHeight;
+using cwt::goldenFileExists;
+using cwt::loadGolden;
 
 // ---------------------------------------------------------------------------
 // Canvas API Fidelity Tests

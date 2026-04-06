@@ -2,6 +2,7 @@
 #include "visual_fidelity.hpp"
 #include "gpu_visual_renderer.hpp"
 #include "fidelity.hpp"
+#include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/render_image.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
 #include <campello_widgets/ui/render_padding.hpp>
@@ -27,9 +28,11 @@ namespace cw = systems::leal::campello_widgets;
 namespace cwt = systems::leal::campello_widgets::testing;
 namespace cg = systems::leal::campello_gpu;
 
-// Standard resolution for fidelity testing
-constexpr float kFidelityWidth = 1280.0f;
-constexpr float kFidelityHeight = 720.0f;
+using cwt::kFidelityWidth;
+using cwt::kFidelityHeight;
+using cwt::flutterGoldenExists;
+using cwt::getFlutterGoldenPath;
+using cwt::getCppOutputPath;
 
 // ----------------------------------------------------------------------------
 // Helper: Load image from file into a GPU texture
@@ -104,22 +107,6 @@ static std::string getTestImagesDirectory()
 static std::string getTestImagePath(const std::string& filename)
 {
     return (std::filesystem::path(getTestImagesDirectory()) / filename).string();
-}
-
-static bool flutterGoldenExists(const std::string& name)
-{
-    std::filesystem::path path = std::filesystem::path(cwt::getFlutterGoldensDirectory()) / name;
-    return std::filesystem::exists(path);
-}
-
-static std::string getFlutterGoldenPath(const std::string& name)
-{
-    return (std::filesystem::path(cwt::getFlutterGoldensDirectory()) / name).string();
-}
-
-static std::string getCppOutputPath(const std::string& name)
-{
-    return (std::filesystem::path(cwt::getCppOutputDirectory()) / name).string();
 }
 
 // ----------------------------------------------------------------------------
