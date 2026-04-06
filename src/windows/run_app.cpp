@@ -21,8 +21,9 @@
 #include <memory>
 #include <chrono>
 
-namespace GPU     = systems::leal::campello_gpu;
-namespace Widgets = systems::leal::campello_widgets;
+// Namespace aliases - using global qualification to work correctly in Unity Build
+namespace GPU     = ::systems::leal::campello_gpu;
+namespace Widgets = ::systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -389,6 +390,9 @@ static void updateSafeAreaInsets(WindowState* state)
 
 namespace systems::leal::campello_widgets
 {
+    // Namespace aliases for use inside this namespace block
+    namespace GPU     = ::systems::leal::campello_gpu;
+    namespace Widgets = ::systems::leal::campello_widgets;
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget)
 {

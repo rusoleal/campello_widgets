@@ -22,8 +22,9 @@
 
 #include <map>
 
-namespace GPU     = systems::leal::campello_gpu;
-namespace Widgets = systems::leal::campello_widgets;
+// Namespace aliases - using global qualification to work correctly in Unity Build
+namespace GPU     = ::systems::leal::campello_gpu;
+namespace Widgets = ::systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -360,6 +361,9 @@ namespace {
 
 namespace systems::leal::campello_widgets
 {
+    // Namespace aliases for use inside this namespace block
+    namespace GPU     = ::systems::leal::campello_gpu;
+    namespace Widgets = ::systems::leal::campello_widgets;
 
 int runApp(int argc, char** argv, WidgetRef root_widget)
 {

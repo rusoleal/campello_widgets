@@ -23,8 +23,9 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
-namespace GPU     = systems::leal::campello_gpu;
-namespace Widgets = systems::leal::campello_widgets;
+// Namespace aliases - using global qualification to work correctly in Unity Build
+namespace GPU     = ::systems::leal::campello_gpu;
+namespace Widgets = ::systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
 // WidgetSession — owns all per-window campello_widgets state
@@ -257,6 +258,9 @@ static std::unique_ptr<WidgetSession> createSession(
 
 namespace systems::leal::campello_widgets
 {
+    // Namespace aliases for use inside this namespace block
+    namespace GPU     = ::systems::leal::campello_gpu;
+    namespace Widgets = ::systems::leal::campello_widgets;
 
 void runApp(android_app* app, WidgetRef root_widget)
 {

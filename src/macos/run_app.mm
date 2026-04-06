@@ -25,8 +25,9 @@
 // Forward declaration for PlatformMenuDelegate initialization
 extern "C" void campello_widgets_initialize_macos_menu_delegate();
 
-namespace GPU     = systems::leal::campello_gpu;
-namespace Widgets = systems::leal::campello_widgets;
+// Namespace aliases - using global qualification to work correctly in Unity Build
+namespace GPU     = ::systems::leal::campello_gpu;
+namespace Widgets = ::systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
 // Internal state passed from runApp() to the delegates
@@ -904,6 +905,9 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 
 namespace systems::leal::campello_widgets
 {
+    // Namespace aliases for use inside this namespace block
+    namespace GPU     = ::systems::leal::campello_gpu;
+    namespace Widgets = ::systems::leal::campello_widgets;
 
 int runApp(WidgetRef   root_widget,
            const char* title,

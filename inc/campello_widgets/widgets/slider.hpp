@@ -45,10 +45,10 @@ namespace systems::leal::campello_widgets
         {}
         explicit Slider(
             float val,
-            float minimum,
-            float maximum,
+            float min_val,
+            float max_val,
             std::function<void(float)> on_change = nullptr)
-            : value(val), min(minimum), max(maximum), on_changed(std::move(on_change))
+            : value(val), min(min_val), max(max_val), on_changed(std::move(on_change))
         {}
 
         std::unique_ptr<StateBase> createState() const override;
