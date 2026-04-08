@@ -35,7 +35,7 @@ jobs:
             platform: windows
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       # campello_gpu on Linux requires Vulkan headers to compile.
       # campello_input requires libevdev for input handling.
@@ -48,7 +48,7 @@ jobs:
       # Cache FetchContent dependency sources across runs.
       # Key is invalidated whenever a dependency version pin changes.
       - name: Cache dependency sources
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: build/${{ matrix.platform }}_test/_deps
           key: deps-${{ matrix.platform }}-${{ hashFiles('dependencies/*.cmake') }}
@@ -81,10 +81,10 @@ jobs:
     runs-on: macos-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Cache dependency sources
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: build/ios/_deps
           key: deps-ios-${{ hashFiles('dependencies/*.cmake') }}
@@ -109,10 +109,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Cache dependency sources
-        uses: actions/cache@v4
+        uses: actions/cache@v4.2.3
         with:
           path: build/android/_deps
           key: deps-android-${{ hashFiles('dependencies/*.cmake') }}

@@ -16,7 +16,23 @@ if(NOT campello_input_POPULATED)
     FetchContent_Populate(campello_input)
     include_directories(${campello_input_SOURCE_DIR}/inc)
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
+        # campello_input v0.2.1 android.cmake requires the AGDK game-activity
+        # package (find_package(game-activity REQUIRED)) which is not installed
+        # on standard CI runners. campello_widgets' Android code does not
+        # reference any campello_input symbols, so an INTERFACE stub is enough
+        # to satisfy the link dependency without needing the full AGDK.
+        configure_file(
+            ${campello_input_SOURCE_DIR}/src/campello_input_config.h.in
+            ${campello_input_BINARY_DIR}/campello_input_config.h
+        )
+        add_library(campello_input INTERFACE)
+        target_include_directories(campello_input INTERFACE
+            ${campello_input_SOURCE_DIR}/inc
+            ${campello_input_BINARY_DIR}
+        )
+
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         # campello_input v0.2.1 linux.cmake only sets variables but never calls
         # add_library, so the target is never created and the install()/
         # get_target_property() calls in the upstream CMakeLists.txt error out.
