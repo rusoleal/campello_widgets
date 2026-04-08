@@ -5,13 +5,7 @@ All notable changes to campello_widgets will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.2.3] - 2026-04-08
-
-### Changed
-
-- **Dependencies** — `campello_gpu` upgraded from v0.5.0 to v0.7.0
-
-## [0.2.2] - 2026-04-06
+## [0.2.2] - 2026-04-08
 
 ### Added
 
@@ -39,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows build failure** — `<windows.h>` defines `min(a,b)` / `max(a,b)` as macros, which expanded in `Slider`'s constructor initializer list (`min(min_val), max(max_val)`) producing C2059/C2612 syntax errors and cascading C3668 `override` failures across `Button`, `Navigator`, `Divider`, `Card`, `ListTile`, `FloatingActionButton`, `SnackBar`, and a C1004 unexpected-EOF on the whole unity batch. Fixed by adding `NOMINMAX` to `campello_widgets`' compile definitions in `windows.cmake`.
+- **Linux CI configure failure** — `campello_input` v0.2.1's `linux.cmake` populates source/include variables but never calls `add_library`, so the upstream `CMakeLists.txt` `install(TARGETS campello_input)` and `get_target_property(... campello_input ...)` calls errored during CMake configure. The `campello_input.cmake` wrapper now creates the target manually on Linux (bypassing `add_subdirectory` for that platform) instead of relying on the broken upstream build script.
 - **Unity Build Compilation Errors** — fixed symbol conflicts when unity build is enabled:
   - `campello_gpu` — disabled unity build due to naming conflicts between `campello_gpu::Device`/`Buffer` and Apple's `MTL::Device`/`MTL::Buffer`
   - `campello_input` — disabled unity build due to Objective-C++ (`.mm`) files incompatible with C++ unity batches
@@ -49,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Dependencies** — added `campello_image` v0.3.1 for image loading capabilities
+- **Dependencies** — `campello_gpu` upgraded from v0.5.0 to v0.7.0; added `campello_image` v0.3.1 for image loading capabilities
 
 ## [0.2.1] - 2026-04-04
 

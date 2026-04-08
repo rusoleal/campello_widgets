@@ -35,5 +35,8 @@ target_link_libraries(campello_widgets
 
 target_compile_options(campello_widgets PRIVATE /W4)
 
-# Define Windows platform macro
-target_compile_definitions(campello_widgets PUBLIC CAMPELLO_PLATFORM_WINDOWS)
+# Define Windows platform macro.
+# NOMINMAX prevents <windows.h> from defining min()/max() macros, which
+# conflict with member variables and function parameters named min/max
+# (e.g. Slider::min, Slider::max) in constructor initializer lists.
+target_compile_definitions(campello_widgets PUBLIC CAMPELLO_PLATFORM_WINDOWS NOMINMAX)
