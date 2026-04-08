@@ -16,12 +16,19 @@ if(NOT campello_input_POPULATED)
     FetchContent_Populate(campello_input)
     include_directories(${campello_input_SOURCE_DIR}/inc)
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Android")
-        # campello_input v0.2.1 android.cmake requires the AGDK game-activity
-        # package (find_package(game-activity REQUIRED)) which is not installed
-        # on standard CI runners. campello_widgets' Android code does not
-        # reference any campello_input symbols, so an INTERFACE stub is enough
-        # to satisfy the link dependency without needing the full AGDK.
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        # campello_input v0.2.1 has broken platform cmake/source files on Android,
+        # Linux, and iOS that prevent a clean add_subdirectory build:
+        #   - android.cmake: find_package(game-activity REQUIRED) — AGDK not
+        #     installed on standard CI runners.
+        #   - linux.cmake: only sets variables, never calls add_library, so the
+        #     upstream install()/get_target_property() calls error during configure.
+        #   - touch_apple.mm (iOS): references UITraitCollection.maximumNumberOfTouches
+        #     (non-existent property) and CHHapticPatternPlayer (missing import),
+        #     causing compile errors on the iOS SDK.
+        # In all three cases campello_widgets' platform code does not reference any
+        # campello_input symbols, so an INTERFACE stub satisfies the link
+        # dependency without requiring a working campello_input build.
         configure_file(
             ${campello_input_SOURCE_DIR}/src/campello_input_config.h.in
             ${campello_input_BINARY_DIR}/campello_input_config.h
@@ -32,48 +39,6 @@ if(NOT campello_input_POPULATED)
             ${campello_input_BINARY_DIR}
         )
 
-    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-        # campello_input v0.2.1 linux.cmake only sets variables but never calls
-        # add_library, so the target is never created and the install()/
-        # get_target_property() calls in the upstream CMakeLists.txt error out.
-        # Work around this by building the target ourselves instead of using
-        # add_subdirectory.
-
-        # Generate the version config header that configure_file would produce.
-        set(_ci_src ${campello_input_SOURCE_DIR})
-        configure_file(
-            ${_ci_src}/src/campello_input_config.h.in
-            ${campello_input_BINARY_DIR}/campello_input_config.h
-        )
-        include_directories(${campello_input_BINARY_DIR})
-
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(CAMPELLO_INPUT_EVDEV REQUIRED libevdev)
-        pkg_check_modules(CAMPELLO_INPUT_UDEV  REQUIRED libudev)
-
-        add_library(campello_input SHARED
-            ${_ci_src}/src/linux/input_linux_system.cpp
-            ${_ci_src}/src/linux/gamepad_linux.cpp
-            ${_ci_src}/src/linux/keyboard_linux.cpp
-            ${_ci_src}/src/linux/mouse_linux.cpp
-        )
-        target_include_directories(campello_input PUBLIC
-            ${_ci_src}/inc
-            ${_ci_src}/src/linux/inc
-            ${campello_input_BINARY_DIR}
-            ${CAMPELLO_INPUT_EVDEV_INCLUDE_DIRS}
-            ${CAMPELLO_INPUT_UDEV_INCLUDE_DIRS}
-        )
-        target_compile_definitions(campello_input PRIVATE
-            CAMPHELLO_INPUT_LINUX
-            ${CAMPELLO_INPUT_EVDEV_CFLAGS_OTHER}
-            ${CAMPELLO_INPUT_UDEV_CFLAGS_OTHER}
-        )
-        target_link_libraries(campello_input PUBLIC
-            ${CAMPELLO_INPUT_EVDEV_LIBRARIES}
-            ${CAMPELLO_INPUT_UDEV_LIBRARIES}
-        )
-        set_target_properties(campello_input PROPERTIES UNITY_BUILD OFF)
     else()
         # Disable campello_input tests — they have broken install targets on some platforms
         set(CAMPELLO_INPUT_BUILD_TESTS OFF CACHE BOOL "" FORCE)
