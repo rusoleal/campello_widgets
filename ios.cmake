@@ -20,6 +20,12 @@ target_link_libraries(campello_widgets
         vector_math
         campello_image
     PRIVATE
+        "-framework Cocoa"
+        "-framework Metal"
+        "-framework MetalKit"
+        "-framework CoreText"
+        "-framework CoreGraphics"
+        "-framework Foundation"
         "-framework CFNetwork"
         "-framework CoreFoundation"
 )
