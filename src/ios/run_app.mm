@@ -85,7 +85,7 @@ namespace {
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = static_cast<float>(self.contentScaleFactor);
     
-    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+    auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, rootWidget);
 
     // Mount widget tree.
