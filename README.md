@@ -19,9 +19,9 @@ The library is fully multiplatform and targets:
 | Package | Role |
 |---|---|
 | [`campello_gpu`](https://github.com/rusoleal/campello_gpu) | Graphics rendering backend (multiplatform) |
-| `campello_input` | Input event handling (keyboard, mouse, touch, gamepad) |
-| `campello_image` | Image loading (JPEG, PNG, WebP, GIF, BMP, TGA) |
-| `vector_math` | SIMD-optimized vector and matrix math |
+| [`campello_input`](https://github.com/rusoleal/campello_input) | Input event handling (keyboard, mouse, touch, gamepad) |
+| [`campello_image`](https://github.com/rusoleal/campello_image) | Image loading (JPEG, PNG, WebP, GIF, BMP, TGA) |
+| [`vector_math`](https://github.com/rusoleal/vector_math) | SIMD-optimized vector and matrix math |
 
 ## Architecture
 
