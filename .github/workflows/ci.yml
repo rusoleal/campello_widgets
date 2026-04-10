@@ -48,7 +48,7 @@ jobs:
       # Cache FetchContent dependency sources across runs.
       # Key is invalidated whenever a dependency version pin changes.
       - name: Cache dependency sources
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v5
         with:
           path: build/${{ matrix.platform }}_test/_deps
           key: deps-${{ matrix.platform }}-${{ hashFiles('dependencies/*.cmake') }}
@@ -84,7 +84,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Cache dependency sources
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v5
         with:
           path: build/ios/_deps
           key: deps-ios-${{ hashFiles('dependencies/*.cmake') }}
@@ -112,7 +112,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Cache dependency sources
-        uses: actions/cache@v4.2.3
+        uses: actions/cache@v5
         with:
           path: build/android/_deps
           key: deps-android-${{ hashFiles('dependencies/*.cmake') }}
