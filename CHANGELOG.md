@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Dependencies** — `campello_gpu` upgraded from v0.5.0 to v0.7.0
+- **Dependencies** — `campello_gpu` upgraded from v0.5.0 to v0.8.0
+- **Dependency guard policy** — all dependency cmake wrappers now skip `FetchContent` when the target is already defined by a parent project (`if(TARGET <name>) return()`), preventing duplicate target errors when `campello_widgets` is consumed as a subdirectory: `campello_gpu.cmake`, `campello_image.cmake`, `vector_math.cmake`, `campello_input.cmake`
 
 ### Fixed
 

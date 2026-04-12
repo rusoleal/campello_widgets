@@ -1,6 +1,12 @@
 cmake_minimum_required(VERSION 3.5.0 FATAL_ERROR)
 cmake_policy(SET CMP0077 NEW)
 
+# Skip if campello_input target is already defined (e.g., by parent project)
+if(TARGET campello_input)
+    message(STATUS "campello_input target already exists, skipping FetchContent")
+    return()
+endif()
+
 include(FetchContent)
 
 FetchContent_Declare(
