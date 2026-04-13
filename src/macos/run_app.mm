@@ -619,11 +619,20 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _backendPtr->setViewport(w, h);
     _backendPtr->setDevicePixelRatio(static_cast<float>(scale));
 
+    // Schedule the drawable to be presented inside the command buffer via
+    // [MTLCommandBuffer presentDrawable:] rather than calling [drawable present]
+    // separately on the CPU.  This ties presentation to GPU completion and to
+    // the display vsync, eliminating "present before render" tearing artefacts.
+    _device->scheduleNextPresent((__bridge void *)drawable);
+
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
     bool rendered = colorView && _renderer->renderFrame(colorView, w, h);
 
-    if (rendered)
-        [drawable present];
+    if (!rendered) {
+        // renderFrame skipped (widget tree not dirty) — clear the scheduled
+        // present so the pointer doesn't dangle into the next frame.
+        _device->scheduleNextPresent(nullptr);
+    }
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size
