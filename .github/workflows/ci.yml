@@ -152,12 +152,14 @@ jobs:
           restore-keys: deps-android-${{ matrix.arch }}-
 
       # ubuntu-latest runners have the NDK pre-installed at $ANDROID_NDK_HOME.
+      # API 28 is the minimum for Vulkan 1.1 (vkEnumerateInstanceVersion,
+      # vkGetPhysicalDeviceProperties2) which campello_gpu requires.
       - name: Configure
         run: |
           cmake -S . -B build/android_${{ matrix.arch }}_${{ matrix.build_type }} \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=${{ matrix.arch }} \
-            -DANDROID_PLATFORM=android-26 \
+            -DANDROID_PLATFORM=android-28 \
             -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
       - name: Build

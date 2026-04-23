@@ -124,7 +124,7 @@ public:
 
     // ------------------------------------------------------------------
 
-    void setViewport(float w, float h) noexcept
+    void setViewport(float w, float h) noexcept override
     {
         vp_w_ = w;
         vp_h_ = h;

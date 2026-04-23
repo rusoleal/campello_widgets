@@ -20,7 +20,7 @@ target_link_libraries(campello_widgets
         vector_math
         campello_image
     PRIVATE
-        "-framework Cocoa"
+        "-framework UIKit"
         "-framework Metal"
         "-framework MetalKit"
         "-framework CoreText"
@@ -31,6 +31,11 @@ target_link_libraries(campello_widgets
 )
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)
+
+# Enable Automatic Reference Counting for Objective-C++ files.
+# This is required for __weak and modern property attributes (strong, weak).
+# The flag is ignored for regular C++ sources, so we apply it to all files.
+target_compile_options(campello_widgets PRIVATE -fobjc-arc)
 
 # Disable unity build for campello_widgets - it contains .mm (Objective-C++) files
 # that cannot be combined with regular C++ files in a unity build

@@ -8,6 +8,7 @@
 #include <campello_widgets/widgets/stateful_widget.hpp>
 #include <campello_widgets/widgets/stateful_element.hpp>
 #include <campello_widgets/widgets/element.hpp>
+#include <campello_widgets/widgets/render_object_element.hpp>
 
 #include <algorithm>
 #include <string_view>

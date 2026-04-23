@@ -9,6 +9,7 @@
 #import <campello_widgets/ui/focus_manager.hpp>
 #import <campello_widgets/ui/ticker.hpp>
 #import <campello_widgets/ui/frame_scheduler.hpp>
+#import <campello_widgets/ui/text_input_manager.hpp>
 
 #include <chrono>
 
@@ -97,7 +98,7 @@ namespace {
     int32_t                   _nextPointerId;
 
     id<UITextInputTokenizer>  _tokenizer;
-    id<UITextInputDelegate>   _inputDelegate;
+    __weak id<UITextInputDelegate> _inputDelegate;
 }
 
 @synthesize inputDelegate = _inputDelegate;
@@ -151,7 +152,7 @@ namespace {
     self.paused               = YES;
     self.enableSetNeedsDisplay = YES;
     Widgets::FrameScheduler::setCallback([weakSelf] {
-        if (weakSelf) [weakSelf setNeedsDisplay:YES];
+        if (weakSelf) [weakSelf setNeedsDisplay];
     });
 
     // Wrap root widget with MediaQuery
@@ -512,13 +513,13 @@ namespace {
     }
 }
 
-- (UITextWritingDirection)baseWritingDirectionForPosition:(UITextPosition*)position inDirection:(UITextStorageDirection)direction
+- (NSWritingDirection)baseWritingDirectionForPosition:(UITextPosition*)position inDirection:(UITextStorageDirection)direction
 {
     (void)position; (void)direction;
-    return UITextWritingDirectionLeftToRight;
+    return NSWritingDirectionLeftToRight;
 }
 
-- (void)setBaseWritingDirection:(UITextWritingDirection)writingDirection forRange:(UITextRange*)range
+- (void)setBaseWritingDirection:(NSWritingDirection)writingDirection forRange:(UITextRange*)range
 {
     (void)writingDirection; (void)range;
 }
@@ -597,6 +598,12 @@ namespace {
     int end   = static_cast<int>(NSMaxRange(r.range));
     controller->setSelection(start, end);
     controller->insertText([text UTF8String]);
+}
+
+- (NSArray<UITextSelectionRect*>*)selectionRectsForRange:(UITextRange*)range
+{
+    (void)range;
+    return @[];
 }
 
 - (id<UITextInputTokenizer>)tokenizer
