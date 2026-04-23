@@ -109,4 +109,10 @@ namespace systems::leal::campello_widgets
         return false;
     }
 
+    void RenderStack::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const
+    {
+        for (const auto& child : stack_children_)
+            if (child.box) visitor(child.box.get());
+    }
+
 } // namespace systems::leal::campello_widgets

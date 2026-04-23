@@ -1,6 +1,15 @@
 # campello_widgets
 
-A C++20 UI framework inspired by Flutter's widget composition model, built on top of `campello_gpu` for rendering and `campello_input` for input handling.
+A C++20 UI framework inspired by Flutter's widget composition model, built on top of [campello_gpu](https://github.com/rusoleal/campello_gpu) for rendering and [campello_input](https://github.com/rusoleal/campello_input) for input handling.
+
+## 🚀 Part of the Campello Engine
+
+This project is a module within the **Campello** ecosystem.
+
+👉 Main repository: https://github.com/rusoleal/campello
+
+Campello is a modular, composable game engine built as a collection of independent libraries.
+Each module is designed to work standalone, but integrates seamlessly into the engine runtime.
 
 ## Overview
 

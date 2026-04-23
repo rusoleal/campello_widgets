@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <campello_widgets/ui/render_flex.hpp>
 
 namespace systems::leal::campello_widgets
@@ -37,9 +38,12 @@ namespace systems::leal::campello_widgets
         {
             if (fc.flex > 0) { total_flex += fc.flex; continue; }
 
+            const float remaining_main = std::isinf(max_main)
+                ? max_main
+                : std::max(0.0f, max_main - allocated_main);
             BoxConstraints cc = is_h
-                ? BoxConstraints{0.0f, std::max(0.0f, max_main - allocated_main), 0.0f, max_cross}
-                : BoxConstraints{0.0f, max_cross, 0.0f, std::max(0.0f, max_main - allocated_main)};
+                ? BoxConstraints{0.0f, remaining_main, 0.0f, max_cross}
+                : BoxConstraints{0.0f, max_cross, 0.0f, remaining_main};
 
             if (cross_axis_alignment == CrossAxisAlignment::stretch)
             {
@@ -56,7 +60,9 @@ namespace systems::leal::campello_widgets
         // Second pass: lay out flex children.
         if (total_flex > 0)
         {
-            const float free = std::max(0.0f, max_main - allocated_main);
+            const float free = std::isinf(max_main)
+                ? 0.0f
+                : std::max(0.0f, max_main - allocated_main);
 
             for (auto& fc : flex_children_)
             {
@@ -84,7 +90,7 @@ namespace systems::leal::campello_widgets
         }
 
         // Compute own size.
-        const float main_size  = (main_axis_size == MainAxisSize::max)
+        const float main_size  = (main_axis_size == MainAxisSize::max && std::isfinite(max_main))
             ? max_main : allocated_main;
         const float cross_size = (cross_axis_alignment == CrossAxisAlignment::stretch)
             ? max_cross : max_cross_child;
@@ -169,6 +175,12 @@ namespace systems::leal::campello_widgets
                 return true;
         }
         return false;
+    }
+
+    void RenderFlex::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const
+    {
+        for (const auto& child : flex_children_)
+            if (child.box) visitor(child.box.get());
     }
 
 } // namespace systems::leal::campello_widgets

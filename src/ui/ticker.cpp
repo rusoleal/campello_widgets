@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/ticker.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -14,12 +15,19 @@ namespace systems::leal::campello_widgets
             if (listeners_.count(id))
                 cb(now_ms);
         }
+        // If there are still active tickers after the tick (e.g. running
+        // animations), request the next frame so the loop continues — mirroring
+        // Flutter's Ticker which reschedules itself each frame while active.
+        if (!listeners_.empty())
+            FrameScheduler::scheduleFrame();
     }
 
     uint64_t TickerScheduler::subscribe(std::function<void(uint64_t)> callback)
     {
         const uint64_t id = next_id_++;
         listeners_.emplace(id, std::move(callback));
+        // A new animation just started — request the first frame for it.
+        FrameScheduler::scheduleFrame();
         return id;
     }
 

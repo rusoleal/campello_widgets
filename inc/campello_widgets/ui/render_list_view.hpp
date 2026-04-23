@@ -47,6 +47,9 @@ namespace systems::leal::campello_widgets
         RenderListView();
         ~RenderListView();
 
+        void attach() override;
+        void detach() override;
+
         void setController(std::shared_ptr<ScrollController> controller);
         void setPhysics(std::shared_ptr<ScrollPhysics> physics);
 
@@ -77,6 +80,7 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
+        void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
     private:
         void onPointerEvent(const PointerEvent& event);
@@ -108,6 +112,7 @@ namespace systems::leal::campello_widgets
         int cached_last_  = -1;
 
         // Pan / momentum state.
+        bool   pointer_down_  = false;
         bool   panning_       = false;
         Offset pan_last_pos_;
         std::chrono::steady_clock::time_point last_pan_time_;

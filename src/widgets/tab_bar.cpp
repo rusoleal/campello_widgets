@@ -168,9 +168,12 @@ namespace systems::leal::campello_widgets
         if (children.empty()) return nullptr;
         const int clamped = (idx >= 0 && idx < static_cast<int>(children.size())) ? idx : 0;
 
+        if (animation_duration_ms <= 0.0)
+            return children[clamped];
+
         auto switcher = std::make_shared<AnimatedSwitcher>();
         switcher->child         = children[clamped];
-        switcher->duration_ms   = 200.0;
+        switcher->duration_ms   = animation_duration_ms;
         return switcher;
     }
 

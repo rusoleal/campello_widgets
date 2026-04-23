@@ -1,6 +1,8 @@
 #include <campello_widgets/ui/render_text.hpp>
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
+#include <campello_widgets/ui/debug_flags.hpp>
+#include <campello_widgets/ui/paint.hpp>
 
 #include <limits>
 #include <sstream>
@@ -104,6 +106,23 @@ namespace systems::leal::campello_widgets
         for (std::size_t i = 0; i < lines_.size(); ++i) {
             const Offset line_offset{offset.x, offset.y + line_height_ * static_cast<float>(i)};
             context.canvas().drawText(TextSpan{lines_[i], scaled_style}, line_offset);
+        }
+    }
+
+    void RenderText::debugPaint(PaintContext& context, const Offset& offset) const
+    {
+        if (!DebugFlags::paintBaselinesEnabled) return;
+
+        // Approximate alphabetic baseline: roughly 75% down from the top of
+        // the font's em-box. This is close enough for visual debugging.
+        const float baseline_offset = span_.style.font_size * 0.75f;
+
+        for (std::size_t i = 0; i < lines_.size(); ++i) {
+            const float y = offset.y + line_height_ * static_cast<float>(i) + baseline_offset;
+            context.canvas().drawLine(
+                Offset{offset.x, y},
+                Offset{offset.x + size_.width, y},
+                Paint::stroked(Color::fromRGB(0.0f, 0.8f, 0.0f), 1.0f));
         }
     }
 

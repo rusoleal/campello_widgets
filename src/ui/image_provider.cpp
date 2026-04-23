@@ -39,9 +39,14 @@ namespace systems::leal::campello_widgets
         
         decoded->width = static_cast<int>(img->getWidth());
         decoded->height = static_cast<int>(img->getHeight());
-        decoded->channels = 4;  // campello_image always returns RGBA8
+        decoded->channels = 4;  // campello_image v0.4.0+ returns RGBA8 for LDR, RGBA32F for HDR
         
-        // Copy pixel data to vector
+        // For now, only RGBA8 is supported by the texture pipeline
+        if (img->getFormat() != campello_image::ImageFormat::rgba8) {
+            throw std::runtime_error("HDR/FP image formats not yet supported: " + debug_name);
+        }
+        
+        // Copy pixel data to vector (getData() returns const void* since v0.4.0)
         size_t data_size = img->getDataSize();
         decoded->pixels.resize(data_size);
         std::memcpy(decoded->pixels.data(), img->getData(), data_size);

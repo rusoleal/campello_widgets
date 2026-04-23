@@ -47,8 +47,9 @@ namespace systems::leal::campello_widgets
     {
         if (child_)
         {
-            const Size child_size = layoutChild(*child_, constraints_.loosen());
-            size_         = constraints_.constrain(child_size);
+            // Layout-transparent: pass constraints through unchanged, just like Flutter.
+            const Size child_size = layoutChild(*child_, constraints_);
+            size_         = child_size;
             child_offset_ = Offset::zero();
         }
         else

@@ -31,6 +31,9 @@ namespace systems::leal::campello_widgets
         RenderSlider();
         ~RenderSlider() override;
 
+        void attach() override;
+        void detach() override;
+
         void performLayout() override;
         void performPaint(PaintContext& ctx, const Offset& offset) override;
 

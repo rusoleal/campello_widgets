@@ -29,7 +29,18 @@ namespace systems::leal::campello_widgets
 
     // -------------------------------------------------------------------------
 
-    RenderTextField::RenderTextField()
+    RenderTextField::RenderTextField() = default;
+
+    RenderTextField::~RenderTextField()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->removeHandler(this);
+            d->removeTickHandler(this);
+        }
+    }
+
+    void RenderTextField::attach()
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
@@ -38,7 +49,7 @@ namespace systems::leal::campello_widgets
         }
     }
 
-    RenderTextField::~RenderTextField()
+    void RenderTextField::detach()
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
@@ -859,6 +870,50 @@ namespace systems::leal::campello_widgets
             }
         }
         return best_idx;
+    }
+
+    // -------------------------------------------------------------------------
+    // IME geometry queries
+    // -------------------------------------------------------------------------
+
+    Rect RenderTextField::getRectForCharacterRange(int start, int end) const
+    {
+        if (!controller) return Rect::zero();
+
+        const float line_h = lineHeight();
+        const std::string disp = displayText();
+        int sz = static_cast<int>(disp.size());
+        start = std::clamp(start, 0, sz);
+        end   = std::clamp(end,   0, sz);
+
+        if (isMultiline())
+        {
+            getLineCount();
+            int line = getLineForPosition(start);
+            int line_start = getPositionForLine(line);
+            const std::string& line_text = lines_[line];
+
+            int offset_in_line = start - line_start;
+            int end_in_line    = std::min(end - line_start, static_cast<int>(line_text.size()));
+
+            float x0 = padding_h + measureText(line_text.substr(0, static_cast<size_t>(offset_in_line)));
+            float x1 = padding_h + measureText(line_text.substr(0, static_cast<size_t>(end_in_line)));
+            float y  = padding_v + line * line_h - scroll_offset_y_;
+
+            return Rect::fromLTWH(x0, y, x1 - x0, line_h);
+        }
+        else
+        {
+            float x0 = padding_h + measurePrefix(start);
+            float x1 = padding_h + measurePrefix(end);
+            float y  = padding_v;
+            return Rect::fromLTWH(x0, y, x1 - x0, line_h);
+        }
+    }
+
+    int RenderTextField::getPositionForPoint(float local_x, float local_y) const
+    {
+        return hitTestText(local_x, local_y);
     }
 
     // -------------------------------------------------------------------------

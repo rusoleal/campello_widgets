@@ -6,6 +6,8 @@
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/widgets/stateful_widget.hpp>
+#include <campello_widgets/widgets/stateful_element.hpp>
+#include <campello_widgets/widgets/element.hpp>
 
 #include <algorithm>
 #include <string_view>
@@ -143,10 +145,7 @@ namespace systems::leal::campello_widgets
                 {
                     if (has_focus)
                     {
-                        TextInputManager::InputTarget target;
-                        target.controller = ctrl_.get();
-                        // TODO: Add get_character_rect callback for IME candidate positioning
-                        tim->registerInputTarget(target);
+                        tim->registerInputTarget(makeInputTarget());
                     }
                     else
                     {
@@ -181,11 +180,22 @@ namespace systems::leal::campello_widgets
                 }
                 tim->unregisterInputTarget();
             }
-            
+
+            // Clear callbacks BEFORE unregistering from FocusManager.
+            // unregisterNode() fires on_focus_changed(false); if the callback
+            // is still bound it will call setState() on a State that is in the
+            // middle of being disposed, which schedules a build on an element
+            // whose render object has already been detached.
+            focus_node_->on_focus_changed = nullptr;
+            focus_node_->on_key           = nullptr;
+
+            if (auto* fm = FocusManager::activeManager())
+            {
+                fm->unregisterNode(focus_node_.get());
+            }
+
             if (ctrl_ && ctrl_listener_id_ != 0)
                 ctrl_->removeListener(ctrl_listener_id_);
-            focus_node_->on_key           = nullptr;
-            focus_node_->on_focus_changed = nullptr;
         }
 
         void didUpdateWidget(const Widget& old_base) override
@@ -222,9 +232,16 @@ namespace systems::leal::campello_widgets
                     }
                     tim->unregisterInputTarget();
                 }
-                
-                focus_node_->on_key           = nullptr;
+
+                // Clear callbacks BEFORE unregistering — same reason as in dispose().
                 focus_node_->on_focus_changed = nullptr;
+                focus_node_->on_key           = nullptr;
+
+                if (auto* fm = FocusManager::activeManager())
+                {
+                    fm->unregisterNode(focus_node_.get());
+                }
+
                 focus_node_ = new_fn;
                 focus_node_->on_focus_changed = [this](bool has_focus) {
                     setState([this, has_focus]() { focused_ = has_focus; });
@@ -234,9 +251,7 @@ namespace systems::leal::campello_widgets
                     {
                         if (has_focus)
                         {
-                            TextInputManager::InputTarget target;
-                            target.controller = ctrl_.get();
-                            tim->registerInputTarget(target);
+                            tim->registerInputTarget(makeInputTarget());
                         }
                         else
                         {
@@ -257,9 +272,7 @@ namespace systems::leal::campello_widgets
                 {
                     if (auto* tim = TextInputManager::activeManager())
                     {
-                        TextInputManager::InputTarget target;
-                        target.controller = ctrl_.get();
-                        tim->registerInputTarget(target);
+                        tim->registerInputTarget(makeInputTarget());
                     }
                 }
             }
@@ -505,6 +518,52 @@ namespace systems::leal::campello_widgets
         void notifyChanged()
         {
             if (widget().on_changed) widget().on_changed(ctrl_->text());
+        }
+
+        /**
+         * @brief Builds an InputTarget with geometry callbacks for the IME.
+         *
+         * Traverses from this State's element down to the RenderTextField to
+         * provide character-rect and point-to-character queries.
+         */
+        TextInputManager::InputTarget makeInputTarget()
+        {
+            TextInputManager::InputTarget target;
+            target.controller = ctrl_.get();
+
+            target.get_character_rect = [this](int byte_offset) -> std::array<float, 4> {
+                auto* elem = this->element();
+                if (!elem) return {0, 0, 0, 0};
+                auto* render_elem = elem->findDescendantRenderObjectElement();
+                if (!render_elem) return {0, 0, 0, 0};
+                auto* render_field = dynamic_cast<RenderTextField*>(render_elem->renderObject());
+                if (!render_field) return {0, 0, 0, 0};
+
+                auto rect = render_field->getRectForCharacterRange(byte_offset, byte_offset);
+                Offset global = render_field->globalOffset();
+                return {
+                    rect.x + global.x,
+                    rect.y + global.y,
+                    std::max(rect.width, 1.0f),
+                    rect.height
+                };
+            };
+
+            target.get_position_for_point = [this](float x, float y) -> int {
+                auto* elem = this->element();
+                if (!elem) return 0;
+                auto* render_elem = elem->findDescendantRenderObjectElement();
+                if (!render_elem) return 0;
+                auto* render_field = dynamic_cast<RenderTextField*>(render_elem->renderObject());
+                if (!render_field) return 0;
+
+                Offset global = render_field->globalOffset();
+                float local_x = x - global.x - render_field->padding_h;
+                float local_y = y - global.y - render_field->padding_v;
+                return render_field->getPositionForPoint(local_x, local_y);
+            };
+
+            return target;
         }
 
         // ------------------------------------------------------------------

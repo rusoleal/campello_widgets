@@ -71,6 +71,24 @@ namespace systems::leal::campello_widgets
             return {0.0f, inf, 0.0f, inf};
         }
 
+        /**
+         * @brief Creates constraints that tighten only the specified dimensions.
+         *
+         * If a dimension is specified, both min and max are set to that value.
+         * If a dimension is null, it remains unconstrained (0 to infinity).
+         */
+        static BoxConstraints tightFor(std::optional<float> width,
+                                       std::optional<float> height) noexcept
+        {
+            const float inf = std::numeric_limits<float>::infinity();
+            return {
+                width  ? *width  : 0.0f,
+                width  ? *width  : inf,
+                height ? *height : 0.0f,
+                height ? *height : inf,
+            };
+        }
+
         // ------------------------------------------------------------------
         // Constraint operations
         // ------------------------------------------------------------------
@@ -101,6 +119,23 @@ namespace systems::leal::campello_widgets
         BoxConstraints loosen() const noexcept
         {
             return {0.0f, max_width, 0.0f, max_height};
+        }
+
+        /**
+         * @brief Returns the intersection of these constraints with another.
+         *
+         * Each bound is clamped to the range of the corresponding bound in
+         * `other`.  This is how SizedBox merges its own bounds with the
+         * parent's constraints.
+         */
+        BoxConstraints enforce(const BoxConstraints& other) const noexcept
+        {
+            return {
+                std::clamp(min_width,  other.min_width,  other.max_width),
+                std::clamp(max_width,  other.min_width,  other.max_width),
+                std::clamp(min_height, other.min_height, other.max_height),
+                std::clamp(max_height, other.min_height, other.max_height),
+            };
         }
 
         /**

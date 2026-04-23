@@ -3,8 +3,10 @@
 #include <memory>
 #include <typeindex>
 #include <unordered_map>
+#include <functional>
 #include <campello_widgets/widgets/widget.hpp>
 #include <campello_widgets/widgets/build_context.hpp>
+#include <campello_widgets/diagnostics/diagnosticable.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -26,7 +28,7 @@ namespace systems::leal::campello_widgets
      *
      * Subclasses implement `performBuild()` to produce their child subtree.
      */
-    class Element : public BuildContext
+    class Element : public BuildContext, public Diagnosticable
     {
     public:
         explicit Element(WidgetRef widget);
@@ -65,6 +67,9 @@ namespace systems::leal::campello_widgets
          * Subclasses should clean up resources and call the base implementation.
          */
         virtual void unmount();
+
+        /** @brief Returns true while the element is in the tree (between mount() and unmount()). */
+        bool mounted() const noexcept { return mounted_; }
 
         /**
          * @brief Updates the widget configuration for an already-mounted element.
@@ -130,6 +135,19 @@ namespace systems::leal::campello_widgets
         virtual Element* firstChildElement() const noexcept { return nullptr; }
 
         /**
+         * @brief Visits all direct child elements.
+         *
+         * Override in subclasses that manage multiple children (e.g.
+         * MultiChildRenderObjectElement) to enumerate all children.
+         * The default implementation visits only `firstChildElement()`.
+         */
+        virtual void visitChildren(const std::function<void(Element*)>& visitor) const
+        {
+            if (auto* c = firstChildElement())
+                visitor(c);
+        }
+
+        /**
          * @brief Walks down the element subtree to find the nearest RenderObjectElement.
          *
          * Returns the first RenderObjectElement reachable through `firstChildElement()`
@@ -165,8 +183,13 @@ namespace systems::leal::campello_widgets
         virtual void performBuild() = 0;
 
         WidgetRef widget_;
-        Element*  parent_ = nullptr;
-        bool      dirty_  = true;
+        Element*  parent_  = nullptr;
+        bool      dirty_   = true;
+        bool      mounted_ = false;
+
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+        std::vector<std::shared_ptr<DiagnosticsNode>> debugDescribeChildren() const override;
+        std::string toStringShort() const override;
 
         /**
          * @brief Map from widget type to the nearest ancestor InheritedElement of

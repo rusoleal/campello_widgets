@@ -1,5 +1,7 @@
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 
 #include <iostream>
 
@@ -30,11 +32,8 @@ namespace systems::leal::campello_widgets
         if (!needs_layout_)
         {
             needs_layout_ = true;
-            if (parent_) {
+            if (parent_)
                 parent_->markNeedsLayout();
-            } else {
-                std::cerr << "[RenderObject] markNeedsLayout with no parent: this=" << this << "\n";
-            }
         }
         markNeedsPaint();
     }
@@ -43,22 +42,22 @@ namespace systems::leal::campello_widgets
     {
         if (needs_paint_) return;
         needs_paint_ = true;
-        if (parent_) parent_->markNeedsPaint();
+        if (parent_)
+            parent_->markNeedsPaint();
+        else
+            // This is the root render object — the whole tree needs a frame.
+            // Mirrors Flutter's PipelineOwner requesting a frame when the root
+            // becomes dirty.  The call is idempotent at the platform level.
+            FrameScheduler::scheduleFrame();
     }
 
     void RenderObject::layout(const BoxConstraints& constraints)
     {
         const bool constraints_changed = !(constraints == constraints_);
 
-        if (!needs_layout_ && !constraints_changed) {
-            std::cerr << "[RenderObject] layout skipped: needs_layout=" << needs_layout_ 
-                      << " constraints_changed=" << constraints_changed << " this=" << this << "\n";
+        if (!needs_layout_ && !constraints_changed)
             return;
-        }
 
-        std::cerr << "[RenderObject] layout running: constraints_changed=" << constraints_changed 
-                  << " this=" << this << "\n";
-        
         const bool must_repaint = constraints_changed;
         constraints_  = constraints;
         needs_layout_ = false;
@@ -85,6 +84,9 @@ namespace systems::leal::campello_widgets
         performPaint(context, offset);
         needs_paint_ = false;
 
+        if (DebugFlags::paintSizeEnabled || DebugFlags::paintBaselinesEnabled)
+            debugPaint(context, offset);
+
         if (DebugFlags::paintSizeEnabled && !size_.isEmpty())
         {
             const Rect  bounds = Rect::fromLTWH(offset.x, offset.y,
@@ -94,6 +96,17 @@ namespace systems::leal::campello_widgets
                 Color::fromRGBA(0.0f, 0.55f, 1.0f, 0.85f), 1.0f);
             context.canvas().drawRect(bounds, border);
         }
+    }
+
+    void RenderObject::debugFillProperties(DiagnosticsPropertyBuilder& out) const
+    {
+        out.add(std::make_unique<ConstraintsProperty>("constraints", constraints_));
+        out.add(std::make_unique<SizeProperty>("size", size_));
+    }
+
+    std::string RenderObject::toStringShort() const
+    {
+        return typeName();
     }
 
 } // namespace systems::leal::campello_widgets

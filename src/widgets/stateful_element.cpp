@@ -11,7 +11,14 @@ namespace systems::leal::campello_widgets
         state_->current_widget_ = widget_.get();
     }
 
-    StatefulElement::~StatefulElement() = default;
+    StatefulElement::~StatefulElement()
+    {
+        if (state_)
+        {
+            state_->element_        = nullptr;
+            state_->current_widget_ = nullptr;
+        }
+    }
 
     void StatefulElement::mount(Element* parent)
     {
@@ -21,7 +28,11 @@ namespace systems::leal::campello_widgets
 
     void StatefulElement::unmount()
     {
+        if (child_)
+            child_->unmount();
         state_->dispose();
+        state_->element_        = nullptr;
+        state_->current_widget_ = nullptr;
         Element::unmount();
     }
 

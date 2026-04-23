@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/transform.hpp>
 #include <campello_widgets/ui/render_transform.hpp>
 
@@ -50,4 +51,9 @@ namespace systems::leal::campello_widgets
         rt.markNeedsPaint();
     }
 
+
+    void Transform::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        properties.add(std::make_unique<StringProperty>("transform", "Matrix4(...)"));
+    }
 } // namespace systems::leal::campello_widgets

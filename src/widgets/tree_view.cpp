@@ -243,6 +243,7 @@ namespace systems::leal::campello_widgets
         rv.setHorizontalController(horizontal_controller);
         rv.setVerticalController(vertical_controller);
         rv.setPhysics(physics);
+        rv.invalidateRowCache();
     }
 
 } // namespace systems::leal::campello_widgets

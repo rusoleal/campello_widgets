@@ -28,6 +28,12 @@ namespace systems::leal::campello_widgets
             return child_elements_.empty() ? nullptr : child_elements_.front().get();
         }
 
+        void visitChildren(const std::function<void(Element*)>& visitor) const override
+        {
+            for (const auto& child : child_elements_)
+                if (child) visitor(child.get());
+        }
+
     protected:
         void performBuild() override;
 

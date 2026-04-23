@@ -1,5 +1,6 @@
 #pragma once
 
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
@@ -26,6 +27,8 @@ namespace systems::leal::campello_widgets
         {}
 
         WidgetRef build(BuildContext& context) const override;
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+
     };
 
 } // namespace systems::leal::campello_widgets

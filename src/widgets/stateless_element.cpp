@@ -8,6 +8,13 @@ namespace systems::leal::campello_widgets
     {
     }
 
+    void StatelessElement::unmount()
+    {
+        if (child_)
+            child_->unmount();
+        Element::unmount();
+    }
+
     void StatelessElement::update(WidgetRef new_widget)
     {
         Element::update(std::move(new_widget));

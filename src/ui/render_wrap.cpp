@@ -233,4 +233,10 @@ namespace systems::leal::campello_widgets
         return false;
     }
 
+
+    void RenderWrap::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const
+    {
+        for (const auto& c : wrap_children_)
+            if (c.box.get()) visitor(c.box.get());
+    }
 } // namespace systems::leal::campello_widgets

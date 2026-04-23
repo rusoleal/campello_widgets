@@ -35,6 +35,9 @@ namespace systems::leal::campello_widgets
         RenderSingleChildScrollView();
         ~RenderSingleChildScrollView();
 
+        void attach() override;
+        void detach() override;
+
         /** @brief Wires an optional ScrollController for programmatic control. */
         void setController(std::shared_ptr<ScrollController> controller);
 
@@ -63,6 +66,7 @@ namespace systems::leal::campello_widgets
         float max_extent_ = 0.0f;
 
         // Pan gesture state.
+        bool   pointer_down_ = false;
         bool   panning_      = false;
         Offset pan_last_pos_;
         std::chrono::steady_clock::time_point last_pan_time_;

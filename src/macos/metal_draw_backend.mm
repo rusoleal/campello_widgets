@@ -345,7 +345,18 @@ bool MetalDrawBackend::applyScissor(const Rect& clip, GPU::RenderPassEncoder& en
     if (w < 1.0f || h < 1.0f)
         return false;
 
+    // Skip redundant setScissorRect calls — Metal API Validation aborts on them.
+    if (x == last_scissor_x_ && y == last_scissor_y_ &&
+        w == last_scissor_w_ && h == last_scissor_h_)
+    {
+        return true;
+    }
+
     encoder.setScissorRect(x, y, w, h);
+    last_scissor_x_ = x;
+    last_scissor_y_ = y;
+    last_scissor_w_ = w;
+    last_scissor_h_ = h;
     return true;
 }
 
@@ -858,6 +869,8 @@ std::shared_ptr<GPU::RenderPassEncoder> MetalDrawBackend::beginOffscreenPass(
     std::shared_ptr<GPU::Texture> tex,
     GPU::CommandEncoder&          encoder)
 {
+    // New encoder == fresh scissor state.
+    last_scissor_x_ = last_scissor_y_ = last_scissor_w_ = last_scissor_h_ = -1.0f;
     if (!tex) return nullptr;
 
     auto view = tex->createView(pixel_format_);

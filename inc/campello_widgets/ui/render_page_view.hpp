@@ -32,6 +32,9 @@ namespace systems::leal::campello_widgets
         RenderPageView();
         ~RenderPageView();
 
+        void attach() override;
+        void detach() override;
+
         // ------------------------------------------------------------------
         // Child management — called by MultiChildRenderObjectElement
         // ------------------------------------------------------------------
@@ -58,6 +61,7 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
+        void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
     private:
         void onPointerEvent(const PointerEvent& event);
@@ -79,6 +83,7 @@ namespace systems::leal::campello_widgets
         float    page_offset_    = 0.0f;   ///< Fractional page position.
         int      last_page_      = 0;
 
+        bool     pointer_down_   = false;
         bool     panning_        = false;
         Offset   pan_last_pos_;
         std::chrono::steady_clock::time_point last_pan_time_;

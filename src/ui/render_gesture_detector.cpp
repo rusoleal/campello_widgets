@@ -1,4 +1,5 @@
 #include <cmath>
+#include <iostream>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 
@@ -7,6 +8,21 @@ namespace systems::leal::campello_widgets
 
     RenderGestureDetector::RenderGestureDetector()
     {
+        std::cerr << "[RenderGestureDetector] ctor this=" << this << "\n";
+    }
+
+    RenderGestureDetector::~RenderGestureDetector()
+    {
+        std::cerr << "[RenderGestureDetector] dtor this=" << this << "\n";
+        if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->removeHandler(this);
+            d->removeTickHandler(this);
+        }
+    }
+
+    void RenderGestureDetector::attach()
+    {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
@@ -14,7 +30,7 @@ namespace systems::leal::campello_widgets
         }
     }
 
-    RenderGestureDetector::~RenderGestureDetector()
+    void RenderGestureDetector::detach()
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {

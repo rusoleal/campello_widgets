@@ -12,6 +12,11 @@
 #import <campello_widgets/ui/focus_manager.hpp>
 #import <campello_widgets/ui/text_input_manager.hpp>
 #import <campello_widgets/ui/ticker.hpp>
+#import <campello_widgets/ui/frame_scheduler.hpp>
+#import <campello_widgets/diagnostics/widget_inspector.hpp>
+
+#include <chrono>
+#include <iostream>
 
 #import <campello_gpu/device.hpp>
 #import <campello_gpu/texture_view.hpp>
@@ -85,9 +90,11 @@ namespace {
 - (void)mouseDown:(NSEvent*)event
 {
     if (!_dispatcher) return;
+    auto pos = [self pointerOffsetForEvent:event];
+    std::cerr << "[macOS mouseDown] pos=" << pos.x << "," << pos.y << "\n";
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::down, 0,
-        [self pointerOffsetForEvent:event], 1.0f});
+        pos, 1.0f});
 }
 
 - (void)mouseMoved:(NSEvent*)event
@@ -109,9 +116,11 @@ namespace {
 - (void)mouseUp:(NSEvent*)event
 {
     if (!_dispatcher) return;
+    auto pos = [self pointerOffsetForEvent:event];
+    std::cerr << "[macOS mouseUp]   pos=" << pos.x << "," << pos.y << "\n";
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::up, 0,
-        [self pointerOffsetForEvent:event], 1.0f});
+        pos, 1.0f});
 }
 
 static Widgets::KeyCode macosKeyCodeToKeyCode(unsigned short kc)
@@ -202,6 +211,14 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 
 - (void)keyDown:(NSEvent*)event
 {
+    // Global debug shortcut: F12 dumps the widget and render trees
+    if (event.keyCode == 111) // F12
+    {
+        Widgets::WidgetInspector::instance().dumpWidgetTree();
+        Widgets::WidgetInspector::instance().dumpRenderObjectTree();
+        return;
+    }
+
     // For IME (Input Method Editor) support, we route text input through
     // the NSTextInputClient protocol by calling interpretKeyEvents:.
     // This allows proper handling of dead keys, accented characters, and CJK input.
@@ -478,8 +495,13 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
  */
 - (NSUInteger)characterIndexForPoint:(NSPoint)point
 {
-    // Not implemented - return NSNotFound
-    return NSNotFound;
+    if (!_textInputManager) return NSNotFound;
+    
+    // Convert from view coordinates to the coordinate space used by getPositionForPoint
+    NSPoint local = [self convertPoint:point fromView:nil];
+    int idx = _textInputManager->getPositionForPoint(static_cast<float>(local.x),
+                                                      static_cast<float>(local.y));
+    return static_cast<NSUInteger>(idx);
 }
 
 /**
@@ -625,6 +647,13 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // the display vsync, eliminating "present before render" tearing artefacts.
     _device->scheduleNextPresent((__bridge void *)drawable);
 
+    auto now = std::chrono::steady_clock::now();
+    uint64_t now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count());
+    if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
+    if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
+
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
     bool rendered = colorView && _renderer->renderFrame(colorView, w, h);
 
@@ -722,6 +751,18 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
         _metalView.preferredFramesPerSecond = 60;
     _metalView.autoresizingMask         = NSViewWidthSizable | NSViewHeightSizable;
 
+    // On-demand rendering: stop the continuous display link.  Frames are now
+    // produced only when setNeedsDisplay:YES is called — matching Flutter's
+    // idle behaviour where the GPU is completely quiet when nothing changes.
+    _metalView.paused               = YES;
+    _metalView.enableSetNeedsDisplay = YES;
+
+    // Register the FrameScheduler callback before mounting the widget tree so
+    // that markNeedsPaint() calls triggered during mount already reach the view.
+    Widgets::FrameScheduler::setCallback([] {
+        if (gMetalView) [gMetalView setNeedsDisplay:YES];
+    });
+
     _window.contentView = _metalView;
     _window.delegate = self;  // For window resize notifications
 
@@ -768,6 +809,8 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     
     _rootElement = wrappedRoot->createElement();
     _rootElement->mount(nullptr);
+
+    Widgets::WidgetInspector::instance().setRootElement(_rootElement);
 
     auto* roe = _rootElement->findDescendantRenderObjectElement();
     if (!roe) {
@@ -889,6 +932,9 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 {
     (void)notification;
     [self updateSafeAreaInsets];
+    // Request a redraw so the widget tree lays out at the new size.
+    // updateSafeAreaInsets may not mark the tree dirty if insets are unchanged.
+    Widgets::FrameScheduler::scheduleFrame();
 }
 
 // KVO for safeAreaInsets changes (macOS 12.1+)
@@ -942,13 +988,11 @@ int runApp(WidgetRef   root_widget,
 
 void requestRefresh()
 {
-    // Force widget tree refresh (layout + paint)
+    // forceRefresh() calls markNeedsLayout() → markNeedsPaint() which calls
+    // FrameScheduler::scheduleFrame() → [gMetalView setNeedsDisplay:YES].
+    // No manual draw call needed in on-demand rendering mode.
     if (gRenderer) {
         gRenderer->forceRefresh();
-    }
-    // Trigger immediate redraw
-    if (gMetalView) {
-        [gMetalView draw];
     }
 }
 

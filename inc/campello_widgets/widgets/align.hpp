@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/ui/alignment.hpp>
 
@@ -38,6 +39,8 @@ namespace systems::leal::campello_widgets
             a->child = std::move(child);
             return a;
         }
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+
     };
 
 } // namespace systems::leal::campello_widgets

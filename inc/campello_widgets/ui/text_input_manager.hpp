@@ -33,8 +33,12 @@ namespace systems::leal::campello_widgets
             TextEditingController* controller = nullptr;
             
             // Optional: callback to get the character rect for IME candidate window positioning
-            // Parameters: byte offset into text, returns: rect in screen coordinates
+            // Parameters: byte offset into text, returns: rect in screen coordinates {x, y, w, h}
             std::function<std::array<float, 4>(int)> get_character_rect;
+
+            // Optional: callback to map a screen point to a character index
+            // Parameters: point in screen coordinates (x, y), returns: byte offset into text
+            std::function<int(float x, float y)> get_position_for_point;
         };
 
         /** @brief Sets the global active TextInputManager instance. */
@@ -126,14 +130,32 @@ namespace systems::leal::campello_widgets
         bool isComposing() const;
 
         /**
+         * @brief Registers a callback fired whenever an input target is registered
+         *        or unregistered.
+         * 
+         * This is used by platform adapters (e.g. iOS) to show or hide the
+         * software keyboard when a text field gains or loses focus.
+         */
+        void setOnInputTargetChanged(std::function<void(bool has_target)> callback);
+
+        /**
          * @brief Gets the character rect for positioning the IME candidate window.
          * @param byte_offset The byte offset in the text
          * @return A rect {x, y, width, height} in window coordinates, or all zeros if no target.
          */
         std::array<float, 4> getCharacterRect(int byte_offset) const;
 
+        /**
+         * @brief Maps a point in window coordinates to a character index.
+         * @param x X coordinate in window coordinates
+         * @param y Y coordinate in window coordinates
+         * @return Byte offset into the text, or 0 if no active target.
+         */
+        int getPositionForPoint(float x, float y) const;
+
     private:
         InputTarget current_target_;
+        std::function<void(bool)> on_target_changed_;
         static TextInputManager* s_active_manager_;
     };
 

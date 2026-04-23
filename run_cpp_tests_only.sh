@@ -18,7 +18,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-BUILD_DIR="${SCRIPT_DIR}/build/darwin"
+BUILD_DIR="${SCRIPT_DIR}/build/darwin-release-test"
 GOLDENS_DIR="${SCRIPT_DIR}/tests/goldens"
 
 # Arguments

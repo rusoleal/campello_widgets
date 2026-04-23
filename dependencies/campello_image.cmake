@@ -14,7 +14,7 @@ include(FetchContent)
 FetchContent_Declare(
     campello_image
     GIT_REPOSITORY https://github.com/rusoleal/campello_image.git
-    GIT_TAG        v0.3.1  # Use latest stable release
+    GIT_TAG        v0.4.0  # Use latest stable release
 )
 
 if(NOT campello_image_POPULATED)

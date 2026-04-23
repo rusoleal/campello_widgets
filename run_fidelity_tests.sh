@@ -26,7 +26,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 # Configuration
-BUILD_DIR="${SCRIPT_DIR}/build/darwin"
+BUILD_DIR="${SCRIPT_DIR}/build/darwin-release-test"
 GOLDENS_DIR="${SCRIPT_DIR}/tests/goldens"
 VISUAL_DIR="${SCRIPT_DIR}/tests/visual_fidelity"
 FLUTTER_DIR="${SCRIPT_DIR}/flutter_fidelity_tester"

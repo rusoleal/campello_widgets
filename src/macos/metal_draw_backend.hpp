@@ -124,7 +124,12 @@ public:
 
     // ------------------------------------------------------------------
 
-    void setViewport(float w, float h) noexcept { vp_w_ = w; vp_h_ = h; }
+    void setViewport(float w, float h) noexcept
+    {
+        vp_w_ = w;
+        vp_h_ = h;
+        last_scissor_x_ = last_scissor_y_ = last_scissor_w_ = last_scissor_h_ = -1.0f;
+    }
     void setDevicePixelRatio(float dpr) noexcept { dpr_ = dpr; }
 
     /** Returns true if all render pipelines were successfully compiled. */
@@ -192,6 +197,13 @@ private:
     float vp_w_ = 800.0f;
     float vp_h_ = 600.0f;
     float dpr_  = 1.0f;
+
+    // Scissor-state cache — avoids redundant setScissorRect calls that trigger
+    // Metal API Validation asserts.
+    float last_scissor_x_ = -1.0f;
+    float last_scissor_y_ = -1.0f;
+    float last_scissor_w_ = -1.0f;
+    float last_scissor_h_ = -1.0f;
 };
 
 } // namespace systems::leal::campello_widgets

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 
 namespace systems::leal::campello_widgets
@@ -16,6 +17,8 @@ namespace systems::leal::campello_widgets
     public:
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+
     };
 
 } // namespace systems::leal::campello_widgets

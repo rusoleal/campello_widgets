@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
 
@@ -20,4 +21,12 @@ namespace systems::leal::campello_widgets
         rsb.markNeedsLayout();
     }
 
+
+    void SizedBox::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        if (width.has_value())
+            properties.add(std::make_unique<DoubleProperty>("width", *width));
+        if (height.has_value())
+            properties.add(std::make_unique<DoubleProperty>("height", *height));
+    }
 } // namespace systems::leal::campello_widgets

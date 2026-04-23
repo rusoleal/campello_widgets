@@ -27,6 +27,9 @@ namespace systems::leal::campello_widgets
         RenderMouseRegion();
         ~RenderMouseRegion() override;
 
+        void attach() override;
+        void detach() override;
+
         void performLayout() override;
         void performPaint(PaintContext& ctx, const Offset& offset) override;
 

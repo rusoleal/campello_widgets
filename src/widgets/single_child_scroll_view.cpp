@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/single_child_scroll_view.hpp>
 #include <campello_widgets/ui/render_single_child_scroll_view.hpp>
 
@@ -21,4 +22,9 @@ namespace systems::leal::campello_widgets
         render.setPhysics(physics);
     }
 
+
+    void SingleChildScrollView::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        properties.add(std::make_unique<StringProperty>("scrollAxis", scroll_axis == Axis::horizontal ? "horizontal" : "vertical"));
+    }
 } // namespace systems::leal::campello_widgets

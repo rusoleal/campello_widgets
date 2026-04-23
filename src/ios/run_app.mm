@@ -8,6 +8,9 @@
 #import <campello_widgets/ui/pointer_dispatcher.hpp>
 #import <campello_widgets/ui/focus_manager.hpp>
 #import <campello_widgets/ui/ticker.hpp>
+#import <campello_widgets/ui/frame_scheduler.hpp>
+
+#include <chrono>
 
 #import <campello_gpu/device.hpp>
 #import <campello_gpu/texture_view.hpp>
@@ -21,6 +24,7 @@
 #import <MetalKit/MetalKit.h>
 
 #include <map>
+#include <algorithm>
 
 // Namespace aliases - using global qualification to work correctly in Unity Build
 namespace GPU     = ::systems::leal::campello_gpu;
@@ -34,10 +38,45 @@ namespace {
 }
 
 // ---------------------------------------------------------------------------
-// CampelloMTKView — MTKView subclass with touch and draw delegate
+// UITextInput helpers
 // ---------------------------------------------------------------------------
 
-@interface CampelloMTKView : MTKView <MTKViewDelegate>
+@interface CampelloTextPosition : UITextPosition
+@property (nonatomic, assign) NSInteger index;
++ (instancetype)positionWithIndex:(NSInteger)index;
+@end
+
+@implementation CampelloTextPosition
++ (instancetype)positionWithIndex:(NSInteger)index
+{
+    CampelloTextPosition* pos = [[self alloc] init];
+    pos.index = index;
+    return pos;
+}
+@end
+
+@interface CampelloTextRange : UITextRange
+@property (nonatomic, assign) NSRange range;
++ (instancetype)rangeWithNSRange:(NSRange)range;
+@end
+
+@implementation CampelloTextRange
++ (instancetype)rangeWithNSRange:(NSRange)range
+{
+    CampelloTextRange* r = [[self alloc] init];
+    r.range = range;
+    return r;
+}
+- (UITextPosition*)start   { return [CampelloTextPosition positionWithIndex:self.range.location]; }
+- (UITextPosition*)end     { return [CampelloTextPosition positionWithIndex:NSMaxRange(self.range)]; }
+- (BOOL)isEmpty            { return self.range.length == 0; }
+@end
+
+// ---------------------------------------------------------------------------
+// CampelloMTKView — MTKView subclass with touch, draw delegate, and UITextInput
+// ---------------------------------------------------------------------------
+
+@interface CampelloMTKView : MTKView <MTKViewDelegate, UITextInput>
 - (instancetype)initWithFrame:(CGRect)frame device:(id<MTLDevice>)device;
 - (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
                 rootWidget:(Widgets::WidgetRef)rootWidget;
@@ -50,12 +89,18 @@ namespace {
     std::shared_ptr<Widgets::PointerDispatcher> _dispatcher;
     std::shared_ptr<Widgets::FocusManager>      _focusManager;
     std::unique_ptr<Widgets::TickerScheduler>   _tickerScheduler;
+    std::unique_ptr<Widgets::TextInputManager>  _textInputManager;
     Widgets::MetalDrawBackend*                  _backendPtr;
 
     // Touch → pointer_id mapping (UITouch* identity is stable per gesture)
     std::map<void*, int32_t>  _touchIds;
     int32_t                   _nextPointerId;
+
+    id<UITextInputTokenizer>  _tokenizer;
+    id<UITextInputDelegate>   _inputDelegate;
 }
+
+@synthesize inputDelegate = _inputDelegate;
 
 - (instancetype)initWithFrame:(CGRect)frame device:(id<MTLDevice>)device
 {
@@ -63,6 +108,11 @@ namespace {
     _nextPointerId  = 0;
     self.delegate   = self;
     return self;
+}
+
+- (BOOL)canBecomeFirstResponder
+{
+    return YES;
 }
 
 - (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
@@ -80,6 +130,29 @@ namespace {
 
     _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(_tickerScheduler.get());
+
+    _textInputManager = std::make_unique<Widgets::TextInputManager>();
+    Widgets::TextInputManager::setActiveManager(_textInputManager.get());
+
+    // Show/hide the software keyboard when a TextField gains or loses focus.
+    __weak CampelloMTKView* weakSelf = self;
+    _textInputManager->setOnInputTargetChanged([weakSelf](bool has_target) {
+        if (CampelloMTKView* strongSelf = weakSelf) {
+            if (has_target && !strongSelf.isFirstResponder)
+                [strongSelf becomeFirstResponder];
+            else if (!has_target && strongSelf.isFirstResponder)
+                [strongSelf resignFirstResponder];
+        }
+    });
+
+    // On-demand rendering: stop the continuous display link.
+    // Register the callback before mounting so initial markNeedsPaint() calls
+    // during tree construction already reach the view.
+    self.paused               = YES;
+    self.enableSetNeedsDisplay = YES;
+    Widgets::FrameScheduler::setCallback([weakSelf] {
+        if (weakSelf) [weakSelf setNeedsDisplay:YES];
+    });
 
     // Wrap root widget with MediaQuery
     Widgets::MediaQueryData mediaData;
@@ -141,10 +214,21 @@ namespace {
     _renderer->setDevicePixelRatio(static_cast<float>(scale));
     if (_backendPtr) _backendPtr->setViewport(physical_width, physical_height);
 
-    auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
-    if (colorView) _renderer->renderFrame(colorView, logical_width, logical_height);
+    // Tie presentation to GPU completion + vsync via presentDrawable: on the
+    // command buffer rather than calling [drawable present] on the CPU.
+    _device->scheduleNextPresent((__bridge void*)drawable);
 
-    [drawable present];
+    auto now = std::chrono::steady_clock::now();
+    uint64_t now_ms = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            now.time_since_epoch()).count());
+    if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
+    if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
+
+    auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
+    bool rendered = colorView && _renderer->renderFrame(colorView, logical_width, logical_height);
+    if (!rendered)
+        _device->scheduleNextPresent(nullptr);
 }
 
 - (void)mtkView:(MTKView*)view drawableSizeWillChange:(CGSize)size
@@ -249,6 +333,280 @@ namespace {
     }
 }
 
+// ============================================================================
+// UIKeyInput
+// ============================================================================
+
+- (BOOL)hasText
+{
+    auto* controller = _textInputManager->activeController();
+    return controller && !controller->text().empty();
+}
+
+- (void)insertText:(NSString*)text
+{
+    if (!_textInputManager) return;
+
+    // Filter standalone dead keys (e.g. Bluetooth keyboard accents)
+    if (text.length == 1 && !_textInputManager->isComposing()) {
+        unichar c = [text characterAtIndex:0];
+        BOOL isDeadKey = (c == 0x00B4 || c == 0x0060 || c == 0x005E || c == 0x007E ||
+                          c == 0x00A8 || c == 0x02C6 || c == 0x02DC || c == 0x02D9 ||
+                          c == 0x00B8 || c == 0x02CA || c == 0x02CB);
+        if (isDeadKey) return;
+    }
+
+    if (_textInputManager->isComposing())
+        _textInputManager->commitComposing();
+
+    _textInputManager->insertText([text UTF8String]);
+}
+
+- (void)deleteBackward
+{
+    auto* controller = _textInputManager->activeController();
+    if (controller) controller->deleteBackward();
+}
+
+// ============================================================================
+// UITextInput
+// ============================================================================
+
+- (UITextRange*)selectedTextRange
+{
+    auto* controller = _textInputManager->activeController();
+    if (!controller) return nil;
+    int start = controller->selectionStart();
+    int end   = controller->selectionEnd();
+    return [CampelloTextRange rangeWithNSRange:NSMakeRange(start, end - start)];
+}
+
+- (void)setSelectedTextRange:(UITextRange*)selectedTextRange
+{
+    auto* controller = _textInputManager->activeController();
+    if (!controller) return;
+    CampelloTextRange* r = (CampelloTextRange*)selectedTextRange;
+    int start = static_cast<int>(r.range.location);
+    int end   = static_cast<int>(NSMaxRange(r.range));
+    controller->setSelection(start, end);
+}
+
+- (UITextRange*)markedTextRange
+{
+    auto* controller = _textInputManager->activeController();
+    if (!controller || !controller->isComposing()) return nil;
+    int start = controller->composingStart();
+    int end   = controller->composingEnd();
+    return [CampelloTextRange rangeWithNSRange:NSMakeRange(start, end - start)];
+}
+
+- (void)setMarkedText:(NSString*)markedText selectedRange:(NSRange)selectedRange
+{
+    if (!_textInputManager) return;
+
+    // Skip standalone dead-key accents
+    if (markedText.length == 1) {
+        unichar c = [markedText characterAtIndex:0];
+        BOOL isDeadKey = (c == 0x00B4 || c == 0x0060 || c == 0x005E || c == 0x007E ||
+                          c == 0x00A8 || c == 0x02C6 || c == 0x02DC || c == 0x02D9 ||
+                          c == 0x00B8 || c == 0x02CA || c == 0x02CB);
+        if (isDeadKey) return;
+    }
+
+    _textInputManager->updateComposingText([markedText UTF8String]);
+
+    auto* controller = _textInputManager->activeController();
+    if (controller) {
+        int selStart = controller->composingStart() + static_cast<int>(selectedRange.location);
+        int selEnd   = selStart + static_cast<int>(selectedRange.length);
+        controller->setSelection(selStart, selEnd);
+    }
+}
+
+- (void)unmarkText
+{
+    if (_textInputManager)
+        _textInputManager->commitComposing();
+}
+
+- (NSDictionary*)markedTextStyle { return nil; }
+- (void)setMarkedTextStyle:(NSDictionary*)markedTextStyle { (void)markedTextStyle; }
+
+- (UITextPosition*)beginningOfDocument
+{
+    return [CampelloTextPosition positionWithIndex:0];
+}
+
+- (UITextPosition*)endOfDocument
+{
+    auto* controller = _textInputManager->activeController();
+    NSInteger len = controller ? static_cast<NSInteger>(controller->text().size()) : 0;
+    return [CampelloTextPosition positionWithIndex:len];
+}
+
+- (UITextRange*)textRangeFromPosition:(UITextPosition*)fromPosition toPosition:(UITextPosition*)toPosition
+{
+    NSInteger from = ((CampelloTextPosition*)fromPosition).index;
+    NSInteger to   = ((CampelloTextPosition*)toPosition).index;
+    if (from > to) std::swap(from, to);
+    return [CampelloTextRange rangeWithNSRange:NSMakeRange(from, to - from)];
+}
+
+- (UITextPosition*)positionFromPosition:(UITextPosition*)position offset:(NSInteger)offset
+{
+    NSInteger idx = ((CampelloTextPosition*)position).index + offset;
+    auto* controller = _textInputManager->activeController();
+    NSInteger maxLen = controller ? static_cast<NSInteger>(controller->text().size()) : 0;
+    idx = std::max<NSInteger>(0, std::min(idx, maxLen));
+    return [CampelloTextPosition positionWithIndex:idx];
+}
+
+- (NSComparisonResult)comparePosition:(UITextPosition*)position toPosition:(UITextPosition*)other
+{
+    NSInteger a = ((CampelloTextPosition*)position).index;
+    NSInteger b = ((CampelloTextPosition*)other).index;
+    if (a < b) return NSOrderedAscending;
+    if (a > b) return NSOrderedDescending;
+    return NSOrderedSame;
+}
+
+- (NSInteger)offsetFromPosition:(UITextPosition*)from toPosition:(UITextPosition*)toPosition
+{
+    return ((CampelloTextPosition*)toPosition).index - ((CampelloTextPosition*)from).index;
+}
+
+- (UITextPosition*)positionFromPosition:(UITextPosition*)position inDirection:(UITextLayoutDirection)direction offset:(NSInteger)offset
+{
+    (void)direction;
+    return [self positionFromPosition:position offset:offset];
+}
+
+- (UITextPosition*)positionWithinRange:(UITextRange*)range farthestInDirection:(UITextLayoutDirection)direction
+{
+    CampelloTextRange* r = (CampelloTextRange*)range;
+    switch (direction) {
+        case UITextLayoutDirectionUp:
+        case UITextLayoutDirectionLeft:  return r.start;
+        case UITextLayoutDirectionDown:
+        case UITextLayoutDirectionRight: return r.end;
+        default:                         return r.end;
+    }
+}
+
+- (UITextRange*)characterRangeByExtendingPosition:(UITextPosition*)position inDirection:(UITextLayoutDirection)direction
+{
+    NSInteger idx = ((CampelloTextPosition*)position).index;
+    auto* controller = _textInputManager->activeController();
+    NSInteger maxLen = controller ? static_cast<NSInteger>(controller->text().size()) : 0;
+
+    switch (direction) {
+        case UITextLayoutDirectionUp:
+        case UITextLayoutDirectionLeft:
+            if (idx > 0) return [CampelloTextRange rangeWithNSRange:NSMakeRange(idx - 1, 1)];
+            return [CampelloTextRange rangeWithNSRange:NSMakeRange(idx, 0)];
+        case UITextLayoutDirectionDown:
+        case UITextLayoutDirectionRight:
+        default:
+            if (idx < maxLen) return [CampelloTextRange rangeWithNSRange:NSMakeRange(idx, 1)];
+            return [CampelloTextRange rangeWithNSRange:NSMakeRange(idx, 0)];
+    }
+}
+
+- (UITextWritingDirection)baseWritingDirectionForPosition:(UITextPosition*)position inDirection:(UITextStorageDirection)direction
+{
+    (void)position; (void)direction;
+    return UITextWritingDirectionLeftToRight;
+}
+
+- (void)setBaseWritingDirection:(UITextWritingDirection)writingDirection forRange:(UITextRange*)range
+{
+    (void)writingDirection; (void)range;
+}
+
+- (CGRect)firstRectForRange:(UITextRange*)range
+{
+    auto rect = _textInputManager->getCharacterRect(
+        static_cast<int>(((CampelloTextRange*)range).range.location));
+    return CGRectMake(rect[0], rect[1], std::max(rect[2], 1.0f), std::max(rect[3], 1.0f));
+}
+
+- (CGRect)caretRectForPosition:(UITextPosition*)position
+{
+    auto rect = _textInputManager->getCharacterRect(
+        static_cast<int>(((CampelloTextPosition*)position).index));
+    return CGRectMake(rect[0], rect[1], std::max(rect[2], 1.0f), std::max(rect[3], 1.0f));
+}
+
+- (UITextPosition*)closestPositionToPoint:(CGPoint)point
+{
+    if (!_textInputManager) return [self endOfDocument];
+    
+    int idx = _textInputManager->getPositionForPoint(static_cast<float>(point.x),
+                                                      static_cast<float>(point.y));
+    auto* controller = _textInputManager->activeController();
+    int maxLen = controller ? static_cast<int>(controller->text().size()) : 0;
+    idx = std::max(0, std::min(idx, maxLen));
+    return [CampelloTextPosition positionWithIndex:idx];
+}
+
+- (UITextPosition*)closestPositionToPoint:(CGPoint)point withinRange:(UITextRange*)range
+{
+    CampelloTextRange* r = (CampelloTextRange*)range;
+    if (!_textInputManager) return r.start;
+    
+    int idx = _textInputManager->getPositionForPoint(static_cast<float>(point.x),
+                                                      static_cast<float>(point.y));
+    int start = static_cast<int>(r.range.location);
+    int end   = static_cast<int>(r.range.location + r.range.length);
+    idx = std::max(start, std::min(idx, end));
+    return [CampelloTextPosition positionWithIndex:idx];
+}
+
+- (UITextRange*)characterRangeAtPoint:(CGPoint)point
+{
+    if (!_textInputManager) return [CampelloTextRange rangeWithNSRange:NSMakeRange(0, 0)];
+    
+    int idx = _textInputManager->getPositionForPoint(static_cast<float>(point.x),
+                                                      static_cast<float>(point.y));
+    auto* controller = _textInputManager->activeController();
+    int maxLen = controller ? static_cast<int>(controller->text().size()) : 0;
+    idx = std::max(0, std::min(idx, maxLen));
+    return [CampelloTextRange rangeWithNSRange:NSMakeRange(idx, 0)];
+}
+
+- (NSString*)textInRange:(UITextRange*)range
+{
+    auto* controller = _textInputManager->activeController();
+    if (!controller) return @"";
+    CampelloTextRange* r = (CampelloTextRange*)range;
+    const std::string& text = controller->text();
+    NSUInteger start = r.range.location;
+    NSUInteger len   = r.range.length;
+    if (start >= text.size()) return @"";
+    if (start + len > text.size()) len = text.size() - start;
+    std::string sub = text.substr(static_cast<size_t>(start), static_cast<size_t>(len));
+    return [NSString stringWithUTF8String:sub.c_str()];
+}
+
+- (void)replaceRange:(UITextRange*)range withText:(NSString*)text
+{
+    auto* controller = _textInputManager->activeController();
+    if (!controller) return;
+    CampelloTextRange* r = (CampelloTextRange*)range;
+    int start = static_cast<int>(r.range.location);
+    int end   = static_cast<int>(NSMaxRange(r.range));
+    controller->setSelection(start, end);
+    controller->insertText([text UTF8String]);
+}
+
+- (id<UITextInputTokenizer>)tokenizer
+{
+    if (!_tokenizer) {
+        _tokenizer = [[UITextInputStringTokenizer alloc] initWithTextInput:self];
+    }
+    return _tokenizer;
+}
+
 @end
 
 // ---------------------------------------------------------------------------
@@ -280,9 +638,9 @@ namespace {
     _metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
     _metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
     _metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
-    _metalView.preferredFramesPerSecond = 60;
     _metalView.autoresizingMask         =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    // paused/enableSetNeedsDisplay are set inside setupWithGPUDevice.
 
     [self.view addSubview:_metalView];
 
@@ -309,6 +667,9 @@ namespace {
 {
     [super viewDidLayoutSubviews];
     [self updateSafeAreaInsets];
+    // View bounds may have changed (rotation, split-screen resize) — request a
+    // frame so the widget tree lays out at the new size.
+    Widgets::FrameScheduler::scheduleFrame();
 }
 
 - (void)updateSafeAreaInsets

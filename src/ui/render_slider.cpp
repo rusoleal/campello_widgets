@@ -10,13 +10,21 @@
 namespace systems::leal::campello_widgets
 {
 
-    RenderSlider::RenderSlider()
+    RenderSlider::RenderSlider() = default;
+
+    RenderSlider::~RenderSlider()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher())
+            d->removeHandler(this);
+    }
+
+    void RenderSlider::attach()
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
     }
 
-    RenderSlider::~RenderSlider()
+    void RenderSlider::detach()
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
             d->removeHandler(this);

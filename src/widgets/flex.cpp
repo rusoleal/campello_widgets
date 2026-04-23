@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/flex.hpp>
 #include <campello_widgets/widgets/flex_element.hpp>
 #include <campello_widgets/ui/render_flex.hpp>
@@ -84,4 +85,33 @@ namespace systems::leal::campello_widgets
         static_cast<RenderFlex&>(parent).clearChildren();
     }
 
+
+    void Flex::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        properties.add(std::make_unique<StringProperty>("axis", axis == Axis::horizontal ? "horizontal" : "vertical"));
+
+        const char* mainAlign = [] (MainAxisAlignment v) {
+            switch (v) {
+                case MainAxisAlignment::start: return "start";
+                case MainAxisAlignment::end: return "end";
+                case MainAxisAlignment::center: return "center";
+                case MainAxisAlignment::spaceBetween: return "spaceBetween";
+                case MainAxisAlignment::spaceAround: return "spaceAround";
+                case MainAxisAlignment::spaceEvenly: return "spaceEvenly";
+            }
+            return "start";
+        }(main_axis_alignment);
+        properties.add(std::make_unique<StringProperty>("mainAxisAlignment", mainAlign));
+
+        const char* crossAlign = [] (CrossAxisAlignment v) {
+            switch (v) {
+                case CrossAxisAlignment::start: return "start";
+                case CrossAxisAlignment::end: return "end";
+                case CrossAxisAlignment::center: return "center";
+                case CrossAxisAlignment::stretch: return "stretch";
+            }
+            return "start";
+        }(cross_axis_alignment);
+        properties.add(std::make_unique<StringProperty>("crossAxisAlignment", crossAlign));
+    }
 } // namespace systems::leal::campello_widgets

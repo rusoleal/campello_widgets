@@ -291,6 +291,8 @@ namespace systems::leal::campello_widgets
     template<typename T, typename... Args>
     std::shared_ptr<T> mw(Args&&... args)
     {
-        return std::make_shared<T>(std::forward<Args>(args)...);
+        auto w = std::make_shared<T>(std::forward<Args>(args)...);
+        w->captureLocation();
+        return w;
     }
 } // namespace systems::leal::campello_widgets

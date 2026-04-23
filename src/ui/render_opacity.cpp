@@ -40,4 +40,10 @@ namespace systems::leal::campello_widgets
         context.canvas().restore();
     }
 
+    bool RenderOpacity::hitTestChildren(HitTestResult& result, const Offset& position)
+    {
+        if (opacity_ <= 0.0f) return false;
+        return RenderBox::hitTestChildren(result, position);
+    }
+
 } // namespace systems::leal::campello_widgets

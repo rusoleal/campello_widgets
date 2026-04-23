@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/stack_element.hpp>
 #include <campello_widgets/ui/render_stack.hpp>
@@ -88,4 +89,9 @@ namespace systems::leal::campello_widgets
         static_cast<RenderStack&>(parent).clearChildren();
     }
 
+
+    void Stack::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        properties.add(std::make_unique<StringProperty>("fit", fit == StackFit::loose ? "loose" : (fit == StackFit::expand ? "expand" : "passthrough")));
+    }
 } // namespace systems::leal::campello_widgets

@@ -1,6 +1,9 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 
+#include <iostream>
+#include <typeinfo>
+
 namespace systems::leal::campello_widgets
 {
 
@@ -49,6 +52,16 @@ namespace systems::leal::campello_widgets
 
     void PointerDispatcher::handlePointerEvent(const PointerEvent& event)
     {
+        // Record position for debug visualization
+        if (event.kind == PointerEventKind::down ||
+            event.kind == PointerEventKind::move ||
+            event.kind == PointerEventKind::up)
+        {
+            recent_positions_.push_back({event.position.x, event.position.y, 0});
+            if (recent_positions_.size() > 16)
+                recent_positions_.erase(recent_positions_.begin());
+        }
+
         switch (event.kind)
         {
         case PointerEventKind::down:
@@ -61,6 +74,11 @@ namespace systems::leal::campello_widgets
             path.reserve(result.path().size());
             for (const auto& entry : result.path())
                 path.push_back(entry.target);
+
+            std::cerr << "[PointerDispatcher] down at " << event.position.x << "," << event.position.y
+                      << " path size=" << path.size() << "\n";
+            for (auto* box : path)
+                std::cerr << "  -> " << typeid(*box).name() << " @ " << box << "\n";
 
             dispatch(path, event);
             active_pointers_[event.pointer_id] = {std::move(path)};
@@ -112,6 +130,7 @@ namespace systems::leal::campello_widgets
             auto it = active_pointers_.find(event.pointer_id);
             if (it != active_pointers_.end())
             {
+                std::cerr << "[PointerDispatcher] up/cancel path size=" << it->second.path.size() << "\n";
                 dispatch(it->second.path, event);
                 active_pointers_.erase(it);
             }
@@ -151,12 +170,17 @@ namespace systems::leal::campello_widgets
         }
 
         // Normal dispatch to all handlers in path
+        int dispatched = 0;
         for (RenderBox* box : path)
         {
             auto it = handlers_.find(box);
             if (it != handlers_.end())
+            {
                 it->second(event);
+                ++dispatched;
+            }
         }
+        std::cerr << "[PointerDispatcher] dispatched to " << dispatched << " handlers\n";
     }
 
     void PointerDispatcher::capturePointer(int32_t pointer_id, RenderBox* box)

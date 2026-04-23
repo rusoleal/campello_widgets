@@ -9,6 +9,8 @@
 #include <campello_widgets/ui/key_event.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/ticker.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/ui/text_input_manager.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -17,9 +19,14 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <dwmapi.h>
+#include <imm.h>
 
-#include <memory>
 #include <chrono>
+#include <memory>
+#include <atomic>
+#include <string>
+#include <vector>
 
 // Namespace aliases - using global qualification to work correctly in Unity Build
 namespace GPU     = ::systems::leal::campello_gpu;
@@ -49,12 +56,115 @@ struct WindowState
     std::shared_ptr<Widgets::FocusManager>      focus_manager;
     std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
     std::unique_ptr<Widgets::D3DDrawBackend>    draw_backend;
+    std::unique_ptr<Widgets::TextInputManager>  text_input_manager;
     
     // For tracking pointer position
     bool mouse_tracking = false;
 };
 
 static WindowState* gWindowState = nullptr;
+
+// ---------------------------------------------------------------------------
+// Vsync thread — aligns WM_PAINT to the DWM composition clock
+// ---------------------------------------------------------------------------
+//
+// DwmFlush() blocks the calling thread until the next DWM vsync (~16 ms at
+// 60 Hz, ~8 ms at 120 Hz).  Running it on a dedicated thread keeps the main
+// message pump free for input while still delivering vsync-gated frames.
+//
+// Protocol:
+//   1. FrameScheduler::scheduleFrame() calls SetEvent(gVsyncEvent).
+//   2. The vsync thread wakes from WaitForSingleObject, calls DwmFlush(),
+//      then posts InvalidateRect — WM_PAINT fires at the vsync boundary.
+//   3. WM_PAINT renders the frame; tickers call scheduleFrame() → repeat.
+//
+// The auto-reset event coalesces multiple scheduleFrame() calls that arrive
+// within the same vsync interval into exactly one WM_PAINT.
+
+static std::atomic<bool> gVsyncRunning{false};
+static HANDLE            gVsyncEvent  = nullptr;   // auto-reset
+static HANDLE            gVsyncThread = nullptr;
+
+static DWORD WINAPI vsyncThreadProc(LPVOID param)
+{
+    HWND hwnd = static_cast<HWND>(param);
+    while (gVsyncRunning.load(std::memory_order_relaxed))
+    {
+        // Block until scheduleFrame() signals a dirty frame (or 200 ms to
+        // re-check the running flag on shutdown).
+        const DWORD result = WaitForSingleObject(gVsyncEvent, 200);
+        if (result == WAIT_TIMEOUT) continue;
+        if (!gVsyncRunning.load(std::memory_order_relaxed)) break;
+
+        // Align to the next DWM vsync boundary.
+        DwmFlush();
+
+        // Post WM_PAINT to the main thread.  InvalidateRect is safe to call
+        // from any thread.
+        if (gVsyncRunning.load(std::memory_order_relaxed))
+            InvalidateRect(hwnd, nullptr, FALSE);
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// IME helpers
+// ---------------------------------------------------------------------------
+
+static std::string utf16ToUtf8(const wchar_t* wstr, int len)
+{
+    if (len <= 0 || !wstr) return {};
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr, len, nullptr, 0, nullptr, nullptr);
+    if (size_needed <= 0) return {};
+    std::string result(size_needed, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr, len, result.data(), size_needed, nullptr, nullptr);
+    return result;
+}
+
+/**
+ * @brief Positions the IME candidate window near the current cursor/composition.
+ *
+ * Called during WM_IME_STARTCOMPOSITION and WM_IME_COMPOSITION so the candidate
+ * list appears just below the caret rather than at the top-left of the window.
+ */
+static void updateImeCompositionWindow(HWND hwnd, Widgets::TextInputManager* tim)
+{
+    if (!tim || !tim->hasInputTarget()) return;
+
+    auto* controller = tim->activeController();
+    if (!controller) return;
+
+    // Get the rect at the cursor position (or composing start if composing)
+    int byte_offset = controller->isComposing()
+        ? controller->composingStart()
+        : controller->selectionEnd();
+
+    auto rect = tim->getCharacterRect(byte_offset);
+    if (rect[2] <= 0.0f || rect[3] <= 0.0f) return; // No valid rect
+
+    // Convert from client coordinates to screen coordinates
+    POINT pt = { static_cast<LONG>(rect[0]), static_cast<LONG>(rect[1] + rect[3]) };
+    ClientToScreen(hwnd, &pt);
+
+    HIMC hIMC = ImmGetContext(hwnd);
+    if (!hIMC) return;
+
+    COMPOSITIONFORM cf = {};
+    cf.dwStyle = CFS_POINT;
+    cf.ptCurrentPos.x = pt.x;
+    cf.ptCurrentPos.y = pt.y;
+    ImmSetCompositionWindow(hIMC, &cf);
+
+    // Also set the candidate window position (the list of suggestions)
+    CANDIDATEFORM cand = {};
+    cand.dwIndex = 0;
+    cand.dwStyle = CFS_CANDIDATEPOS;
+    cand.ptCurrentPos.x = pt.x;
+    cand.ptCurrentPos.y = pt.y;
+    ImmSetCandidateWindow(hIMC, &cand);
+
+    ImmReleaseContext(hwnd, hIMC);
+}
 
 // ---------------------------------------------------------------------------
 // Key code translation
@@ -169,10 +279,42 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
                 int width = LOWORD(lparam);
                 int height = HIWORD(lparam);
                 if (width > 0 && height > 0) {
-                    // Renderer will pick up new size on next frame
-                    // D3D backend handles resize via swap chain
+                    // Request a repaint so the widget tree lays out at the new size.
+                    InvalidateRect(hwnd, nullptr, FALSE);
                 }
             }
+            return 0;
+        }
+
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            BeginPaint(hwnd, &ps);
+            if (state && state->renderer && state->device) {
+                RECT client_rect;
+                GetClientRect(hwnd, &client_rect);
+                const int w = client_rect.right  - client_rect.left;
+                const int h = client_rect.bottom - client_rect.top;
+                if (w > 0 && h > 0) {
+                    UINT dpi = GetDpiForWindow(hwnd);
+                    state->renderer->setDevicePixelRatio(
+                        static_cast<float>(dpi) / 96.0f);
+                    auto color_view = state->device->getSwapchainTextureView();
+                    if (color_view) {
+                        auto now = std::chrono::steady_clock::now();
+                        uint64_t now_ms = static_cast<uint64_t>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                now.time_since_epoch()).count());
+                        if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
+                        if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
+
+                        state->renderer->renderFrame(
+                            color_view,
+                            static_cast<float>(w),
+                            static_cast<float>(h));
+                    }
+                }
+            }
+            EndPaint(hwnd, &ps);
             return 0;
         }
 
@@ -259,6 +401,70 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
             return 0;
         }
 
+        // IME composition events
+        case WM_IME_STARTCOMPOSITION: {
+            if (state && state->text_input_manager) {
+                state->text_input_manager->beginComposing();
+                updateImeCompositionWindow(hwnd, state->text_input_manager.get());
+            }
+            return 0;
+        }
+
+        case WM_IME_COMPOSITION: {
+            if (!state || !state->text_input_manager) return 0;
+
+            HIMC hIMC = ImmGetContext(hwnd);
+            if (!hIMC) return 0;
+
+            if (lparam & GCS_COMPSTR) {
+                LONG size = ImmGetCompositionStringW(hIMC, GCS_COMPSTR, nullptr, 0);
+                if (size > 0) {
+                    std::vector<wchar_t> buf(size / sizeof(wchar_t));
+                    ImmGetCompositionStringW(hIMC, GCS_COMPSTR, buf.data(), size);
+                    std::string utf8 = utf16ToUtf8(buf.data(), static_cast<int>(buf.size()));
+                    if (!utf8.empty())
+                        state->text_input_manager->updateComposingText(utf8);
+                }
+            }
+
+            if (lparam & GCS_RESULTSTR) {
+                LONG size = ImmGetCompositionStringW(hIMC, GCS_RESULTSTR, nullptr, 0);
+                if (size > 0) {
+                    std::vector<wchar_t> buf(size / sizeof(wchar_t));
+                    ImmGetCompositionStringW(hIMC, GCS_RESULTSTR, buf.data(), size);
+                    std::string utf8 = utf16ToUtf8(buf.data(), static_cast<int>(buf.size()));
+                    state->text_input_manager->updateComposingText(utf8);
+                    state->text_input_manager->commitComposing();
+                } else {
+                    state->text_input_manager->cancelComposing();
+                }
+            }
+
+            ImmReleaseContext(hwnd, hIMC);
+
+            // Reposition the candidate window whenever the composition updates
+            // (cursor may have moved within the composing text).
+            updateImeCompositionWindow(hwnd, state->text_input_manager.get());
+            return 0;
+        }
+
+        case WM_IME_ENDCOMPOSITION: {
+            if (state && state->text_input_manager) {
+                if (state->text_input_manager->isComposing())
+                    state->text_input_manager->cancelComposing();
+            }
+            return 0;
+        }
+
+        case WM_IME_SETCONTEXT: {
+            // lparam == TRUE  → IME window is being activated
+            // lparam == FALSE → IME window is being deactivated
+            // We don't need special handling here, but we pass it through to
+            // DefWindowProc so the system IME UI (candidate window, etc.) is
+            // created/destroyed correctly.
+            return DefWindowProc(hwnd, msg, wparam, lparam);
+        }
+
         // Keyboard events
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
@@ -288,6 +494,11 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
         case WM_CHAR: {
             if (state && state->focus_manager) {
+                // Suppress WM_CHAR while an IME composition is active to avoid
+                // duplicate text insertion (the IME delivers text via WM_IME_COMPOSITION).
+                if (state->text_input_manager && state->text_input_manager->isComposing())
+                    return 0;
+
                 Widgets::KeyEvent ke;
                 ke.kind = Widgets::KeyEventKind::down;
                 ke.key_code = Widgets::KeyCode::unknown;
@@ -435,8 +646,24 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.focus_manager = std::make_shared<Widgets::FocusManager>();
     Widgets::FocusManager::setActiveManager(state.focus_manager.get());
 
+    state.text_input_manager = std::make_unique<Widgets::TextInputManager>();
+    Widgets::TextInputManager::setActiveManager(state.text_input_manager.get());
+
     state.ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(state.ticker_scheduler.get());
+
+    // Start the vsync thread before mounting the widget tree so that
+    // markNeedsPaint() calls during tree construction already reach it.
+    gVsyncEvent  = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+    gVsyncRunning.store(true, std::memory_order_relaxed);
+    gVsyncThread = CreateThread(nullptr, 0, vsyncThreadProc,
+                                static_cast<LPVOID>(state.hwnd), 0, nullptr);
+
+    // FrameScheduler signals the vsync thread; it calls DwmFlush() then
+    // InvalidateRect so WM_PAINT fires exactly at the vsync boundary.
+    Widgets::FrameScheduler::setCallback([] {
+        SetEvent(gVsyncEvent);
+    });
 
     // Wrap root widget with MediaQuery
     UINT dpi = GetDpiForWindow(state.hwnd);
@@ -478,70 +705,33 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // Initial safe area setup
     updateSafeAreaInsets(&state);
 
-    // Show window
+    // Show window — triggers the initial WM_PAINT via the pending InvalidateRect.
     ShowWindow(state.hwnd, SW_SHOW);
     UpdateWindow(state.hwnd);
 
-    // Message loop
-    bool running = true;
-    while (running) {
-        MSG msg;
-        while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            if (msg.message == WM_QUIT) {
-                running = false;
-                break;
-            }
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-
-        if (!running) break;
-
-        // Get client size
-        RECT client_rect;
-        GetClientRect(state.hwnd, &client_rect);
-        int client_width = client_rect.right - client_rect.left;
-        int client_height = client_rect.bottom - client_rect.top;
-
-        if (client_width > 0 && client_height > 0) {
-            // Update device pixel ratio from window DPI
-            // Standard DPI is 96; DPR = DPI / 96
-            UINT dpi = GetDpiForWindow(state.hwnd);
-            float dpr = static_cast<float>(dpi) / 96.0f;
-            state.renderer->setDevicePixelRatio(dpr);
-
-            // Update draw backend viewport
-            if (state.draw_backend) {
-                state.draw_backend->setViewport(
-                    static_cast<float>(client_width),
-                    static_cast<float>(client_height));
-            }
-
-            // Get swapchain texture from device
-            auto color_view = state.device->getSwapchainTextureView();
-            if (color_view) {
-                state.renderer->renderFrame(
-                    color_view,
-                    static_cast<float>(client_width),
-                    static_cast<float>(client_height));
-            }
-        }
-
-        // Tick schedulers
-        const auto now_tp = std::chrono::steady_clock::now().time_since_epoch();
-        const uint64_t ms = 
-            std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
-        
-        if (auto* d = Widgets::PointerDispatcher::activeDispatcher()) d->tick(ms);
-        if (auto* ts = Widgets::TickerScheduler::active()) ts->tick(ms);
-
-        // Small sleep to avoid 100% CPU when idle
-        Sleep(1);
+    // Message loop — GetMessage blocks when the queue is empty, bringing idle
+    // CPU to ~0%.  Frames are produced only when FrameScheduler::scheduleFrame()
+    // is called (via setState / markNeedsPaint / ticker), which posts InvalidateRect
+    // → WM_PAINT.  This mirrors Flutter's on-demand vsync-driven render loop.
+    MSG msg;
+    while (GetMessage(&msg, nullptr, 0, 0) > 0) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
+
+    // Stop the vsync thread cleanly before teardown.
+    gVsyncRunning.store(false, std::memory_order_relaxed);
+    SetEvent(gVsyncEvent);   // unblock WaitForSingleObject
+    WaitForSingleObject(gVsyncThread, INFINITE);
+    CloseHandle(gVsyncThread);
+    CloseHandle(gVsyncEvent);
+    gVsyncThread = nullptr;
+    gVsyncEvent  = nullptr;
 
     // Cleanup
     Widgets::PointerDispatcher::setActiveDispatcher(nullptr);
     Widgets::FocusManager::setActiveManager(nullptr);
+    Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
 
     gWindowState = nullptr;

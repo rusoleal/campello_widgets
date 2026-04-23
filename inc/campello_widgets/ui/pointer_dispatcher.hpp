@@ -134,6 +134,22 @@ namespace systems::leal::campello_widgets
          */
         RenderBox* getCapturingBox(int32_t pointer_id) const;
 
+        // ------------------------------------------------------------------
+        // Debug: pointer position tracking
+        // ------------------------------------------------------------------
+
+        struct PointerPosition {
+            float x = 0.0f;
+            float y = 0.0f;
+            uint64_t timestamp_ms = 0;
+        };
+
+        /** @brief Returns the last 16 pointer positions for debug visualization. */
+        const std::vector<PointerPosition>& recentPointerPositions() const noexcept
+        {
+            return recent_positions_;
+        }
+
     private:
         struct ActivePointer
         {
@@ -148,6 +164,7 @@ namespace systems::leal::campello_widgets
         std::unordered_map<RenderBox*, TickHandler>      tick_handlers_;
         std::vector<RenderBox*>                          last_hover_path_;
         std::unordered_map<int32_t, RenderBox*>          captured_pointers_;  ///< pointer_id -> capturing box
+        std::vector<PointerPosition>                     recent_positions_;
 
         static PointerDispatcher* s_active_dispatcher_;
     };

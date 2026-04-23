@@ -1,5 +1,6 @@
 #pragma once
 
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/multi_child_render_object_widget.hpp>
 #include <campello_widgets/widgets/stack_element.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
@@ -61,6 +62,8 @@ namespace systems::leal::campello_widgets
             s->children = std::move(children);
             return s;
         }
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+
     };
 
 } // namespace systems::leal::campello_widgets

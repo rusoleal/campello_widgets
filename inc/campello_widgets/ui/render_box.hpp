@@ -117,6 +117,22 @@ namespace systems::leal::campello_widgets
          */
         virtual bool hitTestChildren(HitTestResult& result, const Offset& position);
 
+        // ------------------------------------------------------------------
+        // Diagnostics
+        // ------------------------------------------------------------------
+
+        std::vector<std::shared_ptr<DiagnosticsNode>> debugDescribeChildren() const override;
+
+        /**
+         * @brief Visits all render children for diagnostic tree traversal.
+         *
+         * Override in multi-child render boxes (RenderFlex, RenderStack, etc.)
+         * to enumerate all children. Default implementation visits only `child_`.
+         */
+        virtual void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const;
+
+    protected:
+
     protected:
         std::shared_ptr<RenderBox> child_;
         Offset                     child_offset_;

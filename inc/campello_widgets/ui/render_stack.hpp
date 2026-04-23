@@ -47,6 +47,7 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
+        void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
     private:
         struct StackChild

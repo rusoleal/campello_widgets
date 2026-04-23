@@ -18,13 +18,15 @@ if [[ "$1" == "--fidelity" ]]; then
 fi
 
 PLATFORM=${1:-$(uname -s | tr '[:upper:]' '[:lower:]')}
-BUILD_DIR="build/${PLATFORM}_test"
+BUILD_DIR="build/${PLATFORM}-debug-test"
 
 echo "Building tests..."
-cmake -S . -B "${BUILD_DIR}" \
-    -DCMAKE_BUILD_TYPE=Debug \
-    -DBUILD_TESTS=ON \
-    -DBUILD_INTEGRATION_TESTS=${INTEGRATION:-OFF}
+if [ ! -f "build/${PLATFORM}-debug-test/CMakeCache.txt" ]; then
+    cmake -S . -B "${BUILD_DIR}" \
+        -DCMAKE_BUILD_TYPE=Debug \
+        -DBUILD_TESTS=ON \
+        -DBUILD_INTEGRATION_TESTS=${INTEGRATION:-OFF}
+fi
 
 cmake --build "${BUILD_DIR}" --config Debug
 

@@ -72,6 +72,9 @@ namespace systems::leal::campello_widgets
         RenderTextField();
         ~RenderTextField() override;
 
+        void attach() override;
+        void detach() override;
+
         void performLayout() override;
         void performPaint(PaintContext& ctx, const Offset& offset) override;
 
@@ -86,6 +89,25 @@ namespace systems::leal::campello_widgets
 
         /** @brief Returns true if this is a multi-line text field. */
         bool isMultiline() const { return max_lines != 1; }
+
+        /**
+         * @brief Returns the bounding rect of a character range in local coordinates.
+         *
+         * The rect is relative to the render object's origin and includes padding.
+         * Used by the platform IME to position candidate windows.
+         */
+        Rect getRectForCharacterRange(int start, int end) const;
+
+        /**
+         * @brief Returns the character index at a local point.
+         *
+         * Coordinates are relative to the render object's origin (including padding).
+         * Used by the platform IME for hit-testing and cursor placement.
+         */
+        int getPositionForPoint(float local_x, float local_y) const;
+
+        /** @brief The global offset latched during the last paint. */
+        Offset globalOffset() const noexcept { return global_offset_; }
 
     private:
         void onPointerEvent(const PointerEvent& event);

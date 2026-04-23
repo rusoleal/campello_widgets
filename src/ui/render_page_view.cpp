@@ -38,13 +38,7 @@ namespace systems::leal::campello_widgets
     // RenderPageView
     // =========================================================================
 
-    RenderPageView::RenderPageView()
-    {
-        if (auto* d = PointerDispatcher::activeDispatcher()) {
-            d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
-            d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
-        }
-    }
+    RenderPageView::RenderPageView() = default;
 
     RenderPageView::~RenderPageView()
     {
@@ -53,6 +47,22 @@ namespace systems::leal::campello_widgets
             d->removeTickHandler(this);
         }
         if (controller_) controller_->detach();
+    }
+
+    void RenderPageView::attach()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher()) {
+            d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
+            d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
+        }
+    }
+
+    void RenderPageView::detach()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher()) {
+            d->removeHandler(this);
+            d->removeTickHandler(this);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -239,6 +249,7 @@ namespace systems::leal::campello_widgets
         switch (event.kind)
         {
         case PointerEventKind::down:
+            pointer_down_  = true;
             panning_       = false;
             pan_last_pos_  = event.position;
             velocity_px_s_ = 0.0f;
@@ -248,6 +259,9 @@ namespace systems::leal::campello_widgets
 
         case PointerEventKind::move:
         {
+            if (!pointer_down_)
+                break;
+
             const float dx = event.position.x - pan_last_pos_.x;
             const float dy = event.position.y - pan_last_pos_.y;
 
@@ -270,6 +284,7 @@ namespace systems::leal::campello_widgets
         }
 
         case PointerEventKind::up:
+            pointer_down_ = false;
             if (panning_) {
                 velocity_px_s_ = pan_velocity_;
                 snapToPage();
@@ -278,6 +293,7 @@ namespace systems::leal::campello_widgets
             break;
 
         case PointerEventKind::cancel:
+            pointer_down_ = false;
             panning_ = false;
             break;
 
@@ -303,4 +319,10 @@ namespace systems::leal::campello_widgets
         velocity_px_s_ *= std::exp(-kSpringCoeff * dt_s);
     }
 
+
+    void RenderPageView::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const
+    {
+        for (const auto& c : children_)
+            if (c.box.get()) visitor(c.box.get());
+    }
 } // namespace systems::leal::campello_widgets

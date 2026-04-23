@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/draw_backend.hpp>
+#include <campello_widgets/diagnostics/diagnosticable.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -22,7 +23,7 @@ namespace systems::leal::campello_widgets
      * to compute `size_` from `constraints_`, and `performPaint()` to issue draw
      * calls.
      */
-    class RenderObject
+    class RenderObject : public Diagnosticable
     {
     public:
         virtual ~RenderObject() = default;
@@ -72,6 +73,14 @@ namespace systems::leal::campello_widgets
         void paint(PaintContext& context, const Offset& offset);
 
         /**
+         * @brief Override to paint debug visualizations.
+         *
+         * Called automatically by paint() after performPaint() when any
+         * debug overlay flag is enabled. The default implementation does nothing.
+         */
+        virtual void debugPaint(PaintContext& context, const Offset& offset) const {}
+
+        /**
          * @brief Issues draw calls for this render object.
          *
          * Override in subclasses. `offset` is this object's origin in the
@@ -107,7 +116,18 @@ namespace systems::leal::campello_widgets
         // Parent tracking (set by child-management methods in RenderBox)
         // ------------------------------------------------------------------
 
-        void setParent(RenderObject* parent) noexcept { parent_ = parent; }
+        virtual void attach() {}
+        virtual void detach() {}
+
+        void setParent(RenderObject* parent) noexcept
+        {
+            RenderObject* old_parent = parent_;
+            if (old_parent && !parent)
+                detach();
+            parent_ = parent;
+            if (parent && !old_parent)
+                attach();
+        }
 
         // ------------------------------------------------------------------
         // Layout-time backend access
@@ -156,6 +176,9 @@ namespace systems::leal::campello_widgets
         bool            needs_layout_ = true;
         bool            needs_paint_  = true;
         RenderObject*   parent_       = nullptr;
+
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+        std::string toStringShort() const override;
 
     private:
         inline static IDrawBackend* s_active_backend_ = nullptr;

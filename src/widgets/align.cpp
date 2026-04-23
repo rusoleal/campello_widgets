@@ -1,5 +1,8 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/ui/render_align.hpp>
+
+#include <sstream>
 
 namespace systems::leal::campello_widgets
 {
@@ -22,4 +25,11 @@ namespace systems::leal::campello_widgets
         ra.markNeedsLayout();
     }
 
+
+    void Align::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        std::ostringstream oss;
+        oss << "Alignment(" << alignment.x << ", " << alignment.y << ")";
+        properties.add(std::make_unique<StringProperty>("alignment", oss.str()));
+    }
 } // namespace systems::leal::campello_widgets

@@ -39,6 +39,14 @@ namespace systems::leal::campello_widgets
         virtual ~IDrawBackend() = default;
 
         /**
+         * @brief Set the viewport dimensions for the current frame.
+         *
+         * Must be called before renderFrame() each frame so the backend
+         * knows the output size for coordinate transforms.
+         */
+        virtual void setViewport(float /*w*/, float /*h*/) noexcept {}
+
+        /**
          * @brief Draw a filled or stroked rectangle.
          *
          * @param cmd       The draw rect command (rect + paint).

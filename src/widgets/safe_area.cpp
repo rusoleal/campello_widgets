@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/safe_area.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/ui/renderer.hpp>
@@ -37,4 +38,9 @@ namespace systems::leal::campello_widgets
         return padding;
     }
 
+
+    void SafeArea::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        properties.add(std::make_unique<DiagnosticProperty<EdgeInsets>>("minimum", minimum));
+    }
 } // namespace systems::leal::campello_widgets

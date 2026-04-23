@@ -53,19 +53,21 @@ TEST(RenderSizedBox, NoExplicitSizeTakesMaxFromConstraints)
     EXPECT_FLOAT_EQ(box.size().height, 120.0f);
 }
 
-TEST(RenderSizedBox, OnlyWidthSetHeightTakesMax)
+TEST(RenderSizedBox, OnlyWidthSetHeightIsZero)
 {
+    // Matches Flutter: unspecified dimension defaults to 0 when childless.
     auto box = makeBox(80.0f, {});
     box.layout(cw::BoxConstraints::loose(200.0f, 100.0f));
     EXPECT_FLOAT_EQ(box.size().width,  80.0f);
-    EXPECT_FLOAT_EQ(box.size().height, 100.0f);
+    EXPECT_FLOAT_EQ(box.size().height, 0.0f);
 }
 
-TEST(RenderSizedBox, OnlyHeightSetWidthTakesMax)
+TEST(RenderSizedBox, OnlyHeightSetWidthIsZero)
 {
+    // Matches Flutter: unspecified dimension defaults to 0 when childless.
     auto box = makeBox({}, 60.0f);
     box.layout(cw::BoxConstraints::loose(200.0f, 100.0f));
-    EXPECT_FLOAT_EQ(box.size().width,  200.0f);
+    EXPECT_FLOAT_EQ(box.size().width,  0.0f);
     EXPECT_FLOAT_EQ(box.size().height, 60.0f);
 }
 

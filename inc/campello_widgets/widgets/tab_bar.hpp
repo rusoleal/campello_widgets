@@ -139,6 +139,7 @@ namespace systems::leal::campello_widgets
     {
     public:
         std::vector<WidgetRef> children;
+        double                 animation_duration_ms = 200.0;
 
         TabBarView() = default;
         explicit TabBarView(std::vector<WidgetRef> ch)

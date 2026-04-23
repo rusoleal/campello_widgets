@@ -1,3 +1,4 @@
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/container.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
 #include <campello_widgets/widgets/padding.hpp>
@@ -53,4 +54,18 @@ namespace systems::leal::campello_widgets
         return result;
     }
 
+
+    void Container::debugFillProperties(DiagnosticsPropertyBuilder& properties) const
+    {
+        if (width.has_value())
+            properties.add(std::make_unique<DoubleProperty>("width", *width));
+        if (height.has_value())
+            properties.add(std::make_unique<DoubleProperty>("height", *height));
+        if (color.has_value())
+            properties.add(std::make_unique<ColorProperty>("color", *color));
+        if (padding.has_value())
+            properties.add(std::make_unique<DiagnosticProperty<EdgeInsets>>("padding", *padding));
+        if (alignment.has_value())
+            properties.add(std::make_unique<StringProperty>("alignment", "Alignment(...)"));
+    }
 } // namespace systems::leal::campello_widgets

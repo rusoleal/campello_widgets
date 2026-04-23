@@ -39,6 +39,9 @@ namespace systems::leal::campello_widgets
         RenderGestureDetector();
         ~RenderGestureDetector();
 
+        void attach() override;
+        void detach() override;
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);

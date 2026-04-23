@@ -1,5 +1,6 @@
 #pragma once
 
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/multi_child_render_object_widget.hpp>
 #include <campello_widgets/widgets/flex_element.hpp>
 #include <campello_widgets/ui/axis.hpp>
@@ -37,6 +38,8 @@ namespace systems::leal::campello_widgets
             int                        index) const override;
 
         void clearRenderObjectChildren(RenderObject& parent) const override;
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+
     };
 
 } // namespace systems::leal::campello_widgets

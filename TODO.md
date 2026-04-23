@@ -284,14 +284,166 @@ with the device pixel ratio (DPR) applied only at the GPU boundary.
 
 ---
 
+## Phase 15 — Design System
+
+Capa de alto nivel intercambiable entre design systems (Material, Cupertino, custom).
+Los widgets adaptativos no conocen el design system activo — simplemente delegan a él vía `Theme::of(ctx)`.
+
+### Arquitectura
+
+```
+DesignTokens            — valores crudos (colores, tipografía, espaciado, motion, shape)
+DesignSystem            — interfaz abstracta: tokens() + buildXxx(Config) por componente
+Theme (InheritedWidget) — propaga el DesignSystem por el árbol
+Button, Card, ...       — thin wrappers que llaman a Theme::of(ctx).buildXxx()
+```
+
+### Archivos a crear
+
+| Archivo | Contenido |
+|---|---|
+| `inc/campello_widgets/ui/design_tokens.hpp` | `ColorScheme`, `Typography`, `ShapeTokens`, `SpacingTokens`, `MotionTokens`, `DesignTokens`, `Brightness` |
+| `inc/campello_widgets/ui/design_system.hpp` | Config structs + clase abstracta `DesignSystem` |
+| `inc/campello_widgets/widgets/theme.hpp` | `Theme : InheritedWidget` con `Theme::of(ctx)` y `Theme::tokensOf(ctx)` |
+| `src/widgets/theme.cpp` | Implementación de `Theme` |
+
+Los widgets adaptativos existentes (`Button`, `Card`, `TextField`, `NavigationBar`, ...) se refactorizan para delegar a `Theme::of(ctx).buildXxx()`.
+
+### Tareas
+
+- [ ] **Task 1 — DesignTokens**: Crear `inc/campello_widgets/ui/design_tokens.hpp` con `ColorScheme`, `Typography`, `ShapeTokens`, `SpacingTokens`, `MotionTokens`, `DesignTokens`, `Brightness`.
+- [ ] **Task 2 — DesignSystem**: Crear `inc/campello_widgets/ui/design_system.hpp` con config structs agnósticas (`ButtonConfig`, `TextFieldConfig`, `CardConfig`, `NavigationBarConfig`, ...) y clase abstracta `DesignSystem`.
+- [ ] **Task 3 — Theme**: Crear `inc/campello_widgets/widgets/theme.hpp` + `src/widgets/theme.cpp`. `Theme : InheritedWidget` con `Theme::of(ctx)` y `Theme::tokensOf(ctx)`.
+- [ ] **Task 4 — Widgets adaptativos**: Refactorizar `Button`, `Card`, `TextField`, `NavigationBar` para ser thin wrappers que llaman a `Theme::of(ctx).buildXxx(config)`.
+- [ ] **Task 5 — Implementación custom**: Crear `CampelloDesignSystem : DesignSystem` como primera implementación concreta usando los tokens.
+
+### Diseño de referencia
+
+**DesignTokens:**
+```cpp
+struct ColorScheme {
+    Color primary, on_primary;
+    Color secondary, on_secondary;
+    Color surface, on_surface;
+    Color surface_variant;
+    Color outline;
+    Color error, on_error;
+};
+enum class Brightness { light, dark };
+struct Typography {
+    TextStyle display_large, display_medium;
+    TextStyle headline_large, headline_medium;
+    TextStyle title_large, title_medium;
+    TextStyle body_large, body_medium;
+    TextStyle label_large, label_medium;
+};
+struct ShapeTokens {
+    float radius_none=0.f, radius_xs=4.f, radius_sm=8.f,
+          radius_md=12.f,  radius_lg=16.f, radius_full=9999.f;
+};
+struct SpacingTokens {
+    float xs=4.f, sm=8.f, md=16.f, lg=24.f, xl=32.f, xxl=48.f;
+};
+struct MotionTokens {
+    Duration duration_fast=100ms, duration_medium=250ms, duration_slow=400ms;
+    Curve curve_standard, curve_decelerate, curve_accelerate;
+};
+struct DesignTokens {
+    ColorScheme colors; Typography typography;
+    ShapeTokens shape;  SpacingTokens spacing;
+    MotionTokens motion; Brightness brightness = Brightness::light;
+};
+```
+
+**DesignSystem:**
+```cpp
+enum class ButtonVariant { filled, outlined, text, tonal };
+struct ButtonConfig {
+    WidgetRef label; std::function<void()> on_pressed;
+    ButtonVariant variant = ButtonVariant::filled; bool enabled = true;
+};
+struct TextFieldConfig {
+    std::string placeholder; std::function<void(std::string)> on_changed;
+    bool obscure_text = false;
+};
+struct CardConfig { WidgetRef child; EdgeInsets padding=EdgeInsets::all(16.f); float elevation=1.f; };
+struct NavigationBarConfig {
+    struct Item { WidgetRef icon; std::string label; };
+    std::vector<Item> items; int selected_index=0; std::function<void(int)> on_tap;
+};
+
+class DesignSystem {
+public:
+    virtual ~DesignSystem() = default;
+    virtual const DesignTokens& tokens() const = 0;
+    virtual WidgetRef buildButton(const ButtonConfig&)               const = 0;
+    virtual WidgetRef buildTextField(const TextFieldConfig&)         const = 0;
+    virtual WidgetRef buildCard(const CardConfig&)                   const = 0;
+    virtual WidgetRef buildNavigationBar(const NavigationBarConfig&) const = 0;
+};
+```
+
+**Theme:**
+```cpp
+class Theme : public InheritedWidget {
+public:
+    std::shared_ptr<const DesignSystem> data;
+    static const DesignSystem& of(BuildContext& ctx) {
+        return *ctx.dependOnInheritedWidgetOfExactType<Theme>()->data;
+    }
+    static const DesignTokens& tokensOf(BuildContext& ctx) { return of(ctx).tokens(); }
+    bool updateShouldNotify(const InheritedWidget& old) const override {
+        return static_cast<const Theme&>(old).data != data;
+    }
+};
+```
+
+**Widget adaptativo (patrón):**
+```cpp
+class Button : public StatelessWidget {
+public:
+    ButtonConfig config;
+    WidgetRef build(BuildContext& ctx) const override {
+        return Theme::of(ctx).buildButton(config);
+    }
+};
+```
+
+**Uso:**
+```cpp
+runApp(make_shared<Theme>(Theme{
+    .data  = make_shared<CampelloDesignSystem>(myTokens),
+    .child = make_shared<MyApp>(),
+}));
+```
+
+---
+
 ## Backlog / Future
 
-- Theme system (colours, typography, spacing tokens)
 - Accessibility (semantic tree, screen reader support)
 - Internationalisation (text direction, locale)
 - [x] Rich text / inline spans
 - [x] Dialog / overlay / modal system
 - Drag-and-drop
+
+### IME (Input Method Editor) Platform Gaps
+
+| Platform | Status | Notes |
+|----------|--------|-------|
+| macOS | ✅ Full | `NSTextInputClient` + candidate window positioning + `characterIndexForPoint:` |
+| iOS | ✅ Full | `UITextInput` + software keyboard show/hide + `closestPositionToPoint:` |
+| Windows | ✅ Full | `WM_IME_COMPOSITION` + `ImmSetCompositionWindow` candidate positioning |
+| Android | ⚠️ Partial | Basic key events + soft keyboard show/hide via JNI. **Missing:** `InputConnection` for composed characters (accents, CJK, emoji). Soft keyboards expect `setComposingText` / `commitText` which requires a Java-side `InputConnection` implementation bridging to `TextEditingController`. |
+| Linux | ❌ None | No `GtkIMContext`, IBus, or Fcitx integration |
+
+**Android IME — what would be needed to reach Flutter parity:**
+1. Custom Java `Activity` extending `GameActivity` / `NativeActivity`
+2. Override `onCreateInputConnection()` returning a custom `InputConnection`
+3. `InputConnection` forwards `setComposingText`, `commitText`, `deleteSurroundingText` to native via JNI
+4. JNI bridge calls `TextEditingController::{beginComposing,updateComposingText,commitComposing}`
+5. Update `AndroidManifest.xml` + CMake/build system to compile Java sources
+6. Estimated effort: 2–3 days
 
 ---
 

@@ -6,16 +6,17 @@ namespace systems::leal::campello_widgets
 
     void RenderSizedBox::performLayout()
     {
-        const float w = width  ? std::clamp(*width,  constraints_.min_width,  constraints_.max_width)
-                                : constraints_.max_width;
-        const float h = height ? std::clamp(*height, constraints_.min_height, constraints_.max_height)
-                                : constraints_.max_height;
-        size_ = {w, h};
+        const BoxConstraints additional = BoxConstraints::tightFor(width, height);
 
         if (child_)
         {
-            layoutChild(*child_, BoxConstraints::tight(size_));
+            layoutChild(*child_, additional.enforce(constraints_));
+            size_ = constraints_.constrain(child_->size());
             positionChild(*child_, {0.0f, 0.0f});
+        }
+        else
+        {
+            size_ = additional.enforce(constraints_).constrain(Size::zero());
         }
     }
 

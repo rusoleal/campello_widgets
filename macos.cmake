@@ -35,6 +35,10 @@ target_link_libraries(campello_widgets
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)
 
-# Disable unity build for campello_widgets - it contains .mm (Objective-C++) files
-# that cannot be combined with regular C++ files in a unity build
-set_target_properties(campello_widgets PROPERTIES UNITY_BUILD OFF)
+# Exclude .mm (Objective-C++) files from unity build — they cannot be combined
+# with regular C++ files in a unity batch.  The .cpp files are still unity-built.
+foreach(src ${CAMPELLO_WIDGETS_SOURCES})
+    if(src MATCHES "\\.mm$")
+        set_source_files_properties(${src} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+    endif()
+endforeach()

@@ -80,4 +80,19 @@ namespace systems::leal::campello_widgets
         return child_->hitTest(result, position - child_offset_);
     }
 
+    std::vector<std::shared_ptr<DiagnosticsNode>> RenderBox::debugDescribeChildren() const
+    {
+        std::vector<std::shared_ptr<DiagnosticsNode>> result;
+        visitRenderChildren([&](RenderBox* child) {
+            result.push_back(child->toDiagnosticsNode());
+        });
+        return result;
+    }
+
+    void RenderBox::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const
+    {
+        if (child_)
+            visitor(child_.get());
+    }
+
 } // namespace systems::leal::campello_widgets

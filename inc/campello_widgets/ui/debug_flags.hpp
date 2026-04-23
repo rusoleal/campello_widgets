@@ -63,6 +63,37 @@ namespace systems::leal::campello_widgets
          * 32 ms (red).
          */
         inline static bool showPerformanceOverlay = false;
+
+        /**
+         * @brief Log widget rebuilds to stdout.
+         *
+         * Every time an Element's rebuild() method runs, prints the widget
+         * type name to standard output. Useful for detecting unnecessary
+         * rebuilds or rebuild storms.
+         *
+         * Equivalent to Flutter's `debugPrintRebuildDirtyWidgets`.
+         */
+        inline static bool printRebuildsEnabled = false;
+
+        /**
+         * @brief Draw green lines at text baselines.
+         *
+         * Useful for debugging text alignment and positioning issues.
+         * Each line of text gets a green horizontal line at its alphabetic
+         * baseline.
+         *
+         * Equivalent to Flutter's `debugPaintBaselinesEnabled`.
+         */
+        inline static bool paintBaselinesEnabled = false;
+
+        /**
+         * @brief Draw colored dots at recent pointer/touch positions.
+         *
+         * Useful for verifying hit-test areas and gesture responsiveness.
+         *
+         * Equivalent to Flutter's `debugPaintPointersEnabled`.
+         */
+        inline static bool paintPointersEnabled = false;
     };
 
 } // namespace systems::leal::campello_widgets

@@ -31,6 +31,8 @@ target_link_libraries(campello_widgets
         d3d11
         d3d12
         winhttp
+        dwmapi
+        imm32
 )
 
 target_compile_options(campello_widgets PRIVATE /W4)

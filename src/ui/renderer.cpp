@@ -246,6 +246,21 @@ namespace systems::leal::campello_widgets
                 Offset{bx + 18.0f, 6.0f});
         }
 
+        if (DebugFlags::paintPointersEnabled)
+        {
+            if (auto* pd = PointerDispatcher::activeDispatcher())
+            {
+                const auto& positions = pd->recentPointerPositions();
+                for (const auto& pos : positions)
+                {
+                    const float radius = 6.0f;
+                    ctx.canvas().drawCircle(
+                        Offset{pos.x, pos.y}, radius,
+                        Paint::filled(Color::fromRGBA(0.90f, 0.20f, 0.20f, 0.60f)));
+                }
+            }
+        }
+
         return ctx.commands();
     }
 

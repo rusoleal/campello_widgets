@@ -12,11 +12,6 @@ namespace systems::leal::campello_widgets
     RenderSingleChildScrollView::RenderSingleChildScrollView()
     {
         physics_ = std::make_shared<ClampingScrollPhysics>();
-        if (auto* d = PointerDispatcher::activeDispatcher())
-        {
-            d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
-            d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
-        }
     }
 
     RenderSingleChildScrollView::~RenderSingleChildScrollView()
@@ -27,6 +22,24 @@ namespace systems::leal::campello_widgets
             d->removeTickHandler(this);
         }
         if (controller_) controller_->detach();
+    }
+
+    void RenderSingleChildScrollView::attach()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
+            d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
+        }
+    }
+
+    void RenderSingleChildScrollView::detach()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->removeHandler(this);
+            d->removeTickHandler(this);
+        }
     }
 
     void RenderSingleChildScrollView::setController(
@@ -161,6 +174,7 @@ namespace systems::leal::campello_widgets
         switch (event.kind)
         {
         case PointerEventKind::down:
+            pointer_down_  = true;
             panning_       = false;
             pan_last_pos_  = event.position;
             velocity_px_s_ = 0.0f;
@@ -170,6 +184,9 @@ namespace systems::leal::campello_widgets
 
         case PointerEventKind::move:
         {
+            if (!pointer_down_)
+                break;
+
             const bool  is_v  = (scroll_axis == Axis::vertical);
             const float dx    = event.position.x - pan_last_pos_.x;
             const float dy    = event.position.y - pan_last_pos_.y;
@@ -194,12 +211,14 @@ namespace systems::leal::campello_widgets
         }
 
         case PointerEventKind::up:
+            pointer_down_ = false;
             if (panning_ && physics_->allowsMomentum())
                 velocity_px_s_ = pan_velocity_;
             panning_ = false;
             break;
 
         case PointerEventKind::cancel:
+            pointer_down_ = false;
             panning_ = false;
             break;
 

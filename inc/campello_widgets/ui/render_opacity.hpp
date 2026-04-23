@@ -25,6 +25,7 @@ namespace systems::leal::campello_widgets
 
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
+        bool hitTestChildren(HitTestResult& result, const Offset& position) override;
 
     private:
         float opacity_;

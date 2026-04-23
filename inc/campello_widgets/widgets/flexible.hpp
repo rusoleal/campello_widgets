@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/stateless_widget.hpp>
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -30,6 +31,11 @@ namespace systems::leal::campello_widgets
         }
 
         WidgetRef build(BuildContext&) const override { return child; }
+
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override
+        {
+            properties.add(std::make_unique<IntProperty>("flex", flex));
+        }
     };
 
 } // namespace systems::leal::campello_widgets

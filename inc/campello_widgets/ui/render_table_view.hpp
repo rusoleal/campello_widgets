@@ -41,6 +41,9 @@ namespace systems::leal::campello_widgets
         RenderTableView();
         ~RenderTableView();
 
+        void attach() override;
+        void detach() override;
+
         /// Sets the horizontal scroll controller.
         void setHorizontalController(std::shared_ptr<ScrollController> controller);
 
@@ -84,6 +87,7 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
+        void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
     private:
         void onPointerEvent(const PointerEvent& event);

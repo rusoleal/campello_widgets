@@ -17,6 +17,7 @@ namespace systems::leal::campello_widgets
     public:
         explicit StatelessElement(std::shared_ptr<const StatelessWidget> widget);
 
+        void unmount() override;
         void update(WidgetRef new_widget) override;
 
         Element* firstChildElement() const noexcept override { return child_.get(); }

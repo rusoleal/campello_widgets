@@ -12,11 +12,6 @@ namespace systems::leal::campello_widgets
     RenderTreeView::RenderTreeView()
     {
         physics_ = std::make_shared<ClampingScrollPhysics>();
-        if (auto* d = PointerDispatcher::activeDispatcher())
-        {
-            d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
-            d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
-        }
     }
 
     RenderTreeView::~RenderTreeView()
@@ -28,6 +23,24 @@ namespace systems::leal::campello_widgets
         }
         if (horizontal_controller_) horizontal_controller_->detach();
         if (vertical_controller_) vertical_controller_->detach();
+    }
+
+    void RenderTreeView::attach()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
+            d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
+        }
+    }
+
+    void RenderTreeView::detach()
+    {
+        if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->removeHandler(this);
+            d->removeTickHandler(this);
+        }
     }
 
     void RenderTreeView::setHorizontalController(std::shared_ptr<ScrollController> controller)
@@ -491,4 +504,10 @@ namespace systems::leal::campello_widgets
         }
     }
 
+
+    void RenderTreeView::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const
+    {
+        for (const auto& c : rows_)
+            if (c.second.box.get()) visitor(c.second.box.get());
+    }
 } // namespace systems::leal::campello_widgets

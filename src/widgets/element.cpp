@@ -2,6 +2,9 @@
 #include <campello_widgets/widgets/inherited_element.hpp>
 #include <campello_widgets/widgets/inherited_widget.hpp>
 #include <campello_widgets/ui/key.hpp>
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
+#include <campello_widgets/diagnostics/widget_inspector.hpp>
+#include <campello_widgets/ui/debug_flags.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -19,6 +22,7 @@ namespace systems::leal::campello_widgets
     void Element::mount(Element* parent)
     {
         parent_ = parent;
+        mounted_ = true;
         if (parent_)
             inherited_widgets_ = parent_->inherited_widgets_;
         onMountInheritance();
@@ -46,7 +50,8 @@ namespace systems::leal::campello_widgets
         if (auto* gk = dynamic_cast<GlobalKey*>(widget_->key.get()))
             GlobalKey::_unregister(gk);
 
-        parent_ = nullptr;
+        mounted_ = false;
+        parent_  = nullptr;
     }
 
     void Element::update(WidgetRef new_widget)
@@ -65,12 +70,39 @@ namespace systems::leal::campello_widgets
     {
         if (!dirty_) return;
         dirty_ = false;
+
+        if (DebugFlags::printRebuildsEnabled)
+        {
+            std::cout << "[REBUILD] " << widget_->toStringShort() << "\n";
+        }
+        WidgetInspector::instance().recordRebuild(this);
+
         performBuild();
     }
 
     void Element::onDescendantRenderObjectChanged()
     {
         if (parent_) parent_->onDescendantRenderObjectChanged();
+    }
+
+    void Element::debugFillProperties(DiagnosticsPropertyBuilder& out) const
+    {
+        out.add(std::make_unique<StringProperty>("widget", widget_->toStringShort()));
+        out.add(std::make_unique<FlagProperty>("dirty", dirty_, "dirty", "clean"));
+    }
+
+    std::vector<std::shared_ptr<DiagnosticsNode>> Element::debugDescribeChildren() const
+    {
+        std::vector<std::shared_ptr<DiagnosticsNode>> result;
+        visitChildren([&](Element* child) {
+            result.push_back(child->toDiagnosticsNode());
+        });
+        return result;
+    }
+
+    std::string Element::toStringShort() const
+    {
+        return widget_->toStringShort() + " Element";
     }
 
     RenderObjectElement* Element::findDescendantRenderObjectElement() noexcept

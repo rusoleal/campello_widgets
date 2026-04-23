@@ -19,11 +19,18 @@ namespace systems::leal::campello_widgets
     void TextInputManager::registerInputTarget(const InputTarget& target)
     {
         current_target_ = target;
+        if (on_target_changed_) on_target_changed_(hasInputTarget());
     }
 
     void TextInputManager::unregisterInputTarget()
     {
         current_target_ = InputTarget{};
+        if (on_target_changed_) on_target_changed_(hasInputTarget());
+    }
+
+    void TextInputManager::setOnInputTargetChanged(std::function<void(bool)> callback)
+    {
+        on_target_changed_ = std::move(callback);
     }
 
     bool TextInputManager::beginComposing()
@@ -74,6 +81,15 @@ namespace systems::leal::campello_widgets
             return current_target_.get_character_rect(byte_offset);
         }
         return {0.0f, 0.0f, 0.0f, 0.0f};
+    }
+
+    int TextInputManager::getPositionForPoint(float x, float y) const
+    {
+        if (current_target_.get_position_for_point)
+        {
+            return current_target_.get_position_for_point(x, y);
+        }
+        return 0;
     }
 
 } // namespace systems::leal::campello_widgets

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/ui/box_decoration.hpp>
 #include <campello_widgets/ui/render_decorated_box.hpp>
@@ -40,6 +41,8 @@ namespace systems::leal::campello_widgets
 
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
+        void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+
     };
 
 } // namespace systems::leal::campello_widgets

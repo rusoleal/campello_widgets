@@ -2,6 +2,8 @@
 #include <campello_widgets/ui/render_list_view.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
+#include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/pointer_event.hpp>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -159,4 +161,111 @@ TEST(RenderListView, OnVisibleRangeChangedNotFiredWhenRangeUnchanged)
 
     doLayout(lv, 400.0f, 200.0f); // same constraints, same range — should not fire again
     EXPECT_EQ(call_count, after_first);
+}
+
+// ---------------------------------------------------------------------------
+// Input handling — hover vs pan vs wheel
+// ---------------------------------------------------------------------------
+
+TEST(RenderListView, HoverMoveDoesNotScroll)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f); // viewport = 200, 4 items visible
+
+    lv.attach();
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    // Simulate a hover move (no preceding down) with a large delta.
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {0.0f, 100.0f};
+    dispatcher.handlePointerEvent(move);
+
+    // Move again to create a delta from the first hover position.
+    move.position = {0.0f, 300.0f};
+    dispatcher.handlePointerEvent(move);
+
+    // List should NOT have scrolled.
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+TEST(RenderListView, PanGestureScrolls)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    lv.attach();
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    // down — start inside the viewport
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 150.0f};
+    dispatcher.handlePointerEvent(down);
+
+    // move far enough to exceed tap slop and trigger panning
+    // Drag UP (decreasing y) to scroll down and reveal lower items.
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {0.0f, 130.0f};
+    dispatcher.handlePointerEvent(move);
+
+    // scroll down by 100 px → 100/50 = 2 items scrolled
+    move.position = {0.0f, 50.0f};
+    dispatcher.handlePointerEvent(move);
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 2);
+
+    // up
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+TEST(RenderListView, WheelEventScrolls)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    lv.attach();
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    cw::PointerEvent scroll;
+    scroll.kind           = cw::PointerEventKind::scroll;
+    scroll.position       = {0.0f, 0.0f};
+    scroll.scroll_delta_y = 100.0f;
+    dispatcher.handlePointerEvent(scroll);
+
+    // Scrolled down by 100 px → 100/50 = 2 items
+    EXPECT_EQ(lv.firstVisibleIndex(), 2);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
 }

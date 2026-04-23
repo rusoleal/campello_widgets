@@ -564,8 +564,13 @@ static void generateVisualDiff(
     // Create diff image (RGBA)
     std::vector<unsigned char> diffPixels(totalPixels * 4);
     
-    const uint8_t* expData = expImg->getData();
-    const uint8_t* actData = actImg->getData();
+    if (expImg->getFormat() != ci::ImageFormat::rgba8 || actImg->getFormat() != ci::ImageFormat::rgba8) {
+        result.errors.push_back("Visual diff only supports RGBA8 images");
+        return;
+    }
+    
+    const uint8_t* expData = static_cast<const uint8_t*>(expImg->getData());
+    const uint8_t* actData = static_cast<const uint8_t*>(actImg->getData());
     
     int diffPixelCount = 0;
     int maxChannelDiff = 0;
@@ -663,8 +668,14 @@ cwt::ImageComparisonResult cwt::comparePngImages(
     int diffCount = 0;
     int maxChannelDiff = 0;
 
-    const uint8_t* expData = expImg->getData();
-    const uint8_t* actData = actImg->getData();
+    if (expImg->getFormat() != ci::ImageFormat::rgba8 || actImg->getFormat() != ci::ImageFormat::rgba8) {
+        result.match = false;
+        result.errors.push_back("Pixel comparison only supports RGBA8 images");
+        return result;
+    }
+
+    const uint8_t* expData = static_cast<const uint8_t*>(expImg->getData());
+    const uint8_t* actData = static_cast<const uint8_t*>(actImg->getData());
 
     for (int i = 0; i < totalPixels; ++i) {
         const int idx = i * 4;

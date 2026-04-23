@@ -8,16 +8,22 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/ticker.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/key_event.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 
 #include <game-activity/native_app_glue/android_native_app_glue.h>
+#include <android/choreographer.h>
 #include <android/log.h>
+#include <android/input.h>
 
 #include <memory>
-#include <chrono>
+#include <atomic>
+#include <string>
 
 #define LOG_TAG "campello_widgets"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -39,6 +45,7 @@ struct WidgetSession
     std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
     std::shared_ptr<Widgets::FocusManager>       focus_manager;
     std::unique_ptr<Widgets::TickerScheduler>    ticker_scheduler;
+    std::unique_ptr<Widgets::TextInputManager>   text_input_manager;
     android_app*                               app = nullptr;  // For accessing contentRect
 };
 
@@ -84,14 +91,240 @@ static void updateSafeAreaInsets(WidgetSession* session)
 }
 
 // ---------------------------------------------------------------------------
-// Touch event processing
+// JNI helpers for soft keyboard show / hide
 // ---------------------------------------------------------------------------
 
-static void handleMotionEvents(android_app* app, WidgetSession* session)
+static JNIEnv* getJniEnv(android_app* app, bool* out_attached)
+{
+    JNIEnv* env = nullptr;
+    *out_attached = false;
+    if (app->activity->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK)
+        return env;
+    if (app->activity->vm->AttachCurrentThread(&env, nullptr) == JNI_OK)
+        *out_attached = true;
+    return env;
+}
+
+static void showSoftInput(android_app* app)
+{
+    bool attached = false;
+    JNIEnv* env = getJniEnv(app, &attached);
+    if (!env) return;
+
+    jobject activity = app->activity->clazz;
+
+    jclass activityClass = env->FindClass("android/app/NativeActivity");
+    jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+    jobject window = env->CallObjectMethod(activity, getWindow);
+
+    jclass windowClass = env->FindClass("android/view/Window");
+    jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
+    jobject decorView = env->CallObjectMethod(window, getDecorView);
+
+    jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService",
+                                                   "(Ljava/lang/String;)Ljava/lang/Object;");
+    jstring serviceName = env->NewStringUTF("input_method");
+    jobject imm = env->CallObjectMethod(activity, getSystemService, serviceName);
+
+    jclass immClass = env->FindClass("android/view/inputmethod/InputMethodManager");
+    jmethodID showSoftInput = env->GetMethodID(immClass, "showSoftInput",
+                                                "(Landroid/view/View;I)Z");
+    env->CallBooleanMethod(imm, showSoftInput, decorView, 0);
+
+    env->DeleteLocalRef(serviceName);
+    env->DeleteLocalRef(imm);
+    env->DeleteLocalRef(decorView);
+    env->DeleteLocalRef(window);
+
+    if (attached)
+        app->activity->vm->DetachCurrentThread();
+}
+
+static void hideSoftInput(android_app* app)
+{
+    bool attached = false;
+    JNIEnv* env = getJniEnv(app, &attached);
+    if (!env) return;
+
+    jobject activity = app->activity->clazz;
+
+    jclass activityClass = env->FindClass("android/app/NativeActivity");
+    jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
+    jobject window = env->CallObjectMethod(activity, getWindow);
+
+    jclass windowClass = env->FindClass("android/view/Window");
+    jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
+    jobject decorView = env->CallObjectMethod(window, getDecorView);
+
+    jclass viewClass = env->FindClass("android/view/View");
+    jmethodID getWindowToken = env->GetMethodID(viewClass, "getWindowToken", "()Landroid/os/IBinder;");
+    jobject windowToken = env->CallObjectMethod(decorView, getWindowToken);
+
+    jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService",
+                                                   "(Ljava/lang/String;)Ljava/lang/Object;");
+    jstring serviceName = env->NewStringUTF("input_method");
+    jobject imm = env->CallObjectMethod(activity, getSystemService, serviceName);
+
+    jclass immClass = env->FindClass("android/view/inputmethod/InputMethodManager");
+    jmethodID hideSoftInput = env->GetMethodID(immClass, "hideSoftInputFromWindow",
+                                                "(Landroid/os/IBinder;I)Z");
+    env->CallBooleanMethod(imm, hideSoftInput, windowToken, 0);
+
+    env->DeleteLocalRef(serviceName);
+    env->DeleteLocalRef(imm);
+    env->DeleteLocalRef(windowToken);
+    env->DeleteLocalRef(decorView);
+    env->DeleteLocalRef(window);
+
+    if (attached)
+        app->activity->vm->DetachCurrentThread();
+}
+
+// ---------------------------------------------------------------------------
+// Key code translation
+// ---------------------------------------------------------------------------
+
+static Widgets::KeyCode androidKeyCodeToKeyCode(int32_t keyCode)
+{
+    switch (keyCode)
+    {
+        case AKEYCODE_A: return Widgets::KeyCode::a;
+        case AKEYCODE_B: return Widgets::KeyCode::b;
+        case AKEYCODE_C: return Widgets::KeyCode::c;
+        case AKEYCODE_D: return Widgets::KeyCode::d;
+        case AKEYCODE_E: return Widgets::KeyCode::e;
+        case AKEYCODE_F: return Widgets::KeyCode::f;
+        case AKEYCODE_G: return Widgets::KeyCode::g;
+        case AKEYCODE_H: return Widgets::KeyCode::h;
+        case AKEYCODE_I: return Widgets::KeyCode::i;
+        case AKEYCODE_J: return Widgets::KeyCode::j;
+        case AKEYCODE_K: return Widgets::KeyCode::k;
+        case AKEYCODE_L: return Widgets::KeyCode::l;
+        case AKEYCODE_M: return Widgets::KeyCode::m;
+        case AKEYCODE_N: return Widgets::KeyCode::n;
+        case AKEYCODE_O: return Widgets::KeyCode::o;
+        case AKEYCODE_P: return Widgets::KeyCode::p;
+        case AKEYCODE_Q: return Widgets::KeyCode::q;
+        case AKEYCODE_R: return Widgets::KeyCode::r;
+        case AKEYCODE_S: return Widgets::KeyCode::s;
+        case AKEYCODE_T: return Widgets::KeyCode::t;
+        case AKEYCODE_U: return Widgets::KeyCode::u;
+        case AKEYCODE_V: return Widgets::KeyCode::v;
+        case AKEYCODE_W: return Widgets::KeyCode::w;
+        case AKEYCODE_X: return Widgets::KeyCode::x;
+        case AKEYCODE_Y: return Widgets::KeyCode::y;
+        case AKEYCODE_Z: return Widgets::KeyCode::z;
+        case AKEYCODE_0: return Widgets::KeyCode::digit_0;
+        case AKEYCODE_1: return Widgets::KeyCode::digit_1;
+        case AKEYCODE_2: return Widgets::KeyCode::digit_2;
+        case AKEYCODE_3: return Widgets::KeyCode::digit_3;
+        case AKEYCODE_4: return Widgets::KeyCode::digit_4;
+        case AKEYCODE_5: return Widgets::KeyCode::digit_5;
+        case AKEYCODE_6: return Widgets::KeyCode::digit_6;
+        case AKEYCODE_7: return Widgets::KeyCode::digit_7;
+        case AKEYCODE_8: return Widgets::KeyCode::digit_8;
+        case AKEYCODE_9: return Widgets::KeyCode::digit_9;
+        case AKEYCODE_SPACE:        return Widgets::KeyCode::space;
+        case AKEYCODE_ENTER:        return Widgets::KeyCode::enter;
+        case AKEYCODE_TAB:          return Widgets::KeyCode::tab;
+        case AKEYCODE_DEL:          return Widgets::KeyCode::backspace;
+        case AKEYCODE_FORWARD_DEL:  return Widgets::KeyCode::delete_forward;
+        case AKEYCODE_ESCAPE:       return Widgets::KeyCode::escape;
+        case AKEYCODE_DPAD_LEFT:    return Widgets::KeyCode::left;
+        case AKEYCODE_DPAD_RIGHT:   return Widgets::KeyCode::right;
+        case AKEYCODE_DPAD_UP:      return Widgets::KeyCode::up;
+        case AKEYCODE_DPAD_DOWN:    return Widgets::KeyCode::down;
+        case AKEYCODE_MOVE_HOME:    return Widgets::KeyCode::home;
+        case AKEYCODE_MOVE_END:     return Widgets::KeyCode::end;
+        case AKEYCODE_PAGE_UP:      return Widgets::KeyCode::page_up;
+        case AKEYCODE_PAGE_DOWN:    return Widgets::KeyCode::page_down;
+        case AKEYCODE_F1:  return Widgets::KeyCode::f1;
+        case AKEYCODE_F2:  return Widgets::KeyCode::f2;
+        case AKEYCODE_F3:  return Widgets::KeyCode::f3;
+        case AKEYCODE_F4:  return Widgets::KeyCode::f4;
+        case AKEYCODE_F5:  return Widgets::KeyCode::f5;
+        case AKEYCODE_F6:  return Widgets::KeyCode::f6;
+        case AKEYCODE_F7:  return Widgets::KeyCode::f7;
+        case AKEYCODE_F8:  return Widgets::KeyCode::f8;
+        case AKEYCODE_F9:  return Widgets::KeyCode::f9;
+        case AKEYCODE_F10: return Widgets::KeyCode::f10;
+        case AKEYCODE_F11: return Widgets::KeyCode::f11;
+        case AKEYCODE_F12: return Widgets::KeyCode::f12;
+        case AKEYCODE_SHIFT_LEFT:   return Widgets::KeyCode::left_shift;
+        case AKEYCODE_SHIFT_RIGHT:  return Widgets::KeyCode::right_shift;
+        case AKEYCODE_CTRL_LEFT:    return Widgets::KeyCode::left_ctrl;
+        case AKEYCODE_CTRL_RIGHT:   return Widgets::KeyCode::right_ctrl;
+        case AKEYCODE_ALT_LEFT:     return Widgets::KeyCode::left_alt;
+        case AKEYCODE_ALT_RIGHT:    return Widgets::KeyCode::right_alt;
+        case AKEYCODE_META_LEFT:    return Widgets::KeyCode::left_meta;
+        case AKEYCODE_META_RIGHT:   return Widgets::KeyCode::right_meta;
+        case AKEYCODE_CAPS_LOCK:    return Widgets::KeyCode::caps_lock;
+        default: return Widgets::KeyCode::unknown;
+    }
+}
+
+static uint32_t androidMetaStateToKeyModifiers(int32_t metaState)
+{
+    uint32_t mods = Widgets::KeyModifiers::none;
+    if (metaState & AMETA_SHIFT_ON)   mods |= Widgets::KeyModifiers::shift;
+    if (metaState & AMETA_CTRL_ON)    mods |= Widgets::KeyModifiers::ctrl;
+    if (metaState & AMETA_ALT_ON)     mods |= Widgets::KeyModifiers::alt;
+    if (metaState & AMETA_META_ON)    mods |= Widgets::KeyModifiers::meta;
+    return mods;
+}
+
+static uint32_t androidKeyCodeToCharacter(int32_t keyCode, int32_t metaState)
+{
+    // Only produce characters for down/repeat events; let the caller filter.
+    const bool shift = (metaState & AMETA_SHIFT_ON) != 0;
+
+    if (keyCode >= AKEYCODE_A && keyCode <= AKEYCODE_Z)
+    {
+        char c = static_cast<char>('a' + (keyCode - AKEYCODE_A));
+        if (shift) c = static_cast<char>('A' + (keyCode - AKEYCODE_A));
+        return static_cast<uint32_t>(c);
+    }
+    if (keyCode >= AKEYCODE_0 && keyCode <= AKEYCODE_9)
+    {
+        if (shift)
+        {
+            const char shifted[] = {')', '!', '@', '#', '$', '%', '^', '&', '*', '('};
+            return static_cast<uint32_t>(shifted[keyCode - AKEYCODE_0]);
+        }
+        return static_cast<uint32_t>('0' + (keyCode - AKEYCODE_0));
+    }
+
+    switch (keyCode)
+    {
+        case AKEYCODE_SPACE:        return ' ';
+        case AKEYCODE_PERIOD:       return shift ? '>' : '.';
+        case AKEYCODE_COMMA:        return shift ? '<' : ',';
+        case AKEYCODE_SLASH:        return shift ? '?' : '/';
+        case AKEYCODE_BACKSLASH:    return shift ? '|' : '\\';
+        case AKEYCODE_SEMICOLON:    return shift ? ':' : ';';
+        case AKEYCODE_APOSTROPHE:   return shift ? '"' : '\'';
+        case AKEYCODE_LEFT_BRACKET: return shift ? '{' : '[';
+        case AKEYCODE_RIGHT_BRACKET:return shift ? '}' : ']';
+        case AKEYCODE_GRAVE:        return shift ? '~' : '`';
+        case AKEYCODE_EQUALS:       return shift ? '+' : '=';
+        case AKEYCODE_MINUS:        return shift ? '_' : '-';
+        case AKEYCODE_PLUS:         return '+';
+        case AKEYCODE_STAR:         return '*';
+        case AKEYCODE_POUND:        return '#';
+        default: return 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Input event processing (motion + key)
+// ---------------------------------------------------------------------------
+
+static void handleInputEvents(android_app* app, WidgetSession* session)
 {
     android_input_buffer* buf = android_app_swap_input_buffers(app);
     if (!buf) return;
 
+    // ---- Motion events ----
     for (uint64_t i = 0; i < buf->motionEventsCount; ++i)
     {
         const GameActivityMotionEvent& ev = buf->motionEvents[i];
@@ -164,6 +397,53 @@ static void handleMotionEvents(android_app* app, WidgetSession* session)
     }
 
     android_app_clear_motion_events(buf);
+
+    // ---- Key events ----
+    if (session->focus_manager)
+    {
+        for (uint64_t i = 0; i < buf->keyEventsCount; ++i)
+        {
+            const GameActivityKeyEvent& ev = buf->keyEvents[i];
+
+            Widgets::KeyEventKind kind;
+            if (ev.action == AKEY_EVENT_ACTION_DOWN)
+            {
+                kind = (ev.repeatCount > 0)
+                    ? Widgets::KeyEventKind::repeat
+                    : Widgets::KeyEventKind::down;
+            }
+            else if (ev.action == AKEY_EVENT_ACTION_UP)
+            {
+                kind = Widgets::KeyEventKind::up;
+            }
+            else
+            {
+                continue; // Skip unknown actions
+            }
+
+            // Only dispatch DOWN and REPEAT events for typing;
+            // UP events are sent with character=0 for modifier tracking.
+            if (kind == Widgets::KeyEventKind::up)
+            {
+                Widgets::KeyEvent ke;
+                ke.kind      = kind;
+                ke.key_code  = androidKeyCodeToKeyCode(ev.keyCode);
+                ke.modifiers = androidMetaStateToKeyModifiers(ev.metaState);
+                ke.character = 0;
+                session->focus_manager->handleKeyEvent(ke);
+            }
+            else
+            {
+                Widgets::KeyEvent ke;
+                ke.kind      = kind;
+                ke.key_code  = androidKeyCodeToKeyCode(ev.keyCode);
+                ke.modifiers = androidMetaStateToKeyModifiers(ev.metaState);
+                ke.character = androidKeyCodeToCharacter(ev.keyCode, ev.metaState);
+                session->focus_manager->handleKeyEvent(ke);
+            }
+        }
+    }
+    android_app_clear_key_events(buf);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +482,17 @@ static std::unique_ptr<WidgetSession> createSession(
 
     session->ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(session->ticker_scheduler.get());
+
+    session->text_input_manager = std::make_unique<Widgets::TextInputManager>();
+    Widgets::TextInputManager::setActiveManager(session->text_input_manager.get());
+
+    // Show / hide the software keyboard when a TextField gains or loses focus.
+    session->text_input_manager->setOnInputTargetChanged([app](bool has_target) {
+        if (has_target)
+            showSoftInput(app);
+        else
+            hideSoftInput(app);
+    });
 
     // Wrap root widget with MediaQuery
     Widgets::MediaQueryData mediaData;
@@ -253,6 +544,33 @@ static std::unique_ptr<WidgetSession> createSession(
 }
 
 // ---------------------------------------------------------------------------
+// AChoreographer vsync callback
+// ---------------------------------------------------------------------------
+//
+// Fires on the main thread at the display vsync boundary (≈ 16 ms at 60 Hz).
+// AChoreographer_postFrameCallback() is called by FrameScheduler::scheduleFrame();
+// the callback itself re-arms only when animations are still running (via the
+// tick → scheduleFrame chain), so idle CPU drops to ~0%.
+//
+// The "frame pending" flag coalesces multiple scheduleFrame() calls that arrive
+// within the same vsync interval into exactly one callback registration.
+
+static std::atomic<bool> gFramePending{false};
+
+static void onVsyncCallback(long frameTimeNanos, void* /*data*/)
+{
+    // Allow the next scheduleFrame() call to post a new callback.
+    gFramePending.store(false, std::memory_order_relaxed);
+
+    // Tick schedulers at the vsync timestamp.
+    const uint64_t ms = static_cast<uint64_t>(frameTimeNanos) / 1'000'000ULL;
+    if (auto* d  = PointerDispatcher::activeDispatcher()) d->tick(ms);
+    if (auto* ts = TickerScheduler::active())            ts->tick(ms);
+
+    // NOTE: renderFrame() goes here once the Android GPU backend is wired up.
+}
+
+// ---------------------------------------------------------------------------
 // runApp
 // ---------------------------------------------------------------------------
 
@@ -265,6 +583,18 @@ namespace systems::leal::campello_widgets
 void runApp(android_app* app, WidgetRef root_widget)
 {
     android_app_set_motion_event_filter(app, motion_event_filter);
+
+    // Vsync-gated on-demand rendering via AChoreographer (API 24+).
+    // AChoreographer_getInstance() must be called on the main thread (the one
+    // that owns the ALooper).  Choreographer callbacks are delivered through
+    // the same ALooper so ALooper_pollOnce(-1) unblocks at vsync — no busy
+    // waiting, zero idle CPU.
+    AChoreographer* choreographer = AChoreographer_getInstance();
+    FrameScheduler::setCallback([choreographer] {
+        // Post at most one pending callback per vsync interval.
+        if (!gFramePending.exchange(true, std::memory_order_relaxed))
+            AChoreographer_postFrameCallback(choreographer, onVsyncCallback, nullptr);
+    });
 
     std::unique_ptr<WidgetSession> session;
 
@@ -283,6 +613,7 @@ void runApp(android_app* app, WidgetRef root_widget)
             {
                 PointerDispatcher::setActiveDispatcher(nullptr);
                 FocusManager::setActiveManager(nullptr);
+                TextInputManager::setActiveManager(nullptr);
                 TickerScheduler::setActive(nullptr);
                 session_ptr->reset();
             }
@@ -317,9 +648,17 @@ void runApp(android_app* app, WidgetRef root_widget)
     bool running = true;
     while (running)
     {
-        // Poll events.
+        // Block until a native event or an ALooper_wake() arrives.
+        // FrameScheduler::scheduleFrame() calls ALooper_wake(), so the loop
+        // unblocks as soon as setState/markNeedsPaint/ticker fires — then
+        // immediately drains remaining events before rendering.  This brings
+        // idle CPU to ~0%, matching Flutter's on-demand render loop.
         int          events;
         android_poll_source* source;
+        ALooper_pollOnce(-1, nullptr, &events, reinterpret_cast<void**>(&source));
+        if (source) source->process(app, source);
+
+        // Drain any additional events that arrived while processing.
         while (ALooper_pollOnce(0, nullptr, &events,
                                 reinterpret_cast<void**>(&source)) >= 0)
         {
@@ -344,18 +683,13 @@ void runApp(android_app* app, WidgetRef root_widget)
 
         if (!session || !session->renderer) continue;
 
-        // Process touch input.
-        handleMotionEvents(app, session.get());
+        // Process touch and key input (event-driven, not vsync-driven).
+        handleInputEvents(app, session.get());
 
-        // Render frame.
-        // TODO(Phase 10): obtain swapchain TextureView from campello_gpu surface.
-        // For now, the frame loop ticks the dispatcher (long-press timers, etc.)
-        // but does not submit GPU work until a draw backend is configured.
-        const auto now_tp  = std::chrono::steady_clock::now().time_since_epoch();
-        const uint64_t ms  =
-            std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
-        if (auto* d = PointerDispatcher::activeDispatcher()) d->tick(ms);
-        if (auto* ts = TickerScheduler::active()) ts->tick(ms);
+        // Ticking and rendering are now done in onVsyncCallback, which fires
+        // at the hardware vsync via AChoreographer.  FrameScheduler::scheduleFrame()
+        // posts the callback; the TickerScheduler re-arms it each frame while
+        // animations are active, then goes quiet when idle.
     }
 
     // Cleanup.
@@ -363,6 +697,7 @@ void runApp(android_app* app, WidgetRef root_widget)
     {
         PointerDispatcher::setActiveDispatcher(nullptr);
         FocusManager::setActiveManager(nullptr);
+        TextInputManager::setActiveManager(nullptr);
         TickerScheduler::setActive(nullptr);
     }
 }
