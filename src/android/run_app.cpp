@@ -16,7 +16,7 @@
 #include <campello_gpu/texture_view.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 
-#include <game-activity/native_app_glue/android_native_app_glue.h>
+#include <android_native_app_glue/android_native_app_glue.h>
 #include <android/choreographer.h>
 #include <android/log.h>
 #include <android/input.h>

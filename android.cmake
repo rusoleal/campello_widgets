@@ -12,6 +12,12 @@ target_include_directories(campello_widgets
         $<INSTALL_INTERFACE:inc>
 )
 
+if(ANDROID_NDK)
+    target_include_directories(campello_widgets PRIVATE
+        ${ANDROID_NDK}/sources/android/native_app_glue
+    )
+endif()
+
 target_link_libraries(campello_widgets
     PUBLIC
         campello_gpu
