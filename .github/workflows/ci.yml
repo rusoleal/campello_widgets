@@ -13,119 +13,152 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # macOS / Linux / Windows — build + universal tests
+  # Desktop — build + test (Debug & Release, multiple archs where possible)
   # ---------------------------------------------------------------------------
-  test:
-    name: Test / ${{ matrix.name }}
+  desktop:
+    name: ${{ matrix.platform }} / ${{ matrix.arch }} / ${{ matrix.build_type }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: macOS
-            os: macos-latest
-            platform: darwin
+          # macOS — arm64 (native, test on Debug only to save time)
+          - { platform: macOS, os: macos-latest, arch: arm64, build_type: Debug, test: true }
+          - { platform: macOS, os: macos-latest, arch: arm64, build_type: Release, test: false }
+          # macOS — x86_64 (cross-compile from Apple Silicon runner, build only)
+          - { platform: macOS, os: macos-latest, arch: x86_64, build_type: Debug, test: false }
+          - { platform: macOS, os: macos-latest, arch: x86_64, build_type: Release, test: false }
 
-          - name: Linux
-            os: ubuntu-latest
-            platform: linux
+          # Linux — x86_64
+          - { platform: Linux, os: ubuntu-latest, arch: x86_64, build_type: Debug, test: true }
+          - { platform: Linux, os: ubuntu-latest, arch: x86_64, build_type: Release, test: true }
+          # Linux — arm64 (native ARM64 runner)
+          - { platform: Linux, os: ubuntu-24.04-arm, arch: arm64, build_type: Debug, test: true }
+          - { platform: Linux, os: ubuntu-24.04-arm, arch: arm64, build_type: Release, test: true }
 
-          - name: Windows
-            os: windows-latest
-            platform: windows
+          # Windows — x86_64
+          - { platform: Windows, os: windows-latest, arch: x86_64, build_type: Debug, test: true }
+          - { platform: Windows, os: windows-latest, arch: x86_64, build_type: Release, test: true }
+          # Windows — arm64 (native Windows on ARM runner)
+          - { platform: Windows, os: windows-11-arm, arch: arm64, build_type: Debug, test: false }
+          - { platform: Windows, os: windows-11-arm, arch: arm64, build_type: Release, test: false }
 
     steps:
       - uses: actions/checkout@v6
 
-      # campello_gpu on Linux requires Vulkan headers to compile.
-      # campello_input requires libevdev for input handling.
-      - name: Install Linux system dependencies
+      # campello_gpu requires Vulkan headers; campello_widgets requires
+      # X11, D-Bus (IBus), FreeType, HarfBuzz, fontconfig, and optionally
+      # Wayland + xkbcommon.
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan-dev libevdev-dev libudev-dev
+          sudo apt-get install -y \
+            libvulkan-dev \
+            libx11-dev \
+            libdbus-1-dev \
+            libfreetype6-dev \
+            libharfbuzz-dev \
+            libfontconfig1-dev \
+            libwayland-dev \
+            libxkbcommon-dev
 
       # Cache FetchContent dependency sources across runs.
       # Key is invalidated whenever a dependency version pin changes.
       - name: Cache dependency sources
         uses: actions/cache@v5
         with:
-          path: build/${{ matrix.platform }}_test/_deps
-          key: deps-${{ matrix.platform }}-${{ hashFiles('dependencies/*.cmake') }}
-          restore-keys: deps-${{ matrix.platform }}-
+          path: build/${{ matrix.platform }}_${{ matrix.arch }}_${{ matrix.build_type }}_test/_deps
+          key: deps-${{ matrix.platform }}-${{ matrix.arch }}-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-${{ matrix.platform }}-${{ matrix.arch }}-
 
       - name: Configure
         shell: bash
         run: |
-          cmake -S . -B build/${{ matrix.platform }}_test \
-            -DCMAKE_BUILD_TYPE=Debug \
-            -DBUILD_TESTS=ON
+          CMAKE_ARGS=()
+          if [[ "${{ matrix.platform }}" == "macOS" && "${{ matrix.arch }}" != "arm64" ]]; then
+            CMAKE_ARGS+=(-DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}")
+          fi
+          cmake -S . -B "build/${{ matrix.platform }}_${{ matrix.arch }}_${{ matrix.build_type }}_test" \
+            -DCMAKE_BUILD_TYPE="${{ matrix.build_type }}" \
+            -DBUILD_TESTS=ON \
+            "${CMAKE_ARGS[@]}"
 
       - name: Build
         shell: bash
-        run: cmake --build build/${{ matrix.platform }}_test --config Debug
+        run: |
+          cmake --build "build/${{ matrix.platform }}_${{ matrix.arch }}_${{ matrix.build_type }}_test" \
+            --config "${{ matrix.build_type }}"
 
       - name: Test
+        if: matrix.test == true
         shell: bash
         run: |
-          ctest --test-dir build/${{ matrix.platform }}_test \
+          ctest --test-dir "build/${{ matrix.platform }}_${{ matrix.arch }}_${{ matrix.build_type }}_test" \
             --output-on-failure \
-            -C Debug \
+            -C "${{ matrix.build_type }}" \
             -E "campello_input"
 
   # ---------------------------------------------------------------------------
-  # iOS — cross-compilation check (build only, no test execution)
+  # iOS — cross-compilation check (Debug & Release, no test execution)
   # ---------------------------------------------------------------------------
-  build-ios:
-    name: Build / iOS
+  ios:
+    name: iOS / arm64 / ${{ matrix.build_type }}
     runs-on: macos-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v6
 
       - name: Cache dependency sources
         uses: actions/cache@v5
         with:
-          path: build/ios/_deps
+          path: build/ios_${{ matrix.build_type }}/_deps
           key: deps-ios-${{ hashFiles('dependencies/*.cmake') }}
           restore-keys: deps-ios-
 
       - name: Configure
         run: |
-          cmake -S . -B build/ios \
+          cmake -S . -B build/ios_${{ matrix.build_type }} \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
       - name: Build
-        run: cmake --build build/ios --config Release
+        run: cmake --build build/ios_${{ matrix.build_type }} --config ${{ matrix.build_type }}
 
   # ---------------------------------------------------------------------------
-  # Android — cross-compilation check (build only, no test execution)
+  # Android — cross-compilation check (Debug & Release, all four ABIs)
   # ---------------------------------------------------------------------------
-  build-android:
-    name: Build / Android
+  android:
+    name: Android / ${{ matrix.arch }} / ${{ matrix.build_type }}
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64-v8a, armeabi-v7a, x86_64, x86]
+        build_type: [Debug, Release]
     steps:
       - uses: actions/checkout@v6
 
       - name: Cache dependency sources
         uses: actions/cache@v5
         with:
-          path: build/android/_deps
-          key: deps-android-${{ hashFiles('dependencies/*.cmake') }}
-          restore-keys: deps-android-
+          path: build/android_${{ matrix.arch }}_${{ matrix.build_type }}/_deps
+          key: deps-android-${{ matrix.arch }}-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-android-${{ matrix.arch }}-
 
       # ubuntu-latest runners have the NDK pre-installed at $ANDROID_NDK_HOME.
       - name: Configure
         run: |
-          cmake -S . -B build/android \
+          cmake -S . -B build/android_${{ matrix.arch }}_${{ matrix.build_type }} \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_ABI=${{ matrix.arch }} \
             -DANDROID_PLATFORM=android-26 \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
 
       - name: Build
-        run: cmake --build build/android --config Release
+        run: cmake --build build/android_${{ matrix.arch }}_${{ matrix.build_type }} --config ${{ matrix.build_type }}

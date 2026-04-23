@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Optional CMake integration: `pkg_check_modules(WAYLAND_DEPS wayland-client xkbcommon)`; defines `CAMPHELLO_WIDGETS_HAS_WAYLAND` when available
   - Protocol bindings generated from upstream XML via `generate_wayland_protocols.py` (minimal `wayland-scanner` replacement)
 - **`IDrawBackend::setViewport()`** added to the interface as a virtual no-op so that `Renderer::drawBackend()` can call it polymorphically across all platforms
+- **CI matrix expansion** — `.github/workflows/ci.yml` now covers:
+  - **Desktop**: Debug + Release for macOS (arm64 native + x86_64 cross-compile), Linux (x86_64), and Windows (x86_64)
+  - **Tests**: executed on Debug and Release for Linux and Windows; macOS Debug only (to save CI time)
+  - **iOS**: Debug + Release cross-compilation for arm64
+  - **Android**: Debug + Release for `arm64-v8a` and `x86_64`
+  - **Caching**: per-platform, per-arch dependency source caches keyed on `dependencies/*.cmake` hashes
+  - **Linux deps**: installs all required build packages (`libvulkan-dev`, `libx11-dev`, `libdbus-1-dev`, `libfreetype6-dev`, `libharfbuzz-dev`, `libfontconfig1-dev`, `libwayland-dev`, `libxkbcommon-dev`)
 
 ### Changed
 
