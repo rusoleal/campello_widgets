@@ -12,9 +12,18 @@ target_include_directories(campello_widgets
         $<INSTALL_INTERFACE:inc>
 )
 
+set(ANDROID_NDK_PATH "")
 if(ANDROID_NDK)
+    set(ANDROID_NDK_PATH ${ANDROID_NDK})
+elseif(CMAKE_ANDROID_NDK)
+    set(ANDROID_NDK_PATH ${CMAKE_ANDROID_NDK})
+elseif(DEFINED ENV{ANDROID_NDK_HOME})
+    set(ANDROID_NDK_PATH $ENV{ANDROID_NDK_HOME})
+endif()
+
+if(ANDROID_NDK_PATH)
     target_include_directories(campello_widgets PRIVATE
-        ${ANDROID_NDK}/sources/android/native_app_glue
+        ${ANDROID_NDK_PATH}/sources/android/native_app_glue
     )
 endif()
 
