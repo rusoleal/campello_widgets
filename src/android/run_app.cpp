@@ -505,7 +505,7 @@ static std::unique_ptr<WidgetSession> createSession(
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = getDevicePixelRatio(app);
     
-    auto wrappedRoot = Widgets::make<Widgets::MediaQuery>(
+    auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, root_widget);
 
     // Mount widget tree.
@@ -571,8 +571,8 @@ static void onVsyncCallback(long frameTimeNanos, void* /*data*/)
 
     // Tick schedulers at the vsync timestamp.
     const uint64_t ms = static_cast<uint64_t>(frameTimeNanos) / 1'000'000ULL;
-    if (auto* d  = PointerDispatcher::activeDispatcher()) d->tick(ms);
-    if (auto* ts = TickerScheduler::active())            ts->tick(ms);
+    if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(ms);
+    if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(ms);
 
     // NOTE: renderFrame() goes here once the Android GPU backend is wired up.
 }
