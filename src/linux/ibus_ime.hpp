@@ -4,10 +4,7 @@
 #include <memory>
 #include <functional>
 
-// Forward declarations for libdbus
-typedef struct DBusConnection DBusConnection;
-typedef struct DBusMessage DBusMessage;
-typedef int DBusHandlerResult;
+#include <dbus/dbus.h>
 
 namespace systems::leal::campello_widgets
 {

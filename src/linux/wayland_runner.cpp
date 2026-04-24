@@ -147,7 +147,7 @@ static uint32_t xkbStateToKeyModifiers(struct xkb_state* state, xkb_keycode_t ke
     return mods;
 }
 
-static bool isNavigationOrSpecialKey(Widgets::KeyCode key_code)
+static bool isNavigationOrSpecialKeyWayland(Widgets::KeyCode key_code)
 {
     return key_code == Widgets::KeyCode::left
         || key_code == Widgets::KeyCode::right
@@ -400,7 +400,7 @@ static void keyboard_key(void* data, struct wl_keyboard* keyboard,
     if (state_val == WL_KEYBOARD_KEY_STATE_PRESSED)
     {
         // Navigation / special keys bypass IME
-        if (isNavigationOrSpecialKey(key_code)) {
+        if (isNavigationOrSpecialKeyWayland(key_code)) {
             Widgets::KeyEvent ke;
             ke.kind      = Widgets::KeyEventKind::down;
             ke.key_code  = key_code;

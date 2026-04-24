@@ -174,7 +174,7 @@ static uint32_t x11StateToKeyModifiers(unsigned int state)
     return mods;
 }
 
-static bool isNavigationOrSpecialKey(Widgets::KeyCode key_code)
+static bool isNavigationOrSpecialKeyX11(Widgets::KeyCode key_code)
 {
     return key_code == Widgets::KeyCode::left
         || key_code == Widgets::KeyCode::right
@@ -315,7 +315,7 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             uint32_t mods = x11StateToKeyModifiers(ev.xkey.state);
 
             // Navigation / special keys bypass IME
-            if (isNavigationOrSpecialKey(key_code))
+            if (isNavigationOrSpecialKeyX11(key_code))
             {
                 Widgets::KeyEvent ke;
                 ke.kind      = Widgets::KeyEventKind::down;
