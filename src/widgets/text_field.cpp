@@ -11,6 +11,7 @@
 #include <campello_widgets/widgets/render_object_element.hpp>
 
 #include <algorithm>
+#include <array>
 #include <string_view>
 
 namespace systems::leal::campello_widgets
