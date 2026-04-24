@@ -61,7 +61,8 @@ jobs:
             libharfbuzz-dev \
             libfontconfig1-dev \
             libwayland-dev \
-            libxkbcommon-dev
+            libxkbcommon-dev \
+            libcurl4-openssl-dev
 
       # Cache FetchContent dependency sources across runs.
       # Key is invalidated whenever a dependency version pin changes.
