@@ -29,9 +29,9 @@ endif()
 
 if(ANDROID_NDK_PATH)
     target_include_directories(campello_widgets PRIVATE
-        ${ANDROID_NDK_PATH}/sources/android
+        ${ANDROID_NDK_PATH}/sources/android/native_app_glue
     )
-    message(STATUS "Android NDK native_app_glue include: ${ANDROID_NDK_PATH}/sources/android")
+    message(STATUS "Android NDK native_app_glue include: ${ANDROID_NDK_PATH}/sources/android/native_app_glue")
 else()
     message(WARNING "Could not locate Android NDK path for native_app_glue includes")
 endif()

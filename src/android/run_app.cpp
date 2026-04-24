@@ -16,7 +16,7 @@
 #include <campello_gpu/texture_view.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 
-#include <android_native_app_glue/android_native_app_glue.h>
+#include <android_native_app_glue.h>
 #include <android/choreographer.h>
 #include <android/log.h>
 #include <android/input.h>
@@ -319,20 +319,24 @@ static uint32_t androidKeyCodeToCharacter(int32_t keyCode, int32_t metaState)
 // Input event processing (motion + key)
 // ---------------------------------------------------------------------------
 
-static void handleInputEvents(android_app* app, WidgetSession* session)
+static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
 {
-    android_input_buffer* buf = android_app_swap_input_buffers(app);
-    if (!buf) return;
+    auto* session_ptr = reinterpret_cast<std::unique_ptr<WidgetSession>*>(app->userData);
+    if (!session_ptr || !*session_ptr) return 0;
 
-    // ---- Motion events ----
-    for (uint64_t i = 0; i < buf->motionEventsCount; ++i)
+    WidgetSession* session = session_ptr->get();
+
+    const int32_t event_type = AInputEvent_getType(event);
+    if (event_type == AINPUT_EVENT_TYPE_MOTION)
     {
-        const GameActivityMotionEvent& ev = buf->motionEvents[i];
+        // Filter to pointer source only (matching old motion_event_filter)
+        const int32_t source = AInputEvent_getSource(event);
+        if ((source & AINPUT_SOURCE_CLASS_MASK) != AINPUT_SOURCE_CLASS_POINTER)
+            return 0;
 
-        const int32_t action_code =
-            ev.action & AMOTION_EVENT_ACTION_MASK;
-        const int32_t pointer_index =
-            (ev.action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
+        const int32_t action = AMotionEvent_getAction(event);
+        const int32_t action_code = action & AMOTION_EVENT_ACTION_MASK;
+        const int32_t pointer_index = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
             >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
 
         switch (action_code)
@@ -340,25 +344,29 @@ static void handleInputEvents(android_app* app, WidgetSession* session)
         case AMOTION_EVENT_ACTION_DOWN:
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
         {
-            const auto& p = ev.pointers[pointer_index];
+            const int32_t id = AMotionEvent_getPointerId(event, static_cast<size_t>(pointer_index));
+            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index));
+            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index));
             session->dispatcher->handlePointerEvent({
                 Widgets::PointerEventKind::down,
-                p.id,
-                { p.axisValues[AMOTION_AXIS_X], p.axisValues[AMOTION_AXIS_Y] },
+                id,
+                { x, y },
                 1.0f});
             break;
         }
 
         case AMOTION_EVENT_ACTION_MOVE:
         {
-            // MOVE carries all currently active pointers.
-            for (int32_t j = 0; j < ev.pointerCount; ++j)
+            const size_t pointer_count = AMotionEvent_getPointerCount(event);
+            for (size_t j = 0; j < pointer_count; ++j)
             {
-                const auto& p = ev.pointers[j];
+                const int32_t id = AMotionEvent_getPointerId(event, j);
+                const float x = AMotionEvent_getX(event, j);
+                const float y = AMotionEvent_getY(event, j);
                 session->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::move,
-                    p.id,
-                    { p.axisValues[AMOTION_AXIS_X], p.axisValues[AMOTION_AXIS_Y] },
+                    id,
+                    { x, y },
                     1.0f});
             }
             break;
@@ -367,25 +375,29 @@ static void handleInputEvents(android_app* app, WidgetSession* session)
         case AMOTION_EVENT_ACTION_UP:
         case AMOTION_EVENT_ACTION_POINTER_UP:
         {
-            const auto& p = ev.pointers[pointer_index];
+            const int32_t id = AMotionEvent_getPointerId(event, static_cast<size_t>(pointer_index));
+            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index));
+            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index));
             session->dispatcher->handlePointerEvent({
                 Widgets::PointerEventKind::up,
-                p.id,
-                { p.axisValues[AMOTION_AXIS_X], p.axisValues[AMOTION_AXIS_Y] },
+                id,
+                { x, y },
                 0.0f});
             break;
         }
 
         case AMOTION_EVENT_ACTION_CANCEL:
         {
-            // Cancel all active pointers.
-            for (int32_t j = 0; j < ev.pointerCount; ++j)
+            const size_t pointer_count = AMotionEvent_getPointerCount(event);
+            for (size_t j = 0; j < pointer_count; ++j)
             {
-                const auto& p = ev.pointers[j];
+                const int32_t id = AMotionEvent_getPointerId(event, j);
+                const float x = AMotionEvent_getX(event, j);
+                const float y = AMotionEvent_getY(event, j);
                 session->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::cancel,
-                    p.id,
-                    { p.axisValues[AMOTION_AXIS_X], p.axisValues[AMOTION_AXIS_Y] },
+                    id,
+                    { x, y },
                     0.0f});
             }
             break;
@@ -394,67 +406,62 @@ static void handleInputEvents(android_app* app, WidgetSession* session)
         default:
             break;
         }
+
+        return 1;
     }
-
-    android_app_clear_motion_events(buf);
-
-    // ---- Key events ----
-    if (session->focus_manager)
+    else if (event_type == AINPUT_EVENT_TYPE_KEY)
     {
-        for (uint64_t i = 0; i < buf->keyEventsCount; ++i)
+        if (!session->focus_manager) return 0;
+
+        const int32_t action = AKeyEvent_getAction(event);
+        const int32_t keyCode = AKeyEvent_getKeyCode(event);
+        const int32_t metaState = AKeyEvent_getMetaState(event);
+        const int32_t repeatCount = AKeyEvent_getRepeatCount(event);
+
+        Widgets::KeyEventKind kind;
+        if (action == AKEY_EVENT_ACTION_DOWN)
         {
-            const GameActivityKeyEvent& ev = buf->keyEvents[i];
-
-            Widgets::KeyEventKind kind;
-            if (ev.action == AKEY_EVENT_ACTION_DOWN)
-            {
-                kind = (ev.repeatCount > 0)
-                    ? Widgets::KeyEventKind::repeat
-                    : Widgets::KeyEventKind::down;
-            }
-            else if (ev.action == AKEY_EVENT_ACTION_UP)
-            {
-                kind = Widgets::KeyEventKind::up;
-            }
-            else
-            {
-                continue; // Skip unknown actions
-            }
-
-            // Only dispatch DOWN and REPEAT events for typing;
-            // UP events are sent with character=0 for modifier tracking.
-            if (kind == Widgets::KeyEventKind::up)
-            {
-                Widgets::KeyEvent ke;
-                ke.kind      = kind;
-                ke.key_code  = androidKeyCodeToKeyCode(ev.keyCode);
-                ke.modifiers = androidMetaStateToKeyModifiers(ev.metaState);
-                ke.character = 0;
-                session->focus_manager->handleKeyEvent(ke);
-            }
-            else
-            {
-                Widgets::KeyEvent ke;
-                ke.kind      = kind;
-                ke.key_code  = androidKeyCodeToKeyCode(ev.keyCode);
-                ke.modifiers = androidMetaStateToKeyModifiers(ev.metaState);
-                ke.character = androidKeyCodeToCharacter(ev.keyCode, ev.metaState);
-                session->focus_manager->handleKeyEvent(ke);
-            }
+            kind = (repeatCount > 0)
+                ? Widgets::KeyEventKind::repeat
+                : Widgets::KeyEventKind::down;
         }
+        else if (action == AKEY_EVENT_ACTION_UP)
+        {
+            kind = Widgets::KeyEventKind::up;
+        }
+        else
+        {
+            return 0;
+        }
+
+        if (kind == Widgets::KeyEventKind::up)
+        {
+            Widgets::KeyEvent ke;
+            ke.kind      = kind;
+            ke.key_code  = androidKeyCodeToKeyCode(keyCode);
+            ke.modifiers = androidMetaStateToKeyModifiers(metaState);
+            ke.character = 0;
+            session->focus_manager->handleKeyEvent(ke);
+        }
+        else
+        {
+            Widgets::KeyEvent ke;
+            ke.kind      = kind;
+            ke.key_code  = androidKeyCodeToKeyCode(keyCode);
+            ke.modifiers = androidMetaStateToKeyModifiers(metaState);
+            ke.character = androidKeyCodeToCharacter(keyCode, metaState);
+            session->focus_manager->handleKeyEvent(ke);
+        }
+
+        return 1;
     }
-    android_app_clear_key_events(buf);
+
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
 // Window lifecycle
 // ---------------------------------------------------------------------------
-
-static bool motion_event_filter(const GameActivityMotionEvent* ev)
-{
-    const auto source_class = ev->source & AINPUT_SOURCE_CLASS_MASK;
-    return source_class == AINPUT_SOURCE_CLASS_POINTER;
-}
 
 static float getDevicePixelRatio(android_app* app)
 {
@@ -582,8 +589,6 @@ namespace systems::leal::campello_widgets
 
 void runApp(android_app* app, WidgetRef root_widget)
 {
-    android_app_set_motion_event_filter(app, motion_event_filter);
-
     // Vsync-gated on-demand rendering via AChoreographer (API 24+).
     // AChoreographer_getInstance() must be called on the main thread (the one
     // that owns the ALooper).  Choreographer callbacks are delivered through
@@ -597,6 +602,8 @@ void runApp(android_app* app, WidgetRef root_widget)
     });
 
     std::unique_ptr<WidgetSession> session;
+
+    app->onInputEvent = handleAndroidInputEvent;
 
     app->onAppCmd = [](android_app* a, int32_t cmd)
     {
@@ -619,7 +626,6 @@ void runApp(android_app* app, WidgetRef root_widget)
             }
             break;
 
-        case APP_CMD_WINDOW_INSETS_CHANGED:
         case APP_CMD_CONTENT_RECT_CHANGED:
             // Safe area / content rect changed (e.g., keyboard showed/hid)
             if (session_ptr && *session_ptr)
@@ -682,9 +688,6 @@ void runApp(android_app* app, WidgetRef root_widget)
         }
 
         if (!session || !session->renderer) continue;
-
-        // Process touch and key input (event-driven, not vsync-driven).
-        handleInputEvents(app, session.get());
 
         // Ticking and rendering are now done in onVsyncCallback, which fires
         // at the hardware vsync via AChoreographer.  FrameScheduler::scheduleFrame()

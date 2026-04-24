@@ -12,19 +12,19 @@ namespace systems::leal::campello_widgets
      * @brief Android entry point — mounts a widget tree and runs the event loop.
      *
      * Drives the campello_gpu/campello_widgets render loop inside a native Android
-     * activity (GameActivity + android_native_app_glue). Handles:
+     * activity (NativeActivity + android_native_app_glue). Handles:
      *  - APP_CMD_INIT_WINDOW / APP_CMD_TERM_WINDOW lifecycle
      *  - Per-frame rendering via Renderer::renderFrame
-     *  - Multitouch input via GameActivityMotionEvent → PointerDispatcher
+     *  - Multitouch input via AMotionEvent → PointerDispatcher
      *
-     * Touch events carry a per-finger `pointer_id` (from GameActivity's pointer
-     * index) so GestureDetector correctly handles simultaneous fingers.
+     * Touch events carry a per-finger `pointer_id` so GestureDetector correctly
+     * handles simultaneous fingers.
      *
      * Usage in your android_main:
      * @code
      * #include <campello_widgets/campello_widgets.hpp>
      * #include <campello_widgets/android/run_app.hpp>
-     * #include <game-activity/native_app_glue/android_native_app_glue.h>
+     * #include <android_native_app_glue.h>
      *
      * class MyApp : public StatelessWidget {
      *     WidgetRef build(BuildContext&) const override {
