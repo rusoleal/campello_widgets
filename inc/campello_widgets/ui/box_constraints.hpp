@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <optional>
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 
