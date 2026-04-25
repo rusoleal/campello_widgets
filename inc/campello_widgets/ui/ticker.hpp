@@ -24,12 +24,8 @@ namespace systems::leal::campello_widgets
         // Singleton-style active instance (mirrors PointerDispatcher pattern)
         // ------------------------------------------------------------------
 
-        static TickerScheduler* active() noexcept { return s_active_; }
-
-        static void setActive(TickerScheduler* scheduler) noexcept
-        {
-            s_active_ = scheduler;
-        }
+        static TickerScheduler* active() noexcept;
+        static void setActive(TickerScheduler* scheduler) noexcept;
 
         // ------------------------------------------------------------------
         // Frame pump — called by Renderer each frame

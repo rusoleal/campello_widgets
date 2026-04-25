@@ -6,6 +6,16 @@ namespace systems::leal::campello_widgets
 
     TickerScheduler* TickerScheduler::s_active_ = nullptr;
 
+    TickerScheduler* TickerScheduler::active() noexcept
+    {
+        return s_active_;
+    }
+
+    void TickerScheduler::setActive(TickerScheduler* scheduler) noexcept
+    {
+        s_active_ = scheduler;
+    }
+
     void TickerScheduler::tick(uint64_t now_ms)
     {
         // Snapshot the map so callbacks can safely call unsubscribe() during dispatch.
