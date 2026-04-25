@@ -1,0 +1,18 @@
+services:
+  linux-build:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: campello_widgets:linux
+    volumes:
+      - ..:/workspace
+    working_dir: /workspace
+    command: >
+      bash -c "
+        cmake -S . -B build/linux_docker_Debug
+          -DCMAKE_BUILD_TYPE=Debug
+          -DBUILD_TESTS=ON
+          -G Ninja
+        && cmake --build build/linux_docker_Debug -j$$(nproc)
+        && ctest --test-dir build/linux_docker_Debug --output-on-failure -E campello_input
+      "

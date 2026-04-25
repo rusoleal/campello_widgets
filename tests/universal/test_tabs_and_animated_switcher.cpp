@@ -17,11 +17,9 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/render_stack.hpp>
-#include <campello_widgets/ui/render_opacity.hpp>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
-#include <campello_widgets/ui/alignment.hpp>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -159,17 +157,6 @@ protected:
         {
             if (auto* stack = dynamic_cast<cw::RenderStack*>(entry.target))
                 return stack;
-        }
-        return nullptr;
-    }
-
-    // Find the first RenderOpacity in a hit path.
-    static cw::RenderOpacity* findRenderOpacity(const cw::HitTestResult& result)
-    {
-        for (const auto& entry : result.path())
-        {
-            if (auto* op = dynamic_cast<cw::RenderOpacity*>(entry.target))
-                return op;
         }
         return nullptr;
     }

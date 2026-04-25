@@ -108,6 +108,12 @@ namespace systems::leal::campello_widgets
         syncChildRenderObjects();
     }
 
+    void MultiChildRenderObjectElement::onDescendantRenderObjectChanged()
+    {
+        // Re-wire the child render objects; don't propagate further — we handle it here.
+        syncChildRenderObjects();
+    }
+
     void MultiChildRenderObjectElement::syncChildRenderObjects()
     {
         const auto& w = static_cast<const MultiChildRenderObjectWidget&>(*widget_);

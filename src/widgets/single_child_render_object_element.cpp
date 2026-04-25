@@ -1,8 +1,6 @@
 #include <campello_widgets/widgets/single_child_render_object_element.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 
-#include <iostream>
-
 namespace systems::leal::campello_widgets
 {
 
@@ -45,9 +43,6 @@ namespace systems::leal::campello_widgets
     {
         const auto& w = static_cast<const SingleChildRenderObjectWidget&>(*widget_);
 
-        std::cerr << "[SingleChildRenderObjectElement] syncChildRenderObject: has_child=" 
-                  << (child_element_ ? "yes" : "no") << "\n";
-
         if (!child_element_)
         {
             w.removeRenderObjectChild(*render_object_);
@@ -55,12 +50,10 @@ namespace systems::leal::campello_widgets
         }
 
         auto* child_roe = child_element_->findDescendantRenderObjectElement();
-        std::cerr << "[SingleChildRenderObjectElement] child_roe=" << child_roe << "\n";
         if (child_roe)
         {
             auto child_box = std::dynamic_pointer_cast<RenderBox>(
                 child_roe->sharedRenderObject());
-            std::cerr << "[SingleChildRenderObjectElement] child_box=" << child_box.get() << "\n";
             if (child_box)
                 w.insertRenderObjectChild(*render_object_, std::move(child_box));
         }

@@ -19,11 +19,20 @@ namespace systems::leal::campello_widgets
             out_ctrl_ = std::make_unique<AnimationController>(w.duration_ms);
             curve_    = w.curve ? w.curve : Curves::easeInOut;
 
-            in_listener_  = in_ctrl_->addListener([this]() { setState([]{}); });
+            in_listener_  = in_ctrl_->addListener([this]() {
+                setState([this]() {
+                    if (in_ctrl_->normalizedValue() >= 1.0 &&
+                        out_ctrl_->normalizedValue() >= 1.0) {
+                        prev_child_    = nullptr;
+                        transitioning_ = false;
+                    }
+                });
+            });
             out_listener_ = out_ctrl_->addListener([this]() {
                 setState([this]() {
-                    if (out_ctrl_->normalizedValue() >= 1.0) {
-                        prev_child_   = nullptr;
+                    if (out_ctrl_->normalizedValue() >= 1.0 &&
+                        in_ctrl_->normalizedValue() >= 1.0) {
+                        prev_child_    = nullptr;
                         transitioning_ = false;
                     }
                 });

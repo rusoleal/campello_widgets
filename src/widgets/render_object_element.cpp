@@ -1,8 +1,6 @@
 #include <campello_widgets/widgets/render_object_element.hpp>
 #include <campello_widgets/ui/render_object.hpp>
 
-#include <iostream>
-
 namespace systems::leal::campello_widgets
 {
 
@@ -12,12 +10,10 @@ namespace systems::leal::campello_widgets
         , render_object_(
               static_cast<const RenderObjectWidget&>(*widget_).createRenderObject())
     {
-        std::cerr << "[RenderObjectElement] Constructor created render_object\n";
     }
 
     void RenderObjectElement::mount(Element* parent)
     {
-        std::cerr << "[RenderObjectElement] mount\n";
         Element::mount(parent);
     }
 
