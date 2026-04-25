@@ -39,9 +39,8 @@ if(UNIVERSAL_TEST_SOURCES)
         add_custom_command(TARGET campello_widgets_tests POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:campello_widgets>
-                $<TARGET_FILE_DIR:campello_widgets_tests>
-            COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:campello_gpu>
+                $<TARGET_FILE:campello_image>
                 $<TARGET_FILE_DIR:campello_widgets_tests>
         )
     endif()

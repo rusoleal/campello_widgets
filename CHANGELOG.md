@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Dependencies** — `campello_gpu` upgraded from v0.11.1 to v0.12.0 (adds mipmap generation and per-mip `copyTextureToTexture`)
 - `linux.cmake` — reworked Linux build configuration:
   - Added `pkg_check_modules` for X11, D-Bus, FreeType2, HarfBuzz, and fontconfig (all required)
   - Added optional `wayland-client` + `xkbcommon` detection
