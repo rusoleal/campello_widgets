@@ -23,6 +23,7 @@
 #include <android/input.h>
 
 #include "vulkan_draw_backend.hpp"
+#include "android_text_rasterizer.hpp"
 
 #include <memory>
 #include <atomic>
@@ -665,6 +666,11 @@ namespace systems::leal::campello_widgets
 
 void runApp(android_app* app, WidgetRef root_widget)
 {
+    // Supply the JVM pointer to AndroidTextRasterizer (JNI_GetCreatedJavaVMs
+    // is not linkable on API < 31, so we pass the VM from android_app directly).
+    if (app && app->activity && app->activity->vm)
+        setAndroidJavaVM(app->activity->vm);
+
     // Vsync-gated on-demand rendering via AChoreographer (API 24+).
     // AChoreographer_getInstance() must be called on the main thread (the one
     // that owns the ALooper).  Choreographer callbacks are delivered through

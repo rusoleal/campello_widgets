@@ -11,6 +11,10 @@
 namespace systems::leal::campello_widgets
 {
 
+/** @brief Supply the JavaVM* used by AndroidTextRasterizer instead of JNI_GetCreatedJavaVMs.
+ *         Must be called (e.g. from run_app.cpp) before any text rasterisation. */
+void setAndroidJavaVM(JavaVM* vm);
+
 // ---------------------------------------------------------------------------
 // AndroidTextRasterizer
 //

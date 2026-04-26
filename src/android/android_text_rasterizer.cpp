@@ -14,18 +14,22 @@ namespace systems::leal::campello_widgets
 #define LOG_TAG "campello_widgets"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
+static JavaVM* g_java_vm = nullptr;
+
+void setAndroidJavaVM(JavaVM* vm)
+{
+    g_java_vm = vm;
+}
+
 static JNIEnv* getAndroidJniEnv()
 {
-    JavaVM* vm = nullptr;
-    jsize vmCount = 0;
-    if (JNI_GetCreatedJavaVMs(&vm, 1, &vmCount) != JNI_OK || vmCount == 0)
-        return nullptr;
+    if (!g_java_vm) return nullptr;
 
     JNIEnv* env = nullptr;
-    if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK)
+    if (g_java_vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK)
         return env;
 
-    if (vm->AttachCurrentThread(&env, nullptr) == JNI_OK)
+    if (g_java_vm->AttachCurrentThread(&env, nullptr) == JNI_OK)
         return env;
 
     return nullptr;
