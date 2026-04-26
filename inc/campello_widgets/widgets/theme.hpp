@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/ui/design_system.hpp>
+#include <campello_widgets/widgets/build_context.hpp>
 #include <campello_widgets/widgets/inherited_widget.hpp>
 
 namespace systems::leal::campello_widgets
