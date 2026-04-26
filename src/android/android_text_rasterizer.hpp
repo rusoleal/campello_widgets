@@ -1,5 +1,6 @@
 #pragma once
 
+#include <jni.h>
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/text_span.hpp>
