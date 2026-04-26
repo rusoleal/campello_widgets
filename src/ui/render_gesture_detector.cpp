@@ -1,4 +1,5 @@
 #include <cmath>
+#include <chrono>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 
@@ -48,7 +49,12 @@ namespace systems::leal::campello_widgets
             long_press_fired_ = false;
             down_pos_         = event.position;
             last_pos_         = event.position;
-            down_time_ms_     = 0; // set by onTick on first tick after down
+            {
+                auto now = std::chrono::steady_clock::now();
+                down_time_ms_ = static_cast<uint64_t>(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch()).count());
+            }
             break;
 
         case PointerEventKind::move:
@@ -128,10 +134,6 @@ namespace systems::leal::campello_widgets
     void RenderGestureDetector::onTick(uint64_t now_ms)
     {
         if (!has_down_) return;
-
-        // Latch the down timestamp on the first tick after a down event.
-        if (down_time_ms_ == 0)
-            down_time_ms_ = now_ms;
 
         // Long press: fire once after kLongPressMs without moving past slop.
         if (!panning_ && !long_press_fired_ &&

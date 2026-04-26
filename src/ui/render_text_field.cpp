@@ -11,6 +11,7 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <string>
 #include <sstream>
@@ -669,7 +670,10 @@ namespace systems::leal::campello_widgets
     void RenderTextField::resetCursorBlink()
     {
         cursor_visible_ = true;
-        last_blink_ms_  = 0; // will reset on next tick
+        auto now = std::chrono::steady_clock::now();
+        last_blink_ms_ = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()).count());
         markNeedsPaint();
     }
 
