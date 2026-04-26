@@ -86,6 +86,9 @@ struct WindowState
 
 static WindowState* gWindowState = nullptr;
 
+// Forward declaration — defined after createSession / runApp helpers.
+static void rebuildMediaQuery(WindowState* state);
+
 // ---------------------------------------------------------------------------
 // Dark-mode D-Bus monitor (xdg-desktop-portal)
 // ---------------------------------------------------------------------------
