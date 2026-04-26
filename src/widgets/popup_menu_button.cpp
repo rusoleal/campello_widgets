@@ -1,5 +1,6 @@
 #include <campello_widgets/widgets/popup_menu_button.hpp>
 #include <campello_widgets/widgets/theme.hpp>
+#include <campello_widgets/widgets/stateful_element.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/modal_barrier.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>

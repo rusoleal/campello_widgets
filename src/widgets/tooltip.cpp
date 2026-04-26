@@ -1,5 +1,6 @@
 #include <campello_widgets/widgets/tooltip.hpp>
 #include <campello_widgets/widgets/theme.hpp>
+#include <campello_widgets/widgets/stateful_element.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
