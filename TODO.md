@@ -11,8 +11,8 @@ Items within a phase can be parallelised where noted.
 - [x] Add `campello_gpu` as a CMake dependency
 - [x] Add `campello_input` as a CMake dependency
 - [x] Define directory layout (`inc/`, `src/`, `tests/`, `examples/`, `dependencies/`)
-- [ ] Set up CI pipeline (Windows, macOS, Linux builds)
-- [ ] Add platform detection macros / abstractions
+- [x] Set up CI pipeline (Windows, macOS, Linux builds)
+- [x] Add platform detection macros / abstractions
 
 ---
 
@@ -140,12 +140,13 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 
 ## Phase 10 — Platform Integration
 
-- [ ] Window / surface creation per platform (delegate to `campello_gpu`)
+- [~] Window / surface creation per platform (delegate to `campello_gpu`) — each platform has its own runner, abstract unification not done
 - [x] iOS: UIKit integration with safe area insets
 - [x] Android: ANativeWindow integration with safe area insets
 - [x] macOS: NSView / CAMetalLayer integration with safe area insets
 - [x] Windows: HWND / DXGI integration
-- [ ] Linux: XCB / Wayland integration
+- [x] Linux: X11 integration with Vulkan swapchain
+- [x] Linux: Wayland integration with `wl_surface` / `xdg_toplevel`
 - [ ] Platform channel / FFI abstraction for native calls
 
 ---
@@ -156,11 +157,19 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 - [~] Hot-reload friendly design (not planned)
 - [x] Comprehensive unit tests for layout engine
 - [x] Integration test harness (headless rendering) — `GpuVisualRenderer` (Metal, offscreen) with CPU fallback
-- [ ] Example applications:
+- [~] Example applications:
   - [x] Hello World
   - [x] Counter app (StatefulWidget demo)
   - [x] List view
   - [x] Animated transitions
+  - [x] macOS Showcase (unified demo app)
+  - [x] TextField / IME demo
+  - [x] Image loading demo
+  - [x] Gestures demo
+  - [x] TableView demo
+  - [x] TreeView demo
+  - [x] Keyboard demo
+  - [x] PlatformMenu test
 
 ---
 
@@ -311,11 +320,11 @@ Los widgets adaptativos existentes (`Button`, `Card`, `TextField`, `NavigationBa
 
 ### Tareas
 
-- [ ] **Task 1 — DesignTokens**: Crear `inc/campello_widgets/ui/design_tokens.hpp` con `ColorScheme`, `Typography`, `ShapeTokens`, `SpacingTokens`, `MotionTokens`, `DesignTokens`, `Brightness`.
-- [ ] **Task 2 — DesignSystem**: Crear `inc/campello_widgets/ui/design_system.hpp` con config structs agnósticas (`ButtonConfig`, `TextFieldConfig`, `CardConfig`, `NavigationBarConfig`, ...) y clase abstracta `DesignSystem`.
-- [ ] **Task 3 — Theme**: Crear `inc/campello_widgets/widgets/theme.hpp` + `src/widgets/theme.cpp`. `Theme : InheritedWidget` con `Theme::of(ctx)` y `Theme::tokensOf(ctx)`.
-- [ ] **Task 4 — Widgets adaptativos**: Refactorizar `Button`, `Card`, `TextField`, `NavigationBar` para ser thin wrappers que llaman a `Theme::of(ctx).buildXxx(config)`.
-- [ ] **Task 5 — Implementación custom**: Crear `CampelloDesignSystem : DesignSystem` como primera implementación concreta usando los tokens.
+- [x] **Task 1 — DesignTokens**: Crear `inc/campello_widgets/ui/design_tokens.hpp` con `ColorScheme`, `Typography`, `ShapeTokens`, `SpacingTokens`, `MotionTokens`, `DesignTokens`, `Brightness`.
+- [x] **Task 2 — DesignSystem**: Crear `inc/campello_widgets/ui/design_system.hpp` con config structs agnósticas (`ButtonConfig`, `TextFieldConfig`, `CardConfig`, `NavigationBarConfig`, ...) y clase abstracta `DesignSystem`.
+- [x] **Task 3 — Theme**: Crear `inc/campello_widgets/widgets/theme.hpp` + `src/widgets/theme.cpp`. `Theme : InheritedWidget` con `Theme::of(ctx)` y `Theme::tokensOf(ctx)`.
+- [x] **Task 4 — Widgets adaptativos**: Refactorizar `Button`, `Card`, `Divider`, `ListTile`, `AppBar`, `NavigationBar`, `PrimaryActionButton` para ser thin wrappers que llaman a `Theme::of(ctx).buildXxx(config)`. Los widgets con estado complejo (Switch, Checkbox, Radio, Slider, TextField, ProgressIndicator, Tooltip, PopupMenuButton, DropdownButton, TabBar, Dialog, SnackBar) se mantienen como widgets canónicos configurados por el DesignSystem.
+- [x] **Task 5 — Implementación custom**: Crear `CampelloDesignSystem : DesignSystem` como primera implementación concreta usando los tokens.
 
 ### Diseño de referencia
 
@@ -425,7 +434,7 @@ runApp(make_shared<Theme>(Theme{
 - Internationalisation (text direction, locale)
 - [x] Rich text / inline spans
 - [x] Dialog / overlay / modal system
-- Drag-and-drop
+- [x] Drag-and-drop (`Draggable` + `DragTarget`)
 
 ### IME (Input Method Editor) Platform Gaps
 
@@ -435,7 +444,7 @@ runApp(make_shared<Theme>(Theme{
 | iOS | ✅ Full | `UITextInput` + software keyboard show/hide + `closestPositionToPoint:` |
 | Windows | ✅ Full | `WM_IME_COMPOSITION` + `ImmSetCompositionWindow` candidate positioning |
 | Android | ⚠️ Partial | Basic key events + soft keyboard show/hide via JNI. **Missing:** `InputConnection` for composed characters (accents, CJK, emoji). Soft keyboards expect `setComposingText` / `commitText` which requires a Java-side `InputConnection` implementation bridging to `TextEditingController`. |
-| Linux | ❌ None | No `GtkIMContext`, IBus, or Fcitx integration |
+| Linux | ✅ Full | IBus IME via D-Bus (`IbusIme` class) — works on both X11 and Wayland |
 
 **Android IME — what would be needed to reach Flutter parity:**
 1. Custom Java `Activity` extending `GameActivity` / `NativeActivity`
@@ -455,5 +464,6 @@ headless Metal renderer that renders a `DrawList` to an offscreen RGBA8 texture 
 `VisualRenderer` is kept as a CPU fallback for CI environments without a GPU.
 
 Remaining work for full cross-platform coverage:
-- Vulkan backend readback (`vkCmdCopyImageToBuffer`) for Android/Linux
-- DirectX 12 backend readback (`CopyTextureRegion` into readback heap) for Windows
+- [x] Metal backend readback — `GpuVisualRenderer` offscreen → PNG (macOS)
+- [ ] Vulkan backend readback (`vkCmdCopyImageToBuffer`) for Android/Linux
+- [ ] DirectX 12 backend readback (`CopyTextureRegion` into readback heap) for Windows

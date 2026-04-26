@@ -57,10 +57,37 @@ struct WindowState
     std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
     std::unique_ptr<Widgets::D3DDrawBackend>    draw_backend;
     std::unique_ptr<Widgets::TextInputManager>  text_input_manager;
-    
+    Widgets::MediaQueryData                   media_data;
+    Widgets::WidgetRef                        user_root_widget;
+
     // For tracking pointer position
     bool mouse_tracking = false;
 };
+
+static Widgets::Brightness getSystemBrightness()
+{
+    HKEY hKey;
+    DWORD value = 1; // default to light
+    DWORD size = sizeof(value);
+    if (RegOpenKeyExA(HKEY_CURRENT_USER,
+        "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        RegQueryValueExA(hKey, "AppsUseLightTheme", nullptr, nullptr,
+            reinterpret_cast<LPBYTE>(&value), &size);
+        RegCloseKey(hKey);
+    }
+    return (value == 0) ? Widgets::Brightness::dark : Widgets::Brightness::light;
+}
+
+static void rebuildMediaQuery(WindowState* state)
+{
+    if (!state || !state->root_element) return;
+    auto newMediaQuery = std::make_shared<Widgets::MediaQuery>(
+        state->media_data, state->user_root_widget);
+    state->root_element->update(newMediaQuery);
+    Widgets::FrameScheduler::scheduleFrame();
+}
 
 static WindowState* gWindowState = nullptr;
 
@@ -279,7 +306,15 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
                 int width = LOWORD(lparam);
                 int height = HIWORD(lparam);
                 if (width > 0 && height > 0) {
-                    // Request a repaint so the widget tree lays out at the new size.
+                    // Update MediaQueryData logical size
+                    Widgets::MediaQueryData newData = state->media_data;
+                    newData.logical_size = Widgets::Size{
+                        static_cast<float>(width),
+                        static_cast<float>(height) };
+                    if (newData != state->media_data) {
+                        state->media_data = newData;
+                        rebuildMediaQuery(state);
+                    }
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
             }
@@ -509,6 +544,19 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
             return 0;
         }
 
+        case WM_SETTINGCHANGE: {
+            if (state)
+            {
+                Widgets::Brightness newBrightness = getSystemBrightness();
+                if (state->media_data.platform_brightness != newBrightness)
+                {
+                    state->media_data.platform_brightness = newBrightness;
+                    rebuildMediaQuery(state);
+                }
+            }
+            return DefWindowProc(hwnd, msg, wparam, lparam);
+        }
+
         default:
             return DefWindowProc(hwnd, msg, wparam, lparam);
     }
@@ -669,7 +717,15 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     UINT dpi = GetDpiForWindow(state.hwnd);
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = static_cast<float>(dpi) / 96.0f;
-    
+    mediaData.platform_brightness = getSystemBrightness();
+    RECT client_rect;
+    GetClientRect(state.hwnd, &client_rect);
+    mediaData.logical_size = Widgets::Size{
+        static_cast<float>(client_rect.right - client_rect.left),
+        static_cast<float>(client_rect.bottom - client_rect.top) };
+    state.media_data = mediaData;
+    state.user_root_widget = gRootWidget;
+
     auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(
         mediaData, gRootWidget);
 

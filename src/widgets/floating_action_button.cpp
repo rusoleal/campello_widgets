@@ -19,7 +19,7 @@ namespace systems::leal::campello_widgets
         deco.border_radius = diameter / 2.0f;   // circular
         if (elevation > 0.0f) {
             deco.box_shadow = {BoxShadow{
-                Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.3f),
+                Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
                 Offset{0.0f, elevation * 0.5f},
                 elevation * 2.0f
             }};
@@ -38,7 +38,7 @@ namespace systems::leal::campello_widgets
 
         if (!on_pressed) {
             auto faded     = std::make_shared<Opacity>();
-            faded->opacity = 0.38f;
+            faded->opacity = 0.40f;
             faded->child   = gesture;
             return faded;
         }

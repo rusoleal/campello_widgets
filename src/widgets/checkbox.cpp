@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/checkbox.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/custom_painter.hpp>
 #include <campello_widgets/ui/canvas.hpp>
 #include <campello_widgets/ui/paint.hpp>
@@ -60,13 +61,14 @@ namespace systems::leal::campello_widgets
 
     // ------------------------------------------------------------------
 
-    WidgetRef Checkbox::build(BuildContext&) const
+    WidgetRef Checkbox::build(BuildContext& ctx) const
     {
         const bool   checked    = value;
         const auto   changed_fn = on_changed;
-        const Color  ac         = active_color;
-        const Color  cc         = check_color;
-        const Color  bc         = border_color;
+        const auto*  tokens     = Theme::tokensOf(ctx);
+        const Color  ac         = active_color.value_or(tokens->colors.primary);
+        const Color  cc         = check_color.value_or(tokens->colors.on_primary);
+        const Color  bc         = border_color.value_or(tokens->colors.outline);
         const float  sz         = size;
         const float  br         = border_radius;
 
@@ -91,7 +93,7 @@ namespace systems::leal::campello_widgets
         if (!changed_fn)
         {
             auto faded     = std::make_shared<Opacity>();
-            faded->opacity = 0.38f;
+            faded->opacity = 0.40f;
             faded->child   = detector;
             return faded;
         }

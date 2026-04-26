@@ -1,35 +1,20 @@
 #include <campello_widgets/widgets/card.hpp>
-#include <campello_widgets/widgets/decorated_box.hpp>
-#include <campello_widgets/widgets/padding.hpp>
-#include <campello_widgets/ui/box_decoration.hpp>
-#include <campello_widgets/ui/box_shadow.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
-    WidgetRef Card::build(BuildContext&) const
+    WidgetRef Card::build(BuildContext& ctx) const
     {
-        BoxDecoration deco;
-        deco.color         = color;
-        deco.border_radius = border_radius;
-        if (elevation > 0.0f) {
-            deco.box_shadow = {BoxShadow{
-                Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.2f),
-                Offset{0.0f, elevation},
-                elevation * 2.0f
-            }};
-        }
+        const auto* ds = Theme::of(ctx);
+        if (!ds) return nullptr;
 
-        auto decorated        = std::make_shared<DecoratedBox>();
-        decorated->decoration = deco;
-        decorated->child      = child;
+        CardConfig cfg;
+        cfg.child    = child;
+        cfg.priority = priority;
+        cfg.padding  = padding;
 
-        if (margin == EdgeInsets::zero()) return decorated;
-
-        auto padded     = std::make_shared<Padding>();
-        padded->padding = margin;
-        padded->child   = decorated;
-        return padded;
+        return ds->buildCard(cfg);
     }
 
 } // namespace systems::leal::campello_widgets

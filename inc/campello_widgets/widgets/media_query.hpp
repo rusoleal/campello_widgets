@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/inherited_widget.hpp>
+#include <campello_widgets/ui/brightness.hpp>
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 
@@ -30,6 +31,9 @@ namespace systems::leal::campello_widgets
         /** @brief Insets from system UI like keyboard (in logical pixels). */
         EdgeInsets view_insets;
 
+        /** @brief The platform's brightness preference (light or dark mode). */
+        Brightness platform_brightness = Brightness::light;
+
         /**
          * @brief Returns the size in physical pixels.
          */
@@ -45,7 +49,8 @@ namespace systems::leal::campello_widgets
             return logical_size == other.logical_size &&
                    device_pixel_ratio == other.device_pixel_ratio &&
                    padding == other.padding &&
-                   view_insets == other.view_insets;
+                   view_insets == other.view_insets &&
+                   platform_brightness == other.platform_brightness;
         }
 
         bool operator!=(const MediaQueryData& other) const noexcept

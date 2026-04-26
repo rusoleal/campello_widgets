@@ -16,6 +16,14 @@
 #include <campello_widgets/widgets/inherited_widget.hpp>
 #include <campello_widgets/widgets/inherited_element.hpp>
 #include <campello_widgets/widgets/media_query.hpp>
+#include <campello_widgets/widgets/theme.hpp>
+
+// Design System
+#include <campello_widgets/ui/brightness.hpp>
+#include <campello_widgets/ui/color_scheme.hpp>
+#include <campello_widgets/ui/design_tokens.hpp>
+#include <campello_widgets/ui/design_system.hpp>
+#include <campello_widgets/ui/campello_design_system.hpp>
 
 // Layout
 #include <campello_widgets/ui/size.hpp>
@@ -249,6 +257,7 @@
 #include <campello_widgets/widgets/divider.hpp>
 #include <campello_widgets/widgets/circular_progress_indicator.hpp>
 #include <campello_widgets/widgets/linear_progress_indicator.hpp>
+#include <campello_widgets/widgets/progress_indicator.hpp>
 #include <campello_widgets/widgets/tooltip.hpp>
 
 // Decoration widgets
@@ -263,6 +272,9 @@
 // High-priority composited widgets
 #include <campello_widgets/widgets/card.hpp>
 #include <campello_widgets/widgets/list_tile.hpp>
+#include <campello_widgets/widgets/app_bar.hpp>
+#include <campello_widgets/widgets/navigation_bar.hpp>
+#include <campello_widgets/widgets/primary_action_button.hpp>
 #include <campello_widgets/widgets/floating_action_button.hpp>
 #include <campello_widgets/widgets/snack_bar.hpp>
 #include <campello_widgets/widgets/popup_menu_button.hpp>

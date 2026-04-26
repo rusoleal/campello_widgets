@@ -1,8 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/stateless_widget.hpp>
-#include <campello_widgets/ui/color.hpp>
-#include <campello_widgets/ui/edge_insets.hpp>
+#include <campello_widgets/ui/design_system.hpp>
 
 #include <functional>
 
@@ -10,23 +9,8 @@ namespace systems::leal::campello_widgets
 {
 
     /**
-     * @brief A single fixed-height row for use in lists.
-     *
-     * ListTile composes a Row with up to four slots:
-     *  - leading  : widget at the start (e.g. icon or avatar)
-     *  - title    : primary text or widget
-     *  - subtitle : secondary text below the title (optional)
-     *  - trailing : widget at the end (e.g. switch or icon)
-     *
-     * Tap / long-press handlers wrap the tile in a GestureDetector.
-     * When disabled the tile is rendered at 38% opacity.
-     *
-     * @code
-     * auto tile = std::make_shared<ListTile>();
-     * tile->title    = std::make_shared<Text>("Settings");
-     * tile->trailing = std::make_shared<Text>(">");
-     * tile->on_tap   = []{ };
-     * @endcode
+     * @brief An adaptive list tile that delegates its visual appearance to the
+     *        active DesignSystem.
      */
     class ListTile : public StatelessWidget
     {
@@ -37,10 +21,7 @@ namespace systems::leal::campello_widgets
         WidgetRef             trailing;
         std::function<void()> on_tap;
         std::function<void()> on_long_press;
-        bool                  enabled          = true;
-        bool                  dense            = false;
-        Color                 background_color = Color::transparent();
-        EdgeInsets            content_padding  = EdgeInsets::symmetric(16.0f, 0.0f);
+        bool                  enabled = true;
 
         ListTile() = default;
         explicit ListTile(WidgetRef tile_title)

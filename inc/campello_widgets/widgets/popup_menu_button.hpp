@@ -46,8 +46,8 @@ namespace systems::leal::campello_widgets
         WidgetRef                      child;
         std::vector<PopupMenuItem>     items;
         std::function<void(int index)> on_selected;
-        Color                          popup_color   = Color::white();
-        float                          border_radius = 4.0f;
+        std::optional<Color>           popup_color;
+        float                          border_radius = 8.0f;
         float                          elevation     = 8.0f;
 
         PopupMenuButton() = default;

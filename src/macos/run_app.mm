@@ -44,6 +44,21 @@ namespace {
     float              gHeight = 600.0f;
     MTKView*           gMetalView = nullptr;  // Global access for requestRefresh()
     std::shared_ptr<Widgets::Renderer> gRenderer;  // Global access for requestRefresh()
+    Widgets::MediaQueryData gMediaData;
+
+    static Widgets::Brightness getSystemBrightness()
+    {
+        if (@available(macOS 10.14, *)) {
+            NSAppearance* appearance = NSAppearance.currentAppearance;
+            if (appearance) {
+                NSAppearanceName name = appearance.name;
+                if ([name isEqualToString:NSAppearanceNameDarkAqua]) {
+                    return Widgets::Brightness::dark;
+                }
+            }
+        }
+        return Widgets::Brightness::light;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -54,12 +69,14 @@ namespace {
 - (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher;
 - (void)setFocusManager:(Widgets::FocusManager*)focusManager;
 - (void)setTextInputManager:(Widgets::TextInputManager*)textInputManager;
+- (void)setAppearanceChangedCallback:(std::function<void()>)callback;
 @end
 
 @implementation CampelloMTKView {
     Widgets::PointerDispatcher* _dispatcher;
     Widgets::FocusManager*      _focusManager;
     Widgets::TextInputManager*  _textInputManager;
+    std::function<void()>       _appearanceChangedCallback;
 }
 
 - (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher
@@ -75,6 +92,19 @@ namespace {
 - (void)setTextInputManager:(Widgets::TextInputManager*)textInputManager
 {
     _textInputManager = textInputManager;
+}
+
+- (void)setAppearanceChangedCallback:(std::function<void()>)callback
+{
+    _appearanceChangedCallback = std::move(callback);
+}
+
+- (void)viewDidChangeEffectiveAppearance
+{
+    [super viewDidChangeEffectiveAppearance];
+    if (_appearanceChangedCallback) {
+        _appearanceChangedCallback();
+    }
 }
 
 - (BOOL)acceptsFirstResponder { return YES; }
@@ -802,6 +832,18 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // -----------------------------------------------------------------------
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = static_cast<float>(_window.backingScaleFactor);
+    mediaData.platform_brightness = getSystemBrightness();
+    mediaData.logical_size = Widgets::Size{
+        static_cast<float>(_metalView.bounds.size.width),
+        static_cast<float>(_metalView.bounds.size.height) };
+    if (@available(macOS 12.1, *)) {
+        NSEdgeInsets safeInsets = _window.contentView.safeAreaInsets;
+        mediaData.padding.left   = static_cast<float>(safeInsets.left);
+        mediaData.padding.top    = static_cast<float>(safeInsets.top);
+        mediaData.padding.right  = static_cast<float>(safeInsets.right);
+        mediaData.padding.bottom = static_cast<float>(safeInsets.bottom);
+    }
+    gMediaData = mediaData;
     
     // Wrap the root widget with MediaQuery
     auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
@@ -842,6 +884,13 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
         _device, renderBox, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
     gRenderer = _renderer;  // Store globally for requestRefresh()
+
+    // -----------------------------------------------------------------------
+    // Wire up appearance change detection
+    // -----------------------------------------------------------------------
+    [_metalView setAppearanceChangedCallback:^() {
+        [self updateMediaQueryBrightness];
+    }];
 
     // -----------------------------------------------------------------------
     // Wire up the MTKView delegate
@@ -900,6 +949,49 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 {
     (void)sender;
     return YES;
+}
+
+// ---------------------------------------------------------------------------
+// System brightness / dark-mode handling
+// ---------------------------------------------------------------------------
+
+- (void)updateMediaQueryBrightness
+{
+    Widgets::Brightness newBrightness = getSystemBrightness();
+    if (gMediaData.platform_brightness == newBrightness) return;
+
+    gMediaData.platform_brightness = newBrightness;
+    [self rebuildRootMediaQuery];
+}
+
+- (void)updateWindowMetrics
+{
+    Widgets::MediaQueryData newData = gMediaData;
+    newData.logical_size = Widgets::Size{
+        static_cast<float>(_metalView.bounds.size.width),
+        static_cast<float>(_metalView.bounds.size.height) };
+    if (@available(macOS 12.1, *)) {
+        NSEdgeInsets safeInsets = _window.contentView.safeAreaInsets;
+        newData.padding.left   = static_cast<float>(safeInsets.left);
+        newData.padding.top    = static_cast<float>(safeInsets.top);
+        newData.padding.right  = static_cast<float>(safeInsets.right);
+        newData.padding.bottom = static_cast<float>(safeInsets.bottom);
+    }
+    if (newData != gMediaData) {
+        gMediaData = newData;
+        [self rebuildRootMediaQuery];
+    }
+}
+
+- (void)rebuildRootMediaQuery
+{
+    if (!_rootElement) return;
+
+    auto newMediaQuery = Widgets::mw<Widgets::MediaQuery>(
+        gMediaData, gRootWidget);
+
+    _rootElement->update(newMediaQuery);
+    Widgets::FrameScheduler::scheduleFrame();
 }
 
 // ---------------------------------------------------------------------------

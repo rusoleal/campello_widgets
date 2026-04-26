@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/snack_bar.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/row.hpp>
 #include <campello_widgets/widgets/padding.hpp>
@@ -19,10 +20,11 @@ namespace systems::leal::campello_widgets
     // SnackBarAction
     // -------------------------------------------------------------------------
 
-    WidgetRef SnackBarAction::build(BuildContext&) const
+    WidgetRef SnackBarAction::build(BuildContext& ctx) const
     {
+        const auto* tokens = Theme::tokensOf(ctx);
         TextStyle ts;
-        ts.color     = text_color;
+        ts.color     = text_color.value_or(tokens->colors.primary);
         ts.font_size = 14.0f;
 
         auto text   = std::make_shared<Text>(label, ts);
@@ -43,8 +45,10 @@ namespace systems::leal::campello_widgets
     // SnackBar
     // -------------------------------------------------------------------------
 
-    WidgetRef SnackBar::build(BuildContext&) const
+    WidgetRef SnackBar::build(BuildContext& ctx) const
     {
+        const auto* tokens = Theme::tokensOf(ctx);
+
         std::vector<WidgetRef> row_children;
         row_children.push_back(std::make_shared<Expanded>(content));
         if (action) row_children.push_back(action);
@@ -58,7 +62,7 @@ namespace systems::leal::campello_widgets
         padded->child   = row;
 
         BoxDecoration deco;
-        deco.color         = background_color;
+        deco.color         = background_color.value_or(tokens->colors.inverse_surface);
         deco.border_radius = border_radius;
 
         auto decorated        = std::make_shared<DecoratedBox>();

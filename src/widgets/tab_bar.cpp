@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/tab_bar.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/widgets/row.hpp>
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/expanded.hpp>
@@ -85,6 +86,11 @@ namespace systems::leal::campello_widgets
     {
         const TabScope* scope = ctx.dependOnInheritedWidgetOfExactType<TabScope>();
         const int active = scope ? scope->index : 0;
+        const auto* tokens = Theme::tokensOf(ctx);
+        const Color ind_color = indicator_color.value_or(tokens->colors.primary);
+        const Color lbl_color = label_color.value_or(tokens->colors.primary);
+        const Color unsel_color = unselected_label_color.value_or(tokens->colors.on_surface_variant);
+        const Color bg_color = background_color.value_or(tokens->colors.surface);
 
         std::vector<WidgetRef> tab_widgets;
         for (int i = 0; i < static_cast<int>(tabs.size()); ++i) {
@@ -97,7 +103,7 @@ namespace systems::leal::campello_widgets
                 label = tab.child;
             } else {
                 TextStyle ts;
-                ts.color     = is_active ? label_color : unselected_label_color;
+                ts.color     = is_active ? lbl_color : unsel_color;
                 ts.font_size = 14.0f;
                 ts.font_weight = FontWeight::bold;
                 label = std::make_shared<Text>(tab.text, ts);
@@ -109,7 +115,7 @@ namespace systems::leal::campello_widgets
                 auto bar     = std::make_shared<SizedBox>();
                 bar->height  = indicator_weight;
                 auto colored = std::make_shared<ColoredBox>();
-                colored->color = indicator_color;
+                colored->color = ind_color;
                 colored->child = bar;
                 indicator = colored;
             } else {
@@ -146,9 +152,9 @@ namespace systems::leal::campello_widgets
         row->main_axis_size = MainAxisSize::max;
         row->children = std::move(tab_widgets);
 
-        if (background_color.a > 0.0f) {
+        if (bg_color.a > 0.0f) {
             auto colored = std::make_shared<ColoredBox>();
-            colored->color = background_color;
+            colored->color = bg_color;
             colored->child = row;
             return colored;
         }

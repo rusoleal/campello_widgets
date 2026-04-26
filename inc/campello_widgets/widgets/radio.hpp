@@ -3,6 +3,8 @@
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
 
+#include <optional>
+
 namespace systems::leal::campello_widgets
 {
 
@@ -30,8 +32,8 @@ namespace systems::leal::campello_widgets
         int   value  = 0; ///< The value this radio represents in the group
         float size   = 20.0f;
 
-        Color active_color  = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color inactive_color = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.54f);
+        std::optional<Color> active_color;
+        std::optional<Color> inactive_color;
 
         explicit Radio(int v = 0) : value(v) {}
 

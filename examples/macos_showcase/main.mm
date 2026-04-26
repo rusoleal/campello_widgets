@@ -1363,18 +1363,219 @@ public:
 // Root showcase app with TabBar
 // ---------------------------------------------------------------------------
 
-class ShowcaseApp : public cw::StatelessWidget
+// ---------------------------------------------------------------------------
+// 10. Theme Demo
+// ---------------------------------------------------------------------------
+
+class ThemeDemo : public cw::StatefulWidget
 {
 public:
-    cw::WidgetRef build(cw::BuildContext&) const override
+    std::function<void()> on_toggle_theme;
+
+    std::unique_ptr<cw::StateBase> createState() const override;
+};
+
+class ThemeDemoState : public cw::State<ThemeDemo>
+{
+public:
+    bool switch_on_ = false;
+    bool checkbox_checked_ = false;
+
+    cw::WidgetRef build(cw::BuildContext& ctx) override
     {
+        const auto& w = widget();
+        const auto* ts = cw::Theme::textStyleOf(ctx, cw::TextRole::title_large);
+        const auto* body = cw::Theme::textStyleOf(ctx, cw::TextRole::body_medium);
+        const auto* label = cw::Theme::textStyleOf(ctx, cw::TextRole::label_medium);
+        const auto* title_medium = cw::Theme::textStyleOf(ctx, cw::TextRole::title_medium);
+
+        auto heading = cw::mw<cw::Text>(
+            "Adaptive Widgets",
+            ts ? *ts : cw::TextStyle{}.withFontSize(20.0f).bold());
+
+        auto sub = cw::mw<cw::Text>(
+            "These widgets change appearance based on the active DesignSystem.",
+            body ? *body : cw::TextStyle{}.withFontSize(12.0f));
+
+        // Button row
+        auto btn_primary = cw::mw<cw::Button>(
+            cw::mw<cw::Text>("Primary"),
+            [](){});
+        btn_primary->priority = cw::ButtonPriority::primary;
+
+        auto btn_secondary = cw::mw<cw::Button>(
+            cw::mw<cw::Text>("Secondary"),
+            [](){});
+        btn_secondary->priority = cw::ButtonPriority::secondary;
+
+        auto btn_danger = cw::mw<cw::Button>(
+            cw::mw<cw::Text>("Danger"),
+            [](){});
+        btn_danger->priority = cw::ButtonPriority::danger;
+
+        auto btn_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start,
+            cw::CrossAxisAlignment::center,
+            cw::WidgetList{
+                btn_primary,
+                cw::SizedBox::from_width(12.0f),
+                btn_secondary,
+                cw::SizedBox::from_width(12.0f),
+                btn_danger,
+            });
+
+        // Card demo
+        auto card_content = cw::mw<cw::Column>(
+            cw::MainAxisAlignment::start,
+            cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                cw::mw<cw::Text>("Card Title",
+                    title_medium ? *title_medium : cw::TextStyle{}.withFontSize(16.0f).bold()),
+                cw::mw<cw::Padding>(
+                    cw::EdgeInsets::only(0.0f, 4.0f, 0.0f, 0.0f),
+                    cw::mw<cw::Text>("This card's colors come from the design system tokens.",
+                        body ? *body : cw::TextStyle{}.withFontSize(12.0f))),
+            });
+        auto card = cw::mw<cw::Card>(card_content);
+        card->priority = cw::CardPriority::elevated;
+
+        // Switch + Checkbox row
+        auto sw = cw::mw<cw::Switch>(switch_on_, [this](bool v) {
+            setState([this, v]() { switch_on_ = v; });
+        });
+
+        auto cb = cw::mw<cw::Checkbox>(checkbox_checked_, [this](bool v) {
+            setState([this, v]() { checkbox_checked_ = v; });
+        });
+
+        auto controls_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start,
+            cw::CrossAxisAlignment::center,
+            cw::WidgetList{
+                cw::mw<cw::Text>("Switch:", label ? *label : cw::TextStyle{}.withFontSize(14.0f)),
+                cw::SizedBox::from_width(8.0f),
+                sw,
+                cw::SizedBox::from_width(24.0f),
+                cw::mw<cw::Text>("Checkbox:", label ? *label : cw::TextStyle{}.withFontSize(14.0f)),
+                cw::SizedBox::from_width(8.0f),
+                cb,
+            });
+
+        // Divider
+        auto div = cw::mw<cw::Divider>();
+
+        // Typography scale demo
+        auto typography_heading = cw::mw<cw::Text>(
+            "Typography Scale",
+            ts ? *ts : cw::TextStyle{}.withFontSize(20.0f).bold());
+
+        auto makeTypeDemo = [&](const std::string& name, cw::TextRole role) -> cw::WidgetRef {
+            const auto* style = cw::Theme::textStyleOf(ctx, role);
+            return cw::mw<cw::Text>(name, style ? *style : cw::TextStyle{});
+        };
+
+        auto type_col = cw::mw<cw::Column>(
+            cw::MainAxisAlignment::start,
+            cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                makeTypeDemo("Display Large", cw::TextRole::display_large),
+                makeTypeDemo("Headline Large", cw::TextRole::headline_large),
+                makeTypeDemo("Title Large", cw::TextRole::title_large),
+                makeTypeDemo("Body Large", cw::TextRole::body_large),
+                makeTypeDemo("Label Large", cw::TextRole::label_large),
+            });
+
+        // Dark mode toggle button
+        auto toggle_btn = cw::mw<cw::Button>(
+            cw::mw<cw::Text>("Toggle Dark Mode"),
+            w.on_toggle_theme);
+        toggle_btn->priority = cw::ButtonPriority::primary;
+
+        auto toggle_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::center,
+            cw::CrossAxisAlignment::center,
+            cw::WidgetList{ toggle_btn });
+
+        return cw::mw<cw::SingleChildScrollView>(
+            cw::mw<cw::Padding>(
+                cw::EdgeInsets::all(24.0f),
+                cw::mw<cw::Column>(
+                    cw::MainAxisAlignment::start,
+                    cw::CrossAxisAlignment::stretch,
+                    cw::WidgetList{
+                        heading,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 4.0f, 0.0f, 16.0f), sub),
+                        btn_row,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 16.0f, 0.0f, 16.0f), card),
+                        controls_row,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 16.0f, 0.0f, 16.0f), div),
+                        typography_heading,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 8.0f, 0.0f, 16.0f), type_col),
+                        toggle_row,
+                    })));
+    }
+};
+
+std::unique_ptr<cw::StateBase> ThemeDemo::createState() const
+{
+    return std::make_unique<ThemeDemoState>();
+}
+
+// ---------------------------------------------------------------------------
+// ShowcaseApp
+// ---------------------------------------------------------------------------
+
+class ShowcaseApp : public cw::StatefulWidget
+{
+public:
+    std::unique_ptr<cw::StateBase> createState() const override;
+};
+
+class ShowcaseAppState : public cw::State<ShowcaseApp>
+{
+public:
+    std::shared_ptr<const cw::DesignSystem> ds_;
+    bool follow_system_ = true;
+
+    void initState() override
+    {
+        ds_ = std::make_shared<cw::CampelloDesignSystem>(cw::CampelloDesignSystem::light());
+    }
+
+    void toggleTheme()
+    {
+        setState([this]() {
+            follow_system_ = false; // User override — stop following system
+            bool is_dark = (ds_->tokens().brightness == cw::Brightness::dark);
+            ds_ = std::make_shared<cw::CampelloDesignSystem>(
+                is_dark ? cw::CampelloDesignSystem::light()
+                        : cw::CampelloDesignSystem::dark());
+        });
+    }
+
+    cw::WidgetRef build(cw::BuildContext& ctx) override
+    {
+        // If following system, sync with MediaQuery platform brightness
+        if (follow_system_) {
+            const auto* media = cw::MediaQuery::of(ctx);
+            if (media) {
+                bool want_dark = (media->platform_brightness == cw::Brightness::dark);
+                bool is_dark = (ds_->tokens().brightness == cw::Brightness::dark);
+                if (want_dark != is_dark) {
+                    ds_ = std::make_shared<cw::CampelloDesignSystem>(
+                        want_dark ? cw::CampelloDesignSystem::dark()
+                                  : cw::CampelloDesignSystem::light());
+                }
+            }
+        }
         auto tabCtrl = std::make_shared<cw::DefaultTabController>();
-        tabCtrl->length = 9;
+        tabCtrl->length = 10;
         tabCtrl->child = cw::mw<cw::Column>(
             cw::MainAxisAlignment::start,
             cw::CrossAxisAlignment::stretch,
             cw::WidgetList{
                 cw::mw<cw::TabBar>(std::vector<cw::Tab>{
+                    cw::Tab{"Theme"},
                     cw::Tab{"Counter"},
                     cw::Tab{"List"},
                     cw::Tab{"Animate"},
@@ -1386,7 +1587,11 @@ public:
                     cw::Tab{"Image"},
                 }),
                 [&]() -> cw::WidgetRef {
+                    auto theme_demo = std::make_shared<ThemeDemo>();
+                    theme_demo->on_toggle_theme = [this]() { toggleTheme(); };
+
                     auto tabView = std::make_shared<cw::TabBarView>(std::vector<cw::WidgetRef>{
+                        theme_demo,
                         std::make_shared<CounterDemo>(),
                         std::make_shared<ListViewDemo>(),
                         std::make_shared<AnimationDemo>(),
@@ -1402,9 +1607,14 @@ public:
                 }(),
             }
         );
-        return tabCtrl;
+        return cw::mw<cw::Theme>(ds_, tabCtrl);
     }
 };
+
+std::unique_ptr<cw::StateBase> ShowcaseApp::createState() const
+{
+    return std::make_unique<ShowcaseAppState>();
+}
 
 // ---------------------------------------------------------------------------
 // Menu bar
@@ -1432,6 +1642,10 @@ static std::vector<cw::PlatformMenuRef> buildMenuBar()
             cw::PlatformProvidedMenuItem::select_all(),
         }),
         cw::PlatformMenu::create("View", {
+            cw::PlatformMenuItemLabel::create("Toggle Dark Mode", "Cmd+T", []() {
+                // Menu callback will be wired up after app creation
+            }),
+            cw::PlatformMenuItemSeparator::create(),
             cw::PlatformMenuItemLabel::create("Zoom In",  "Cmd++", []() {}),
             cw::PlatformMenuItemLabel::create("Zoom Out", "Cmd+-", []() {}),
             cw::PlatformMenuItemSeparator::create(),

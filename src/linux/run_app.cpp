@@ -25,6 +25,8 @@
 #include <X11/XKBlib.h>
 #include <X11/keysym.h>
 
+#include <dbus/dbus.h>
+
 #include <chrono>
 #include <memory>
 #include <string>
@@ -78,9 +80,188 @@ struct WindowState
     bool running = true;
     bool needs_redraw = true;
     bool mouse_pressed = false;
+    Widgets::MediaQueryData                     media_data;
+    Widgets::WidgetRef                          user_root_widget;
 };
 
 static WindowState* gWindowState = nullptr;
+
+// ---------------------------------------------------------------------------
+// Dark-mode D-Bus monitor (xdg-desktop-portal)
+// ---------------------------------------------------------------------------
+
+static DBusConnection* gDarkModeConn = nullptr;
+
+static DBusHandlerResult darkModeDBusFilter(DBusConnection* /*connection*/,
+                                              DBusMessage* msg,
+                                              void* user_data)
+{
+    if (!dbus_message_is_signal(msg, "org.freedesktop.portal.Settings", "SettingChanged"))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    DBusMessageIter iter;
+    if (!dbus_message_iter_init(msg, &iter))
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    const char* ns = nullptr;
+    dbus_message_iter_get_basic(&iter, &ns);
+
+    dbus_message_iter_next(&iter);
+    if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_STRING)
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    const char* key = nullptr;
+    dbus_message_iter_get_basic(&iter, &key);
+
+    if (!ns || !key || std::strcmp(ns, "org.freedesktop.appearance") != 0 ||
+        std::strcmp(key, "color-scheme") != 0)
+    {
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+
+    dbus_message_iter_next(&iter);
+    if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_VARIANT)
+        return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+
+    DBusMessageIter variant;
+    dbus_message_iter_recurse(&iter, &variant);
+
+    uint32_t value = 0;
+    if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_UINT32)
+        dbus_message_iter_get_basic(&variant, &value);
+
+    auto* state = static_cast<WindowState*>(user_data);
+    Widgets::Brightness newBrightness = (value == 1)
+        ? Widgets::Brightness::dark : Widgets::Brightness::light;
+    if (state->media_data.platform_brightness != newBrightness)
+    {
+        state->media_data.platform_brightness = newBrightness;
+        std::cerr << "[Linux] platform brightness changed to "
+                  << (newBrightness == Widgets::Brightness::dark ? "dark" : "light") << "\n";
+        rebuildMediaQuery(state);
+    }
+
+    return DBUS_HANDLER_RESULT_HANDLED;
+}
+
+static bool initializeDarkModeMonitor(WindowState* state)
+{
+    DBusError err;
+    dbus_error_init(&err);
+
+    gDarkModeConn = dbus_bus_get(DBUS_BUS_SESSION, &err);
+    if (!gDarkModeConn || dbus_error_is_set(&err))
+    {
+        if (dbus_error_is_set(&err)) dbus_error_free(&err);
+        return false;
+    }
+
+    dbus_connection_ref(gDarkModeConn);
+
+    dbus_bus_add_match(gDarkModeConn,
+        "type='signal',interface='org.freedesktop.portal.Settings',member='SettingChanged'",
+        &err);
+    if (dbus_error_is_set(&err))
+    {
+        std::cerr << "[Linux] Failed to add dark-mode signal match: " << err.message << "\n";
+        dbus_error_free(&err);
+        dbus_connection_unref(gDarkModeConn);
+        gDarkModeConn = nullptr;
+        return false;
+    }
+
+    dbus_connection_add_filter(gDarkModeConn, darkModeDBusFilter, state, nullptr);
+    return true;
+}
+
+static void shutdownDarkModeMonitor()
+{
+    if (!gDarkModeConn) return;
+    dbus_connection_remove_filter(gDarkModeConn, darkModeDBusFilter, nullptr);
+    dbus_connection_unref(gDarkModeConn);
+    gDarkModeConn = nullptr;
+}
+
+static void pumpDarkModeEvents()
+{
+    if (!gDarkModeConn) return;
+    dbus_connection_read_write(gDarkModeConn, 0);
+    while (dbus_connection_get_dispatch_status(gDarkModeConn) == DBUS_DISPATCH_DATA_REMAINS)
+    {
+        dbus_connection_dispatch(gDarkModeConn);
+    }
+}
+
+static Widgets::Brightness getSystemBrightness()
+{
+    // Query the xdg-desktop-portal Settings interface for color-scheme.
+    // Value: 0 = no preference, 1 = dark, 2 = light
+    DBusError err;
+    dbus_error_init(&err);
+
+    DBusConnection* conn = dbus_bus_get(DBUS_BUS_SESSION, &err);
+    if (!conn || dbus_error_is_set(&err)) {
+        dbus_error_free(&err);
+        return Widgets::Brightness::light;
+    }
+
+    DBusMessage* msg = dbus_message_new_method_call(
+        "org.freedesktop.portal.Desktop",
+        "/org/freedesktop/portal/desktop",
+        "org.freedesktop.portal.Settings",
+        "Read");
+    if (!msg) return Widgets::Brightness::light;
+
+    const char* ns  = "org.freedesktop.appearance";
+    const char* key = "color-scheme";
+    dbus_message_append_args(msg,
+        DBUS_TYPE_STRING, &ns,
+        DBUS_TYPE_STRING, &key,
+        DBUS_TYPE_INVALID);
+
+    DBusMessage* reply = dbus_connection_send_with_reply_and_block(conn, msg, 500, &err);
+    dbus_message_unref(msg);
+
+    if (!reply || dbus_error_is_set(&err)) {
+        if (reply) dbus_message_unref(reply);
+        dbus_error_free(&err);
+        return Widgets::Brightness::light;
+    }
+
+    DBusMessageIter iter;
+    if (!dbus_message_iter_init(reply, &iter)) {
+        dbus_message_unref(reply);
+        return Widgets::Brightness::light;
+    }
+
+    if (dbus_message_iter_get_arg_type(&iter) != DBUS_TYPE_VARIANT) {
+        dbus_message_unref(reply);
+        return Widgets::Brightness::light;
+    }
+
+    DBusMessageIter variant;
+    dbus_message_iter_recurse(&iter, &variant);
+
+    uint32_t value = 0;
+    if (dbus_message_iter_get_arg_type(&variant) == DBUS_TYPE_UINT32) {
+        dbus_message_iter_get_basic(&variant, &value);
+    }
+
+    dbus_message_unref(reply);
+    // dbus_bus_get returns a shared connection — do not unref
+
+    return (value == 1) ? Widgets::Brightness::dark : Widgets::Brightness::light;
+}
+
+static void rebuildMediaQuery(WindowState* state)
+{
+    if (!state || !state->root_element) return;
+    auto newMediaQuery = std::make_shared<Widgets::MediaQuery>(
+        state->media_data, state->user_root_widget);
+    state->root_element->update(newMediaQuery);
+    Widgets::FrameScheduler::scheduleFrame();
+}
 
 // ---------------------------------------------------------------------------
 // X11 keycode translation
@@ -241,6 +422,14 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             if (ev.xconfigure.width > 0 && ev.xconfigure.height > 0) {
                 gWidth  = ev.xconfigure.width;
                 gHeight = ev.xconfigure.height;
+                Widgets::MediaQueryData newData = state->media_data;
+                newData.logical_size = Widgets::Size{
+                    static_cast<float>(ev.xconfigure.width),
+                    static_cast<float>(ev.xconfigure.height) };
+                if (newData != state->media_data) {
+                    state->media_data = newData;
+                    rebuildMediaQuery(state);
+                }
                 state->needs_redraw = true;
             }
             break;
@@ -542,6 +731,14 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::TickerScheduler::setActive(state.ticker_scheduler.get());
 
     // -----------------------------------------------------------------------
+    // Set up dark-mode D-Bus monitor
+    // -----------------------------------------------------------------------
+    if (!initializeDarkModeMonitor(&state)) {
+        std::cerr << "[Linux] xdg-desktop-portal not available; dark-mode live updates disabled.\n";
+        // Non-fatal — startup detection still works
+    }
+
+    // -----------------------------------------------------------------------
     // Set up IBus IME
     // -----------------------------------------------------------------------
     state.ibus_ime = std::make_unique<Widgets::IbusIme>();
@@ -575,6 +772,12 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::MediaQueryData mediaData;
     // X11 doesn't have a built-in DPR concept; use 1.0 as default
     mediaData.device_pixel_ratio = 1.0f;
+    mediaData.platform_brightness = getSystemBrightness();
+    mediaData.logical_size = Widgets::Size{
+        static_cast<float>(width),
+        static_cast<float>(height) };
+    state.media_data = mediaData;
+    state.user_root_widget = gRootWidget;
 
     auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(mediaData, gRootWidget);
 
@@ -623,6 +826,9 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
             handleX11Event(&state, ev);
         }
 
+        // Pump dark-mode D-Bus signals
+        pumpDarkModeEvents();
+
         // Pump IBus D-Bus signals
         if (state.ibus_ime && state.ibus_ime->isActive()) {
             state.ibus_ime->dispatchEvents();
@@ -643,6 +849,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // -----------------------------------------------------------------------
     // Cleanup
     // -----------------------------------------------------------------------
+    shutdownDarkModeMonitor();
     state.ibus_ime.reset();
 
     Widgets::PointerDispatcher::setActiveDispatcher(nullptr);

@@ -23,12 +23,12 @@ namespace systems::leal::campello_widgets
      * fab->on_pressed = []{ createItem(); };
      * @endcode
      */
-    class FloatingActionButton : public StatelessWidget
+    class [[deprecated("Use PrimaryActionButton instead")]] FloatingActionButton : public StatelessWidget
     {
     public:
         WidgetRef             child;
         std::function<void()> on_pressed;
-        Color                 background_color = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
+        Color                 background_color = Color::fromRGBA(0.051f, 0.545f, 0.553f, 1.0f);
         Color                 foreground_color = Color::white();
         float                 elevation        = 6.0f;
         bool                  mini             = false;

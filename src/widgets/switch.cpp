@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/switch.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
 #include <campello_widgets/ui/custom_painter.hpp>
 #include <campello_widgets/ui/canvas.hpp>
@@ -98,16 +99,19 @@ namespace systems::leal::campello_widgets
                 widget().value ? ctrl_->forward(0.0) : ctrl_->reverse(0.0);
         }
 
-        WidgetRef build(BuildContext&) override
+        WidgetRef build(BuildContext& ctx) override
         {
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(ctx);
 
             auto painter                    = std::make_shared<SwitchPainter>();
             painter->t                      = ctrl_ ? ctrl_->normalizedValue() : (w.value ? 1.0 : 0.0);
-            painter->active_track_color     = w.active_track_color;
-            painter->inactive_track_color   = w.inactive_track_color;
-            painter->active_thumb_color     = w.active_thumb_color;
-            painter->inactive_thumb_color   = w.inactive_thumb_color;
+            painter->active_track_color     = w.active_track_color.value_or(
+                Color::fromRGBA(tokens->colors.primary.r, tokens->colors.primary.g, tokens->colors.primary.b, tokens->colors.primary.a * 0.5f));
+            painter->inactive_track_color   = w.inactive_track_color.value_or(
+                Color::fromRGBA(tokens->colors.on_surface.r, tokens->colors.on_surface.g, tokens->colors.on_surface.b, tokens->colors.on_surface.a * 0.26f));
+            painter->active_thumb_color     = w.active_thumb_color.value_or(tokens->colors.primary);
+            painter->inactive_thumb_color   = w.inactive_thumb_color.value_or(tokens->colors.surface);
 
             auto box    = std::make_shared<SizedBox>();
             box->width  = w.width;
@@ -125,7 +129,7 @@ namespace systems::leal::campello_widgets
             if (!fn)
             {
                 auto faded     = std::make_shared<Opacity>();
-                faded->opacity = 0.38f;
+                faded->opacity = 0.40f;
                 faded->child   = detector;
                 return faded;
             }

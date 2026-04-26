@@ -30,9 +30,9 @@ namespace systems::leal::campello_widgets
         /// How long to keep the tooltip visible after it appears.
         double display_duration_ms = 2000.0;
 
-        Color      background_color = Color::fromRGBA(0.1f, 0.1f, 0.1f, 0.9f);
-        Color      text_color       = Color::white();
-        float      border_radius    = 4.0f;
+        std::optional<Color> background_color;
+        std::optional<Color> text_color;
+        float      border_radius = 8.0f;
         EdgeInsets padding          = EdgeInsets::symmetric(8.0f, 4.0f);
         float      font_size        = 12.0f;
 

@@ -11,6 +11,7 @@
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/stack.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
 #include <algorithm>
@@ -24,14 +25,12 @@ namespace systems::leal::campello_widgets
 
     WidgetRef Dialog::build(BuildContext& context) const
     {
-        (void)context;
-
         if (!child) return nullptr;
 
         // Container with background, padding, and rounded corners
         auto container = std::make_shared<Container>();
         container->child = child;
-        container->color = background_color;
+        container->color = background_color.value_or(Theme::tokensOf(context)->colors.surface);
         // Note: border_radius and elevation would need Container decoration support
         // For now, just use the basic container
 
@@ -47,9 +46,8 @@ namespace systems::leal::campello_widgets
     // AlertDialog
     // -------------------------------------------------------------------------
 
-    WidgetRef AlertDialog::build(BuildContext& context) const
+    WidgetRef AlertDialog::build(BuildContext&) const
     {
-        (void)context;
 
         std::vector<WidgetRef> dialog_children;
 
@@ -107,7 +105,11 @@ namespace systems::leal::campello_widgets
         content_column->cross_axis_alignment = CrossAxisAlignment::stretch;
 
         // Wrap in Dialog container
-        return Dialog::create(content_column);
+        auto dialog = std::make_shared<Dialog>(content_column);
+        if (background_color.has_value()) {
+            dialog->background_color = background_color;
+        }
+        return dialog;
     }
 
     // -------------------------------------------------------------------------

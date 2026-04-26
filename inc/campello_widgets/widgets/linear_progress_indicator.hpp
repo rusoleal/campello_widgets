@@ -31,8 +31,8 @@ namespace systems::leal::campello_widgets
     public:
         std::optional<float> value;
 
-        Color  background_color = Color::fromRGBA(0.098f, 0.463f, 0.824f, 0.24f);
-        Color  value_color      = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
+        std::optional<Color> background_color;
+        std::optional<Color> value_color;
         float  min_height       = 4.0f;
         double duration_ms      = 1600.0;   ///< Indeterminate animation period
 

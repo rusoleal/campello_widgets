@@ -20,7 +20,7 @@ namespace systems::leal::campello_widgets
     {
     public:
         float  value          = 0.0f;     ///< Normalised [0, 1]
-        Color  active_color   = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
+        Color  active_color   = Color::fromRGBA(0.051f, 0.545f, 0.553f, 1.0f);
         Color  inactive_color = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.26f);
         float  track_height   = 4.0f;
         float  thumb_radius   = 10.0f;

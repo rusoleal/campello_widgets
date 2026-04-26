@@ -29,8 +29,8 @@ namespace systems::leal::campello_widgets
     public:
         std::optional<float> value;
 
-        Color background_color = Color::transparent();
-        Color value_color      = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
+        std::optional<Color> background_color;
+        std::optional<Color> value_color;
         float stroke_width     = 4.0f;
         float size             = 36.0f;   ///< Diameter in logical pixels
         double duration_ms     = 1200.0;  ///< Indeterminate rotation period

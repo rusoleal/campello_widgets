@@ -49,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Android**: Debug + Release for `arm64-v8a` and `x86_64`
   - **Caching**: per-platform, per-arch dependency source caches keyed on `dependencies/*.cmake` hashes
   - **Linux deps**: installs all required build packages (`libvulkan-dev`, `libx11-dev`, `libdbus-1-dev`, `libfreetype6-dev`, `libharfbuzz-dev`, `libfontconfig1-dev`, `libwayland-dev`, `libxkbcommon-dev`)
+- **Design System abstraction** — complete theming layer decoupling visual style from widget logic:
+  - `DesignTokens` — value types for colors (`ColorScheme`), typography, shapes, spacing, motion, and elevation
+  - `DesignSystem` — abstract interface with 19 `buildXxx(Config)` methods covering Button, Switch, Checkbox, Radio, Slider, TextField, Card, ProgressIndicator, Tooltip, ListTile, Divider, AppBar, NavigationBar, Dialog, SnackBar, PopupMenuButton, DropdownButton, PrimaryActionButton, and TabBar
+  - `Theme` — `InheritedWidget` that propagates `std::shared_ptr<const DesignSystem>` down the tree; `Theme::of()` returns a static fallback `CampelloDesignSystem` when no theme is present
+  - `CampelloDesignSystem` — concrete implementation with a distinct warm-teal visual identity (not Material, not Cupertino); `light()` and `dark()` factory presets
+  - Adaptive thin-wrapper widgets — `Button`, `Card`, `Divider`, `ListTile`, `AppBar`, `NavigationBar`, and `PrimaryActionButton` now delegate their `build()` to the active design system
+  - Canonical configured widgets — `Switch`, `Checkbox`, `Radio`, `Slider`, `TextField`, `CircularProgressIndicator`, `LinearProgressIndicator`, `Tooltip`, `PopupMenuButton`, `DropdownButton`, `TabBar`, `Dialog`, and `SnackBar` are constructed and themed by `CampelloDesignSystem`
+  - macOS showcase example updated with a "Theme" tab demonstrating adaptive widgets and a live dark-mode toggle
 
 ### Changed
 

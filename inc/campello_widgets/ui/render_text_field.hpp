@@ -38,15 +38,15 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<TextEditingController> controller;
 
         TextStyle   style;
-        Color       cursor_color          = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color       selection_color       = Color::fromRGBA(0.098f, 0.463f, 0.824f, 0.4f);
+        Color       cursor_color          = Color::fromRGBA(0.051f, 0.545f, 0.553f, 1.0f);
+        Color       selection_color       = Color::fromRGBA(0.051f, 0.545f, 0.553f, 0.4f);
         Color       fill_color            = Color::white();
-        Color       border_color          = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.38f);
-        Color       focused_border_color  = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color       placeholder_color     = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.38f);
+        Color       border_color          = Color::fromRGB(0.831f, 0.812f, 0.780f);
+        Color       focused_border_color  = Color::fromRGBA(0.051f, 0.545f, 0.553f, 1.0f);
+        Color       placeholder_color     = Color::fromRGB(0.353f, 0.373f, 0.400f);
         std::string placeholder;
 
-        float border_radius = 4.0f;
+        float border_radius = 8.0f;
         float border_width  = 1.0f;
         float padding_h     = 12.0f; ///< Horizontal inner padding
         float padding_v     = 8.0f;  ///< Vertical inner padding

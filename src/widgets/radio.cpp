@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/radio.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/widgets/radio_group.hpp>
 #include <campello_widgets/ui/custom_painter.hpp>
 #include <campello_widgets/ui/canvas.hpp>
@@ -50,11 +51,12 @@ namespace systems::leal::campello_widgets
         const bool selected    = scope && scope->group_value == value;
         const int  this_value  = value;
         const auto on_changed  = scope ? scope->on_changed : std::function<void(int)>{};
+        const auto* tokens     = Theme::tokensOf(ctx);
 
         auto painter           = std::make_shared<RadioPainter>();
         painter->selected      = selected;
-        painter->active_color  = active_color;
-        painter->inactive_color = inactive_color;
+        painter->active_color  = active_color.value_or(tokens->colors.primary);
+        painter->inactive_color = inactive_color.value_or(tokens->colors.outline);
 
         auto box    = std::make_shared<SizedBox>();
         box->width  = size;

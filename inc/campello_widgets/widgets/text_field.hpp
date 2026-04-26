@@ -93,14 +93,14 @@ namespace systems::leal::campello_widgets
          */
         bool expands = false;
 
-        Color fill_color           = Color::white();
-        Color border_color         = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.38f);
-        Color focused_border_color = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color cursor_color         = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color selection_color      = Color::fromRGBA(0.098f, 0.463f, 0.824f, 0.4f);
-        Color placeholder_color    = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.38f);
+        std::optional<Color> fill_color;
+        std::optional<Color> border_color;
+        std::optional<Color> focused_border_color;
+        std::optional<Color> cursor_color;
+        std::optional<Color> selection_color;
+        std::optional<Color> placeholder_color;
 
-        float border_radius = 4.0f;
+        float border_radius = 8.0f;
         float border_width  = 1.0f;
         float min_height    = 36.0f;
 

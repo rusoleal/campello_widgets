@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/tooltip.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
@@ -51,10 +52,13 @@ namespace systems::leal::campello_widgets
             }
 
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(*element());
+            const Color bg = w.background_color.value_or(tokens->colors.inverse_surface);
+            const Color fg = w.text_color.value_or(tokens->colors.inverse_on_surface);
 
             // Build the tooltip bubble
             TextStyle ts;
-            ts.color     = w.text_color;
+            ts.color     = fg;
             ts.font_size = w.font_size;
 
             auto label = std::make_shared<Text>(w.message, ts);
@@ -64,7 +68,7 @@ namespace systems::leal::campello_widgets
             padded->child      = label;
 
             BoxDecoration deco;
-            deco.color         = w.background_color;
+            deco.color         = bg;
             deco.border_radius = w.border_radius;
 
             auto bubble        = std::make_shared<DecoratedBox>();

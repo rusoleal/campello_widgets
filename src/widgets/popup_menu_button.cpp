@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/popup_menu_button.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/modal_barrier.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
@@ -57,6 +58,8 @@ namespace systems::leal::campello_widgets
         {
             if (menu_entry_) return;
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(*element());
+            const Color popup_bg = w.popup_color.value_or(tokens->colors.surface);
 
             // Build item rows
             std::vector<WidgetRef> item_widgets;
@@ -94,7 +97,7 @@ namespace systems::leal::campello_widgets
                     row_widget = g;
                 } else {
                     auto faded     = std::make_shared<Opacity>();
-                    faded->opacity = 0.38f;
+                    faded->opacity = 0.40f;
                     faded->child   = padded;
                     row_widget     = faded;
                 }
@@ -108,11 +111,11 @@ namespace systems::leal::campello_widgets
             col->children             = std::move(item_widgets);
 
             BoxDecoration menu_deco;
-            menu_deco.color         = w.popup_color;
+            menu_deco.color         = popup_bg;
             menu_deco.border_radius = w.border_radius;
             if (w.elevation > 0.0f) {
                 menu_deco.box_shadow = {BoxShadow{
-                    Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.3f),
+                    Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
                     Offset{0.0f, w.elevation * 0.5f},
                     w.elevation * 2.0f
                 }};

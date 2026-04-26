@@ -1,10 +1,12 @@
 #pragma once
 
 #include <campello_widgets/widgets/stateful_widget.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/modal_barrier.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/decorated_box.hpp>
+#include <campello_widgets/widgets/expanded.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/row.hpp>
@@ -67,8 +69,8 @@ namespace systems::leal::campello_widgets
         std::optional<T>                 value;
         std::function<void(T)>           on_changed;
         std::string                      hint;
-        Color                            dropdown_color = Color::white();
-        float                            border_radius  = 4.0f;
+        std::optional<Color>             dropdown_color;
+        float                            border_radius = 8.0f;
         float                            elevation      = 8.0f;
 
         DropdownButton() = default;
@@ -91,9 +93,13 @@ namespace systems::leal::campello_widgets
         public:
             void dispose() override { close(); }
 
-            WidgetRef build(BuildContext&) override
+            WidgetRef build(BuildContext& ctx) override
             {
                 const auto& w = this->widget();
+                const auto* tokens = Theme::tokensOf(ctx);
+                const Color outline = tokens->colors.outline;
+                const Color on_surface_variant = tokens->colors.on_surface_variant;
+                resolved_dropdown_color_ = w.dropdown_color.value_or(tokens->colors.surface);
 
                 // Selected label (or hint)
                 WidgetRef label;
@@ -107,7 +113,7 @@ namespace systems::leal::campello_widgets
                 }
                 if (!label) {
                     TextStyle ts;
-                    ts.color = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.54f);
+                    ts.color = on_surface_variant;
                     label = std::make_shared<Text>(w.hint, ts);
                 }
 
@@ -115,7 +121,7 @@ namespace systems::leal::campello_widgets
                 auto arrow = std::make_shared<Text>(
                     "\u25BC",
                     TextStyle{}.withFontSize(10.0f)
-                               .withColor(Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.54f)));
+                               .withColor(on_surface_variant));
 
                 auto row = std::make_shared<Row>();
                 row->main_axis_alignment = MainAxisAlignment::spaceBetween;
@@ -128,10 +134,9 @@ namespace systems::leal::campello_widgets
                 padded->child   = row;
 
                 BoxDecoration deco;
-                deco.color         = Color::white();
+                deco.color         = tokens->colors.surface;
                 deco.border_radius = w.border_radius;
-                deco.border = BoxBorder::all(
-                    Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.38f), 1.0f);
+                deco.border = BoxBorder::all(outline, 1.0f);
 
                 auto decorated = std::make_shared<DecoratedBox>();
                 decorated->decoration = deco;
@@ -147,11 +152,13 @@ namespace systems::leal::campello_widgets
         private:
             std::shared_ptr<OverlayEntry> barrier_entry_;
             std::shared_ptr<OverlayEntry> menu_entry_;
+            Color resolved_dropdown_color_ = Color::white();
 
             void open()
             {
                 if (menu_entry_) return;
                 const auto& w = this->widget();
+                const Color dropdown_bg = resolved_dropdown_color_;
 
                 // Build menu items
                 std::vector<WidgetRef> item_widgets;
@@ -174,7 +181,7 @@ namespace systems::leal::campello_widgets
                         item_widgets.push_back(g);
                     } else {
                         auto faded     = std::make_shared<Opacity>();
-                        faded->opacity = 0.38f;
+                        faded->opacity = 0.40f;
                         faded->child   = padded;
                         item_widgets.push_back(faded);
                     }
@@ -186,11 +193,11 @@ namespace systems::leal::campello_widgets
                 col->children = std::move(item_widgets);
 
                 BoxDecoration menu_deco;
-                menu_deco.color         = w.dropdown_color;
+                menu_deco.color         = dropdown_bg;
                 menu_deco.border_radius = w.border_radius;
                 if (w.elevation > 0.0f) {
                     menu_deco.box_shadow = {BoxShadow{
-                        Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.3f),
+                        Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
                         Offset{0.0f, w.elevation * 0.5f},
                         w.elevation * 2.0f
                     }};

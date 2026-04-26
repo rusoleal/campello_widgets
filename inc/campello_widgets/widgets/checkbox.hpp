@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 
 #include <functional>
+#include <optional>
 
 namespace systems::leal::campello_widgets
 {
@@ -27,9 +28,9 @@ namespace systems::leal::campello_widgets
         bool                           value      = false;
         std::function<void(bool)>      on_changed;
 
-        Color active_color  = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color check_color   = Color::white();
-        Color border_color  = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.54f);
+        std::optional<Color> active_color;
+        std::optional<Color> check_color;
+        std::optional<Color> border_color;
         float size          = 18.0f;
         float border_radius = 2.0f;
 

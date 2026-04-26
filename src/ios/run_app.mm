@@ -36,6 +36,18 @@ namespace Widgets = ::systems::leal::campello_widgets;
 // ---------------------------------------------------------------------------
 namespace {
     Widgets::WidgetRef gRootWidget;
+    Widgets::MediaQueryData gMediaData;
+
+    static Widgets::Brightness getSystemBrightness()
+    {
+        if (@available(iOS 12.0, *)) {
+            UIUserInterfaceStyle style = UITraitCollection.currentTraitCollection.userInterfaceStyle;
+            if (style == UIUserInterfaceStyleDark) {
+                return Widgets::Brightness::dark;
+            }
+        }
+        return Widgets::Brightness::light;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +104,7 @@ namespace {
     std::unique_ptr<Widgets::TickerScheduler>   _tickerScheduler;
     std::unique_ptr<Widgets::TextInputManager>  _textInputManager;
     Widgets::MetalDrawBackend*                  _backendPtr;
+    Widgets::MediaQueryData                     _mediaData;
 
     // Touch → pointer_id mapping (UITouch* identity is stable per gesture)
     std::map<void*, int32_t>  _touchIds;
@@ -158,6 +171,19 @@ namespace {
     // Wrap root widget with MediaQuery
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = static_cast<float>(self.contentScaleFactor);
+    mediaData.platform_brightness = getSystemBrightness();
+    mediaData.logical_size = Widgets::Size{
+        static_cast<float>(self.bounds.size.width),
+        static_cast<float>(self.bounds.size.height) };
+    if (@available(iOS 11.0, *)) {
+        UIEdgeInsets safeInsets = self.safeAreaInsets;
+        mediaData.padding.left   = static_cast<float>(safeInsets.left);
+        mediaData.padding.top    = static_cast<float>(safeInsets.top);
+        mediaData.padding.right  = static_cast<float>(safeInsets.right);
+        mediaData.padding.bottom = static_cast<float>(safeInsets.bottom);
+    }
+    _mediaData = mediaData;
+    gMediaData = mediaData;
     
     auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, rootWidget);
@@ -192,6 +218,50 @@ namespace {
 // ------------------------------------------------------------------
 // MTKViewDelegate
 // ------------------------------------------------------------------
+
+- (void)rebuildMediaQuery
+{
+    if (!_rootElement) return;
+    auto newMediaQuery = Widgets::mw<Widgets::MediaQuery>(
+        _mediaData, gRootWidget);
+    _rootElement->update(newMediaQuery);
+    Widgets::FrameScheduler::scheduleFrame();
+}
+
+- (void)updateMediaQueryBrightness
+{
+    Widgets::Brightness newBrightness = getSystemBrightness();
+    if (_mediaData.platform_brightness == newBrightness) return;
+    _mediaData.platform_brightness = newBrightness;
+    gMediaData.platform_brightness = newBrightness;
+    [self rebuildMediaQuery];
+}
+
+- (void)updateWindowMetrics
+{
+    Widgets::MediaQueryData newData = _mediaData;
+    newData.logical_size = Widgets::Size{
+        static_cast<float>(self.bounds.size.width),
+        static_cast<float>(self.bounds.size.height) };
+    if (@available(iOS 11.0, *)) {
+        UIEdgeInsets safeInsets = self.safeAreaInsets;
+        newData.padding.left   = static_cast<float>(safeInsets.left);
+        newData.padding.top    = static_cast<float>(safeInsets.top);
+        newData.padding.right  = static_cast<float>(safeInsets.right);
+        newData.padding.bottom = static_cast<float>(safeInsets.bottom);
+    }
+    if (newData != _mediaData) {
+        _mediaData = newData;
+        gMediaData = newData;
+        [self rebuildMediaQuery];
+    }
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection
+{
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self updateMediaQueryBrightness];
+}
 
 - (void)drawInMTKView:(MTKView*)view
 {
@@ -668,12 +738,14 @@ namespace {
 {
     [super viewSafeAreaInsetsDidChange];
     [self updateSafeAreaInsets];
+    [_metalView updateWindowMetrics];
 }
 
 - (void)viewDidLayoutSubviews
 {
     [super viewDidLayoutSubviews];
     [self updateSafeAreaInsets];
+    [_metalView updateWindowMetrics];
     // View bounds may have changed (rotation, split-screen resize) — request a
     // frame so the widget tree lays out at the new size.
     Widgets::FrameScheduler::scheduleFrame();

@@ -3,6 +3,8 @@
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
 
+#include <optional>
+
 namespace systems::leal::campello_widgets
 {
 
@@ -17,7 +19,7 @@ namespace systems::leal::campello_widgets
     {
     public:
         WidgetRef child;
-        Color     background_color = Color::white();
+        std::optional<Color> background_color;
 
         Scaffold() = default;
         explicit Scaffold(WidgetRef c)

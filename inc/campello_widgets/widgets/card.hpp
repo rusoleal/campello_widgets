@@ -1,33 +1,31 @@
 #pragma once
 
 #include <campello_widgets/widgets/stateless_widget.hpp>
-#include <campello_widgets/ui/color.hpp>
+#include <campello_widgets/ui/design_system.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
     /**
-     * @brief A material design card — an elevated surface with rounded corners.
+     * @brief An adaptive card that delegates its visual appearance to the
+     *        active DesignSystem.
      *
-     * Card wraps its child in a DecoratedBox with a background color, rounded
-     * corners, and an optional elevation shadow. An outer margin separates the
-     * card from neighboring widgets.
+     * The card's look (colors, radius, elevation, outline) is decided by the
+     * current theme's DesignSystem based on the semantic `priority` you supply.
      *
      * @code
-     * auto card = std::make_shared<Card>();
-     * card->child     = std::make_shared<Text>("Hello");
-     * card->elevation = 2.0f;
+     * auto card = std::make_shared<Card>(
+     *     std::make_shared<Text>("Hello"));
+     * card->priority = CardPriority::elevated;
      * @endcode
      */
     class Card : public StatelessWidget
     {
     public:
-        WidgetRef   child;
-        Color       color          = Color::white();
-        float       border_radius  = 4.0f;
-        float       elevation      = 1.0f;
-        EdgeInsets  margin         = EdgeInsets::all(4.0f);
+        WidgetRef    child;
+        CardPriority priority = CardPriority::elevated;
+        EdgeInsets   padding  = EdgeInsets::all(16.0f);
 
         Card() = default;
         explicit Card(WidgetRef c) : child(std::move(c)) {}

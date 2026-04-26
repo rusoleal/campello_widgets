@@ -1,9 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/stateless_widget.hpp>
-#include <campello_widgets/ui/color.hpp>
-#include <campello_widgets/ui/edge_insets.hpp>
-#include <campello_widgets/ui/box_shadow.hpp>
+#include <campello_widgets/ui/design_system.hpp>
 
 #include <functional>
 
@@ -11,19 +9,17 @@ namespace systems::leal::campello_widgets
 {
 
     /**
-     * @brief A basic interactive button widget.
+     * @brief An adaptive button that delegates its visual appearance to the
+     *        active DesignSystem.
      *
-     * Wraps its `child` in a rounded, coloured surface that responds to taps.
-     * Set `on_pressed` to nullptr to make the button inactive (rendered at
-     * reduced opacity).
+     * The button's look (colors, padding, radius, elevation) is decided by the
+     * current theme's DesignSystem based on the semantic `priority` you supply.
      *
      * @code
-     * auto btn = std::make_shared<Button>();
-     * btn->child      = std::make_shared<Text>("Click me");
-     * btn->on_pressed = []() { }; // handle tap
-     *
-     * // Or use Text directly as child for a simple label button:
-     * btn->background_color = Color::fromRGB(0.2f, 0.6f, 1.0f);
+     * auto btn = std::make_shared<Button>(
+     *     std::make_shared<Text>("Save"),
+     *     []() { save(); });
+     * btn->priority = ButtonPriority::primary;
      * @endcode
      */
     class Button : public StatelessWidget
@@ -31,19 +27,14 @@ namespace systems::leal::campello_widgets
     public:
         WidgetRef              child;
         std::function<void()>  on_pressed;
-
-        Color       background_color = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color       foreground_color = Color::white();
-        EdgeInsets  padding          = EdgeInsets::symmetric(16.0f, 8.0f);
-        float       border_radius    = 4.0f;
-        float       elevation        = 2.0f;
+        ButtonPriority         priority = ButtonPriority::primary;
+        bool                   enabled  = true;
+        WidgetRef              leading_icon;
+        WidgetRef              trailing_icon;
 
         Button() = default;
         explicit Button(WidgetRef c, std::function<void()> on_press = nullptr)
             : child(std::move(c)), on_pressed(std::move(on_press))
-        {}
-        explicit Button(WidgetRef c, std::function<void()> on_press, Color bg)
-            : child(std::move(c)), on_pressed(std::move(on_press)), background_color(bg)
         {}
 
         WidgetRef build(BuildContext& ctx) const override;

@@ -1,28 +1,19 @@
 #include <campello_widgets/widgets/divider.hpp>
-#include <campello_widgets/widgets/sized_box.hpp>
-#include <campello_widgets/widgets/padding.hpp>
-#include <campello_widgets/widgets/align.hpp>
-#include <campello_widgets/widgets/container.hpp>
-#include <campello_widgets/ui/edge_insets.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
-    WidgetRef Divider::build(BuildContext&) const
+    WidgetRef Divider::build(BuildContext& ctx) const
     {
-        // A coloured box of the desired thickness, indented on both sides.
-        auto line     = std::make_shared<Container>();
-        line->height  = thickness;
-        line->color   = color;
+        const auto* ds = Theme::of(ctx);
+        if (!ds) return nullptr;
 
-        auto indented         = std::make_shared<Padding>();
-        indented->padding     = EdgeInsets::only(indent, 0.0f, end_indent, 0.0f);
-        indented->child       = line;
+        DividerConfig cfg;
+        cfg.indent     = indent;
+        cfg.end_indent = end_indent;
 
-        auto box      = std::make_shared<SizedBox>();
-        box->height   = height;
-        box->child    = std::make_shared<Align>(Alignment::center(), indented);
-        return box;
+        return ds->buildDivider(cfg);
     }
 
 } // namespace systems::leal::campello_widgets

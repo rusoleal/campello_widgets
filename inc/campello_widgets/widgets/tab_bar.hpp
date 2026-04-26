@@ -106,11 +106,11 @@ namespace systems::leal::campello_widgets
     {
     public:
         std::vector<Tab> tabs;
-        Color            indicator_color         = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color            label_color             = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color            unselected_label_color  = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.54f);
+        std::optional<Color> indicator_color;
+        std::optional<Color> label_color;
+        std::optional<Color> unselected_label_color;
         float            indicator_weight        = 2.0f;
-        Color            background_color        = Color::transparent();
+        std::optional<Color> background_color;
 
         TabBar() = default;
         explicit TabBar(std::vector<Tab> t)

@@ -25,7 +25,7 @@ namespace systems::leal::campello_widgets
     {
     public:
         std::string           label;
-        Color                 text_color = Color::fromRGBA(0.4f, 0.8f, 1.0f, 1.0f);
+        std::optional<Color> text_color;
         std::function<void()> on_pressed;
 
         SnackBarAction() = default;
@@ -49,8 +49,8 @@ namespace systems::leal::campello_widgets
     public:
         WidgetRef   content;
         WidgetRef   action;
-        Color       background_color = Color::fromRGBA(0.2f, 0.2f, 0.2f, 0.9f);
-        float       border_radius    = 4.0f;
+        std::optional<Color> background_color;
+        float       border_radius = 8.0f;
         double      duration_ms      = 4000.0;
         EdgeInsets  padding          = EdgeInsets::symmetric(16.0f, 14.0f);
 

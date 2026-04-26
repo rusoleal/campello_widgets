@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 
 #include <functional>
+#include <optional>
 
 namespace systems::leal::campello_widgets
 {
@@ -26,10 +27,10 @@ namespace systems::leal::campello_widgets
         bool                      value      = false;
         std::function<void(bool)> on_changed;
 
-        Color active_track_color   = Color::fromRGBA(0.098f, 0.463f, 0.824f, 0.5f);
-        Color inactive_track_color = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.26f);
-        Color active_thumb_color   = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color inactive_thumb_color = Color::white();
+        std::optional<Color> active_track_color;
+        std::optional<Color> inactive_track_color;
+        std::optional<Color> active_thumb_color;
+        std::optional<Color> inactive_thumb_color;
 
         float width  = 44.0f;
         float height = 24.0f;

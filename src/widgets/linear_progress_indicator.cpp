@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/linear_progress_indicator.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
 #include <campello_widgets/ui/custom_painter.hpp>
 #include <campello_widgets/ui/canvas.hpp>
@@ -22,8 +23,8 @@ namespace systems::leal::campello_widgets
     public:
         std::optional<float> value;
         double               anim_t        = 0.0;
-        Color                background    = Color::fromRGBA(0.098f, 0.463f, 0.824f, 0.24f);
-        Color                value_color   = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
+        Color                background    = Color::fromRGBA(0.051f, 0.545f, 0.553f, 0.24f);
+        Color                value_color   = Color::fromRGBA(0.051f, 0.545f, 0.553f, 1.0f);
 
         void paint(Canvas& canvas, Size size) override
         {
@@ -98,15 +99,17 @@ namespace systems::leal::campello_widgets
             }
         }
 
-        WidgetRef build(BuildContext&) override
+        WidgetRef build(BuildContext& ctx) override
         {
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(ctx);
 
             auto painter            = std::make_shared<LinearProgressPainter>();
             painter->value          = w.value;
             painter->anim_t         = anim_t_;
-            painter->background     = w.background_color;
-            painter->value_color    = w.value_color;
+            painter->background     = w.background_color.value_or(
+                Color::fromRGBA(tokens->colors.primary.r, tokens->colors.primary.g, tokens->colors.primary.b, tokens->colors.primary.a * 0.15f));
+            painter->value_color    = w.value_color.value_or(tokens->colors.primary);
 
             auto box    = std::make_shared<SizedBox>();
             box->height = w.min_height;

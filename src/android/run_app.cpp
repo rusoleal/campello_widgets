@@ -18,8 +18,11 @@
 
 #include <android_native_app_glue.h>
 #include <android/choreographer.h>
+#include <android/configuration.h>
 #include <android/log.h>
 #include <android/input.h>
+
+#include "vulkan_draw_backend.hpp"
 
 #include <memory>
 #include <atomic>
@@ -47,47 +50,76 @@ struct WidgetSession
     std::unique_ptr<Widgets::TickerScheduler>    ticker_scheduler;
     std::unique_ptr<Widgets::TextInputManager>   text_input_manager;
     android_app*                               app = nullptr;  // For accessing contentRect
+    Widgets::WidgetRef                         user_root_widget;
+    Widgets::MediaQueryData                    media_data;
 };
 
+// Forward declaration — defined after createSession.
+static void rebuildMediaQuery(WidgetSession* session);
+
 // ---------------------------------------------------------------------------
-// Safe area / insets helper
+// Window metrics helper (logical size + view insets + MediaQuery rebuild)
 // ---------------------------------------------------------------------------
 
 /**
- * @brief Updates the renderer's view insets based on the Android content rect.
- * 
- * The contentRect represents the area of the window that is not obscured by
- * system UI (status bar, navigation bar, cutouts). We compute insets by
- * comparing the content rect to the full window size.
+ * @brief Updates logical window size, view insets, and MediaQueryData.
+ *
+ * Reads the physical window size and content rect from ANativeWindow, converts
+ * everything to logical pixels using the current DPR, updates the renderer's
+ * view insets, and rebuilds the root MediaQuery widget if anything changed.
  */
-static void updateSafeAreaInsets(WidgetSession* session)
+static void updateWindowMetrics(WidgetSession* session)
 {
-    if (!session || !session->renderer || !session->app) return;
-    
+    if (!session || !session->app) return;
+    if (!session->app->window) return;
+
     android_app* app = session->app;
-    
-    // Get the full window size from ANativeWindow
+
     int32_t window_width  = ANativeWindow_getWidth(app->window);
     int32_t window_height = ANativeWindow_getHeight(app->window);
-    
-    // contentRect is the safe area provided by native_app_glue
-    // Note: these are already in pixels
+
     const ARect& content = app->contentRect;
-    
-    // Calculate insets in pixels
-    Widgets::EdgeInsets insets;
-    insets.left   = static_cast<float>(content.left);
-    insets.top    = static_cast<float>(content.top);
-    insets.right  = static_cast<float>(window_width - content.right);
-    insets.bottom = static_cast<float>(window_height - content.bottom);
-    
-    // Ensure non-negative insets
-    if (insets.left < 0.0f)   insets.left = 0.0f;
-    if (insets.top < 0.0f)    insets.top = 0.0f;
-    if (insets.right < 0.0f)  insets.right = 0.0f;
-    if (insets.bottom < 0.0f) insets.bottom = 0.0f;
-    
-    session->renderer->setViewInsets(insets);
+
+    // Calculate insets in physical pixels
+    Widgets::EdgeInsets physical_insets;
+    physical_insets.left   = static_cast<float>(content.left);
+    physical_insets.top    = static_cast<float>(content.top);
+    physical_insets.right  = static_cast<float>(window_width - content.right);
+    physical_insets.bottom = static_cast<float>(window_height - content.bottom);
+
+    if (physical_insets.left < 0.0f)   physical_insets.left = 0.0f;
+    if (physical_insets.top < 0.0f)    physical_insets.top = 0.0f;
+    if (physical_insets.right < 0.0f)  physical_insets.right = 0.0f;
+    if (physical_insets.bottom < 0.0f) physical_insets.bottom = 0.0f;
+
+    // Convert to logical pixels
+    float dpr = session->media_data.device_pixel_ratio;
+    if (dpr <= 0.0f) dpr = 1.0f;
+
+    Widgets::EdgeInsets logical_insets;
+    logical_insets.left   = physical_insets.left   / dpr;
+    logical_insets.top    = physical_insets.top    / dpr;
+    logical_insets.right  = physical_insets.right  / dpr;
+    logical_insets.bottom = physical_insets.bottom / dpr;
+
+    // Update renderer
+    if (session->renderer)
+    {
+        session->renderer->setViewInsets(logical_insets);
+    }
+
+    // Update MediaQueryData
+    Widgets::MediaQueryData newData = session->media_data;
+    newData.logical_size = Widgets::Size{
+        static_cast<float>(window_width) / dpr,
+        static_cast<float>(window_height) / dpr};
+    newData.view_insets  = logical_insets;
+
+    if (newData != session->media_data)
+    {
+        session->media_data = newData;
+        rebuildMediaQuery(session);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,6 +495,14 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
 // Window lifecycle
 // ---------------------------------------------------------------------------
 
+static Widgets::Brightness getSystemBrightness(android_app* app)
+{
+    int32_t nightMode = AConfiguration_getUiModeNight(app->config);
+    if (nightMode == ACONFIGURATION_UI_MODE_NIGHT_YES)
+        return Widgets::Brightness::dark;
+    return Widgets::Brightness::light;
+}
+
 static float getDevicePixelRatio(android_app* app)
 {
     // Get the density from the configuration
@@ -504,6 +544,9 @@ static std::unique_ptr<WidgetSession> createSession(
     // Wrap root widget with MediaQuery
     Widgets::MediaQueryData mediaData;
     mediaData.device_pixel_ratio = getDevicePixelRatio(app);
+    mediaData.platform_brightness = getSystemBrightness(app);
+    session->media_data = mediaData;
+    session->user_root_widget = root_widget;
     
     auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, root_widget);
@@ -546,7 +589,17 @@ static std::unique_ptr<WidgetSession> createSession(
     float dpr = getDevicePixelRatio(app);
     session->renderer->setDevicePixelRatio(dpr);
 
-    LOGI("campello_widgets session created (DPR=%.2f)", dpr);
+    // Populate logical size, view insets, and push to MediaQuery
+    updateWindowMetrics(session.get());
+
+    // Create Vulkan draw backend and attach to renderer
+    auto backend = std::make_unique<Widgets::VulkanDrawBackend>(
+        session->device, Widgets::Color::black(), GPU::PixelFormat::bgra8unorm);
+    session->renderer->setDrawBackend(std::move(backend));
+
+    LOGI("campello_widgets session created (DPR=%.2f, size=%.0fx%.0f)",
+         dpr, session->media_data.logical_size.width,
+         session->media_data.logical_size.height);
     return session;
 }
 
@@ -562,9 +615,19 @@ static std::unique_ptr<WidgetSession> createSession(
 // The "frame pending" flag coalesces multiple scheduleFrame() calls that arrive
 // within the same vsync interval into exactly one callback registration.
 
-static std::atomic<bool> gFramePending{false};
+static void rebuildMediaQuery(WidgetSession* session)
+{
+    if (!session || !session->root_element) return;
+    auto newMediaQuery = Widgets::mw<Widgets::MediaQuery>(
+        session->media_data, session->user_root_widget);
+    session->root_element->update(newMediaQuery);
+    Widgets::FrameScheduler::scheduleFrame();
+}
 
-static void onVsyncCallback(long frameTimeNanos, void* /*data*/)
+static std::atomic<bool> gFramePending{false};
+static WidgetSession* gActiveSession = nullptr;
+
+static void onVsyncCallback(long frameTimeNanos, void* data)
 {
     // Allow the next scheduleFrame() call to post a new callback.
     gFramePending.store(false, std::memory_order_relaxed);
@@ -574,7 +637,20 @@ static void onVsyncCallback(long frameTimeNanos, void* /*data*/)
     if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(ms);
     if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(ms);
 
-    // NOTE: renderFrame() goes here once the Android GPU backend is wired up.
+    // Render frame
+    auto* session = static_cast<WidgetSession*>(data);
+    if (session && session->renderer && session->device && session->app && session->app->window)
+    {
+        auto color_view = session->device->getSwapchainTextureView();
+        if (color_view)
+        {
+            int32_t w = ANativeWindow_getWidth(session->app->window);
+            int32_t h = ANativeWindow_getHeight(session->app->window);
+            if (auto* backend = session->renderer->drawBackend())
+                backend->setViewport(static_cast<float>(w), static_cast<float>(h));
+            session->renderer->renderFrame(color_view, static_cast<float>(w), static_cast<float>(h));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -598,7 +674,7 @@ void runApp(android_app* app, WidgetRef root_widget)
     FrameScheduler::setCallback([choreographer] {
         // Post at most one pending callback per vsync interval.
         if (!gFramePending.exchange(true, std::memory_order_relaxed))
-            AChoreographer_postFrameCallback(choreographer, onVsyncCallback, nullptr);
+            AChoreographer_postFrameCallback(choreographer, onVsyncCallback, gActiveSession);
     });
 
     std::unique_ptr<WidgetSession> session;
@@ -622,25 +698,45 @@ void runApp(android_app* app, WidgetRef root_widget)
                 FocusManager::setActiveManager(nullptr);
                 TextInputManager::setActiveManager(nullptr);
                 TickerScheduler::setActive(nullptr);
+                gActiveSession = nullptr;
                 session_ptr->reset();
             }
             break;
 
         case APP_CMD_CONTENT_RECT_CHANGED:
-            // Safe area / content rect changed (e.g., keyboard showed/hid)
+            // Safe area / content rect changed (e.g., keyboard showed/hid, rotation)
             if (session_ptr && *session_ptr)
             {
-                updateSafeAreaInsets(session_ptr->get());
+                updateWindowMetrics(session_ptr->get());
             }
             break;
 
         case APP_CMD_CONFIG_CHANGED:
-            // Configuration changed (e.g., density/DPR changed)
-            if (session_ptr && *session_ptr && (*session_ptr)->renderer)
+            // Configuration changed (e.g., density/DPR changed, dark mode toggled,
+            // orientation changed)
+            if (session_ptr && *session_ptr)
             {
                 float dpr = getDevicePixelRatio(a);
-                (*session_ptr)->renderer->setDevicePixelRatio(dpr);
-                LOGI("DPR updated to %.2f", dpr);
+                if ((*session_ptr)->renderer)
+                {
+                    (*session_ptr)->renderer->setDevicePixelRatio(dpr);
+                }
+                if ((*session_ptr)->media_data.device_pixel_ratio != dpr)
+                {
+                    (*session_ptr)->media_data.device_pixel_ratio = dpr;
+                    LOGI("DPR updated to %.2f", dpr);
+                }
+
+                Widgets::Brightness newBrightness = getSystemBrightness(a);
+                if ((*session_ptr)->media_data.platform_brightness != newBrightness)
+                {
+                    (*session_ptr)->media_data.platform_brightness = newBrightness;
+                    LOGI("platform brightness changed to %s",
+                         newBrightness == Widgets::Brightness::dark ? "dark" : "light");
+                }
+
+                // DPR or orientation change affects logical size and insets
+                updateWindowMetrics(session_ptr->get());
             }
             break;
 
@@ -683,7 +779,7 @@ void runApp(android_app* app, WidgetRef root_widget)
             session = createSession(app, root_widget);
             if (session)
             {
-                updateSafeAreaInsets(session.get());
+                gActiveSession = session.get();
             }
         }
 

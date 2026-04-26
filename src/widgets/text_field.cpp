@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/text_field.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/render_text_field.hpp>
 #include <campello_widgets/ui/text_editing_controller.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
@@ -34,7 +35,7 @@ namespace systems::leal::campello_widgets
         Color       focused_border_color;
         Color       placeholder_color;
         std::string placeholder;
-        float       border_radius = 4.0f;
+        float       border_radius = 8.0f;
         float       border_width  = 1.0f;
         float       min_height    = 36.0f;
         bool        focused       = false;
@@ -280,19 +281,21 @@ namespace systems::leal::campello_widgets
             }
         }
 
-        WidgetRef build(BuildContext&) override
+        WidgetRef build(BuildContext& ctx) override
         {
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(ctx);
 
             auto proxy = std::make_shared<TextFieldProxy>();
             proxy->controller           = ctrl_;
             proxy->style                = w.style;
-            proxy->cursor_color         = w.cursor_color;
-            proxy->selection_color      = w.selection_color;
-            proxy->fill_color           = w.fill_color;
-            proxy->border_color         = w.border_color;
-            proxy->focused_border_color = w.focused_border_color;
-            proxy->placeholder_color    = w.placeholder_color;
+            proxy->cursor_color         = w.cursor_color.value_or(tokens->colors.primary);
+            proxy->selection_color      = w.selection_color.value_or(
+                Color::fromRGBA(tokens->colors.primary.r, tokens->colors.primary.g, tokens->colors.primary.b, tokens->colors.primary.a * 0.3f));
+            proxy->fill_color           = w.fill_color.value_or(tokens->colors.surface);
+            proxy->border_color         = w.border_color.value_or(tokens->colors.outline);
+            proxy->focused_border_color = w.focused_border_color.value_or(tokens->colors.primary);
+            proxy->placeholder_color    = w.placeholder_color.value_or(tokens->colors.on_surface_variant);
             proxy->placeholder          = w.placeholder;
             proxy->border_radius        = w.border_radius;
             proxy->border_width         = w.border_width;

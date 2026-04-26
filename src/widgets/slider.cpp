@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/slider.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/render_slider.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
@@ -67,14 +68,15 @@ namespace systems::leal::campello_widgets
                 current_ = normalize(widget().value);
         }
 
-        WidgetRef build(BuildContext&) override
+        WidgetRef build(BuildContext& ctx) override
         {
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(ctx);
 
             auto proxy                    = std::make_shared<SliderProxy>();
             proxy->normalized_value       = current_;
-            proxy->active_color           = w.active_color;
-            proxy->inactive_color         = w.inactive_color;
+            proxy->active_color           = w.active_color.value_or(tokens->colors.primary);
+            proxy->inactive_color         = w.inactive_color.value_or(tokens->colors.outline);
             proxy->track_height           = w.track_height;
             proxy->thumb_radius           = w.thumb_radius;
             proxy->on_normalized_changed  = [this](float norm) {

@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -39,8 +40,8 @@ namespace systems::leal::campello_widgets
         /** @brief The dialog's content. */
         WidgetRef child;
 
-        /** @brief Background color. */
-        Color background_color = Color::white();
+        /** @brief Background color. Falls back to Theme surface tokens when unset. */
+        std::optional<Color> background_color;
 
         /** @brief Corner radius. */
         float border_radius = 8.0f;
@@ -106,8 +107,8 @@ namespace systems::leal::campello_widgets
         /** @brief Action buttons (typically TextButton). */
         std::vector<WidgetRef> actions;
 
-        /** @brief Background color. */
-        Color background_color = Color::white();
+        /** @brief Background color. Falls back to Theme surface tokens when unset. */
+        std::optional<Color> background_color;
 
         AlertDialog() = default;
 
@@ -156,7 +157,7 @@ namespace systems::leal::campello_widgets
     {
     public:
         std::string text;
-        Color text_color = Color::fromRGB(0.129f, 0.588f, 0.953f);  // Material Blue
+        Color text_color = Color::fromRGB(0.051f, 0.545f, 0.553f);  // Material Blue
         std::function<void()> on_pressed;
 
         DialogAction() = default;

@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 
 #include <functional>
+#include <optional>
 
 namespace systems::leal::campello_widgets
 {
@@ -32,8 +33,8 @@ namespace systems::leal::campello_widgets
 
         std::function<void(float)> on_changed; ///< Called with value in [min, max]
 
-        Color active_color   = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
-        Color inactive_color = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.26f);
+        std::optional<Color> active_color;
+        std::optional<Color> inactive_color;
 
         float height       = 36.0f; ///< Total hit-area height
         float track_height = 4.0f;

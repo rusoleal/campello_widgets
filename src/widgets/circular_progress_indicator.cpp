@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/circular_progress_indicator.hpp>
+#include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
 #include <campello_widgets/ui/custom_painter.hpp>
 #include <campello_widgets/ui/canvas.hpp>
@@ -23,7 +24,7 @@ namespace systems::leal::campello_widgets
         std::optional<float> value;
         double               anim_t        = 0.0;
         Color                background_color = Color::transparent();
-        Color                value_color      = Color::fromRGBA(0.098f, 0.463f, 0.824f, 1.0f);
+        Color                value_color      = Color::fromRGBA(0.051f, 0.545f, 0.553f, 1.0f);
         float                stroke_width     = 4.0f;
 
         void paint(Canvas& canvas, Size size) override
@@ -101,15 +102,16 @@ namespace systems::leal::campello_widgets
             }
         }
 
-        WidgetRef build(BuildContext&) override
+        WidgetRef build(BuildContext& ctx) override
         {
             const auto& w = widget();
+            const auto* tokens = Theme::tokensOf(ctx);
 
             auto painter              = std::make_shared<CircularProgressPainter>();
             painter->value            = w.value;
             painter->anim_t           = anim_t_;
-            painter->background_color = w.background_color;
-            painter->value_color      = w.value_color;
+            painter->background_color = w.background_color.value_or(Color::transparent());
+            painter->value_color      = w.value_color.value_or(tokens->colors.primary);
             painter->stroke_width     = w.stroke_width;
 
             auto box    = std::make_shared<SizedBox>();
