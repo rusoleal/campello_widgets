@@ -119,6 +119,23 @@ Supported formats: JPEG, PNG, WebP, GIF, BMP, TGA. Images are decoded asynchrono
 | `GestureDetector` | Wraps a child and listens for pointer/touch gestures |
 | `Scaffold` | Top-level layout structure (background, layers) |
 
+## Design System & Theming
+
+`campello_widgets` includes a pluggable design-system layer that decouples visual style from widget logic. The base framework provides `DesignTokens`, `DesignSystem`, and `Theme` (an `InheritedWidget`), while a default `CampelloDesignSystem` ships with a distinct warm-teal visual identity.
+
+```cpp
+// Wrap your app in a Theme to activate a design system
+runApp(Theme::create(Theme{
+    .design_system = std::make_shared<CampelloDesignSystem>(CampelloDesignSystem::dark()),
+    .child = std::make_shared<MyApp>(),
+}));
+
+// Adaptive widgets automatically delegate to the active design system
+auto button = Button::create({.label = Text::create("Save"), .on_pressed = onSave});
+```
+
+Adaptive widgets (e.g. `Button`, `Card`, `AppBar`, `NavigationBar`) call `Theme::of(ctx).buildXxx(config)` so their appearance is determined by the active `DesignSystem` rather than hardcoded values. This enables runtime switching between light/dark modes and future extraction of `CampelloDesignSystem` into independent theme libraries.
+
 ## Example (Planned API)
 
 ```cpp
