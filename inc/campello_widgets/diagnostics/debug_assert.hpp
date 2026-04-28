@@ -3,7 +3,14 @@
 #include <campello_widgets/diagnostics/widget_inspector.hpp>
 
 #include <iostream>
-#include <csignal>
+
+#if defined(_WIN32)
+    #include <intrin.h>
+    #define CW_DEBUG_BREAK() __debugbreak()
+#else
+    #include <csignal>
+    #define CW_DEBUG_BREAK() std::raise(SIGTRAP)
+#endif
 
 namespace systems::leal::campello_widgets
 {
@@ -36,7 +43,7 @@ namespace systems::leal::campello_widgets
                 std::cerr << "\n"; \
                 WidgetInspector::instance().dumpWidgetTree(std::cerr); \
                 std::cerr << "========================================\n"; \
-                std::raise(SIGTRAP); \
+                CW_DEBUG_BREAK(); \
             } \
         } while (0)
 
@@ -50,7 +57,7 @@ namespace systems::leal::campello_widgets
                 std::cerr << "\n"; \
                 WidgetInspector::instance().dumpWidgetTree(std::cerr); \
                 std::cerr << "========================================\n"; \
-                std::raise(SIGTRAP); \
+                CW_DEBUG_BREAK(); \
             } \
         } while (0)
 
