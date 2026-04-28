@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/design_system.hpp>
 
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -34,9 +35,18 @@ namespace systems::leal::campello_widgets
         {}
         explicit ProgressIndicator(ProgressType t, float val)
             : type(t), value(val)
-        {}
+        {
+            CW_ASSERT_MSG(val >= 0.0f && val <= 1.0f, "ProgressIndicator.value must be in [0.0, 1.0]");
+}
 
         WidgetRef build(BuildContext& ctx) const override;
+        void debugValidate() const override
+        {
+            if (value.has_value())
+                CW_ASSERT_MSG(*value >= 0.0f && *value <= 1.0f, "ProgressIndicator.value must be in [0.0, 1.0]");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

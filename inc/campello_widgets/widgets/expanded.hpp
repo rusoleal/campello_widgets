@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/flexible.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -24,6 +25,7 @@ namespace systems::leal::campello_widgets
 
         explicit Expanded(int flex_value, WidgetRef child_widget)
         {
+            CW_ASSERT_MSG(flex_value > 0, "Expanded.flex must be greater than 0");
             flex  = flex_value;
             child = std::move(child_widget);
         }

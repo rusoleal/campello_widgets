@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/box_constraints.hpp>
 
 #include <functional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -35,9 +36,17 @@ namespace systems::leal::campello_widgets
         LayoutBuilder() = default;
         explicit LayoutBuilder(std::function<WidgetRef(BuildContext&, BoxConstraints)> b)
             : builder(std::move(b))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "LayoutBuilder.builder must be set");
+}
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(builder, "LayoutBuilder.builder must be set");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

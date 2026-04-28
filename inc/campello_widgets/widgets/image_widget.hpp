@@ -12,6 +12,7 @@
 #include <memory>
 #include <functional>
 #include <variant>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -179,6 +180,15 @@ namespace systems::leal::campello_widgets
         ErrorBuilder error_builder;
         FrameBuilder frame_builder;
 
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(opacity >= 0.0f && opacity <= 1.0f, "ImageWidget.opacity must be in [0.0, 1.0]");
+            if (width.has_value())
+                CW_ASSERT_MSG(*width >= 0.0f, "ImageWidget.width must be non-negative");
+            if (height.has_value())
+                CW_ASSERT_MSG(*height >= 0.0f, "ImageWidget.height must be non-negative");
+        }
         std::unique_ptr<StateBase> createState() const override
         {
             return std::make_unique<ImageWidgetState>();

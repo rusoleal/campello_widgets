@@ -2,6 +2,7 @@
 
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -26,11 +27,17 @@ namespace systems::leal::campello_widgets
         explicit Flexible(WidgetRef c) { child = std::move(c); }
         explicit Flexible(int f, WidgetRef c)
         {
+            CW_ASSERT_MSG(f >= 0, "Flexible.flex must be non-negative");
             flex  = f;
             child = std::move(c);
         }
 
         WidgetRef build(BuildContext&) const override { return child; }
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(flex >= 0, "Flexible.flex must be non-negative");
+        }
 
         void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override
         {

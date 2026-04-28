@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <memory>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -100,13 +101,19 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<ValueNotifier<T>> listenable,
             std::function<WidgetRef(BuildContext&, const T&, WidgetRef)> b)
             : valueListenable(std::move(listenable)), builder(std::move(b))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "ValueListenableBuilder.builder must be set");
+            CW_ASSERT_MSG(valueListenable != nullptr, "ValueListenableBuilder.valueListenable must be set");
+        }
         explicit ValueListenableBuilder(
             std::shared_ptr<ValueNotifier<T>> listenable,
             std::function<WidgetRef(BuildContext&, const T&, WidgetRef)> b,
             WidgetRef c)
             : valueListenable(std::move(listenable)), builder(std::move(b)), child(std::move(c))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "ValueListenableBuilder.builder must be set");
+            CW_ASSERT_MSG(valueListenable != nullptr, "ValueListenableBuilder.valueListenable must be set");
+        }
 
         std::unique_ptr<StateBase> createState() const override
         {

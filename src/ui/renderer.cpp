@@ -169,6 +169,14 @@ namespace systems::leal::campello_widgets
         frame_encoder_ = nullptr;
         frame_target_.reset();
 
+        // Schedule swapchain presentation just before our submit() so that
+        // nested submit() calls (e.g. from offscreen renderers triggered
+        // during the layout pass) cannot steal the drawable.
+        if (pending_drawable_) {
+            device_->scheduleNextPresent(pending_drawable_);
+            pending_drawable_ = nullptr;
+        }
+
         auto cmd_buffer = encoder->finish();
         device_->submit(std::move(cmd_buffer));
         return true;

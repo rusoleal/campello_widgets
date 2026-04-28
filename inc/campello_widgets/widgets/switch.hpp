@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -38,9 +39,19 @@ namespace systems::leal::campello_widgets
         Switch() = default;
         explicit Switch(bool val, std::function<void(bool)> on_change = nullptr)
             : value(val), on_changed(std::move(on_change))
-        {}
+        {
+            CW_ASSERT_MSG(width > 0.0f, "Switch.width must be greater than 0");
+            CW_ASSERT_MSG(height > 0.0f, "Switch.height must be greater than 0");
+        }
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(width > 0.0f, "Switch.width must be greater than 0");
+            CW_ASSERT_MSG(height > 0.0f, "Switch.height must be greater than 0");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

@@ -9,7 +9,7 @@ namespace systems::leal::campello_widgets
 
     bool TreeController::isExpanded(const TreeNode* node) const
     {
-        if (!this || !node) return false;
+        if (!node) return false;
         return expanded_nodes_.count(node) > 0;
     }
 
@@ -24,7 +24,7 @@ namespace systems::leal::campello_widgets
 
     void TreeController::toggleExpanded(const TreeNode* node)
     {
-        if (!this || !node) return;
+        if (!node) return;
 
         if (isExpanded(node))
             collapse(node);
@@ -34,7 +34,7 @@ namespace systems::leal::campello_widgets
 
     void TreeController::expand(const TreeNode* node)
     {
-        if (!this || !node || !node->hasChildren()) return;
+        if (!node || !node->hasChildren()) return;
 
         bool changed = expanded_nodes_.insert(node).second;
         if (changed)
@@ -43,7 +43,7 @@ namespace systems::leal::campello_widgets
 
     void TreeController::collapse(const TreeNode* node)
     {
-        if (!this || !node) return;
+        if (!node) return;
 
         bool changed = expanded_nodes_.erase(node) > 0;
         if (changed)

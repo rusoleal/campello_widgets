@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -81,6 +82,12 @@ namespace systems::leal::campello_widgets
             children = ch;
         }
 
+        
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(!children.empty(), "PageView must have at least one child");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
 

@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 
 namespace systems::leal::campello_widgets
@@ -103,6 +104,14 @@ namespace systems::leal::campello_widgets
             s->child = std::move(child);
             return s;
         }
+        void debugValidate() const override
+        {
+            if (width.has_value())
+                CW_ASSERT_MSG(*width >= 0.0f, "SizedBox.width must be non-negative");
+            if (height.has_value())
+                CW_ASSERT_MSG(*height >= 0.0f, "SizedBox.height must be non-negative");
+        }
+
         void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
 
     };

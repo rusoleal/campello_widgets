@@ -69,8 +69,8 @@ namespace systems::leal::campello_widgets
                 buildSwitch("Print Rebuilds",   &DebugFlags::printRebuildsEnabled),
                 buildSwitch("Paint Baselines",  &DebugFlags::paintBaselinesEnabled),
                 buildSwitch("Paint Pointers",   &DebugFlags::paintPointersEnabled),
-                buildButton("Dump Widget Tree", [this]() { WidgetInspector::instance().dumpWidgetTree(); }),
-                buildButton("Dump Render Tree", [this]() { WidgetInspector::instance().dumpRenderObjectTree(); }),
+                buildButton("Dump Widget Tree", []() { WidgetInspector::instance().dumpWidgetTree(); }),
+                buildButton("Dump Render Tree", []() { WidgetInspector::instance().dumpRenderObjectTree(); }),
                 buildButton("Close", [this]() { const_cast<DebugOverlayPanelState*>(this)->setState([this] { visible = false; }); }),
             };
 

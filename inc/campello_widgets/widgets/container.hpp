@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
@@ -47,6 +48,21 @@ namespace systems::leal::campello_widgets
 
         WidgetRef build(BuildContext& context) const override;
         void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
+        void debugValidate() const override
+        {
+            if (width.has_value())
+                CW_ASSERT_MSG(*width >= 0.0f, "Container.width must be non-negative");
+            if (height.has_value())
+                CW_ASSERT_MSG(*height >= 0.0f, "Container.height must be non-negative");
+            if (padding.has_value()) {
+                CW_ASSERT_MSG(padding->left >= 0.0f, "Container.padding.left must be non-negative");
+                CW_ASSERT_MSG(padding->top >= 0.0f, "Container.padding.top must be non-negative");
+                CW_ASSERT_MSG(padding->right >= 0.0f, "Container.padding.right must be non-negative");
+                CW_ASSERT_MSG(padding->bottom >= 0.0f, "Container.padding.bottom must be non-negative");
+            }
+
+        }
+
 
     };
 

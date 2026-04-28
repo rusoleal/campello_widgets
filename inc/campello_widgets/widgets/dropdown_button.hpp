@@ -162,9 +162,7 @@ namespace systems::leal::campello_widgets
 
                 // Build menu items
                 std::vector<WidgetRef> item_widgets;
-                int idx = 0;
                 for (const auto& item : w.items) {
-                    int i = idx++;
                     WidgetRef item_child = item.child;
                     auto padded = std::make_shared<Padding>();
                     padded->padding = EdgeInsets::symmetric(12.0f, 10.0f);
@@ -172,7 +170,7 @@ namespace systems::leal::campello_widgets
 
                     if (item.enabled) {
                         auto g  = std::make_shared<GestureDetector>();
-                        g->on_tap = [this, i, val = item.value]() {
+                        g->on_tap = [this, val = item.value]() {
                             close();
                             const auto& ww = this->widget();
                             if (ww.on_changed) ww.on_changed(val);

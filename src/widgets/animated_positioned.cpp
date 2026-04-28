@@ -8,15 +8,6 @@
 namespace systems::leal::campello_widgets
 {
 
-    // Lerp two optional<float> values.
-    // Both present → lerp; one or both absent → keep new_val at end of animation.
-    static float lerpOptVal(std::optional<float> a, std::optional<float> b, double t)
-    {
-        if (a.has_value() && b.has_value())
-            return lerp<float>(*a, *b, static_cast<double>(t));
-        return b.value_or(0.0f);
-    }
-
     class AnimatedPositionedState : public State<AnimatedPositioned>
     {
     public:

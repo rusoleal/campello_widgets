@@ -5,6 +5,7 @@
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/widgets/list_view.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -42,6 +43,16 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<Element>      createElement()    const override;
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(cross_axis_count > 0, "GridView.cross_axis_count must be greater than 0");
+            CW_ASSERT_MSG(item_count >= 0, "GridView.item_count must be non-negative");
+            CW_ASSERT_MSG(item_extent >= 0.0f, "GridView.item_extent must be non-negative");
+            if (item_count > 0)
+                CW_ASSERT_MSG(builder, "GridView.builder must be set when item_count > 0");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

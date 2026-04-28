@@ -46,10 +46,14 @@ namespace {
     std::shared_ptr<Widgets::Renderer> gRenderer;  // Global access for requestRefresh()
     Widgets::MediaQueryData gMediaData;
 
+    // When non-null, runApp() will use this device instead of creating one.
+    // This lets the host application share its GPU device with the widget framework.
+    std::shared_ptr<GPU::Device> gExternalDevice;
+
     static Widgets::Brightness getSystemBrightness()
     {
         if (@available(macOS 10.14, *)) {
-            NSAppearance* appearance = NSAppearance.currentAppearance;
+            NSAppearance* appearance = NSApp.effectiveAppearance;
             if (appearance) {
                 NSAppearanceName name = appearance.name;
                 if ([name isEqualToString:NSAppearanceNameDarkAqua]) {
@@ -671,12 +675,6 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _backendPtr->setViewport(w, h);
     _backendPtr->setDevicePixelRatio(static_cast<float>(scale));
 
-    // Schedule the drawable to be presented inside the command buffer via
-    // [MTLCommandBuffer presentDrawable:] rather than calling [drawable present]
-    // separately on the CPU.  This ties presentation to GPU completion and to
-    // the display vsync, eliminating "present before render" tearing artefacts.
-    _device->scheduleNextPresent((__bridge void *)drawable);
-
     auto now = std::chrono::steady_clock::now();
     uint64_t now_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -685,6 +683,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
 
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
+    _renderer->setPendingDrawable((__bridge void *)drawable);
     bool rendered = colorView && _renderer->renderFrame(colorView, w, h);
 
     if (!rendered) {
@@ -797,16 +796,22 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _window.delegate = self;  // For window resize notifications
 
     // -----------------------------------------------------------------------
-    // Create campello_gpu device
+    // Use externally-provided device or create one
     // -----------------------------------------------------------------------
-    _device = GPU::Device::createDefaultDevice(nullptr);
-    if (!_device) {
-        NSLog(@"campello_widgets: failed to create campello_gpu device");
-        return;
+    if (gExternalDevice) {
+        _device = gExternalDevice;
+        NSLog(@"campello_widgets: using externally-provided device=%s",
+              _device->getName().c_str());
+    } else {
+        _device = GPU::Device::createDefaultDevice(nullptr);
+        if (!_device) {
+            NSLog(@"campello_widgets: failed to create campello_gpu device");
+            return;
+        }
+        NSLog(@"campello_widgets: device=%s  engine=%s",
+              _device->getName().c_str(),
+              GPU::Device::getEngineVersion().c_str());
     }
-    NSLog(@"campello_widgets: device=%s  engine=%s",
-          _device->getName().c_str(),
-          GPU::Device::getEngineVersion().c_str());
 
     // -----------------------------------------------------------------------
     // Create PointerDispatcher and FocusManager early so render objects can
@@ -1076,6 +1081,18 @@ int runApp(WidgetRef   root_widget,
         [app run];
     }
     return 0;
+}
+
+int runApp(std::shared_ptr<campello_gpu::Device> device,
+           WidgetRef                             root_widget,
+           const char*                           title,
+           float                                 width,
+           float                                 height)
+{
+    gExternalDevice = std::move(device);
+    int result = runApp(std::move(root_widget), title, width, height);
+    gExternalDevice.reset();
+    return result;
 }
 
 void requestRefresh()

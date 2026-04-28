@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -35,9 +36,15 @@ namespace systems::leal::campello_widgets
         std::optional<Color> active_color;
         std::optional<Color> inactive_color;
 
-        explicit Radio(int v = 0) : value(v) {}
+        explicit Radio(int v = 0) : value(v) { CW_ASSERT_MSG(size > 0.0f, "Radio.size must be greater than 0"); }
 
         WidgetRef build(BuildContext& ctx) const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(size > 0.0f, "Radio.size must be greater than 0");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

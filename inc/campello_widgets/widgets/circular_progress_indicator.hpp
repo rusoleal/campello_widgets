@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -38,12 +39,26 @@ namespace systems::leal::campello_widgets
         CircularProgressIndicator() = default;
         explicit CircularProgressIndicator(float val)
             : value(val)
-        {}
+        {
+            CW_ASSERT_MSG(val >= 0.0f && val <= 1.0f, "CircularProgressIndicator.value must be in [0.0, 1.0]");
+}
         explicit CircularProgressIndicator(float val, Color val_color)
             : value(val), value_color(val_color)
-        {}
+        {
+            CW_ASSERT_MSG(val >= 0.0f && val <= 1.0f, "CircularProgressIndicator.value must be in [0.0, 1.0]");
+}
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            if (value.has_value())
+                CW_ASSERT_MSG(*value >= 0.0f && *value <= 1.0f, "CircularProgressIndicator.value must be in [0.0, 1.0]");
+            CW_ASSERT_MSG(stroke_width >= 0.0f, "CircularProgressIndicator.stroke_width must be non-negative");
+            CW_ASSERT_MSG(size >= 0.0f, "CircularProgressIndicator.size must be non-negative");
+            CW_ASSERT_MSG(duration_ms >= 0.0, "CircularProgressIndicator.duration_ms must be non-negative");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

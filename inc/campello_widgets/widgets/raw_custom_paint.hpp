@@ -3,6 +3,7 @@
 #include <memory>
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/ui/custom_painter.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -35,6 +36,12 @@ namespace systems::leal::campello_widgets
             return w;
         }
 
+        
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(painter != nullptr, "RawCustomPaint.painter must be set");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
     };

@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -39,12 +40,25 @@ namespace systems::leal::campello_widgets
         LinearProgressIndicator() = default;
         explicit LinearProgressIndicator(float val)
             : value(val)
-        {}
+        {
+            CW_ASSERT_MSG(val >= 0.0f && val <= 1.0f, "LinearProgressIndicator.value must be in [0.0, 1.0]");
+}
         explicit LinearProgressIndicator(float val, Color val_color)
             : value(val), value_color(val_color)
-        {}
+        {
+            CW_ASSERT_MSG(val >= 0.0f && val <= 1.0f, "LinearProgressIndicator.value must be in [0.0, 1.0]");
+}
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            if (value.has_value())
+                CW_ASSERT_MSG(*value >= 0.0f && *value <= 1.0f, "LinearProgressIndicator.value must be in [0.0, 1.0]");
+            CW_ASSERT_MSG(min_height >= 0.0f, "LinearProgressIndicator.min_height must be non-negative");
+            CW_ASSERT_MSG(duration_ms >= 0.0, "LinearProgressIndicator.duration_ms must be non-negative");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

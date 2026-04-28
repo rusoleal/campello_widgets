@@ -32,6 +32,10 @@ namespace systems::leal::campello_widgets
         if (auto* gk = dynamic_cast<GlobalKey*>(widget_->key.get()))
             GlobalKey::_register(gk, this);
 
+#ifndef NDEBUG
+        widget_->debugValidate();
+#endif
+
         rebuild();
     }
 

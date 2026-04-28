@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -38,6 +39,7 @@ namespace systems::leal::campello_widgets
 
         /** @brief Looks up the nearest TabScope; returns nullptr if none. */
         static const TabScope* of(BuildContext& ctx);
+
     };
 
     // =========================================================================
@@ -115,7 +117,9 @@ namespace systems::leal::campello_widgets
         TabBar() = default;
         explicit TabBar(std::vector<Tab> t)
             : tabs(std::move(t))
-        {}
+        {
+            CW_ASSERT_MSG(!tabs.empty(), "TabBar.tabs must not be empty");
+}
 
         WidgetRef build(BuildContext& ctx) const override;
     };

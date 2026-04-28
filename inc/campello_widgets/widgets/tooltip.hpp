@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/edge_insets.hpp>
 
 #include <string>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -47,9 +48,19 @@ namespace systems::leal::campello_widgets
             : child(std::move(c))
             , message(std::move(msg))
             , display_duration_ms(duration_ms)
-        {}
+        {
+            CW_ASSERT_MSG(duration_ms >= 0.0, "Tooltip.display_duration_ms must be non-negative");
+}
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(display_duration_ms >= 0.0, "Tooltip.display_duration_ms must be non-negative");
+            CW_ASSERT_MSG(border_radius >= 0.0f, "Tooltip.border_radius must be non-negative");
+            CW_ASSERT_MSG(font_size >= 0.0f, "Tooltip.font_size must be non-negative");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

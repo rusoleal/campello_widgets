@@ -6,6 +6,7 @@
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/ui/span.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -81,6 +82,14 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<Element> createElement() const override;
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(cell_builder, "TableView.cell_builder must be set");
+            CW_ASSERT_MSG(extents.row_count >= 0, "TableView.extents.row_count must be non-negative");
+            CW_ASSERT_MSG(extents.column_count >= 0, "TableView.extents.column_count must be non-negative");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

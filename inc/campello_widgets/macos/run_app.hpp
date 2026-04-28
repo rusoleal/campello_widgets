@@ -1,6 +1,9 @@
 #pragma once
 
 #include <campello_widgets/widgets/widget.hpp>
+#include <campello_gpu/device.hpp>
+
+#include <memory>
 
 namespace systems::leal::campello_widgets
 {
@@ -38,6 +41,27 @@ namespace systems::leal::campello_widgets
                const char*  title  = "campello_widgets",
                float        width  = 800.0f,
                float        height = 600.0f);
+
+    /**
+     * @brief macOS entry point with an externally-provided GPU device.
+     *
+     * The caller creates and owns the campello_gpu device; the widget framework
+     * will use it for all rendering.  This allows the host application to share
+     * the same device (and therefore the same command queue) with other GPU
+     * consumers such as 3D viewers or game viewports.
+     *
+     * @param device       Pre-created campello_gpu device.
+     * @param root_widget  Root widget of the application.
+     * @param title        Window title string (default: "campello_widgets").
+     * @param width        Initial window width in points (default: 800).
+     * @param height       Initial window height in points (default: 600).
+     * @return NSApp exit code (typically 0).
+     */
+    int runApp(std::shared_ptr<campello_gpu::Device> device,
+               WidgetRef                             root_widget,
+               const char*                           title  = "campello_widgets",
+               float                                 width  = 800.0f,
+               float                                 height = 600.0f);
 
     /**
      * @brief Request a full refresh and redraw of the widget tree.

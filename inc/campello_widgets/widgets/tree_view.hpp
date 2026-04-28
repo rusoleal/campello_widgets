@@ -5,6 +5,7 @@
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/ui/tree_node.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -97,6 +98,14 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<Element> createElement() const override;
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(indent_width >= 0.0f, "TreeView.indent_width must be non-negative");
+            CW_ASSERT_MSG(row_height > 0.0f, "TreeView.row_height must be greater than 0");
+            CW_ASSERT_MSG(row_builder, "TreeView.row_builder must be set");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

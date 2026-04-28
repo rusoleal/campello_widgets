@@ -9,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <memory>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -57,6 +58,16 @@ namespace systems::leal::campello_widgets
         {}
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(duration_ms >= 0.0, "AnimatedContainer.duration_ms must be non-negative");
+            if (width.has_value())
+                CW_ASSERT_MSG(*width >= 0.0f, "AnimatedContainer.width must be non-negative");
+            if (height.has_value())
+                CW_ASSERT_MSG(*height >= 0.0f, "AnimatedContainer.height must be non-negative");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

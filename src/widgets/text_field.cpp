@@ -170,6 +170,18 @@ namespace systems::leal::campello_widgets
             };
 
             focused_ = focus_node_->hasFocus();
+
+            // Register with FocusManager so Tab traversal works
+            if (auto* fm = FocusManager::activeManager())
+            {
+                fm->registerNode(focus_node_.get());
+            }
+
+            // Autofocus on first mount
+            if (w.autofocus)
+            {
+                focus_node_->requestFocus();
+            }
         }
 
         void dispose() override
@@ -269,7 +281,13 @@ namespace systems::leal::campello_widgets
                 focus_node_->on_key = [this](const KeyEvent& event) -> bool {
                     return handleKey(event);
                 };
-                
+
+                // Register new focus node with FocusManager for Tab traversal
+                if (auto* fm = FocusManager::activeManager())
+                {
+                    fm->registerNode(focus_node_.get());
+                }
+
                 // If new focus node already has focus, register it
                 if (focus_node_->hasFocus())
                 {

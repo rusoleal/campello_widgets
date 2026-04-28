@@ -90,7 +90,7 @@ namespace systems::leal::campello_widgets
         };
     }
 
-    void Path::arcToPoint(const Offset& arc_end, const Offset& arc_control, float radius)
+    void Path::arcToPoint(const Offset& arc_end, const Offset& /*arc_control*/, float /*radius*/)
     {
         // Simplified implementation - just draw a line
         // Full implementation would compute the tangent arc

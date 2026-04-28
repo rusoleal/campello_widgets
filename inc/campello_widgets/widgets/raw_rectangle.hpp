@@ -3,6 +3,7 @@
 #include <memory>
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -52,6 +53,12 @@ namespace systems::leal::campello_widgets
             return w;
         }
 
+        
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(corner_radius >= 0.0f, "RawRectangle.corner_radius must be non-negative");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
     };

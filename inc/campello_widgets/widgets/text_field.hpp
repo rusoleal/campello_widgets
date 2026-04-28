@@ -65,6 +65,9 @@ namespace systems::leal::campello_widgets
         /** @brief If true, draws bullets instead of typed characters. */
         bool obscure_text = false;
 
+        /** @brief If true, requests focus automatically when the field is first mounted. */
+        bool autofocus = false;
+
         /** @brief Text style (font size, color, weight, …). */
         TextStyle style;
 

@@ -64,9 +64,6 @@ namespace systems::leal::campello_widgets
                 request.HTTPBody = bodyData;
             }
 
-            // Create a serial queue for this request's callbacks
-            dispatch_queue_t callbackQueue = dispatch_queue_create("com.campello.http", DISPATCH_QUEUE_SERIAL);
-            
             // Create semaphore for synchronous execution
             dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
             

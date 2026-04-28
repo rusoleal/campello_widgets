@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -43,16 +44,30 @@ namespace systems::leal::campello_widgets
         Slider() = default;
         explicit Slider(float val, std::function<void(float)> on_change = nullptr)
             : value(val), on_changed(std::move(on_change))
-        {}
+        {
+            CW_ASSERT_MSG(val >= min && val <= max, "Slider.value must be within [min, max]");
+        }
         explicit Slider(
             float val,
             float min_val,
             float max_val,
             std::function<void(float)> on_change = nullptr)
             : value(val), min(min_val), max(max_val), on_changed(std::move(on_change))
-        {}
+        {
+            CW_ASSERT_MSG(min_val < max_val, "Slider.min must be less than Slider.max");
+            CW_ASSERT_MSG(val >= min_val && val <= max_val, "Slider.value must be within [min, max]");
+        }
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(min < max, "Slider.min must be less than Slider.max");
+            CW_ASSERT_MSG(value >= min && value <= max, "Slider.value must be within [min, max]");
+            CW_ASSERT_MSG(height > 0.0f, "Slider.height must be greater than 0");
+            CW_ASSERT_MSG(track_height > 0.0f, "Slider.track_height must be greater than 0");
+            CW_ASSERT_MSG(thumb_radius > 0.0f, "Slider.thumb_radius must be greater than 0");
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

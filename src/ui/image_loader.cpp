@@ -6,11 +6,6 @@
 namespace systems::leal::campello_widgets
 {
 
-    namespace {
-        void log(const char* msg) {
-            std::cerr << "[ImageLoader] " << msg << "\n";
-        }
-    }
 
     ImageLoader::~ImageLoader()
     {

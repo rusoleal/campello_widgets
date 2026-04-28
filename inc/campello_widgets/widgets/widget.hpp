@@ -108,6 +108,17 @@ namespace systems::leal::campello_widgets
         /** @brief The source location where this widget was created, if any. */
         const WidgetLocation& creationLocation() const noexcept { return location_; }
 
+        /**
+         * @brief Validates widget configuration in debug builds.
+         *
+         * Called automatically by Element::mount() when NDEBUG is not defined.
+         * Override this in concrete widgets to assert invariants (e.g. positive
+         * dimensions, required callbacks set, non-negative counts).
+         *
+         * Use CW_ASSERT / CW_ASSERT_MSG inside the body.
+         */
+        virtual void debugValidate() const {}
+
     protected:
         WidgetLocation location_;
     };

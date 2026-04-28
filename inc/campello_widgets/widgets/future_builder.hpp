@@ -9,6 +9,7 @@
 #include <future>
 #include <memory>
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -116,6 +117,7 @@ namespace systems::leal::campello_widgets
                 ticker_id_ = 0;
             }
         }
+
     };
 
     /**
@@ -155,13 +157,22 @@ namespace systems::leal::campello_widgets
             std::shared_future<T> fut,
             std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b)
             : future(std::move(fut)), builder(std::move(b))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "FutureBuilder.builder must be set");
+}
         explicit FutureBuilder(
             std::shared_future<T> fut,
             std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b,
             T init_data)
             : future(std::move(fut)), builder(std::move(b)), initialData(std::move(init_data))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "FutureBuilder.builder must be set");
+}
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(builder, "FutureBuilder.builder must be set");
+        }
 
         std::unique_ptr<StateBase> createState() const override
         {

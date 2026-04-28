@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 #include <campello_widgets/widgets/stateless_widget.hpp>
 
 namespace systems::leal::campello_widgets
@@ -47,6 +48,20 @@ namespace systems::leal::campello_widgets
         {}
 
         WidgetRef build(BuildContext&) const override { return child; }
+
+        void debugValidate() const override
+        {
+            const bool has_horizontal = left.has_value() || right.has_value() || width.has_value();
+            const bool has_vertical   = top.has_value() || bottom.has_value() || height.has_value();
+            CW_ASSERT_MSG(has_horizontal, "Positioned requires at least one horizontal constraint (left, right, or width)");
+            CW_ASSERT_MSG(has_vertical, "Positioned requires at least one vertical constraint (top, bottom, or height)");
+            (void)has_horizontal;
+            (void)has_vertical;
+            CW_ASSERT_MSG(!left.has_value() || !right.has_value() || !width.has_value(),
+                "Positioned over-constrained horizontally: cannot specify left, right, and width simultaneously");
+            CW_ASSERT_MSG(!top.has_value() || !bottom.has_value() || !height.has_value(),
+                "Positioned over-constrained vertically: cannot specify top, bottom, and height simultaneously");
+        }
 
         /**
          * @brief Creates a Positioned that fills the Stack (all edges = 0).

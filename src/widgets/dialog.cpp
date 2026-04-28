@@ -79,7 +79,7 @@ namespace systems::leal::campello_widgets
 
         // Spacer between content and actions
         if (!actions.empty()) {
-            dialog_children.push_back(SizedBox::create(0, 16));
+            dialog_children.push_back(SizedBox::from_height(16));
 
             // Actions row (aligned to end)
             WidgetRef actions_row;
@@ -96,7 +96,7 @@ namespace systems::leal::campello_widgets
             dialog_children.push_back(actions_row);
         } else {
             // Bottom padding if no actions
-            dialog_children.push_back(SizedBox::create(0, 16));
+            dialog_children.push_back(SizedBox::from_height(16));
         }
 
         // Build dialog content column

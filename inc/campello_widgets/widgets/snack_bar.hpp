@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -31,6 +32,7 @@ namespace systems::leal::campello_widgets
         SnackBarAction() = default;
 
         WidgetRef build(BuildContext& ctx) const override;
+
     };
 
     /**
@@ -57,6 +59,14 @@ namespace systems::leal::campello_widgets
         SnackBar() = default;
         explicit SnackBar(WidgetRef content_widget)
             : content(std::move(content_widget)) {}
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(duration_ms > 0.0, "SnackBar.duration_ms must be greater than 0");
+            CW_ASSERT_MSG(border_radius >= 0.0f, "SnackBar.border_radius must be non-negative");
+            CW_ASSERT_MSG(padding.left >= 0.0f && padding.top >= 0.0f && padding.right >= 0.0f && padding.bottom >= 0.0f,
+                "SnackBar.padding insets must be non-negative");
+        }
 
         WidgetRef build(BuildContext& ctx) const override;
     };

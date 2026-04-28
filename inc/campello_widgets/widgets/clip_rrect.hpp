@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -26,9 +27,17 @@ namespace systems::leal::campello_widgets
         explicit ClipRRect(float radius, WidgetRef c = nullptr)
             : border_radius(radius)
         {
+            CW_ASSERT_MSG(radius >= 0.0f, "ClipRRect.border_radius must be non-negative");
+
             child = std::move(c);
         }
 
+        
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(border_radius >= 0.0f, "ClipRRect.border_radius must be non-negative");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };

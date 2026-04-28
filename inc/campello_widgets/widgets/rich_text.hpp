@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/text_style.hpp>
 #include <memory>
 #include <vector>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -52,7 +53,9 @@ namespace systems::leal::campello_widgets
 
         explicit RichText(std::shared_ptr<InlineSpan> root_span)
             : text(std::move(root_span))
-        {}
+        {
+            CW_ASSERT_MSG(text != nullptr, "RichText.text must be set");
+}
 
         RichText(std::vector<std::shared_ptr<InlineSpan>> spans, TextStyle style = {})
             : default_style(std::move(style))
@@ -80,6 +83,12 @@ namespace systems::leal::campello_widgets
             rt->text = std::move(root_span);
             return rt;
         }
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(text != nullptr, "RichText.text must be set");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

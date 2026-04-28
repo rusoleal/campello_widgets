@@ -36,6 +36,7 @@ namespace systems::leal::campello_widgets
 
         for (auto& fc : flex_children_)
         {
+            if (!fc.box) continue;
             if (fc.flex > 0) { total_flex += fc.flex; continue; }
 
             const float remaining_main = std::isinf(max_main)
@@ -66,6 +67,7 @@ namespace systems::leal::campello_widgets
 
             for (auto& fc : flex_children_)
             {
+                if (!fc.box) continue;
                 if (fc.flex == 0) continue;
 
                 const float main_size = (fc.flex / static_cast<float>(total_flex)) * free;
@@ -133,6 +135,8 @@ namespace systems::leal::campello_widgets
 
         for (auto& fc : flex_children_)
         {
+            if (!fc.box) continue;
+
             const Size s          = fc.box->size();
             const float child_main  = is_h ? s.width  : s.height;
             const float child_cross = is_h ? s.height : s.width;

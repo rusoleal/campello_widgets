@@ -154,6 +154,13 @@ namespace systems::leal::campello_widgets
         // Queries
         // ------------------------------------------------------------------
 
+        /** @brief True when 0 <= min <= max on both axes. */
+        bool isNormalized() const noexcept
+        {
+            return min_width >= 0.0f && max_width >= min_width
+                && min_height >= 0.0f && max_height >= min_height;
+        }
+
         /** @brief True when min == max on both axes. */
         bool isTight() const noexcept
         {

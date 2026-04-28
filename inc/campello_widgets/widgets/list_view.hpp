@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <campello_widgets/widgets/render_object_widget.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 #include <campello_widgets/ui/axis.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
 
@@ -48,6 +49,14 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<Element>      createElement()    const override;
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(item_count >= 0, "ListView.item_count must be non-negative");
+            CW_ASSERT_MSG(item_extent > 0.0f, "ListView.item_extent must be greater than zero");
+            if (item_count > 0)
+                CW_ASSERT_MSG(builder, "ListView.builder must be set when item_count > 0");
+        }
     };
 
 } // namespace systems::leal::campello_widgets

@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <memory>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -43,15 +44,25 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<AnimationController> ctrl,
             WidgetRef c = nullptr)
             : controller(std::move(ctrl)), child(std::move(c))
-        {}
+        {
+            CW_ASSERT_MSG(ctrl != nullptr, "ScaleTransition.controller must be set");
+}
         explicit ScaleTransition(
             std::shared_ptr<AnimationController> ctrl,
             Tween<float> scl,
             WidgetRef c = nullptr)
             : controller(std::move(ctrl)), scale(scl), child(std::move(c))
-        {}
+        {
+            CW_ASSERT_MSG(ctrl != nullptr, "ScaleTransition.controller must be set");
+}
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(controller != nullptr, "ScaleTransition.controller must be set");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

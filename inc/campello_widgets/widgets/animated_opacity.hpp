@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <memory>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -39,15 +40,26 @@ namespace systems::leal::campello_widgets
         AnimatedOpacity() = default;
         explicit AnimatedOpacity(float op, WidgetRef c = nullptr)
             : opacity(op), child(std::move(c))
-        {}
+        {
+            CW_ASSERT_MSG(op >= 0.0f && op <= 1.0f, "AnimatedOpacity.opacity must be in [0.0, 1.0]");
+        }
         explicit AnimatedOpacity(
             float op,
             double duration,
             WidgetRef c = nullptr)
             : opacity(op), child(std::move(c)), duration_ms(duration)
-        {}
+        {
+            CW_ASSERT_MSG(op >= 0.0f && op <= 1.0f, "AnimatedOpacity.opacity must be in [0.0, 1.0]");
+            CW_ASSERT_MSG(duration >= 0.0, "AnimatedOpacity.duration_ms must be non-negative");
+        }
 
         std::unique_ptr<StateBase> createState() const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(opacity >= 0.0f && opacity <= 1.0f, "AnimatedOpacity.opacity must be in [0.0, 1.0]");
+            CW_ASSERT_MSG(duration_ms >= 0.0, "AnimatedOpacity.duration_ms must be non-negative");
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

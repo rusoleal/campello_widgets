@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/box_fit.hpp>
 #include <campello_widgets/ui/alignment.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_gpu { class Texture; }
 
@@ -54,6 +55,12 @@ namespace systems::leal::campello_widgets
             return w;
         }
 
+        
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(opacity >= 0.0f && opacity <= 1.0f, "RawImage.opacity must be in [0.0, 1.0]");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
     };

@@ -78,7 +78,7 @@ namespace systems::leal::campello_widgets
          * Called automatically by paint() after performPaint() when any
          * debug overlay flag is enabled. The default implementation does nothing.
          */
-        virtual void debugPaint(PaintContext& context, const Offset& offset) const {}
+        virtual void debugPaint(PaintContext& /*context*/, const Offset& /*offset*/) const {}
 
         /**
          * @brief Issues draw calls for this render object.

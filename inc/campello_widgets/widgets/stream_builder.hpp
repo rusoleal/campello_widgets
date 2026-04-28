@@ -7,6 +7,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -97,6 +98,7 @@ namespace systems::leal::campello_widgets
             if (error_id_) { s->removeErrorListener(error_id_); error_id_ = 0; }
             if (done_id_)  { s->removeDoneListener(done_id_);   done_id_  = 0; }
         }
+
     };
 
     /**
@@ -133,13 +135,22 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<Stream<T>> s,
             std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b)
             : stream(std::move(s)), builder(std::move(b))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "StreamBuilder.builder must be set");
+}
         explicit StreamBuilder(
             std::shared_ptr<Stream<T>> s,
             std::function<WidgetRef(BuildContext&, AsyncSnapshot<T>)> b,
             T init_data)
             : stream(std::move(s)), builder(std::move(b)), initialData(std::move(init_data))
-        {}
+        {
+            CW_ASSERT_MSG(builder, "StreamBuilder.builder must be set");
+}
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(builder, "StreamBuilder.builder must be set");
+        }
 
         std::unique_ptr<StateBase> createState() const override
         {

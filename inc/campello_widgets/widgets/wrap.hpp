@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/axis.hpp>
 #include <campello_widgets/ui/flex_properties.hpp>
 #include <campello_widgets/ui/wrap_properties.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -45,7 +46,15 @@ namespace systems::leal::campello_widgets
         explicit Wrap(Axis dir, float space, float run_space, WidgetList ch)
             : direction(dir), spacing(space), run_spacing(run_space)
         {
+            CW_ASSERT_MSG(space >= 0.0f, "Wrap.spacing must be non-negative");
+            CW_ASSERT_MSG(run_space >= 0.0f, "Wrap.run_spacing must be non-negative");
             children = ch;
+        }
+
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(spacing >= 0.0f, "Wrap.spacing must be non-negative");
+            CW_ASSERT_MSG(run_spacing >= 0.0f, "Wrap.run_spacing must be non-negative");
         }
 
         std::shared_ptr<RenderObject> createRenderObject() const override;

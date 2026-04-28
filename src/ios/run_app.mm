@@ -297,6 +297,7 @@ namespace {
     if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
 
     auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
+    _renderer->setPendingDrawable((__bridge void*)drawable);
     bool rendered = colorView && _renderer->renderFrame(colorView, logical_width, logical_height);
     if (!rendered)
         _device->scheduleNextPresent(nullptr);

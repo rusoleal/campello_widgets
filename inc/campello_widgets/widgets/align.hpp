@@ -2,6 +2,7 @@
 
 #include <optional>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/ui/alignment.hpp>
 
@@ -29,6 +30,15 @@ namespace systems::leal::campello_widgets
             child     = std::move(c);
         }
 
+        
+        void debugValidate() const override
+        {
+            if (width_factor.has_value())
+                CW_ASSERT_MSG(*width_factor >= 0.0f, "Align.width_factor must be non-negative");
+            if (height_factor.has_value())
+                CW_ASSERT_MSG(*height_factor >= 0.0f, "Align.height_factor must be non-negative");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
 

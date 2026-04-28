@@ -102,6 +102,19 @@ namespace systems::leal::campello_widgets
             float viewport_width,
             float viewport_height);
 
+        /**
+         * @brief Schedules a native drawable for presentation on the NEXT submit().
+         *
+         * Call this before renderFrame() when rendering to a swapchain.  The
+         * drawable is only attached to the command buffer that renderFrame()
+         * submits, so nested submit() calls (e.g. from offscreen renderers
+         * triggered during layout) do not consume it prematurely.
+         */
+        void setPendingDrawable(void* nativeDrawable) noexcept
+        {
+            pending_drawable_ = nativeDrawable;
+        }
+
         // ------------------------------------------------------------------
         // Configuration
         // ------------------------------------------------------------------
@@ -140,6 +153,9 @@ namespace systems::leal::campello_widgets
         IDrawBackend* drawBackend() const noexcept { return draw_backend_.get(); }
 
         campello_gpu::Device& device() noexcept { return *device_; }
+
+        /** @brief The GPU device used by this renderer (shared ownership). */
+        std::shared_ptr<campello_gpu::Device> sharedDevice() const noexcept { return device_; }
 
         // ------------------------------------------------------------------
         // BackdropFilter support
@@ -271,6 +287,9 @@ namespace systems::leal::campello_widgets
         // --- frame-scoped pointers (valid only during renderFrame) ---
         campello_gpu::CommandEncoder*              frame_encoder_ = nullptr;
         std::shared_ptr<campello_gpu::TextureView> frame_target_;
+
+        // Native drawable to present after this frame's command buffer (MTLDrawable / CAMetalDrawable).
+        void* pending_drawable_ = nullptr;
     };
 
 } // namespace systems::leal::campello_widgets

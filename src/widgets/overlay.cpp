@@ -5,6 +5,7 @@
 #include <campello_widgets/widgets/stateful_element.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
 #include <campello_widgets/ui/render_stack.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -160,7 +161,9 @@ void OverlayState::_markDirty()
 {
     if (auto e = element()) {
         e->markNeedsBuild();
+        e->rebuild();
     }
+    FrameScheduler::scheduleFrame();
 }
 
 WidgetRef OverlayState::build(BuildContext& context)

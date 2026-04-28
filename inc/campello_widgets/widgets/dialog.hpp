@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -73,6 +74,16 @@ namespace systems::leal::campello_widgets
             d->border_radius = radius;
             return d;
         }
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(border_radius >= 0.0f, "Dialog.border_radius must be non-negative");
+            CW_ASSERT_MSG(elevation >= 0.0f, "Dialog.elevation must be non-negative");
+            CW_ASSERT_MSG(min_width >= 0.0f, "Dialog.min_width must be non-negative");
+            CW_ASSERT_MSG(max_width >= 0.0f, "Dialog.max_width must be non-negative");
+            CW_ASSERT_MSG(min_width <= max_width, "Dialog.min_width must be less than or equal to max_width");
+
+        }
+
     };
 
     /**

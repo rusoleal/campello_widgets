@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/box_fit.hpp>
 #include <campello_widgets/ui/alignment.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_gpu { class Texture; }
 
@@ -33,9 +34,16 @@ namespace systems::leal::campello_widgets
                        Alignment a = Alignment::center(),
                        float     o = 1.0f)
             : texture(std::move(tex)), size(s), fit(f), alignment(a), opacity(o)
-        {}
-
+        {
+            CW_ASSERT_MSG(o >= 0.0f && o <= 1.0f, "Image.opacity must be in [0.0, 1.0]");
+        }
         WidgetRef build(BuildContext& context) const override;
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(opacity >= 0.0f && opacity <= 1.0f, "Image.opacity must be in [0.0, 1.0]");
+
+        }
+
     };
 
 } // namespace systems::leal::campello_widgets

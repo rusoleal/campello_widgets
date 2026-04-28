@@ -1,6 +1,7 @@
 #pragma once
 
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
+#include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -25,9 +26,17 @@ namespace systems::leal::campello_widgets
         explicit IntrinsicWidth(float step, WidgetRef c = nullptr)
             : step_width(step)
         {
+            CW_ASSERT_MSG(step >= 0.0f, "IntrinsicWidth.step_width must be non-negative");
+
             child = std::move(c);
         }
 
+        
+        void debugValidate() const override
+        {
+            CW_ASSERT_MSG(step_width >= 0.0f, "IntrinsicWidth.step_width must be non-negative");
+
+        }
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& ro) const override;
     };
