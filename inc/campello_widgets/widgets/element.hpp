@@ -3,6 +3,7 @@
 #include <memory>
 #include <typeindex>
 #include <unordered_map>
+#include <unordered_set>
 #include <functional>
 #include <campello_widgets/widgets/widget.hpp>
 #include <campello_widgets/widgets/build_context.hpp>
@@ -32,7 +33,10 @@ namespace systems::leal::campello_widgets
     {
     public:
         explicit Element(WidgetRef widget);
-        virtual ~Element() = default;
+        virtual ~Element();
+
+        /** @brief Returns true if the Element object has not been destroyed. */
+        static bool isAlive(const Element* obj) noexcept;
 
         // ------------------------------------------------------------------
         // BuildContext interface
@@ -92,6 +96,16 @@ namespace systems::leal::campello_widgets
          * Clears the dirty flag then delegates to `performBuild()`.
          */
         virtual void rebuild();
+
+        /**
+         * @brief Rebuilds all elements marked dirty since the last call.
+         *
+         * Called once per frame by Renderer::renderFrame() before layoutPass().
+         * This batches rebuilds so that setState() during a callback (pointer,
+         * animation, etc.) does not mutate the element tree while it is being
+         * traversed by layout or paint.
+         */
+        static void buildScope();
 
         // ------------------------------------------------------------------
         // Tree reconciliation
@@ -183,9 +197,13 @@ namespace systems::leal::campello_widgets
         virtual void performBuild() = 0;
 
         WidgetRef widget_;
-        Element*  parent_  = nullptr;
-        bool      dirty_   = true;
-        bool      mounted_ = false;
+        Element*  parent_   = nullptr;
+        bool      dirty_    = true;
+        bool      mounted_  = false;
+        bool      building_ = false;
+
+        static std::vector<Element*> dirty_elements_;
+        static std::unordered_set<const Element*> s_alive_;
 
         void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
         std::vector<std::shared_ptr<DiagnosticsNode>> debugDescribeChildren() const override;

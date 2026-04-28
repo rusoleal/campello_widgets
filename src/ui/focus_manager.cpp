@@ -1,20 +1,21 @@
 #include <algorithm>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
-    FocusManager* FocusManager::s_active_manager_ = nullptr;
+    std::atomic<FocusManager*> FocusManager::s_active_manager_{nullptr};
 
     void FocusManager::setActiveManager(FocusManager* manager) noexcept
     {
-        s_active_manager_ = manager;
+        s_active_manager_.store(manager, std::memory_order_release);
     }
 
     FocusManager* FocusManager::activeManager() noexcept
     {
-        return s_active_manager_;
+        return s_active_manager_.load(std::memory_order_acquire);
     }
 
     // -------------------------------------------------------------------------
@@ -71,6 +72,7 @@ namespace systems::leal::campello_widgets
 
     void FocusManager::handleKeyEvent(const KeyEvent& event)
     {
+        ThreadChecker::instance().assertOnBoundThread("FocusManager::handleKeyEvent");
         // Intercept Tab / Shift+Tab for traversal on key-down only.
         if (event.kind != KeyEventKind::up && event.key_code == KeyCode::tab)
         {

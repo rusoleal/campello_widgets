@@ -5,13 +5,29 @@
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/diagnostics/widget_inspector.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
+    std::vector<Element*> Element::dirty_elements_;
+    std::unordered_set<const Element*> Element::s_alive_;
+
     Element::Element(WidgetRef widget)
         : widget_(std::move(widget))
     {
+        s_alive_.insert(this);
+    }
+
+    Element::~Element()
+    {
+        s_alive_.erase(this);
+    }
+
+    bool Element::isAlive(const Element* obj) noexcept
+    {
+        return obj && s_alive_.find(obj) != s_alive_.end();
     }
 
     const Widget& Element::widget() const
@@ -66,14 +82,39 @@ namespace systems::leal::campello_widgets
 
     void Element::markNeedsBuild()
     {
+        ThreadChecker::instance().assertOnBoundThread("Element::markNeedsBuild");
+        if (dirty_) return;
         dirty_ = true;
-        // TODO: notify the framework scheduler for deferred rebuild
+        dirty_elements_.push_back(this);
+        FrameScheduler::scheduleFrame();
+
+        // In test environments where no frame callback is registered, rebuild
+        // synchronously so tests that inspect the tree after setState() continue
+        // to work. In real apps the Renderer drives buildScope() before layout.
+        if (!FrameScheduler::hasCallback())
+            buildScope();
+    }
+
+    void Element::buildScope()
+    {
+        while (true)
+        {
+            auto dirty = std::move(dirty_elements_);
+            dirty_elements_.clear();
+            if (dirty.empty()) break;
+            for (Element* e : dirty)
+            {
+                if (isAlive(e) && e->mounted_)
+                    e->rebuild();
+            }
+        }
     }
 
     void Element::rebuild()
     {
-        if (!dirty_) return;
-        dirty_ = false;
+        if (!dirty_ || building_) return;
+        building_ = true;
+        dirty_    = false;
 
         if (DebugFlags::printRebuildsEnabled)
         {
@@ -82,6 +123,7 @@ namespace systems::leal::campello_widgets
         WidgetInspector::instance().recordRebuild(this);
 
         performBuild();
+        building_ = false;
     }
 
     void Element::onDescendantRenderObjectChanged()

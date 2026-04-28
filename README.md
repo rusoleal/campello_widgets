@@ -23,6 +23,19 @@ The library is fully multiplatform and targets:
 - iOS
 - Android
 
+## Threading Model
+
+> **⚠️ Single-threaded only.** `campello_widgets` is architected as a single-threaded UI framework (like Flutter). All widget tree manipulation, layout, painting, animation, input handling, and state changes **must** happen on one thread (the "main" or "UI" thread).
+>
+> Calling `setState()`, mutating an `AnimationController`, dispatching pointer events, or touching the focus system from a background thread will cause data races, memory corruption, and crashes. The framework does not provide internal synchronization for these operations.
+>
+> The only APIs that are safe to use from background threads are:
+> - `ImageLoader::loadAsync()` / `ImageLoader::loadSync()`
+> - `ImageCache::get()` / `ImageCache::put()` / `ImageCache::evict()`
+> - `PlatformMenuDelegate` methods (internally synchronized)
+>
+> If you need to update the UI from a background thread, marshal the call to the main thread via your platform's mechanism (e.g. `dispatch_async(dispatch_get_main_queue(), ...)` on Apple platforms, `runOnUiThread()` on Android, or `PostMessage()` on Windows).
+
 ## Dependencies
 
 | Package | Role |

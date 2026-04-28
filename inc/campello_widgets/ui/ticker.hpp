@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <unordered_map>
@@ -64,7 +65,7 @@ namespace systems::leal::campello_widgets
         uint64_t next_id_ = 1;
         std::unordered_map<uint64_t, std::function<void(uint64_t)>> listeners_;
 
-        static TickerScheduler* s_active_;
+        static std::atomic<TickerScheduler*> s_active_;
     };
 
 } // namespace systems::leal::campello_widgets

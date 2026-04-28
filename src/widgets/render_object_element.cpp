@@ -29,8 +29,6 @@ namespace systems::leal::campello_widgets
         static_cast<const RenderObjectWidget&>(*widget_)
             .updateRenderObject(*render_object_);
         render_object_->markNeedsLayout();
-        markNeedsBuild();
-        rebuild();
     }
 
 } // namespace systems::leal::campello_widgets

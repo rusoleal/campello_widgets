@@ -29,7 +29,7 @@ namespace systems::leal::campello_widgets
 
     std::shared_ptr<DiagnosticsNode> WidgetInspector::getRenderObjectTree() const
     {
-        auto* renderer = detail::currentRenderer();
+        auto* renderer = detail::currentRenderer().load(std::memory_order_acquire);
         if (!renderer) return std::make_shared<DiagnosticsNode>("[no renderer]");
         // Root render box is stored in renderer but not directly accessible.
         // For now, try to find it through the root element's descendant.

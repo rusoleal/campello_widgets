@@ -127,6 +127,7 @@ namespace systems::leal::campello_widgets
         last_tick_ms_ = 0;
 
         ticker_id_ = ts->subscribe([this](uint64_t now_ms) {
+            if (!RenderObject::isAlive(this)) return;
             if (last_tick_ms_ == 0) {
                 last_tick_ms_ = now_ms;
                 return;
@@ -141,6 +142,7 @@ namespace systems::leal::campello_widgets
                 anim_t_ = 1.0;
 
             markNeedsLayout(); // triggers relayout which repaints
+            if (!RenderObject::isAlive(this)) return;
 
             if (anim_t_ >= 1.0)
                 stopAnimation();

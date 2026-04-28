@@ -1,12 +1,30 @@
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
 
 #include <iostream>
 
 namespace systems::leal::campello_widgets
 {
+
+    std::unordered_set<const RenderObject*> RenderObject::s_alive_;
+
+    RenderObject::RenderObject()
+    {
+        s_alive_.insert(this);
+    }
+
+    RenderObject::~RenderObject()
+    {
+        s_alive_.erase(this);
+    }
+
+    bool RenderObject::isAlive(const RenderObject* obj) noexcept
+    {
+        return obj && s_alive_.find(obj) != s_alive_.end();
+    }
 
     // -----------------------------------------------------------------------
     // Debug helpers (translation unit local)
@@ -29,6 +47,7 @@ namespace systems::leal::campello_widgets
 
     void RenderObject::markNeedsLayout() noexcept
     {
+        ThreadChecker::instance().assertOnBoundThread("RenderObject::markNeedsLayout");
         if (!needs_layout_)
         {
             needs_layout_ = true;
@@ -40,6 +59,7 @@ namespace systems::leal::campello_widgets
 
     void RenderObject::markNeedsPaint() noexcept
     {
+        ThreadChecker::instance().assertOnBoundThread("RenderObject::markNeedsPaint");
         if (needs_paint_) return;
         needs_paint_ = true;
         if (parent_)
@@ -81,8 +101,8 @@ namespace systems::leal::campello_widgets
             context.canvas().drawRect(bounds, Paint::filled(nextRainbowColor()));
         }
 
-        performPaint(context, offset);
         needs_paint_ = false;
+        performPaint(context, offset);
 
         if (DebugFlags::paintSizeEnabled || DebugFlags::paintBaselinesEnabled)
             debugPaint(context, offset);

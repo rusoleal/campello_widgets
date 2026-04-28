@@ -125,7 +125,7 @@ namespace systems::leal::campello_widgets
             // so build() can directly return RawImage without a second setState call.
             if (current_result_.status == ImageLoadStatus::completed &&
                 current_result_.image && !current_result_.image->texture) {
-                if (auto* renderer = detail::currentRenderer()) {
+                if (auto* renderer = detail::currentRenderer().load(std::memory_order_acquire)) {
                     if (current_result_.image->createTexture(&renderer->device())) {
                         std::cerr << "[ImageWidget] Texture created in checkFuture\n";
                     }

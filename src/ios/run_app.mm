@@ -10,6 +10,7 @@
 #import <campello_widgets/ui/ticker.hpp>
 #import <campello_widgets/ui/frame_scheduler.hpp>
 #import <campello_widgets/ui/text_input_manager.hpp>
+#import <campello_widgets/ui/thread_checker.hpp>
 
 #include <chrono>
 
@@ -187,6 +188,9 @@ namespace {
     
     auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, rootWidget);
+
+    // Bind the UI thread before any widget tree mutation.
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
 
     // Mount widget tree.
     _rootElement = wrappedRoot->createElement();

@@ -42,13 +42,11 @@ namespace systems::leal::campello_widgets
         Element::update(std::move(new_widget));
         state_->current_widget_ = widget_.get();
         state_->didUpdateWidget(old_widget);
-        rebuild();
     }
 
     void StatefulElement::scheduleBuild()
     {
         markNeedsBuild();
-        rebuild();
     }
 
     void StatefulElement::performBuild()

@@ -81,13 +81,17 @@ namespace systems::leal::campello_widgets
         {
         case PointerEventKind::down:
             pressed_ = true;
-            if (on_value_changed)
+            if (on_value_changed) {
                 on_value_changed(positionToValue(event.position.x));
+                if (!RenderObject::isAlive(this)) return;
+            }
             break;
 
         case PointerEventKind::move:
-            if (pressed_ && on_value_changed)
+            if (pressed_ && on_value_changed) {
                 on_value_changed(positionToValue(event.position.x));
+                if (!RenderObject::isAlive(this)) return;
+            }
             break;
 
         case PointerEventKind::up:

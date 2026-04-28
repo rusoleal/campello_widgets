@@ -207,6 +207,7 @@ namespace systems::leal::campello_widgets
 
     uint64_t TextEditingController::addListener(std::function<void()> fn)
     {
+        std::lock_guard<std::mutex> lock(listeners_mutex_);
         uint64_t id = next_listener_id_++;
         listeners_.emplace_back(id, std::move(fn));
         return id;
@@ -214,6 +215,7 @@ namespace systems::leal::campello_widgets
 
     void TextEditingController::removeListener(uint64_t id)
     {
+        std::lock_guard<std::mutex> lock(listeners_mutex_);
         listeners_.erase(
             std::remove_if(listeners_.begin(), listeners_.end(),
                            [id](const auto& p) { return p.first == id; }),
@@ -222,7 +224,11 @@ namespace systems::leal::campello_widgets
 
     void TextEditingController::notifyListeners()
     {
-        auto copy = listeners_; // snapshot in case a listener mutates the list
+        std::vector<std::pair<uint64_t, std::function<void()>>> copy;
+        {
+            std::lock_guard<std::mutex> lock(listeners_mutex_);
+            copy = listeners_; // snapshot in case a listener mutates the list
+        }
         for (auto& [lid, fn] : copy)
             fn();
     }

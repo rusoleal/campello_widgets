@@ -13,6 +13,7 @@
 #import <campello_widgets/ui/text_input_manager.hpp>
 #import <campello_widgets/ui/ticker.hpp>
 #import <campello_widgets/ui/frame_scheduler.hpp>
+#import <campello_widgets/ui/thread_checker.hpp>
 #import <campello_widgets/diagnostics/widget_inspector.hpp>
 
 #include <chrono>
@@ -732,6 +733,10 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
             // Observer may not have been added
         }
     }
+    // Null out globals so late FrameScheduler callbacks don't message a
+    // deallocated view or use a destroyed renderer.
+    gMetalView = nullptr;
+    gRenderer.reset();
 #if !__has_feature(objc_arc)
     [super dealloc];
 #endif
@@ -854,6 +859,8 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, gRootWidget);
     
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
+
     _rootElement = wrappedRoot->createElement();
     _rootElement->mount(nullptr);
 

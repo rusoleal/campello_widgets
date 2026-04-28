@@ -11,6 +11,7 @@
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/key_event.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -552,6 +553,9 @@ static std::unique_ptr<WidgetSession> createSession(
     auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
         mediaData, root_widget);
 
+    // Bind the UI thread before any widget tree mutation.
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
+
     // Mount widget tree.
     session->root_element = wrappedRoot->createElement();
     session->root_element->mount(nullptr);
@@ -626,7 +630,7 @@ static void rebuildMediaQuery(WidgetSession* session)
 }
 
 static std::atomic<bool> gFramePending{false};
-static WidgetSession* gActiveSession = nullptr;
+static std::atomic<WidgetSession*> gActiveSession{nullptr};
 
 static void onVsyncCallback(long frameTimeNanos, void* data)
 {
@@ -638,8 +642,10 @@ static void onVsyncCallback(long frameTimeNanos, void* data)
     if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(ms);
     if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(ms);
 
-    // Render frame
-    auto* session = static_cast<WidgetSession*>(data);
+    // Render frame. Read gActiveSession atomically instead of trusting the
+    // stale |data| pointer, because APP_CMD_TERM_WINDOW may have destroyed
+    // the session after this callback was posted.
+    auto* session = gActiveSession.load(std::memory_order_acquire);
     if (session && session->renderer && session->device && session->app && session->app->window)
     {
         auto color_view = session->device->getSwapchainTextureView();
@@ -680,7 +686,7 @@ void runApp(android_app* app, WidgetRef root_widget)
     FrameScheduler::setCallback([choreographer] {
         // Post at most one pending callback per vsync interval.
         if (!gFramePending.exchange(true, std::memory_order_relaxed))
-            AChoreographer_postFrameCallback(choreographer, onVsyncCallback, gActiveSession);
+            AChoreographer_postFrameCallback(choreographer, onVsyncCallback, gActiveSession.load(std::memory_order_acquire));
     });
 
     std::unique_ptr<WidgetSession> session;
@@ -704,7 +710,7 @@ void runApp(android_app* app, WidgetRef root_widget)
                 FocusManager::setActiveManager(nullptr);
                 TextInputManager::setActiveManager(nullptr);
                 TickerScheduler::setActive(nullptr);
-                gActiveSession = nullptr;
+                gActiveSession.store(nullptr, std::memory_order_release);
                 session_ptr->reset();
             }
             break;
@@ -785,7 +791,7 @@ void runApp(android_app* app, WidgetRef root_widget)
             session = createSession(app, root_widget);
             if (session)
             {
-                gActiveSession = session.get();
+                gActiveSession.store(session.get(), std::memory_order_release);
             }
         }
 

@@ -1,11 +1,13 @@
 #include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
+#include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -35,13 +37,13 @@ namespace systems::leal::campello_widgets
         , root_(std::move(root_render_object))
         , clear_color_(clear_color)
     {
-        detail::currentRenderer() = this;
+        detail::currentRenderer().store(this, std::memory_order_release);
     }
 
     Renderer::~Renderer()
     {
-        if (detail::currentRenderer() == this)
-            detail::currentRenderer() = nullptr;
+        if (detail::currentRenderer().load(std::memory_order_acquire) == this)
+            detail::currentRenderer().store(nullptr, std::memory_order_release);
     }
 
     // ------------------------------------------------------------------
@@ -66,6 +68,7 @@ namespace systems::leal::campello_widgets
         float viewport_width,
         float viewport_height)
     {
+        ThreadChecker::instance().assertOnBoundThread("Renderer::renderFrame");
         const auto now_tp = std::chrono::steady_clock::now().time_since_epoch();
         const uint64_t now_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
@@ -77,6 +80,8 @@ namespace systems::leal::campello_widgets
 
         if (auto* ts = TickerScheduler::active())
             ts->tick(now_ms);
+
+        Element::buildScope();
 
         layoutPass(viewport_width, viewport_height);
 

@@ -3,6 +3,7 @@
 #include <campello_widgets/widgets/stateful_widget.hpp>
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
+#include <atomic>
 #include <functional>
 #include <vector>
 
@@ -102,6 +103,7 @@ namespace systems::leal::campello_widgets
 
     private:
         void _markDirty();
+        bool removing_ = false;
     };
 
     /**
@@ -162,7 +164,7 @@ namespace systems::leal::campello_widgets
         static OverlayState* globalState() noexcept;
 
     private:
-        static OverlayState* global_state_;
+        static std::atomic<OverlayState*> global_state_;
     };
 
 } // namespace systems::leal::campello_widgets

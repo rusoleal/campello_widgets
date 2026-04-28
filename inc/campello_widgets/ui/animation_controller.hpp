@@ -119,6 +119,7 @@ namespace systems::leal::campello_widgets
         // Listeners: (id, callback) pairs
         uint64_t next_listener_id_ = 1;
         std::vector<std::pair<uint64_t, std::function<void()>>> listeners_;
+        bool notifying_ = false;
     };
 
 } // namespace systems::leal::campello_widgets

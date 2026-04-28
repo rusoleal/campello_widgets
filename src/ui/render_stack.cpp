@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
         std::optional<float>       width,
         std::optional<float>       height)
     {
+        if (index < 0) index = 0;
         if (index >= static_cast<int>(stack_children_.size()))
             stack_children_.resize(index + 1);
         if (stack_children_[index].box) stack_children_[index].box->setParent(nullptr);

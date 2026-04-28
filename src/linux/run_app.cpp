@@ -12,6 +12,7 @@
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -783,6 +784,9 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.user_root_widget = gRootWidget;
 
     auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(mediaData, gRootWidget);
+
+    // Bind the UI thread before any widget tree mutation.
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
 
     state.root_element = wrappedRoot->createElement();
     state.root_element->mount(nullptr);

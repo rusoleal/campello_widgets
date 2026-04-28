@@ -13,7 +13,7 @@ namespace systems::leal::campello_widgets
         // Get view insets from the current renderer if available.
         // This is a temporary solution until MediaQuery is implemented.
         EdgeInsets view_insets;
-        Renderer* renderer = detail::currentRenderer();
+        Renderer* renderer = detail::currentRenderer().load(std::memory_order_acquire);
         if (renderer != nullptr) {
             view_insets = renderer->viewInsets();
         }

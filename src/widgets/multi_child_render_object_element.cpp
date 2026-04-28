@@ -15,7 +15,6 @@ namespace systems::leal::campello_widgets
     void MultiChildRenderObjectElement::update(WidgetRef new_widget)
     {
         RenderObjectElement::update(std::move(new_widget));
-        rebuild();
     }
 
     void MultiChildRenderObjectElement::unmount()
@@ -56,6 +55,7 @@ namespace systems::leal::campello_widgets
 
         for (const auto& new_widget : w.children)
         {
+            if (!new_widget) continue;
             Key* new_key = new_widget->key.get();
 
             if (new_key)

@@ -9,7 +9,7 @@ namespace systems::leal::campello_widgets
     void RenderBackdropFilter::performLayout()
     {
         // Notify the Renderer that a BackdropFilter exists this frame.
-        if (auto* r = detail::currentRenderer())
+        if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
             r->noteBackdropFilter(filter_);
 
         // Lay out the child (if any) tightly to our constraints.

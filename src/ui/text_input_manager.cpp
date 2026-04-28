@@ -4,16 +4,16 @@
 namespace systems::leal::campello_widgets
 {
 
-    TextInputManager* TextInputManager::s_active_manager_ = nullptr;
+    std::atomic<TextInputManager*> TextInputManager::s_active_manager_{nullptr};
 
     void TextInputManager::setActiveManager(TextInputManager* manager) noexcept
     {
-        s_active_manager_ = manager;
+        s_active_manager_.store(manager, std::memory_order_release);
     }
 
     TextInputManager* TextInputManager::activeManager() noexcept
     {
-        return s_active_manager_;
+        return s_active_manager_.load(std::memory_order_acquire);
     }
 
     void TextInputManager::registerInputTarget(const InputTarget& target)

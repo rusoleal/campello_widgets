@@ -69,7 +69,6 @@ namespace systems::leal::campello_widgets
             RenderObjectElement::update(std::move(new_widget));
             wireCallback();
             wireController();
-            rebuild();
         }
 
     protected:
@@ -170,7 +169,6 @@ namespace systems::leal::campello_widgets
             renderTreeView().on_visible_range_changed = [this]()
             {
                 markNeedsBuild();
-                rebuild();
             };
         }
 
@@ -194,7 +192,6 @@ namespace systems::leal::campello_widgets
                     // Expansion state changed - invalidate render object's cache
                     renderTreeView().invalidateRowCache();
                     markNeedsBuild();
-                    rebuild();
                 });
             }
         }

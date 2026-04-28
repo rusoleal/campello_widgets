@@ -11,6 +11,7 @@ namespace systems::leal::campello_widgets
 
     void RenderWrap::insertChild(std::shared_ptr<RenderBox> box, int index)
     {
+        if (index < 0) index = 0;
         if (index >= static_cast<int>(wrap_children_.size()))
             wrap_children_.resize(index + 1);
         if (wrap_children_[index].box)

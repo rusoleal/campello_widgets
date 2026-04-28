@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -177,6 +178,7 @@ namespace systems::leal::campello_widgets
 
         uint64_t next_listener_id_ = 1;
         std::vector<std::pair<uint64_t, std::function<void()>>> listeners_;
+        mutable std::mutex listeners_mutex_;
     };
 
 } // namespace systems::leal::campello_widgets

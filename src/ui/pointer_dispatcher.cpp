@@ -1,27 +1,38 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/render_box.hpp>
+#include <campello_widgets/ui/render_object.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
+#include <algorithm>
 #include <iostream>
 #include <typeinfo>
 
 namespace systems::leal::campello_widgets
 {
 
-    PointerDispatcher* PointerDispatcher::s_active_dispatcher_ = nullptr;
+    std::atomic<PointerDispatcher*> PointerDispatcher::s_active_dispatcher_{nullptr};
 
     void PointerDispatcher::setActiveDispatcher(PointerDispatcher* dispatcher) noexcept
     {
-        s_active_dispatcher_ = dispatcher;
+        s_active_dispatcher_.store(dispatcher, std::memory_order_release);
     }
 
     PointerDispatcher* PointerDispatcher::activeDispatcher() noexcept
     {
-        return s_active_dispatcher_;
+        return s_active_dispatcher_.load(std::memory_order_acquire);
     }
 
     PointerDispatcher::PointerDispatcher(std::shared_ptr<RenderBox> root)
         : root_(std::move(root))
     {
+    }
+
+    void PointerDispatcher::setRoot(std::shared_ptr<RenderBox> root) noexcept
+    {
+        root_ = std::move(root);
+        active_pointers_.clear();
+        captured_pointers_.clear();
+        last_hover_path_.clear();
     }
 
     void PointerDispatcher::addHandler(RenderBox* box, Handler handler)
@@ -44,14 +55,37 @@ namespace systems::leal::campello_widgets
         tick_handlers_.erase(box);
     }
 
+    bool PointerDispatcher::isBoxAlive(RenderBox* box) noexcept
+    {
+        return RenderObject::isAlive(box);
+    }
+
     void PointerDispatcher::tick(uint64_t now_ms)
     {
-        for (auto& [box, handler] : tick_handlers_)
-            handler(now_ms);
+        // Snapshot alive handlers to avoid iterator invalidation if a callback
+        // mutates tick_handlers_ (e.g. calls removeTickHandler).
+        std::vector<std::pair<RenderBox*, TickHandler>> snapshot;
+        snapshot.reserve(tick_handlers_.size());
+        for (auto it = tick_handlers_.begin(); it != tick_handlers_.end(); )
+        {
+            if (!isBoxAlive(it->first))
+                it = tick_handlers_.erase(it);
+            else
+            {
+                snapshot.emplace_back(it->first, it->second);
+                ++it;
+            }
+        }
+        for (auto& [box, handler] : snapshot)
+        {
+            if (isBoxAlive(box))
+                handler(now_ms);
+        }
     }
 
     void PointerDispatcher::handlePointerEvent(const PointerEvent& event)
     {
+        ThreadChecker::instance().assertOnBoundThread("PointerDispatcher::handlePointerEvent");
         // Record position for debug visualization
         if (event.kind == PointerEventKind::down ||
             event.kind == PointerEventKind::move ||
@@ -86,7 +120,17 @@ namespace systems::leal::campello_widgets
             if (it != active_pointers_.end())
             {
                 // Captured move — dispatch to the same path as the down event.
-                dispatch(it->second.path, event);
+                // Prune any boxes that were destroyed since the down event.
+                auto& path = it->second.path;
+                path.erase(
+                    std::remove_if(path.begin(), path.end(),
+                        [](RenderBox* b) { return !isBoxAlive(b); }),
+                    path.end());
+
+                if (path.empty())
+                    active_pointers_.erase(it);
+                else
+                    dispatch(path, event);
             }
             else
             {
@@ -103,8 +147,11 @@ namespace systems::leal::campello_widgets
                 std::unordered_set<RenderBox*> new_set(new_path.begin(), new_path.end());
                 PointerEvent cancel_event = event;
                 cancel_event.kind = PointerEventKind::cancel;
-                for (RenderBox* box : last_hover_path_)
+                auto old_hover = last_hover_path_; // snapshot in case setRoot() is triggered
+                for (RenderBox* box : old_hover)
                 {
+                    if (!isBoxAlive(box))
+                        continue;
                     if (new_set.find(box) == new_set.end())
                     {
                         auto hit = handlers_.find(box);
@@ -125,8 +172,20 @@ namespace systems::leal::campello_widgets
             auto it = active_pointers_.find(event.pointer_id);
             if (it != active_pointers_.end())
             {
-                dispatch(it->second.path, event);
+                // Copy the path and erase the entry BEFORE dispatching.
+                // A handler (e.g. RenderTextField::onPointerEvent) may call
+                // releasePointer() which mutates active_pointers_, invalidating
+                // the iterator we are about to erase.
+                auto path = it->second.path;
                 active_pointers_.erase(it);
+
+                path.erase(
+                    std::remove_if(path.begin(), path.end(),
+                        [](RenderBox* b) { return !isBoxAlive(b); }),
+                    path.end());
+
+                if (!path.empty())
+                    dispatch(path, event);
             }
             break;
         }
@@ -157,6 +216,11 @@ namespace systems::leal::campello_widgets
         {
             // Only dispatch to the capturing box
             RenderBox* capturing_box = capture_it->second;
+            if (!isBoxAlive(capturing_box))
+            {
+                captured_pointers_.erase(capture_it);
+                return;
+            }
             auto handler_it = handlers_.find(capturing_box);
             if (handler_it != handlers_.end())
                 handler_it->second(event);
@@ -166,6 +230,8 @@ namespace systems::leal::campello_widgets
         // Normal dispatch to all handlers in path
         for (RenderBox* box : path)
         {
+            if (!isBoxAlive(box))
+                continue;
             auto it = handlers_.find(box);
             if (it != handlers_.end())
             {
@@ -187,13 +253,16 @@ namespace systems::leal::campello_widgets
 
     bool PointerDispatcher::isPointerCaptured(int32_t pointer_id) const
     {
-        return captured_pointers_.find(pointer_id) != captured_pointers_.end();
+        auto it = captured_pointers_.find(pointer_id);
+        if (it == captured_pointers_.end())
+            return false;
+        return isBoxAlive(it->second);
     }
 
     RenderBox* PointerDispatcher::getCapturingBox(int32_t pointer_id) const
     {
         auto it = captured_pointers_.find(pointer_id);
-        if (it != captured_pointers_.end())
+        if (it != captured_pointers_.end() && isBoxAlive(it->second))
             return it->second;
         return nullptr;
     }

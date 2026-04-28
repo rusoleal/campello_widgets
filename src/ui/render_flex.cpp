@@ -7,6 +7,7 @@ namespace systems::leal::campello_widgets
 
     void RenderFlex::insertChild(std::shared_ptr<RenderBox> box, int index, int flex)
     {
+        if (index < 0) index = 0;
         if (index >= static_cast<int>(flex_children_.size()))
             flex_children_.resize(index + 1);
         if (flex_children_[index].box) flex_children_[index].box->setParent(nullptr);

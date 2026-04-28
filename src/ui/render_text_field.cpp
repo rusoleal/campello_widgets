@@ -38,6 +38,8 @@ namespace systems::leal::campello_widgets
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
+            if (pressed_)
+                d->releasePointer(pointer_id_);
         }
     }
 
@@ -56,6 +58,8 @@ namespace systems::leal::campello_widgets
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
+            if (pressed_)
+                d->releasePointer(pointer_id_);
         }
     }
 
@@ -153,6 +157,7 @@ namespace systems::leal::campello_widgets
         const std::string disp = displayText();
         const bool empty = disp.empty();
         float line_h = lineHeight();
+        if (line_h <= 0.0f) line_h = 1.0f; // prevent division by zero
 
         // Scale font to physical pixels for rendering, matching what RenderParagraph does.
         // measureText/measurePrefix use the logical style for cursor/selection positioning,
@@ -358,13 +363,19 @@ namespace systems::leal::campello_widgets
         {
         case KeyCode::backspace:
             controller->deleteBackward();
-            if (on_changed) on_changed(controller->text());
+            if (on_changed) {
+                on_changed(controller->text());
+                if (!RenderObject::isAlive(this)) return true;
+            }
             resetCursorBlink();
             return true;
 
         case KeyCode::delete_forward:
             controller->deleteForward();
-            if (on_changed) on_changed(controller->text());
+            if (on_changed) {
+                on_changed(controller->text());
+                if (!RenderObject::isAlive(this)) return true;
+            }
             resetCursorBlink();
             return true;
 
@@ -373,13 +384,17 @@ namespace systems::leal::campello_widgets
             {
                 // Multi-line: Insert newline
                 controller->insertText("\n");
-                if (on_changed) on_changed(controller->text());
+                if (on_changed) {
+                    on_changed(controller->text());
+                    if (!RenderObject::isAlive(this)) return true;
+                }
                 resetCursorBlink();
             }
             else if (on_submitted)
             {
                 // Single-line, or multi-line with Ctrl+Enter: Submit
                 on_submitted(controller->text());
+                if (!RenderObject::isAlive(this)) return true;
             }
             return true;
 
@@ -568,7 +583,10 @@ namespace systems::leal::campello_widgets
                 buf[3] = static_cast<char>(0x80 | (cp & 0x3F));
             }
             controller->insertText(std::string_view(buf));
-            if (on_changed) on_changed(controller->text());
+            if (on_changed) {
+                on_changed(controller->text());
+                if (!RenderObject::isAlive(this)) return true;
+            }
             resetCursorBlink();
             return true;
         }
@@ -591,7 +609,10 @@ namespace systems::leal::campello_widgets
             if (auto* d = PointerDispatcher::activeDispatcher())
                 d->capturePointer(pointer_id_, this);
 
-            if (on_tap) on_tap(); // request focus from owning State
+            if (on_tap) {
+                on_tap(); // request focus from owning State
+                if (!RenderObject::isAlive(this)) return;
+            }
             if (controller)
             {
                 float local_x = event.position.x - global_offset_.x - padding_h;
@@ -824,6 +845,7 @@ namespace systems::leal::campello_widgets
         {
             // Find which line was clicked
             float line_h = lineHeight();
+            if (line_h <= 0.0f) return 0;
             int line = static_cast<int>((local_y + scroll_offset_y_) / line_h);
             line = std::max(0, std::min(line, getLineCount() - 1));
 

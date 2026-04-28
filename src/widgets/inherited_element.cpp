@@ -26,7 +26,6 @@ namespace systems::leal::campello_widgets
         const auto& new_w = static_cast<const InheritedWidget&>(*widget_);
         if (new_w.updateShouldNotify(old_w))
             notifyDependents();
-        rebuild();
     }
 
     void InheritedElement::unmount()

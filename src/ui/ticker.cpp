@@ -1,23 +1,25 @@
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
-    TickerScheduler* TickerScheduler::s_active_ = nullptr;
+    std::atomic<TickerScheduler*> TickerScheduler::s_active_{nullptr};
 
     TickerScheduler* TickerScheduler::active() noexcept
     {
-        return s_active_;
+        return s_active_.load(std::memory_order_acquire);
     }
 
     void TickerScheduler::setActive(TickerScheduler* scheduler) noexcept
     {
-        s_active_ = scheduler;
+        s_active_.store(scheduler, std::memory_order_release);
     }
 
     void TickerScheduler::tick(uint64_t now_ms)
     {
+        ThreadChecker::instance().assertOnBoundThread("TickerScheduler::tick");
         // Snapshot the map so callbacks can safely call unsubscribe() during dispatch.
         auto snapshot = listeners_;
         for (auto& [id, cb] : snapshot)

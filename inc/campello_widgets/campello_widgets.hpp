@@ -283,6 +283,23 @@
 #include <campello_widgets/ui/render_page_view.hpp>
 #include <campello_widgets/widgets/page_view.hpp>
 
+// ---------------------------------------------------------------------------
+// Threading model
+// ---------------------------------------------------------------------------
+//
+// campello_widgets is a single-threaded UI framework. All widget tree
+// manipulation, layout, painting, animation, input dispatch, and state changes
+// must happen on one thread (the "main" or "UI" thread).
+//
+// The only APIs that are safe to use from background threads are:
+//   - ImageLoader::loadAsync() / loadSync()
+//   - ImageCache::get() / put() / evict()
+//   - PlatformMenuDelegate methods (internally synchronized)
+//
+// If you need to update the UI from a background thread, marshal the call
+// to the main thread using your platform's mechanism.
+// ---------------------------------------------------------------------------
+
 // Platform-specific entry points
 #ifdef CAMPHELLO_PLATFORM_WINDOWS
 #include <campello_widgets/windows/run_app.hpp>

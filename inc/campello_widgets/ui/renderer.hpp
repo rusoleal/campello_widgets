@@ -29,8 +29,8 @@ namespace systems::leal::campello_widgets
     namespace detail {
         // Internal accessor for widgets that need to query view insets.
         // This is a temporary solution until MediaQuery is implemented.
-        inline Renderer*& currentRenderer() noexcept {
-            static Renderer* instance = nullptr;
+        inline std::atomic<Renderer*>& currentRenderer() noexcept {
+            static std::atomic<Renderer*> instance{nullptr};
             return instance;
         }
     }
@@ -91,7 +91,13 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Renders one frame to `target`.
          *
-         * Must be called from the render thread. Safe to call every vsync.
+         * Must be called from the UI thread (the same thread that owns the
+         * widget tree and the platform event loop). Safe to call every vsync.
+         *
+         * @warning This method is **not** thread-safe. Concurrent calls from
+         *          multiple threads, or calls while the widget tree is being
+         *          mutated on another thread, will cause data races and
+         *          undefined behaviour.
          *
          * @param target           Swapchain (or offscreen) texture view to render into.
          * @param viewport_width   Viewport width in logical pixels.

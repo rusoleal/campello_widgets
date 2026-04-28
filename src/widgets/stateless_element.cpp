@@ -18,7 +18,6 @@ namespace systems::leal::campello_widgets
     void StatelessElement::update(WidgetRef new_widget)
     {
         Element::update(std::move(new_widget));
-        rebuild();
     }
 
     void StatelessElement::performBuild()

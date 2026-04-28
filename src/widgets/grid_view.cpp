@@ -39,7 +39,6 @@ namespace systems::leal::campello_widgets
         {
             RenderObjectElement::update(std::move(new_widget));
             wireCallback();
-            rebuild();
         }
 
     protected:
@@ -99,7 +98,6 @@ namespace systems::leal::campello_widgets
             renderGridView().on_visible_range_changed = [this]()
             {
                 markNeedsBuild();
-                rebuild();
             };
         }
 

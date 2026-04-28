@@ -11,6 +11,7 @@
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -115,20 +116,21 @@ static HANDLE            gVsyncThread = nullptr;
 static DWORD WINAPI vsyncThreadProc(LPVOID param)
 {
     HWND hwnd = static_cast<HWND>(param);
-    while (gVsyncRunning.load(std::memory_order_relaxed))
+    while (gVsyncRunning.load(std::memory_order_acquire))
     {
         // Block until scheduleFrame() signals a dirty frame (or 200 ms to
         // re-check the running flag on shutdown).
         const DWORD result = WaitForSingleObject(gVsyncEvent, 200);
         if (result == WAIT_TIMEOUT) continue;
-        if (!gVsyncRunning.load(std::memory_order_relaxed)) break;
+        if (!gVsyncRunning.load(std::memory_order_acquire)) break;
 
         // Align to the next DWM vsync boundary.
         DwmFlush();
 
-        // Post WM_PAINT to the main thread.  InvalidateRect is safe to call
-        // from any thread.
-        if (gVsyncRunning.load(std::memory_order_relaxed))
+        // Post WM_PAINT to the main thread. InvalidateRect is safe to call
+        // from any thread, but we must verify the window still exists because
+        // the main thread may have destroyed it during teardown.
+        if (gVsyncRunning.load(std::memory_order_acquire) && IsWindow(hwnd))
             InvalidateRect(hwnd, nullptr, FALSE);
     }
     return 0;
@@ -729,6 +731,9 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(
         mediaData, gRootWidget);
 
+    // Bind the UI thread before any widget tree mutation.
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
+
     // Mount widget tree
     state.root_element = wrappedRoot->createElement();
     state.root_element->mount(nullptr);
@@ -776,7 +781,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     }
 
     // Stop the vsync thread cleanly before teardown.
-    gVsyncRunning.store(false, std::memory_order_relaxed);
+    gVsyncRunning.store(false, std::memory_order_release);
     SetEvent(gVsyncEvent);   // unblock WaitForSingleObject
     WaitForSingleObject(gVsyncThread, INFINITE);
     CloseHandle(gVsyncThread);

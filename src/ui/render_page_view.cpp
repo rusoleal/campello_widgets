@@ -71,6 +71,7 @@ namespace systems::leal::campello_widgets
 
     void RenderPageView::insertChild(std::shared_ptr<RenderBox> box, int index)
     {
+        if (index < 0) index = 0;
         if (index >= static_cast<int>(children_.size()))
             children_.resize(index + 1);
         children_[index] = PageChild{std::move(box)};
@@ -236,7 +237,10 @@ namespace systems::leal::campello_widgets
 
         if (target != last_page_) {
             last_page_ = target;
-            if (on_page_changed) on_page_changed(target);
+            if (on_page_changed) {
+                on_page_changed(target);
+                if (!RenderObject::isAlive(this)) return;
+            }
         }
     }
 

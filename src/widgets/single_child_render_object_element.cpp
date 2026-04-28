@@ -13,7 +13,6 @@ namespace systems::leal::campello_widgets
     void SingleChildRenderObjectElement::update(WidgetRef new_widget)
     {
         RenderObjectElement::update(std::move(new_widget));
-        rebuild();
     }
 
     void SingleChildRenderObjectElement::unmount()

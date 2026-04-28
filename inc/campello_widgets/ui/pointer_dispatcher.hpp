@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -42,8 +43,10 @@ namespace systems::leal::campello_widgets
          * @brief Sets (or replaces) the root render box used for hit-testing.
          *
          * Call after the widget tree is mounted and the root RenderBox is known.
+         * Clears all active pointer state (captured pointers, hover path, etc.)
+         * because the old hit-test tree is no longer valid.
          */
-        void setRoot(std::shared_ptr<RenderBox> root) noexcept { root_ = std::move(root); }
+        void setRoot(std::shared_ptr<RenderBox> root) noexcept;
 
         // ------------------------------------------------------------------
         // Handler registration
@@ -158,6 +161,9 @@ namespace systems::leal::campello_widgets
 
         void dispatch(const std::vector<RenderBox*>& path, const PointerEvent& event);
 
+        /// Returns true if |box| is a live RenderObject.
+        static bool isBoxAlive(RenderBox* box) noexcept;
+
         std::shared_ptr<RenderBox>                       root_;
         std::unordered_map<int32_t, ActivePointer>       active_pointers_;
         std::unordered_map<RenderBox*, Handler>          handlers_;
@@ -166,7 +172,7 @@ namespace systems::leal::campello_widgets
         std::unordered_map<int32_t, RenderBox*>          captured_pointers_;  ///< pointer_id -> capturing box
         std::vector<PointerPosition>                     recent_positions_;
 
-        static PointerDispatcher* s_active_dispatcher_;
+        static std::atomic<PointerDispatcher*> s_active_dispatcher_;
     };
 
 } // namespace systems::leal::campello_widgets

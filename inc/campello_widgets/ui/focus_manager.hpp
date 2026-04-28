@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <vector>
 #include <campello_widgets/ui/key_event.hpp>
 
@@ -83,7 +84,7 @@ namespace systems::leal::campello_widgets
         FocusNode*              current_focus_ = nullptr;
         std::vector<FocusNode*> focus_order_;
 
-        static FocusManager* s_active_manager_;
+        static std::atomic<FocusManager*> s_active_manager_;
     };
 
 } // namespace systems::leal::campello_widgets

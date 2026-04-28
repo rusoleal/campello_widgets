@@ -6,6 +6,7 @@
 #include <campello_widgets/widgets/render_object_element.hpp>
 #include <campello_widgets/ui/render_stack.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -65,36 +66,39 @@ WidgetRef OverlayEntryState::build(BuildContext& context)
 // Overlay static members
 // ---------------------------------------------------------------------------
 
-OverlayState* Overlay::global_state_ = nullptr;
+std::atomic<OverlayState*> Overlay::global_state_{nullptr};
 
 void Overlay::setGlobalState(OverlayState* state) noexcept
 {
-    global_state_ = state;
+    global_state_.store(state, std::memory_order_release);
 }
 
 OverlayState* Overlay::globalState() noexcept
 {
-    return global_state_;
+    return global_state_.load(std::memory_order_acquire);
 }
 
 void Overlay::insert(std::shared_ptr<OverlayEntry> entry)
 {
-    if (global_state_) {
-        global_state_->insert(std::move(entry));
+    ThreadChecker::instance().assertOnBoundThread("Overlay::insert");
+    if (auto* state = globalState()) {
+        state->insert(std::move(entry));
     }
 }
 
 void Overlay::insertAt(int index, std::shared_ptr<OverlayEntry> entry)
 {
-    if (global_state_) {
-        global_state_->insertAt(index, std::move(entry));
+    ThreadChecker::instance().assertOnBoundThread("Overlay::insertAt");
+    if (auto* state = globalState()) {
+        state->insertAt(index, std::move(entry));
     }
 }
 
 void Overlay::remove(std::shared_ptr<OverlayEntry> entry)
 {
-    if (global_state_) {
-        global_state_->remove(std::move(entry));
+    ThreadChecker::instance().assertOnBoundThread("Overlay::remove");
+    if (auto* state = globalState()) {
+        state->remove(std::move(entry));
     }
 }
 
@@ -144,16 +148,20 @@ void OverlayState::insertAt(int index, std::shared_ptr<OverlayEntry> entry)
 
 void OverlayState::remove(std::shared_ptr<OverlayEntry> entry)
 {
-    if (!entry) return;
+    if (!entry || removing_) return;
     
     auto it = std::find(entries.begin(), entries.end(), entry);
     if (it != entries.end()) {
-        // Call on_remove callback if set
-        if (entry->on_remove) {
-            entry->on_remove();
-        }
+        // Erase first, THEN call the callback. This prevents UAF if
+        // on_remove() destroys the OverlayState, and prevents infinite
+        // recursion if on_remove() calls entry->remove() again.
         entries.erase(it);
         _markDirty();
+        if (entry->on_remove) {
+            removing_ = true;
+            entry->on_remove();
+            removing_ = false;
+        }
     }
 }
 
@@ -161,9 +169,7 @@ void OverlayState::_markDirty()
 {
     if (auto e = element()) {
         e->markNeedsBuild();
-        e->rebuild();
     }
-    FrameScheduler::scheduleFrame();
 }
 
 WidgetRef OverlayState::build(BuildContext& context)

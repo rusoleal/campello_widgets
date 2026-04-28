@@ -6,6 +6,8 @@
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/draw_backend.hpp>
 #include <campello_widgets/diagnostics/diagnosticable.hpp>
+#include <atomic>
+#include <unordered_set>
 
 namespace systems::leal::campello_widgets
 {
@@ -26,7 +28,8 @@ namespace systems::leal::campello_widgets
     class RenderObject : public Diagnosticable
     {
     public:
-        virtual ~RenderObject() = default;
+        RenderObject();
+        virtual ~RenderObject();
 
         // ------------------------------------------------------------------
         // Layout
@@ -113,6 +116,19 @@ namespace systems::leal::campello_widgets
         bool needsPaint()  const noexcept { return needs_paint_;  }
 
         // ------------------------------------------------------------------
+        // Lifetime tracking
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Returns true if |obj| is a live RenderObject (i.e. its
+         *        constructor has run and its destructor has not yet completed).
+         *
+         * This is used by PointerDispatcher to avoid dispatching events to
+         * render boxes that have been destroyed during a tree mutation.
+         */
+        static bool isAlive(const RenderObject* obj) noexcept;
+
+        // ------------------------------------------------------------------
         // Parent tracking (set by child-management methods in RenderBox)
         // ------------------------------------------------------------------
 
@@ -141,11 +157,11 @@ namespace systems::leal::campello_widgets
          */
         static void setActiveBackend(IDrawBackend* backend) noexcept
         {
-            s_active_backend_ = backend;
+            s_active_backend_.store(backend, std::memory_order_relaxed);
         }
 
         /** @brief Returns the draw backend set for the current layout pass, or nullptr. */
-        static IDrawBackend* activeBackend() noexcept { return s_active_backend_; }
+        static IDrawBackend* activeBackend() noexcept { return s_active_backend_.load(std::memory_order_relaxed); }
 
         // ------------------------------------------------------------------
         // Device pixel ratio access
@@ -159,7 +175,7 @@ namespace systems::leal::campello_widgets
          */
         static void setActiveDevicePixelRatio(float dpr) noexcept
         {
-            s_active_dpr_ = dpr;
+            s_active_dpr_.store(dpr, std::memory_order_relaxed);
         }
 
         /**
@@ -168,7 +184,7 @@ namespace systems::leal::campello_widgets
          * Text render objects use this to scale font_size to physical pixels
          * before passing to the draw backend, ensuring crisp text rendering.
          */
-        static float activeDevicePixelRatio() noexcept { return s_active_dpr_; }
+        static float activeDevicePixelRatio() noexcept { return s_active_dpr_.load(std::memory_order_relaxed); }
 
     protected:
         BoxConstraints  constraints_;
@@ -181,8 +197,9 @@ namespace systems::leal::campello_widgets
         std::string toStringShort() const override;
 
     private:
-        inline static IDrawBackend* s_active_backend_ = nullptr;
-        inline static float s_active_dpr_ = 1.0f;
+        inline static std::atomic<IDrawBackend*> s_active_backend_{nullptr};
+        inline static std::atomic<float> s_active_dpr_{1.0f};
+        static std::unordered_set<const RenderObject*> s_alive_;
     };
 
 } // namespace systems::leal::campello_widgets

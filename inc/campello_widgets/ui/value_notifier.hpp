@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 
 namespace systems::leal::campello_widgets
@@ -33,7 +34,11 @@ namespace systems::leal::campello_widgets
         {
             value_ = std::move(v);
             // Iterate a snapshot in case a listener removes itself
-            auto copy = listeners_;
+            decltype(listeners_) copy;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                copy = listeners_;
+            }
             for (auto& [id, fn] : copy)
                 fn();
         }
@@ -44,6 +49,7 @@ namespace systems::leal::campello_widgets
          */
         uint64_t addListener(std::function<void()> cb)
         {
+            std::lock_guard<std::mutex> lock(mutex_);
             uint64_t id = next_id_++;
             listeners_[id] = std::move(cb);
             return id;
@@ -52,6 +58,7 @@ namespace systems::leal::campello_widgets
         /** @brief Unregisters a previously added listener. */
         void removeListener(uint64_t id)
         {
+            std::lock_guard<std::mutex> lock(mutex_);
             listeners_.erase(id);
         }
 
@@ -59,6 +66,7 @@ namespace systems::leal::campello_widgets
         T value_;
         uint64_t next_id_ = 1;
         std::unordered_map<uint64_t, std::function<void()>> listeners_;
+        mutable std::mutex mutex_;
     };
 
 } // namespace systems::leal::campello_widgets

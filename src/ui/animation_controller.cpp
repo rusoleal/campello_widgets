@@ -1,5 +1,6 @@
 #include <campello_widgets/ui/animation_controller.hpp>
 #include <campello_widgets/ui/ticker.hpp>
+#include <campello_widgets/ui/thread_checker.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -45,6 +46,7 @@ namespace systems::leal::campello_widgets
 
     void AnimationController::forward(double from)
     {
+        ThreadChecker::instance().assertOnBoundThread("AnimationController::forward");
         if (from >= 0.0)
             value_ = std::clamp(from, lower_, upper_);
 
@@ -56,6 +58,7 @@ namespace systems::leal::campello_widgets
 
     void AnimationController::reverse(double from)
     {
+        ThreadChecker::instance().assertOnBoundThread("AnimationController::reverse");
         if (from >= 0.0)
             value_ = std::clamp(from, lower_, upper_);
 
@@ -67,6 +70,7 @@ namespace systems::leal::campello_widgets
 
     void AnimationController::stop()
     {
+        ThreadChecker::instance().assertOnBoundThread("AnimationController::stop");
         if (isAnimating())
         {
             status_ = (value_ >= upper_) ? AnimationStatus::completed
@@ -166,10 +170,13 @@ namespace systems::leal::campello_widgets
 
     void AnimationController::notifyListeners()
     {
+        if (notifying_) return;
+        notifying_ = true;
         // Snapshot so listeners can safely remove themselves during notification.
         auto snapshot = listeners_;
         for (auto& [id, fn] : snapshot)
             fn();
+        notifying_ = false;
     }
 
 } // namespace systems::leal::campello_widgets

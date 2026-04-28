@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <functional>
 #include <string>
 #include <string_view>
@@ -157,7 +158,7 @@ namespace systems::leal::campello_widgets
     private:
         InputTarget current_target_;
         std::function<void(bool)> on_target_changed_;
-        static TextInputManager* s_active_manager_;
+        static std::atomic<TextInputManager*> s_active_manager_;
     };
 
 } // namespace systems::leal::campello_widgets

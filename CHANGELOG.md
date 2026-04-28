@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-04-28
+
+### Changed
+
+- **campello_gpu** upgraded from `v0.13.0` → `v0.13.1`
+
+### Fixed
+
+- **`debug_assert.hpp` Windows compatibility** — replaced `std::raise(SIGTRAP)` with platform-aware `CW_DEBUG_BREAK()` macro: `__debugbreak()` on Windows (`_WIN32`), `std::raise(SIGTRAP)` elsewhere. Fixes build failure on MSVC where `<csignal>`/`SIGTRAP` is not available for inline debug breaks.
+
 ## [0.3.1] - 2026-04-28
 
 ### Changed

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 
 namespace systems::leal::campello_widgets
 {
@@ -24,6 +25,11 @@ namespace systems::leal::campello_widgets
  *   4. After the frame is drawn the platform display link goes quiet.  No more
  *      frames are produced until the next scheduleFrame() call — exactly like
  *      Flutter's idle behaviour.
+ *
+ * @warning Thread-safety: setCallback() and scheduleFrame() are **not**
+ *          synchronized. They must be called from the same thread that owns
+ *          the UI event loop (the "main thread"). Calling scheduleFrame()
+ *          from a background thread is a data race.
  */
 class FrameScheduler
 {
@@ -38,7 +44,11 @@ public:
     /// primitive (setNeedsDisplay:YES, invalidate(), etc.) is idempotent.
     static void scheduleFrame();
 
+    /// Returns true if a frame callback has been registered.
+    static bool hasCallback() noexcept;
+
 private:
+    static std::mutex s_mutex_;
     static std::function<void()> s_callback_;
 };
 
