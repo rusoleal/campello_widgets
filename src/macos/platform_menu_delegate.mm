@@ -254,8 +254,10 @@ namespace systems::leal::campello_widgets
         for (const auto& menu : menus) {
             if (!menu) continue;
             
+            NSMenu* submenu = createMenu(*menu);
             NSMenuItem* item = [[NSMenuItem alloc] init];
-            item.submenu = createMenu(*menu);
+            item.title = submenu.title;
+            item.submenu = submenu;
             [menuBar addItem:item];
             // NOTE: Intentionally not releasing item - see above
         }
@@ -592,6 +594,44 @@ namespace systems::leal::campello_widgets
         if (key == "Down") return @"\uF701";
         if (key == "Left") return @"\uF702";
         if (key == "Right") return @"\uF703";
+        
+        // Function keys F1–F20
+        if (key == "F1")  return @"\uF704";
+        if (key == "F2")  return @"\uF705";
+        if (key == "F3")  return @"\uF706";
+        if (key == "F4")  return @"\uF707";
+        if (key == "F5")  return @"\uF708";
+        if (key == "F6")  return @"\uF709";
+        if (key == "F7")  return @"\uF70A";
+        if (key == "F8")  return @"\uF70B";
+        if (key == "F9")  return @"\uF70C";
+        if (key == "F10") return @"\uF70D";
+        if (key == "F11") return @"\uF70E";
+        if (key == "F12") return @"\uF70F";
+        if (key == "F13") return @"\uF710";
+        if (key == "F14") return @"\uF711";
+        if (key == "F15") return @"\uF712";
+        if (key == "F16") return @"\uF713";
+        if (key == "F17") return @"\uF714";
+        if (key == "F18") return @"\uF715";
+        if (key == "F19") return @"\uF716";
+        if (key == "F20") return @"\uF717";
+        
+        // Navigation keys
+        if (key == "PageUp")   return @"\uF72C";
+        if (key == "PageDown") return @"\uF72D";
+        if (key == "Home")     return @"\uF729";
+        if (key == "End")      return @"\uF72B";
+        
+        // Editing keys
+        if (key == "Insert")        return @"\uF727";
+        if (key == "Delete" || key == "Backspace") return @"\b";
+        if (key == "ForwardDelete") return @"\u007f";
+        if (key == "Space")         return @" ";
+        
+        // Other special keys
+        if (key == "Help")  return @"\uF746";
+        if (key == "Clear") return @"\uF739";
         
         // Default: return first character lowercase
         return [NSString stringWithUTF8String:key.substr(0, 1).c_str()].lowercaseString;

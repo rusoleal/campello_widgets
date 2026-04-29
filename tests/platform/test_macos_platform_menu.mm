@@ -21,6 +21,9 @@ class MacOSPlatformMenuTest : public ::testing::Test
 protected:
     void SetUp() override
     {
+        // Ensure NSApplication exists (required for AppKit menu APIs)
+        [NSApplication sharedApplication];
+        
         // Initialize the macOS platform menu delegate
         // This will set up the real MacOSPlatformMenuDelegate
         cw::initializeMacOSPlatformMenuDelegate();
@@ -419,6 +422,138 @@ TEST_F(MacOSPlatformMenuTest, DisabledMenuItems)
 
     NSMenu* mainMenu = [NSApp mainMenu];
     EXPECT_NE(mainMenu, nil);
+}
+
+TEST_F(MacOSPlatformMenuTest, FunctionKeyShortcuts)
+{
+    auto menus = std::vector<cw::PlatformMenuRef>{
+        cw::PlatformMenu::create("Function Keys", {
+            cw::PlatformMenuItemLabel::create("F1",  "F1",  []() {}),
+            cw::PlatformMenuItemLabel::create("F2",  "F2",  []() {}),
+            cw::PlatformMenuItemLabel::create("F3",  "F3",  []() {}),
+            cw::PlatformMenuItemLabel::create("F4",  "F4",  []() {}),
+            cw::PlatformMenuItemLabel::create("F5",  "F5",  []() {}),
+            cw::PlatformMenuItemLabel::create("F6",  "F6",  []() {}),
+            cw::PlatformMenuItemLabel::create("F7",  "F7",  []() {}),
+            cw::PlatformMenuItemLabel::create("F8",  "F8",  []() {}),
+            cw::PlatformMenuItemLabel::create("F9",  "F9",  []() {}),
+            cw::PlatformMenuItemLabel::create("F10", "F10", []() {}),
+            cw::PlatformMenuItemLabel::create("F11", "F11", []() {}),
+            cw::PlatformMenuItemLabel::create("F12", "F12", []() {}),
+            cw::PlatformMenuItemLabel::create("F13", "F13", []() {}),
+            cw::PlatformMenuItemLabel::create("F14", "F14", []() {}),
+            cw::PlatformMenuItemLabel::create("F15", "F15", []() {}),
+            cw::PlatformMenuItemLabel::create("F16", "F16", []() {}),
+            cw::PlatformMenuItemLabel::create("F17", "F17", []() {}),
+            cw::PlatformMenuItemLabel::create("F18", "F18", []() {}),
+            cw::PlatformMenuItemLabel::create("F19", "F19", []() {}),
+            cw::PlatformMenuItemLabel::create("F20", "F20", []() {}),
+            // With modifiers
+            cw::PlatformMenuItemLabel::create("Cmd+F1",  "Cmd+F1",  []() {}),
+            cw::PlatformMenuItemLabel::create("Ctrl+F5", "Ctrl+F5", []() {}),
+            cw::PlatformMenuItemLabel::create("Shift+F10", "Shift+F10", []() {}),
+        }),
+    };
+
+    delegate_->setMenus(menus);
+
+    NSMenu* mainMenu = [NSApp mainMenu];
+    EXPECT_NE(mainMenu, nil);
+
+    // Verify the Function Keys menu exists and all items have valid key equivalents
+    NSMenuItem* fkItem = nil;
+    for (NSMenuItem* item in [mainMenu itemArray]) {
+        if ([[item title] isEqualToString:@"Function Keys"]) {
+            fkItem = item;
+            break;
+        }
+    }
+    EXPECT_NE(fkItem, nil);
+    if (fkItem) {
+        NSMenu* fkMenu = [fkItem submenu];
+        EXPECT_EQ([[fkMenu itemArray] count], 23u);
+
+        // Verify a few specific key equivalents
+        NSMenuItem* f1Item = [[fkMenu itemArray] objectAtIndex:0];
+        EXPECT_TRUE([f1Item.keyEquivalent isEqualToString:@"\uF704"]);
+
+        NSMenuItem* f12Item = [[fkMenu itemArray] objectAtIndex:11];
+        EXPECT_TRUE([f12Item.keyEquivalent isEqualToString:@"\uF70F"]);
+
+        NSMenuItem* f20Item = [[fkMenu itemArray] objectAtIndex:19];
+        EXPECT_TRUE([f20Item.keyEquivalent isEqualToString:@"\uF717"]);
+
+        NSMenuItem* cmdF1Item = [[fkMenu itemArray] objectAtIndex:20];
+        EXPECT_TRUE([cmdF1Item.keyEquivalent isEqualToString:@"\uF704"]);
+        EXPECT_EQ(cmdF1Item.keyEquivalentModifierMask, NSEventModifierFlagCommand);
+
+        NSMenuItem* ctrlF5Item = [[fkMenu itemArray] objectAtIndex:21];
+        EXPECT_TRUE([ctrlF5Item.keyEquivalent isEqualToString:@"\uF708"]);
+        EXPECT_EQ(ctrlF5Item.keyEquivalentModifierMask, NSEventModifierFlagControl);
+    }
+}
+
+TEST_F(MacOSPlatformMenuTest, NavigationAndEditingKeyShortcuts)
+{
+    auto menus = std::vector<cw::PlatformMenuRef>{
+        cw::PlatformMenu::create("Special Keys", {
+            cw::PlatformMenuItemLabel::create("PageUp",   "PageUp",   []() {}),
+            cw::PlatformMenuItemLabel::create("PageDown", "PageDown", []() {}),
+            cw::PlatformMenuItemLabel::create("Home",     "Home",     []() {}),
+            cw::PlatformMenuItemLabel::create("End",      "End",      []() {}),
+            cw::PlatformMenuItemLabel::create("Insert",   "Insert",   []() {}),
+            cw::PlatformMenuItemLabel::create("Delete",   "Delete",   []() {}),
+            cw::PlatformMenuItemLabel::create("Backspace","Backspace",[]() {}),
+            cw::PlatformMenuItemLabel::create("ForwardDelete", "ForwardDelete", []() {}),
+            cw::PlatformMenuItemLabel::create("Space",    "Space",    []() {}),
+            cw::PlatformMenuItemLabel::create("Help",     "Help",     []() {}),
+            cw::PlatformMenuItemLabel::create("Clear",    "Clear",    []() {}),
+            // With modifiers
+            cw::PlatformMenuItemLabel::create("Cmd+Home", "Cmd+Home", []() {}),
+            cw::PlatformMenuItemLabel::create("Shift+Delete", "Shift+Delete", []() {}),
+        }),
+    };
+
+    delegate_->setMenus(menus);
+
+    NSMenu* mainMenu = [NSApp mainMenu];
+    EXPECT_NE(mainMenu, nil);
+
+    NSMenuItem* specialItem = nil;
+    for (NSMenuItem* item in [mainMenu itemArray]) {
+        if ([[item title] isEqualToString:@"Special Keys"]) {
+            specialItem = item;
+            break;
+        }
+    }
+    EXPECT_NE(specialItem, nil);
+    if (specialItem) {
+        NSMenu* specialMenu = [specialItem submenu];
+        EXPECT_EQ([[specialMenu itemArray] count], 13u);
+
+        // Verify key equivalents
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:0].keyEquivalent isEqualToString:@"\uF72C"]); // PageUp
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:1].keyEquivalent isEqualToString:@"\uF72D"]); // PageDown
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:2].keyEquivalent isEqualToString:@"\uF729"]); // Home
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:3].keyEquivalent isEqualToString:@"\uF72B"]); // End
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:4].keyEquivalent isEqualToString:@"\uF727"]); // Insert
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:5].keyEquivalent isEqualToString:@"\b"]);     // Delete
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:6].keyEquivalent isEqualToString:@"\b"]);     // Backspace
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:7].keyEquivalent isEqualToString:@"\u007f"]); // ForwardDelete
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:8].keyEquivalent isEqualToString:@" "]);      // Space
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:9].keyEquivalent isEqualToString:@"\uF746"]); // Help
+        EXPECT_TRUE([[[specialMenu itemArray] objectAtIndex:10].keyEquivalent isEqualToString:@"\uF739"]); // Clear
+
+        // Verify modifiers on combined shortcuts
+        NSMenuItem* cmdHome = [[specialMenu itemArray] objectAtIndex:11];
+        EXPECT_TRUE([cmdHome.keyEquivalent isEqualToString:@"\uF729"]);
+        EXPECT_EQ(cmdHome.keyEquivalentModifierMask, NSEventModifierFlagCommand);
+
+        NSMenuItem* shiftDelete = [[specialMenu itemArray] objectAtIndex:12];
+        EXPECT_TRUE([shiftDelete.keyEquivalent isEqualToString:@"\b"]);
+        // "Shift+Delete" defaults to Cmd+Shift because the parser defaults to Cmd
+        EXPECT_EQ(shiftDelete.keyEquivalentModifierMask, NSEventModifierFlagCommand | NSEventModifierFlagShift);
+    }
 }
 
 // ---------------------------------------------------------------------------

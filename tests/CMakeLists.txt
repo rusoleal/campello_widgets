@@ -55,6 +55,12 @@ if(BUILD_INTEGRATION_TESTS)
     file(GLOB_RECURSE PLATFORM_TEST_SOURCES
         "${CMAKE_CURRENT_SOURCE_DIR}/platform/*.cpp"
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        file(GLOB_RECURSE PLATFORM_TEST_OBJC_SOURCES
+            "${CMAKE_CURRENT_SOURCE_DIR}/platform/*.mm"
+        )
+        list(APPEND PLATFORM_TEST_SOURCES ${PLATFORM_TEST_OBJC_SOURCES})
+    endif()
 
     if(PLATFORM_TEST_SOURCES)
         add_executable(campello_widgets_integration_tests ${PLATFORM_TEST_SOURCES})
@@ -62,6 +68,10 @@ if(BUILD_INTEGRATION_TESTS)
             campello_widgets
             GTest::gtest_main
         )
+        # .mm files must be compiled as Objective-C++ and cannot participate in unity build
+        if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+            set_target_properties(campello_widgets_integration_tests PROPERTIES UNITY_BUILD OFF)
+        endif()
         include(GoogleTest)
         gtest_discover_tests(campello_widgets_integration_tests)
     endif()

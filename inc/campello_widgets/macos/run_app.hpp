@@ -72,4 +72,14 @@ namespace systems::leal::campello_widgets
      */
     void requestRefresh();
 
+    /**
+     * @brief Initialize the macOS platform menu delegate.
+     *
+     * Installs the macOS-specific PlatformMenuDelegate implementation
+     * so that PlatformMenuBar widgets can drive the native menu bar.
+     * This is called automatically by runApp(); you only need to call it
+     * manually in integration tests or custom entry points.
+     */
+    void initializeMacOSPlatformMenuDelegate();
+
 } // namespace systems::leal::campello_widgets

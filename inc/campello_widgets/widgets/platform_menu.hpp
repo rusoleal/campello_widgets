@@ -56,6 +56,13 @@ namespace systems::leal::campello_widgets
          *
          * Format: "Mod+Key" where Mod can be Cmd, Ctrl, Alt, Shift
          * and Key is a single character or special key name.
+         *
+         * Supported special key names:
+         *   - Arrows: Up, Down, Left, Right
+         *   - Function keys: F1 – F20
+         *   - Navigation: PageUp, PageDown, Home, End
+         *   - Editing: Insert, Delete, Backspace, ForwardDelete, Space
+         *   - Other: Enter, Return, Escape, Esc, Tab, Help, Clear
          */
         std::string shortcut;
 

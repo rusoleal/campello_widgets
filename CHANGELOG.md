@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-04-29
+
+### Added
+
+- **macOS PlatformMenu function-key support** — `PlatformMenuDelegate` now recognises all AppKit special keys in shortcut strings:
+  - **Function keys**: F1 – F20
+  - **Navigation**: PageUp, PageDown, Home, End
+  - **Editing**: Insert, Delete, Backspace, ForwardDelete, Space
+  - **Other**: Help, Clear
+  - Shortcuts like `"Cmd+F1"`, `"Ctrl+F5"`, `"Shift+PageUp"` now produce the correct `NSMenuItem.keyEquivalent` and modifier mask instead of falling back to the first character of the key name.
+- **`initializeMacOSPlatformMenuDelegate()`** now declared in `inc/campello_widgets/macos/run_app.hpp` so integration tests and custom entry points can install the delegate manually.
+
+### Fixed
+
+- **macOS top-level menu item titles** — `NSMenuItem`s added to the menu bar now have their `title` set from the submenu title, so iterating `-[NSMenu itemArray]` and checking `title` correctly finds user-defined menus (e.g. `"File"`, `"Edit"`).
+- **Integration test build** — `tests/CMakeLists.txt` now:
+  - Globs `.mm` (Objective-C++) files on macOS for the platform integration test target (was only collecting `.cpp`, so `test_macos_platform_menu.mm` was never compiled).
+  - Disables Unity Build for the integration test target when `.mm` sources are present, preventing "expected unqualified-id" errors from combining Objective-C++ headers into C++ unity batches.
+
 ## [0.3.2] - 2026-04-28
 
 ### Changed
