@@ -55,6 +55,7 @@ namespace systems::leal::campello_widgets
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         now.time_since_epoch()).count());
             }
+            if (on_pan_down) on_pan_down(event.local_position);
             break;
 
         case PointerEventKind::move:

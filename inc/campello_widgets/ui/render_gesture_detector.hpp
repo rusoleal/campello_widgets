@@ -20,6 +20,9 @@ namespace systems::leal::campello_widgets
      *  - on_tap        — down + up within kTapSlop (18 px)
      *  - on_double_tap — two qualifying taps within kDoubleTapMs (300 ms) and kTapSlop
      *  - on_long_press — finger held ≥ kLongPressMs (500 ms) without moving past kTapSlop
+     *  - on_pan_down   — pointer down, fired immediately (before the slop gate);
+     *                    called with the box-local position, akin to Flutter's
+     *                    GestureDetector.onPanDown(DragDownDetails)
      *  - on_pan_update — move beyond kTapSlop while down; called with Offset delta
      *  - on_pan_end    — up/cancel after a pan
      *  - on_scroll     — scroll-wheel / trackpad scroll; called with Offset{dx, dy}
@@ -32,6 +35,7 @@ namespace systems::leal::campello_widgets
         std::function<void()>           on_tap;
         std::function<void()>           on_double_tap;
         std::function<void()>           on_long_press;
+        std::function<void(Offset)>     on_pan_down;
         std::function<void(Offset)>     on_pan_update;
         std::function<void()>           on_pan_end;
         std::function<void(Offset)>     on_scroll;

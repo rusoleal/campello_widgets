@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`GestureDetector.on_pan_down`** — new callback fired immediately on pointer-down (before the pan slop gate), passing the box-local position — mirrors Flutter's `GestureDetector.onPanDown(DragDownDetails)`. Lets consumers hit-test against rendered content (e.g. picking a 3D gizmo handle) at the exact moment a drag begins.
+  - `PointerEvent` gained a `local_position` field — the hit point in the recipient render box's own coordinate space, filled in per-target by `PointerDispatcher`.
+  - `PointerDispatcher` now retains full `HitTestEntry` (target + local position) for a captured pointer instead of bare `RenderBox*`, and derives `move`/`up` local positions from the down-time anchor plus the global delta (valid since ancestor offsets are pure translations).
+  - `RenderGestureDetector` exposes `on_pan_down`; `GestureDetector` threads it through `createRenderObject`/`updateRenderObject` alongside the existing gesture callbacks.
+
 ## [0.3.3] - 2026-04-29
 
 ### Added

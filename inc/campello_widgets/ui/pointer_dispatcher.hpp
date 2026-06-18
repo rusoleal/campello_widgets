@@ -156,10 +156,13 @@ namespace systems::leal::campello_widgets
     private:
         struct ActivePointer
         {
-            std::vector<RenderBox*> path; ///< Captured hit path (deepest first)
+            std::vector<HitTestEntry> path;       ///< Captured hit path (deepest first); local_position is the value at down time
+            Offset                    down_position; ///< Global position at the down event, for delta-adjusting local_position on move/up
         };
 
-        void dispatch(const std::vector<RenderBox*>& path, const PointerEvent& event);
+        /// Dispatches `event` to each target in `path`, setting `local_position`
+        /// on the per-target copy from the corresponding HitTestEntry.
+        void dispatch(const std::vector<HitTestEntry>& path, const PointerEvent& event);
 
         /// Returns true if |box| is a live RenderObject.
         static bool isBoxAlive(RenderBox* box) noexcept;

@@ -17,6 +17,9 @@ namespace systems::leal::campello_widgets
      *
      * Supported gestures:
      *  - on_tap        — pointer down + up with travel < 18 px
+     *  - on_pan_down   — pointer down, fired immediately with the box-local
+     *                    position (before the slop gate); akin to Flutter's
+     *                    GestureDetector.onPanDown(DragDownDetails)
      *  - on_pan_update — pointer moved while down, after exceeding 18 px slop;
      *                    called with the Offset delta since the last move
      *  - on_pan_end    — pointer lifted after a pan
@@ -34,6 +37,7 @@ namespace systems::leal::campello_widgets
         std::function<void()>          on_tap;
         std::function<void()>          on_double_tap;
         std::function<void()>          on_long_press;
+        std::function<void(Offset)>    on_pan_down;
         std::function<void(Offset)>    on_pan_update;
         std::function<void()>          on_pan_end;
         std::function<void(Offset)>    on_scroll;

@@ -100,17 +100,13 @@ namespace systems::leal::campello_widgets
         {
         case PointerEventKind::down:
         {
-            // Hit-test and capture the path for this pointer.
+            // Hit-test and capture the path for this pointer. Each entry's
+            // local_position is exact at this instant (fresh hit test).
             HitTestResult result;
             if (root_) root_->hitTest(result, event.position);
 
-            std::vector<RenderBox*> path;
-            path.reserve(result.path().size());
-            for (const auto& entry : result.path())
-                path.push_back(entry.target);
-
-            dispatch(path, event);
-            active_pointers_[event.pointer_id] = {std::move(path)};
+            dispatch(result.path(), event);
+            active_pointers_[event.pointer_id] = {result.path(), event.position};
             break;
         }
 
@@ -124,13 +120,24 @@ namespace systems::leal::campello_widgets
                 auto& path = it->second.path;
                 path.erase(
                     std::remove_if(path.begin(), path.end(),
-                        [](RenderBox* b) { return !isBoxAlive(b); }),
+                        [](const HitTestEntry& e) { return !isBoxAlive(e.target); }),
                     path.end());
 
                 if (path.empty())
                     active_pointers_.erase(it);
                 else
-                    dispatch(path, event);
+                {
+                    // The path's local_position was captured at down time; the
+                    // box hasn't moved since (only translations occur between
+                    // ancestor and descendant), so local delta == global delta.
+                    const Offset delta_since_down = event.position - it->second.down_position;
+                    std::vector<HitTestEntry> adjusted;
+                    adjusted.reserve(path.size());
+                    for (const auto& entry : path)
+                        adjusted.push_back({entry.target, entry.local_position + delta_since_down});
+
+                    dispatch(adjusted, event);
+                }
             }
             else
             {
@@ -138,13 +145,13 @@ namespace systems::leal::campello_widgets
                 HitTestResult result;
                 if (root_) root_->hitTest(result, event.position);
 
-                std::vector<RenderBox*> new_path;
-                new_path.reserve(result.path().size());
+                std::vector<RenderBox*> new_targets;
+                new_targets.reserve(result.path().size());
                 for (const auto& entry : result.path())
-                    new_path.push_back(entry.target);
+                    new_targets.push_back(entry.target);
 
                 // Send cancel to boxes that were hovered last time but are no longer.
-                std::unordered_set<RenderBox*> new_set(new_path.begin(), new_path.end());
+                std::unordered_set<RenderBox*> new_set(new_targets.begin(), new_targets.end());
                 PointerEvent cancel_event = event;
                 cancel_event.kind = PointerEventKind::cancel;
                 auto old_hover = last_hover_path_; // snapshot in case setRoot() is triggered
@@ -160,8 +167,8 @@ namespace systems::leal::campello_widgets
                     }
                 }
 
-                dispatch(new_path, event);
-                last_hover_path_ = std::move(new_path);
+                dispatch(result.path(), event);
+                last_hover_path_ = std::move(new_targets);
             }
             break;
         }
@@ -177,15 +184,23 @@ namespace systems::leal::campello_widgets
                 // releasePointer() which mutates active_pointers_, invalidating
                 // the iterator we are about to erase.
                 auto path = it->second.path;
+                const Offset delta_since_down = event.position - it->second.down_position;
                 active_pointers_.erase(it);
 
                 path.erase(
                     std::remove_if(path.begin(), path.end(),
-                        [](RenderBox* b) { return !isBoxAlive(b); }),
+                        [](const HitTestEntry& e) { return !isBoxAlive(e.target); }),
                     path.end());
 
                 if (!path.empty())
-                    dispatch(path, event);
+                {
+                    std::vector<HitTestEntry> adjusted;
+                    adjusted.reserve(path.size());
+                    for (const auto& entry : path)
+                        adjusted.push_back({entry.target, entry.local_position + delta_since_down});
+
+                    dispatch(adjusted, event);
+                }
             }
             break;
         }
@@ -196,19 +211,14 @@ namespace systems::leal::campello_widgets
             HitTestResult result;
             if (root_) root_->hitTest(result, event.position);
 
-            std::vector<RenderBox*> path;
-            path.reserve(result.path().size());
-            for (const auto& entry : result.path())
-                path.push_back(entry.target);
-
-            dispatch(path, event);
+            dispatch(result.path(), event);
             break;
         }
         }
     }
 
     void PointerDispatcher::dispatch(
-        const std::vector<RenderBox*>& path, const PointerEvent& event)
+        const std::vector<HitTestEntry>& path, const PointerEvent& event)
     {
         // Check if this pointer is captured by a specific box
         auto capture_it = captured_pointers_.find(event.pointer_id);
@@ -223,19 +233,32 @@ namespace systems::leal::campello_widgets
             }
             auto handler_it = handlers_.find(capturing_box);
             if (handler_it != handlers_.end())
-                handler_it->second(event);
+            {
+                PointerEvent local_event = event;
+                for (const auto& entry : path)
+                {
+                    if (entry.target == capturing_box)
+                    {
+                        local_event.local_position = entry.local_position;
+                        break;
+                    }
+                }
+                handler_it->second(local_event);
+            }
             return;
         }
 
         // Normal dispatch to all handlers in path
-        for (RenderBox* box : path)
+        for (const auto& entry : path)
         {
-            if (!isBoxAlive(box))
+            if (!isBoxAlive(entry.target))
                 continue;
-            auto it = handlers_.find(box);
+            auto it = handlers_.find(entry.target);
             if (it != handlers_.end())
             {
-                it->second(event);
+                PointerEvent local_event = event;
+                local_event.local_position = entry.local_position;
+                it->second(local_event);
             }
         }
     }

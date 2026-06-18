@@ -44,6 +44,12 @@ namespace systems::leal::campello_widgets
         float            pressure     = 1.0f;  ///< 0.0–1.0; 1.0 for mouse, 0.0 for hover
         float            scroll_delta_x = 0.0f; ///< Scroll amount, x axis (scroll events only)
         float            scroll_delta_y = 0.0f; ///< Scroll amount, y axis (scroll events only)
+
+        /// Position in the recipient render box's own coordinate space, i.e.
+        /// relative to its top-left corner. Filled in per-target by
+        /// PointerDispatcher::dispatch() from the hit-test path, mirroring
+        /// Flutter's `localPosition` on PointerEvent/DragDetails.
+        Offset           local_position;
     };
 
 } // namespace systems::leal::campello_widgets
