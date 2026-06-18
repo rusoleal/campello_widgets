@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `PointerDispatcher` now retains full `HitTestEntry` (target + local position) for a captured pointer instead of bare `RenderBox*`, and derives `move`/`up` local positions from the down-time anchor plus the global delta (valid since ancestor offsets are pure translations).
   - `RenderGestureDetector` exposes `on_pan_down`; `GestureDetector` threads it through `createRenderObject`/`updateRenderObject` alongside the existing gesture callbacks.
 
+### Fixed
+
+- **Duplicate per-frame ticking** — every platform shim (macOS, iOS, Linux X11, Linux Wayland, Windows) called `PointerDispatcher::tick()`/`TickerScheduler::tick()` itself immediately before calling `Renderer::renderFrame()`, which already ticks both internally. The result was two ticks per actually-drawn frame, which could schedule a second, redundant `setNeedsDisplay`-equivalent redraw request right after the first — visible as a back-to-back pair of frames (one near-0ms apart, one at the normal vsync interval) whenever continuous pointer input (e.g. dragging) kept marking the tree dirty. Removed the duplicate external tick call from each platform's `renderFrame()`-adjacent call site; `Renderer::renderFrame()` remains the single owner of ticking. The Wayland idle-timeout tick (which fires only when `renderFrame()` is *not* called that loop iteration, to keep tickers alive while otherwise idle) was left untouched since it isn't a duplicate.
+
 ## [0.3.3] - 2026-04-29
 
 ### Added

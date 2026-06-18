@@ -293,13 +293,8 @@ namespace {
     // command buffer rather than calling [drawable present] on the CPU.
     _device->scheduleNextPresent((__bridge void*)drawable);
 
-    auto now = std::chrono::steady_clock::now();
-    uint64_t now_ms = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()).count());
-    if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
-    if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
-
+    // Note: PointerDispatcher/TickerScheduler are ticked inside
+    // Renderer::renderFrame() itself — don't duplicate that here.
     auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
     _renderer->setPendingDrawable((__bridge void*)drawable);
     bool rendered = colorView && _renderer->renderFrame(colorView, logical_width, logical_height);

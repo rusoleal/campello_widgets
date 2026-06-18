@@ -676,13 +676,8 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _backendPtr->setViewport(w, h);
     _backendPtr->setDevicePixelRatio(static_cast<float>(scale));
 
-    auto now = std::chrono::steady_clock::now();
-    uint64_t now_ms = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            now.time_since_epoch()).count());
-    if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
-    if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
-
+    // Note: PointerDispatcher/TickerScheduler are ticked inside
+    // Renderer::renderFrame() itself — don't duplicate that here.
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
     _renderer->setPendingDrawable((__bridge void *)drawable);
     bool rendered = colorView && _renderer->renderFrame(colorView, w, h);

@@ -337,13 +337,8 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
                         static_cast<float>(dpi) / 96.0f);
                     auto color_view = state->device->getSwapchainTextureView();
                     if (color_view) {
-                        auto now = std::chrono::steady_clock::now();
-                        uint64_t now_ms = static_cast<uint64_t>(
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                now.time_since_epoch()).count());
-                        if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
-                        if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
-
+                        // Note: PointerDispatcher/TickerScheduler are ticked inside
+                        // Renderer::renderFrame() itself — don't duplicate that here.
                         state->renderer->renderFrame(
                             color_view,
                             static_cast<float>(w),
