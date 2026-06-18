@@ -436,6 +436,44 @@ runApp(make_shared<Theme>(Theme{
 - [x] Dialog / overlay / modal system
 - [x] Drag-and-drop (`Draggable` + `DragTarget`)
 
+### Raster/Render Performance Investigation (2026-06-18)
+
+While building the new two-lane performance overlay (`Renderer::paintPerformanceOverlay`,
+see CHANGELOG), found that the **raster lane (GPU command encode + submit) reports
+unexpectedly high costs**:
+
+- `campello_widgets_hello` (a single button, trivial widget tree): **~3.5ms** raster time.
+- `campello_editor`'s main window (multi-panel UI: hierarchy tree, inspector, many
+  text fields/widgets): **~16.6ms** raster time — i.e. consuming essentially the
+  entire 60fps frame budget on CPU-side encoding alone, before the GPU even executes.
+
+For comparison, a Flutter app's raster-thread time for similarly simple content is
+typically well under 1ms. The fact that `hello` (3.5ms) and the editor (~16.6ms)
+differ proportionally to UI complexity rules out a vsync-locked measurement
+artifact — the numbers scale with real work, so this is a genuine cost, not a
+metric bug. Two separate things worth investigating:
+
+1. **Fixed per-frame overhead is higher than expected** — even `hello`'s ~3.5ms for
+   one button suggests something costs more per frame than it should (encoder
+   setup, render pass begin/end, or per-draw-call state changes that aren't
+   amortized).
+2. **No apparent draw-call batching** — `campello_editor`'s heavier UI (many rects/
+   text glyphs) scaling all the way up to the frame budget suggests each widget's
+   draw commands are issued as separate GPU draw calls/state changes rather than
+   batched (e.g. one quad per character, no glyph-atlas batching, no instancing
+   for repeated rect/border draws).
+
+**Suggested next steps** (not started):
+- Instrument `Renderer::flushDrawList()` with sub-phase timestamps (encoder
+  creation, backdrop pass, main pass, finish+submit) to see where the ~3.5ms
+  baseline actually goes even for one button.
+- Audit the Metal draw backend (`src/macos/metal_draw_backend.mm`) for batching
+  opportunities — particularly text glyph rendering and repeated rect/border draws,
+  which are likely the largest contributors in a widget-heavy UI like an editor.
+- Re-measure `hello` and the editor after each change to confirm real improvement
+  (the two-lane overlay now makes this directly observable, unlike the old
+  call-cadence metric).
+
 ### IME (Input Method Editor) Platform Gaps
 
 | Platform | Status | Notes |
