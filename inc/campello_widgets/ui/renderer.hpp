@@ -258,12 +258,30 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::RenderPassEncoder> restartMainRenderPass();
 
         /**
-         * @brief Draws the Flutter-style performance overlay.
+         * @brief Draws the Flutter-style performance overlay: two lanes
+         * (raster on top, UI/build on bottom), each showing the actual
+         * measured duration of that phase per frame — not how often a
+         * frame was requested. See renderFrame() for where each phase is
+         * bracketed with start/end timestamps.
          */
         void paintPerformanceOverlay(
             PaintContext& ctx,
             float         viewport_width,
             float         viewport_height);
+
+        // Draws one lane (label + bar chart + budget reference lines) of the
+        // performance overlay. Shared by the raster and UI/build lanes.
+        void paintTimingLane(
+            PaintContext&                         ctx,
+            const campello_gpu::FrameTimeSampler& sampler,
+            const char*                           label,
+            float                                 lane_top,
+            float                                 lane_w,
+            float                                 panel_h,
+            float                                 label_h,
+            float                                 target_ms,
+            float                                 max_ms,
+            float                                 bar_w);
 
         std::shared_ptr<campello_gpu::Device> device_;
         std::shared_ptr<RenderBox>            root_;
@@ -271,7 +289,10 @@ namespace systems::leal::campello_widgets
         std::unique_ptr<IDrawBackend>         draw_backend_;
 
         // --- performance overlay state ---
-        campello_gpu::FrameTimeSampler perf_sampler_;
+        // Actual measured phase durations per frame (not call-to-call
+        // cadence) — see renderFrame() for the start/end brackets.
+        campello_gpu::FrameTimeSampler build_sampler_;  // build + layout + paint recording
+        campello_gpu::FrameTimeSampler raster_sampler_; // GPU encode + submit
 
         // --- view insets (safe area) ---
         EdgeInsets view_insets_;

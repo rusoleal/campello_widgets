@@ -73,13 +73,16 @@ namespace systems::leal::campello_widgets
         const uint64_t now_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
 
-        perf_sampler_.record(now_ms);
-
         if (auto* d = PointerDispatcher::activeDispatcher())
             d->tick(now_ms);
 
         if (auto* ts = TickerScheduler::active())
             ts->tick(now_ms);
+
+        // "Build" phase: widget rebuild, layout, and paint-command recording —
+        // mirrors Flutter's UI-thread timing. Bracketed with wall-clock
+        // timestamps so the overlay shows actual work cost, not request rate.
+        const auto build_start = std::chrono::steady_clock::now();
 
         Element::buildScope();
 
@@ -90,8 +93,19 @@ namespace systems::leal::campello_widgets
 
         // Generate the draw list once (headless — no encoder).
         const DrawList draw_list = generateDrawList(viewport_width, viewport_height);
+
+        const auto build_end = std::chrono::steady_clock::now();
+        build_sampler_.recordDuration(
+            std::chrono::duration<float, std::milli>(build_end - build_start).count());
+
         if (draw_list.empty())
             return false;
+
+        // "Raster" phase: GPU command encoding + submission — mirrors
+        // Flutter's raster-thread timing. Note this measures CPU-side
+        // encode/submit cost, not full async GPU execution time (which would
+        // need a completion-handler timestamp).
+        const auto raster_start = std::chrono::steady_clock::now();
 
         auto encoder = device_->createCommandEncoder();
 
@@ -184,6 +198,11 @@ namespace systems::leal::campello_widgets
 
         auto cmd_buffer = encoder->finish();
         device_->submit(std::move(cmd_buffer));
+
+        const auto raster_end = std::chrono::steady_clock::now();
+        raster_sampler_.recordDuration(
+            std::chrono::duration<float, std::milli>(raster_end - raster_start).count());
+
         return true;
     }
 
@@ -504,8 +523,68 @@ namespace systems::leal::campello_widgets
     }
 
     // ------------------------------------------------------------------
-    // Performance overlay (unchanged from original)
+    // Performance overlay — Flutter-style two-lane timing chart.
+    //
+    // Each lane shows the *measured duration* of one frame phase (raster
+    // encode/submit on top, UI build+layout+paint on bottom), not how often
+    // a frame was requested — see the build_sampler_/raster_sampler_
+    // recordDuration() calls in renderFrame() for where these are bracketed.
     // ------------------------------------------------------------------
+
+    void Renderer::paintTimingLane(
+        PaintContext&                         ctx,
+        const campello_gpu::FrameTimeSampler& sampler,
+        const char*                           label,
+        float                                 lane_top,
+        float                                 lane_w,
+        float                                 panel_h,
+        float                                 label_h,
+        float                                 target_ms,
+        float                                 max_ms,
+        float                                 bar_w)
+    {
+        const int   n      = sampler.count();
+        const float avg_ms = (n > 0) ? sampler.averageMs() : 0.0f;
+
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s: %.1f ms", label, avg_ms);
+        ctx.canvas().drawText(
+            TextSpan{buf, TextStyle{Color::white(), 11.0f, {}}},
+            Offset{6.0f, lane_top + 4.0f});
+
+        const float chart_top    = lane_top + label_h;
+        const float chart_bottom = chart_top + panel_h;
+
+        for (int i = 0; i < n; ++i)
+        {
+            const float ms    = sampler.at(i);
+            const float frac  = std::min(ms / max_ms, 1.0f);
+            const float bar_h = frac * panel_h;
+            const float bx    = static_cast<float>(i) * bar_w;
+            const float by    = chart_bottom - bar_h;
+
+            const Color bar_color = (ms > target_ms)
+                ? Color::fromRGBA(0.90f, 0.20f, 0.20f, 1.0f)
+                : Color::fromRGBA(0.20f, 0.75f, 0.20f, 1.0f);
+
+            ctx.canvas().drawRect(
+                Rect::fromLTWH(bx, by, bar_w - 1.0f, bar_h),
+                Paint::filled(bar_color));
+        }
+
+        {
+            const float line_y = chart_bottom - (target_ms / max_ms) * panel_h;
+            ctx.canvas().drawRect(
+                Rect::fromLTWH(0.0f, line_y, lane_w, 1.0f),
+                Paint::filled(Color::fromRGBA(0.20f, 0.90f, 0.20f, 0.90f)));
+        }
+        {
+            const float line_y = chart_bottom - (2.0f * target_ms / max_ms) * panel_h;
+            ctx.canvas().drawRect(
+                Rect::fromLTWH(0.0f, line_y, lane_w, 1.0f),
+                Paint::filled(Color::fromRGBA(0.90f, 0.20f, 0.20f, 0.90f)));
+        }
+    }
 
     void Renderer::paintPerformanceOverlay(
         PaintContext& ctx,
@@ -513,9 +592,10 @@ namespace systems::leal::campello_widgets
         float         viewport_height)
     {
         constexpr float kOverlayW  = 300.0f;
-        constexpr float kPanelH    = 80.0f;
-        constexpr float kLabelH    = 20.0f;
-        constexpr float kTotalH    = kPanelH + kLabelH;
+        constexpr float kPanelH    = 70.0f;
+        constexpr float kLabelH    = 16.0f;
+        constexpr float kLaneH     = kPanelH + kLabelH;
+        constexpr float kTotalH    = 2.0f * kLaneH;
         constexpr float kTargetMs  = 1000.0f / 60.0f;
         constexpr float kMaxMs     = 3.0f * kTargetMs;
         constexpr float kBarW      = kOverlayW / static_cast<float>(campello_gpu::FrameTimeSampler::kCapacity);
@@ -526,45 +606,19 @@ namespace systems::leal::campello_widgets
             Rect::fromLTWH(0.0f, oy, kOverlayW, kTotalH),
             Paint::filled(Color::fromRGBA(0.10f, 0.10f, 0.10f, 0.80f)));
 
-        const int   n      = perf_sampler_.count();
-        const float avg_ms = (n > 0) ? perf_sampler_.averageMs() : kTargetMs;
-        const float fps = (avg_ms > 0.0f) ? (1000.0f / avg_ms) : 0.0f;
+        // Top lane: raster (GPU encode/submit) — matches Flutter's top "GPU" graph.
+        paintTimingLane(ctx, raster_sampler_, "RASTER", oy,
+                        kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW);
 
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "FPS: %.0f   frame: %.1f ms", fps, avg_ms);
-        ctx.canvas().drawText(
-            TextSpan{buf, TextStyle{Color::white(), 11.0f, {}}},
-            Offset{6.0f, oy + 4.0f});
-
-        const float chart_bottom = viewport_height;
-        for (int i = 0; i < n; ++i)
-        {
-            const float ms    = perf_sampler_.at(i);
-            const float frac  = std::min(ms / kMaxMs, 1.0f);
-            const float bar_h = frac * kPanelH;
-            const float bx    = static_cast<float>(i) * kBarW;
-            const float by    = chart_bottom - bar_h;
-
-            const Color bar_color = (ms > kTargetMs)
-                ? Color::fromRGBA(0.90f, 0.20f, 0.20f, 1.0f)
-                : Color::fromRGBA(0.20f, 0.75f, 0.20f, 1.0f);
-
-            ctx.canvas().drawRect(
-                Rect::fromLTWH(bx, by, kBarW - 1.0f, bar_h),
-                Paint::filled(bar_color));
-        }
+        // Bottom lane: UI (build + layout + paint recording).
+        paintTimingLane(ctx, build_sampler_, "UI", oy + kLaneH,
+                        kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW);
 
         {
-            const float line_y = chart_bottom - (kTargetMs / kMaxMs) * kPanelH;
+            const float divider_y = oy + kLaneH;
             ctx.canvas().drawRect(
-                Rect::fromLTWH(0.0f, line_y, kOverlayW, 1.0f),
-                Paint::filled(Color::fromRGBA(0.20f, 0.90f, 0.20f, 0.90f)));
-        }
-        {
-            const float line_y = chart_bottom - (2.0f * kTargetMs / kMaxMs) * kPanelH;
-            ctx.canvas().drawRect(
-                Rect::fromLTWH(0.0f, line_y, kOverlayW, 1.0f),
-                Paint::filled(Color::fromRGBA(0.90f, 0.20f, 0.20f, 0.90f)));
+                Rect::fromLTWH(0.0f, divider_y, kOverlayW, 1.0f),
+                Paint::filled(Color::fromRGBA(0.35f, 0.35f, 0.35f, 0.80f)));
         }
     }
 
