@@ -390,18 +390,23 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::down:
             pointer_down_ = true;
             panning_ = false;
+            won_arena_ = false;
+            lost_arena_ = false;
             pan_last_pos_ = event.position;
             velocity_x_ = 0.0f;
             velocity_y_ = 0.0f;
             pan_velocity_x_ = 0.0f;
             pan_velocity_y_ = 0.0f;
             last_pan_time_ = std::chrono::steady_clock::now();
+            arena_entry_.reset();
+            if (auto* d = PointerDispatcher::activeDispatcher())
+                arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 
         case PointerEventKind::move:
         {
             // Only process move events for scrolling if pointer is down
-            if (!pointer_down_)
+            if (!pointer_down_ || lost_arena_)
                 break;
 
             float dx = event.position.x - pan_last_pos_.x;
@@ -409,7 +414,21 @@ namespace systems::leal::campello_widgets
             float distance = std::sqrt(dx * dx + dy * dy);
 
             if (!panning_ && distance > kTapSlop)
-                panning_ = true;
+            {
+                if (won_arena_)
+                {
+                    panning_ = true;
+                }
+                else if (arena_entry_)
+                {
+                    // We have no competitor left to lose to once the arena is
+                    // closed (an actual competitor would already have set
+                    // lost_arena_ via rejectGesture() before this point), so
+                    // this always resolves synchronously in our favor.
+                    arena_entry_->resolve(GestureDisposition::accepted);
+                    panning_ = true;
+                }
+            }
 
             if (panning_)
             {
@@ -437,17 +456,38 @@ namespace systems::leal::campello_widgets
                 velocity_y_ = pan_velocity_y_;
             }
             panning_ = false;
+            arena_entry_.reset();
             break;
 
         case PointerEventKind::cancel:
             pointer_down_ = false;
             panning_ = false;
+            arena_entry_.reset();
             break;
 
         case PointerEventKind::scroll:
             applyScrollDelta(event.scroll_delta_x, event.scroll_delta_y);
             break;
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // GestureArenaMember
+    // -------------------------------------------------------------------------
+
+    void RenderTreeView::acceptGesture(int32_t /*pointer_id*/)
+    {
+        // Only records the win. panning_ starts once a move actually exceeds
+        // kTapSlop (see onPointerEvent) — accepting here just means we're no
+        // longer competing, not that movement has happened yet (e.g. a sole,
+        // uncontested arena resolves immediately at pointer-down).
+        won_arena_ = true;
+    }
+
+    void RenderTreeView::rejectGesture(int32_t /*pointer_id*/)
+    {
+        lost_arena_ = true;
+        panning_    = false;
     }
 
     void RenderTreeView::onTick(uint64_t now_ms)

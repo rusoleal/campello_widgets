@@ -435,6 +435,87 @@ runApp(make_shared<Theme>(Theme{
 - [x] Rich text / inline spans
 - [x] Dialog / overlay / modal system
 - [x] Drag-and-drop (`Draggable` + `DragTarget`)
+- [x] **Gesture arena (Flutter-equivalent gesture arbitration)** — see dedicated section below
+
+### Gesture Arena / Recognizer Arbitration (found 2026-06-18)
+
+There is currently **no arbitration mechanism between competing gesture recognizers**
+— no equivalent of Flutter's `GestureArenaManager`. Every recognizer (`RenderGestureDetector`,
+`RenderDraggable`, `RenderTreeView`'s built-in pan-to-scroll, `RenderListView`/scroll
+physics, etc.) registers independently with `PointerDispatcher` and receives the
+*identical* stream of down/move/up events. Each one decides for itself — using its own
+slop threshold — whether to "claim" the gesture, with nothing to make that claim
+exclusive. The only real mutual-exclusion primitive in the system is
+`PointerDispatcher::capturePointer()`, which is coarse (whole pointer, not gesture-type-aware)
+and is currently only used by `RenderTextField`.
+
+**Concrete bug this caused (fixed for this pair — see below)**: dragging a `Draggable<T>`-wrapped
+row inside a `TreeView` never produced any visual feedback. `RenderTreeView::onPointerEvent`
+flagged `panning_ = true` once a single move sample exceeded its 8px `kTapSlop`, and from
+then on intercepted the gesture as a scroll. `RenderDraggable::onPointerEvent` did the same
+independently with a 10px threshold to decide whether to fire `on_drag_start`. Neither knew
+the other existed; TreeView's smaller threshold meant it usually won the race, so the drag
+never visibly started. The same class of bug is still latent for any *other* pairing — a
+custom pan recognizer and/or a scrollable container (`ListView`, `GridView`,
+`SingleChildScrollView`) nested together, or a second `Draggable`/`GestureDetector` — until
+those are also migrated (see checklist below).
+
+A quick fix exists for the specific TreeView/Draggable case (asymmetric slop +
+`RenderTreeView` checking `DragManager::active()->isDragging()` to yield once a drag has
+claimed the gesture) but that's a one-off patch, not a real fix — it would need to be
+re-applied ad hoc for every future pair of competing recognizers.
+
+**Proper fix**: a real gesture arena, mirroring Flutter's model:
+- [x] Design a `GestureArenaManager`-equivalent: recognizers `add()` themselves to an
+      arena keyed by pointer ID at `down`, instead of acting unilaterally.
+      (`inc/campello_widgets/ui/gesture_arena_manager.hpp` / `src/ui/gesture_arena_manager.cpp`;
+      wired into `PointerDispatcher::handlePointerEvent()` via `close()`/`sweep()`.)
+- [x] Recognizers signal `resolve(GestureDisposition::accepted | rejected)` instead of
+      directly mutating shared state — the arena picks at most one winner per pointer
+      and only the winner continues receiving events for that gesture.
+- [x] Support "first recognizer to claim wins immediately" (e.g. a drag exceeding its
+      slop) as well as "last recognizer standing wins" (Flutter's default when nobody
+      explicitly accepts/rejects before the pointer is released).
+- [x] Migrate `RenderDraggable` and `RenderTreeView` onto the arena (the pair that
+      exposed the bug). `RenderDraggable`'s slop was also tuned to 6px (below
+      `RenderTreeView`'s 8px `kTapSlop`) so the more specific gesture (dragging the row)
+      wins ties within the same monotonic drag.
+- [x] Migrate `RenderGestureDetector`, `RenderListView`/`RenderGridView`/`RenderPageView`/
+      `RenderSingleChildScrollView`/`RenderSlider` pan/scroll/drag handling onto the arena
+      instead of raw `PointerDispatcher` handlers. `RenderSlider` claims its arena
+      immediately on `down` (no slop) so it reliably preempts an ancestor scrollable;
+      `RenderGestureDetector` self-rejects past slop unless it actually has
+      `on_pan_update`/`on_pan_end` wired up, so a plain tap/long-press "button" never
+      blocks an ancestor scrollable from winning.
+- [x] Add a test exercising the exact nested-scrollable-plus-draggable case that exposed
+      this (`tests/universal/test_render_tree_view.cpp`:
+      `DraggableRowWinsArenaOverEnclosingPan`, plus a sanity check that plain TreeView
+      panning and a non-hit Draggable row are both unaffected).
+- [x] Add nested-pan-plus-tap and nested-scroll-plus-scroll tests now that
+      `RenderGestureDetector`/`RenderListView`/`RenderGridView`/`RenderPageView`/
+      `RenderSingleChildScrollView`/`RenderSlider` are migrated
+      (`test_render_gesture_detector.cpp`'s `NestedGestureFixture` cases,
+      `test_render_list_view.cpp`'s `NestedPerpendicularListViewInnerWinsArenaTie`,
+      `test_render_slider.cpp`'s `NestedInListDoesNotLetListScrollWhileDraggingThumb`).
+
+**Side effects found while verifying this end-to-end** (manually driving a live
+`Draggable` row in the `macos_tree_view` example) — all unrelated to the arena itself,
+but were silently breaking `Draggable`+`Overlay` for anyone who used them; see
+CHANGELOG `[Unreleased] → Fixed` for full detail:
+- `DraggableState` left a dangling global `DragManager` pointer on dispose (heap
+  use-after-free, confirmed with ASan).
+- `Element::updateChild()` was missing Flutter's same-`WidgetRef`-instance short-circuit,
+  so inserting one `OverlayEntry` cascaded a full rebuild through every sibling,
+  including `TreeViewElement::update()`'s unconditional unmount-all-rows path —
+  destroying a row mid-drag.
+- `Stack` only recognized a `Positioned` that was its *direct* widget child, not one
+  produced several `StatefulWidget` layers down (e.g. through `OverlayEntry` →
+  `ValueListenableBuilder`).
+- `RenderStack` tightly constrained any positioned child to fill the remaining space
+  even when only `left`/`top` were given, instead of sizing it intrinsically.
+- `Positioned` had no Flutter-style `ParentDataElement`, so a `Positioned` rebuilding
+  deep inside an `Overlay` entry (e.g. following a dragged pointer) never told its
+  ancestor `Stack` to re-layout after the first mount — added `PositionedElement`.
 
 ### Raster/Render Performance Investigation (2026-06-18)
 
@@ -473,6 +554,91 @@ metric bug. Two separate things worth investigating:
 - Re-measure `hello` and the editor after each change to confirm real improvement
   (the two-lane overlay now makes this directly observable, unlike the old
   call-cadence metric).
+
+### Evaluation: Splitting UI and Raster into Two Real Threads (Flutter-style) (2026-06-19)
+
+Today everything — widget rebuild, layout, paint-command recording, **and** GPU
+command encoding/submission — runs sequentially on a single thread (the one
+`ThreadChecker` binds to at startup, which is also the platform's main/event
+thread). The "Build" and "Raster" phases in `Renderer::renderFrame()`
+(`src/ui/renderer.cpp:66-207`) are only separated for *measurement* purposes
+(`build_sampler_` / `raster_sampler_`) — they are not on different threads.
+This section captures a full evaluation of what a genuine two-thread split
+(UI thread + raster thread, as in Flutter) would require, so the analysis
+isn't lost before someone picks this up.
+
+**What already works in our favor:**
+- `DrawList` (`inc/campello_widgets/ui/draw_command.hpp:271`) is already a
+  `std::vector<DrawCommand>` of value types (plus one `shared_ptr<Texture>`
+  for images), fully decoupled from the live `RenderObject` tree. This is the
+  functional equivalent of Flutter's Layer Tree / Scene — the hardest
+  precondition for a UI/raster split already exists.
+
+**What would need to change:**
+1. **No pipeline exists yet.** Build and raster run sequentially in the same
+   call stack today. To get the actual Flutter benefit (UI thread starts
+   building frame N+1 while the raster thread is still rasterizing frame N),
+   we'd need a queue/pipeline with double-buffered `DrawList` + per-frame
+   metadata (target `TextureView`, viewport dims, DPR, pending drawable,
+   backdrop-filter flags). Without this, moving raster to another thread only
+   relocates the work — it doesn't parallelize it.
+2. **Shared global atomics are a real race, not a hypothetical one.**
+   `RenderObject::setActiveBackend` / `setActiveDevicePixelRatio`
+   (`inc/campello_widgets/ui/render_object.hpp:158-187`) are single global
+   atomics (`memory_order_relaxed`) representing "the current frame's"
+   backend/DPR. If the UI thread starts frame N+1's `layoutPass()` (which
+   rewrites these) while the raster thread is still in `flushDrawList()` for
+   frame N (which reads them via `draw_backend_`), that's a textbook data
+   race. These would need to become per-frame data carried with the
+   `DrawList`, not global mutable state.
+3. **`ThreadChecker` assumes exactly one UI thread.** `assertOnBoundThread()`
+   is called from `Renderer::renderFrame`, `RenderObject::markNeedsLayout` /
+   `markNeedsPaint`, `PointerDispatcher`, `FocusManager`, `TickerScheduler`,
+   and `AnimationController` — all assuming the same thread. A second bound
+   thread (raster) would need its own checker, and `Renderer`'s per-frame
+   member state (`backdrop_tex_`, `has_backdrop_filter_`, `frame_encoder_`,
+   `frame_target_`, `pending_drawable_`) would need to move from shared
+   members to an immutable frame package handed off through the queue.
+4. **`FrameScheduler` is explicitly main-thread-only.** Its own doc comment
+   (`inc/campello_widgets/ui/frame_scheduler.hpp:29-32`) says
+   `setCallback()`/`scheduleFrame()` are not synchronized and must be called
+   from the UI event-loop thread. This is consistent with a UI/raster split
+   (only the UI thread would schedule frames) but confirms that today "UI
+   thread" == the platform thread (AppKit run loop, etc.), unlike Flutter
+   where platform and UI are already separate threads.
+5. **Platform run loops currently drive raster on the main thread by
+   construction.** On macOS (`src/macos/run_app.mm:659-690`),
+   `drawInMTKView:` fires via `[MTKView setNeedsDisplay:YES]` inside AppKit's
+   run loop — raster already executes on the main thread because that's how
+   `MTKView`'s delegate model works. Moving raster to its own thread means
+   bypassing that automatic delegate and manually pulling the drawable /
+   `getSwapchainTextureView()` and handing frame data to a raster thread —
+   doable, but it has to be redone **once per platform** (macOS, iOS,
+   Android, Windows, Linux). iOS/Windows/Linux platform integration is
+   already only partial per the phase table above, so this adds maintenance
+   surface in the least mature part of the project.
+6. **`campello_gpu` thread-safety for `Device` is unverified.** No doc
+   comment in `device.hpp` states whether `createCommandEncoder()` /
+   `submit()` are safe to call from a thread other than the one that created
+   the `Device`. Metal/D3D12 generally allow this; Vulkan command-queue
+   submission requires external synchronization. This needs to be confirmed
+   per backend (`metal_draw_backend.mm`, `vulkan_draw_backend.cpp`,
+   `d3d_draw_backend.cpp`) before relying on it, not assumed.
+
+**Why this likely isn't the right next step:** the raster-cost numbers
+recorded above (~3.5ms for `hello`, ~16.6ms for `campello_editor`) are a cost
+in the GPU encode/submit work itself — likely missing draw-call batching —
+not a symptom of build and raster contending for the same thread. Splitting
+threads does **not** reduce that absolute cost; it only stops a slow raster
+phase from blocking the *next* frame's input handling/build. If raster stays
+at ~16.6ms, a 60fps app still drops frames whether or not raster has its own
+thread — the thread split improves input responsiveness/perceived smoothness
+under load, but doesn't fix the root cause already identified above.
+
+**Recommendation:** investigate and fix the raster-cost root cause (batching,
+per-draw-call overhead — see "Suggested next steps" above) first. Revisit a
+UI/raster thread split afterward, once raster is cheaper and there's less
+margin for the synchronization issues described in points 1–6 to matter.
 
 ### IME (Input Method Editor) Platform Gaps
 

@@ -33,6 +33,7 @@ namespace systems::leal::campello_widgets
         active_pointers_.clear();
         captured_pointers_.clear();
         last_hover_path_.clear();
+        arena_.reset();
     }
 
     void PointerDispatcher::addHandler(RenderBox* box, Handler handler)
@@ -107,6 +108,11 @@ namespace systems::leal::campello_widgets
 
             dispatch(result.path(), event);
             active_pointers_[event.pointer_id] = {result.path(), event.position};
+
+            // All recognizers in the hit path have had a chance to add()
+            // themselves to the arena by now — close it so it can start
+            // resolving as soon as one of them claims a win.
+            arena_.close(event.pointer_id);
             break;
         }
 
@@ -202,6 +208,11 @@ namespace systems::leal::campello_widgets
                     dispatch(adjusted, event);
                 }
             }
+
+            // The pointer is no longer tracked (lifted/cancelled) — if
+            // nobody explicitly resolved the arena, the first member added
+            // wins by default.
+            arena_.sweep(event.pointer_id);
             break;
         }
 

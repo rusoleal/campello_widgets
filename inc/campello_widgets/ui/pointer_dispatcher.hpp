@@ -9,6 +9,7 @@
 #include <vector>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
+#include <campello_widgets/ui/gesture_arena_manager.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -138,6 +139,22 @@ namespace systems::leal::campello_widgets
         RenderBox* getCapturingBox(int32_t pointer_id) const;
 
         // ------------------------------------------------------------------
+        // Gesture arena
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief The gesture arena shared by recognizers competing for the
+         * same pointer (e.g. a Draggable nested inside a scrollable).
+         *
+         * handlePointerEvent() calls close() once a `down` event has been
+         * dispatched to every handler in the hit-test path, and sweep() once
+         * `up`/`cancel` has been dispatched. Recognizers add() themselves
+         * from within their own pointer-down handling and later resolve()
+         * once their own gesture criteria are met.
+         */
+        GestureArenaManager& arena() noexcept { return arena_; }
+
+        // ------------------------------------------------------------------
         // Debug: pointer position tracking
         // ------------------------------------------------------------------
 
@@ -174,6 +191,7 @@ namespace systems::leal::campello_widgets
         std::vector<RenderBox*>                          last_hover_path_;
         std::unordered_map<int32_t, RenderBox*>          captured_pointers_;  ///< pointer_id -> capturing box
         std::vector<PointerPosition>                     recent_positions_;
+        GestureArenaManager                              arena_;
 
         static std::atomic<PointerDispatcher*> s_active_dispatcher_;
     };

@@ -3,11 +3,13 @@
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/axis.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
+#include <campello_widgets/ui/gesture_arena_manager.hpp>
 
 #include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace systems::leal::campello_widgets
@@ -23,7 +25,7 @@ namespace systems::leal::campello_widgets
      * Only adjacent pages are painted. Swipe gestures snap to the nearest
      * integer page index.
      */
-    class RenderPageView : public RenderBox
+    class RenderPageView : public RenderBox, public GestureArenaMember
     {
     public:
         Axis                      scroll_direction = Axis::horizontal;
@@ -63,6 +65,13 @@ namespace systems::leal::campello_widgets
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
+        // ------------------------------------------------------------------
+        // GestureArenaMember
+        // ------------------------------------------------------------------
+
+        void acceptGesture(int32_t pointer_id) override;
+        void rejectGesture(int32_t pointer_id) override;
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);
@@ -85,6 +94,9 @@ namespace systems::leal::campello_widgets
 
         bool     pointer_down_   = false;
         bool     panning_        = false;
+        bool     won_arena_      = false;
+        bool     lost_arena_     = false;
+        std::optional<GestureArenaEntry> arena_entry_;
         Offset   pan_last_pos_;
         std::chrono::steady_clock::time_point last_pan_time_;
         float    pan_velocity_   = 0.0f;

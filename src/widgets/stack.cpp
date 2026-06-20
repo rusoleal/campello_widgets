@@ -4,9 +4,32 @@
 #include <campello_widgets/ui/render_stack.hpp>
 #include <campello_widgets/widgets/positioned.hpp>
 #include <campello_widgets/ui/render_box.hpp>
+#include <campello_widgets/widgets/render_object_element.hpp>
 
 namespace systems::leal::campello_widgets
 {
+
+    namespace
+    {
+        // Looks for a Positioned widget between `start` and its nearest
+        // RenderObjectElement descendant. A plain dynamic_cast on the
+        // top-level Stack child widget only sees a Positioned that is the
+        // *direct* child — but it's common for a Positioned to be produced
+        // several StatefulWidget/StatelessWidget layers down (e.g. an
+        // Overlay entry wrapping a ValueListenableBuilder that builds a
+        // Positioned), which would otherwise be invisible to Stack.
+        const Positioned* findPositionedBeforeRenderObject(Element* start)
+        {
+            for (Element* e = start; e; e = e->firstChildElement())
+            {
+                if (auto* p = dynamic_cast<const Positioned*>(&e->widget()))
+                    return p;
+                if (dynamic_cast<RenderObjectElement*>(e))
+                    break;
+            }
+            return nullptr;
+        }
+    } // namespace
 
     // ------------------------------------------------------------------
     // StackElement
@@ -36,7 +59,7 @@ namespace systems::leal::campello_widgets
             std::optional<float> left, top, right, bottom, width, height;
             if (i < static_cast<int>(sw.children.size()))
             {
-                if (auto* p = dynamic_cast<const Positioned*>(sw.children[i].get()))
+                if (const auto* p = findPositionedBeforeRenderObject(child_elements_[i].get()))
                 {
                     left   = p->left;
                     top    = p->top;

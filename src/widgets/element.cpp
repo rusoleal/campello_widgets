@@ -182,7 +182,16 @@ namespace systems::leal::campello_widgets
 
             if (keys_match && child->widget().widgetType() == new_widget->widgetType())
             {
-                child->update(std::move(new_widget));
+                // Skip the rebuild entirely when it's literally the same
+                // immutable Widget instance — mirrors Flutter's identical
+                // check in updateChild. Without this, reusing a cached
+                // WidgetRef (e.g. OverlayState rebuilding its Stack to add
+                // a sibling entry) forces every other untouched subtree to
+                // re-run update() too, which can be destructive further
+                // down (e.g. TreeViewElement::update() unconditionally
+                // unmounts and remounts all rows).
+                if (&child->widget() != new_widget.get())
+                    child->update(std::move(new_widget));
                 return child;
             }
             child->unmount();

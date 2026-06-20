@@ -87,6 +87,7 @@
 #include <campello_widgets/widgets/flexible.hpp>
 #include <campello_widgets/widgets/expanded.hpp>
 #include <campello_widgets/widgets/positioned.hpp>
+#include <campello_widgets/widgets/positioned_element.hpp>
 
 // Phase 6 composited widgets
 #include <campello_widgets/widgets/sized_box.hpp>
@@ -119,6 +120,7 @@
 
 // Phase 7 — Input
 #include <campello_widgets/ui/gesture_recognizer.hpp>
+#include <campello_widgets/ui/gesture_arena_manager.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>

@@ -2,8 +2,10 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
+#include <campello_widgets/ui/gesture_arena_manager.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -29,7 +31,7 @@ namespace systems::leal::campello_widgets
      *
      * Layout and paint pass through to the single child (inherited from RenderBox).
      */
-    class RenderGestureDetector : public RenderBox
+    class RenderGestureDetector : public RenderBox, public GestureArenaMember
     {
     public:
         std::function<void()>           on_tap;
@@ -46,14 +48,28 @@ namespace systems::leal::campello_widgets
         void attach() override;
         void detach() override;
 
+        // ------------------------------------------------------------------
+        // GestureArenaMember
+        // ------------------------------------------------------------------
+
+        void acceptGesture(int32_t pointer_id) override;
+        void rejectGesture(int32_t pointer_id) override;
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);
+
+        bool exceedsSlop() const noexcept;
+        void resolveTapOutcome();
 
         // Tap / double-tap state
         bool     has_down_         = false;
         bool     long_press_fired_ = false;
         bool     panning_          = false;
+        bool     won_arena_        = false;
+        bool     lost_arena_       = false;
+        bool     pending_tap_      = false;
+        std::optional<GestureArenaEntry> arena_entry_;
         Offset   down_pos_;
         Offset   last_pos_;
         uint64_t down_time_ms_     = 0;

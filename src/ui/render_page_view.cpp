@@ -248,6 +248,21 @@ namespace systems::leal::campello_widgets
     // Input
     // ------------------------------------------------------------------
 
+    void RenderPageView::acceptGesture(int32_t /*pointer_id*/)
+    {
+        // Only records the win. panning_ starts once a move actually exceeds
+        // kTapSlop (see onPointerEvent) — accepting here just means we're no
+        // longer competing, not that movement has happened yet (e.g. a sole,
+        // uncontested arena resolves immediately at pointer-down).
+        won_arena_ = true;
+    }
+
+    void RenderPageView::rejectGesture(int32_t /*pointer_id*/)
+    {
+        lost_arena_ = true;
+        panning_    = false;
+    }
+
     void RenderPageView::onPointerEvent(const PointerEvent& event)
     {
         switch (event.kind)
@@ -255,22 +270,37 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::down:
             pointer_down_  = true;
             panning_       = false;
+            won_arena_     = false;
+            lost_arena_    = false;
             pan_last_pos_  = event.position;
             velocity_px_s_ = 0.0f;
             pan_velocity_  = 0.0f;
             last_pan_time_ = std::chrono::steady_clock::now();
+            arena_entry_.reset();
+            if (auto* d = PointerDispatcher::activeDispatcher())
+                arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 
         case PointerEventKind::move:
         {
-            if (!pointer_down_)
+            if (!pointer_down_ || lost_arena_)
                 break;
 
             const float dx = event.position.x - pan_last_pos_.x;
             const float dy = event.position.y - pan_last_pos_.y;
 
             if (!panning_ && std::sqrt(dx * dx + dy * dy) > kTapSlop)
-                panning_ = true;
+            {
+                if (won_arena_)
+                {
+                    panning_ = true;
+                }
+                else if (arena_entry_)
+                {
+                    arena_entry_->resolve(GestureDisposition::accepted);
+                    panning_ = true;
+                }
+            }
 
             if (panning_) {
                 const bool  is_h  = (scroll_direction == Axis::horizontal);
@@ -294,11 +324,13 @@ namespace systems::leal::campello_widgets
                 snapToPage();
             }
             panning_ = false;
+            arena_entry_.reset();
             break;
 
         case PointerEventKind::cancel:
             pointer_down_ = false;
             panning_ = false;
+            arena_entry_.reset();
             break;
 
         default:

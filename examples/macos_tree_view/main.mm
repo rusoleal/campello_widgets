@@ -120,7 +120,7 @@ public:
         info->color = cw::Color::fromRGB(0.97f, 0.97f, 0.99f);
         info->padding = cw::EdgeInsets::symmetric(16.0f, 8.0f);
         info->child = cw::mw<cw::Text>(
-            "Tap ▶/▼ to expand/collapse • Drag to scroll vertically and horizontally",
+            "Tap ▶/▼ to expand/collapse • Drag empty space to scroll • Drag a file row to move it",
             infoStyle);
 
         // TreeView
@@ -163,17 +163,25 @@ public:
             else
                 content = cw::mw<cw::Text>("(empty)");
 
-            auto row = cw::mw<cw::Row>(
-                cw::MainAxisAlignment::start,
-                cw::CrossAxisAlignment::center,
-                cw::WidgetList{
-                    indent,
-                    cw::mw<cw::SizedBox>(8.0f),
-                    cw::mw<cw::SizedBox>(16.0f, 16.0f, icon),
-                    cw::mw<cw::SizedBox>(4.0f),
-                    content,
-                }
-            );
+            // Built twice (live row + drag feedback) since a Widget instance
+            // shouldn't be shared by two parents mounted at the same time.
+            // `shrink_wrap` uses MainAxisSize::min so the drag feedback (which
+            // is positioned via left/top only, with no width constraint) hugs
+            // its content instead of Row's default of expanding to fill.
+            auto buildRow = [&](bool shrink_wrap) -> cw::WidgetRef {
+                return cw::mw<cw::Row>(
+                    cw::MainAxisAlignment::start,
+                    cw::CrossAxisAlignment::center,
+                    shrink_wrap ? cw::MainAxisSize::min : cw::MainAxisSize::max,
+                    cw::WidgetList{
+                        indent,
+                        cw::mw<cw::SizedBox>(8.0f),
+                        cw::mw<cw::SizedBox>(16.0f, 16.0f, icon),
+                        cw::mw<cw::SizedBox>(4.0f),
+                        content,
+                    }
+                );
+            };
 
             // Make tappable for expand/collapse
             if (has_children)
@@ -182,7 +190,7 @@ public:
                 tap->on_tap = [this, &node] {
                     controller_->toggleExpanded(&node);
                 };
-                tap->child = row;
+                tap->child = buildRow(false);
 
                 auto container = std::make_shared<cw::Container>();
                 container->color = cw::Color::white();
@@ -191,10 +199,24 @@ public:
                 return container;
             }
 
+            // Leaf rows are draggable — this exercises the gesture arena:
+            // RenderTreeView's pan-to-scroll and RenderDraggable's pan-to-drag
+            // both register for the same pointer, and only one of them wins
+            // (see TODO.md's "Gesture Arena" section for the bug this fixes).
+            auto draggable = std::make_shared<cw::Draggable<int>>();
+            draggable->data  = 0;
+            draggable->child = buildRow(false);
+
+            auto feedback = std::make_shared<cw::Container>();
+            feedback->color   = cw::Color::fromRGBA(0.2f, 0.5f, 1.0f, 0.85f);
+            feedback->padding = cw::EdgeInsets::symmetric(8.0f, 4.0f);
+            feedback->child   = buildRow(true);
+            draggable->feedback = feedback;
+
             auto container = std::make_shared<cw::Container>();
             container->color = cw::Color::white();
             container->padding = cw::EdgeInsets::symmetric(8.0f, 0.0f);
-            container->child = row;
+            container->child = draggable;
             return container;
         };
 
@@ -233,8 +255,16 @@ int main()
     cw::DebugFlags::showDebugBanner        = false;
     cw::DebugFlags::showPerformanceOverlay = true;
 
+    // Draggable's drag feedback is shown via Overlay::insert(), which is a
+    // no-op without a mounted Overlay ancestor — wrap the app so the file
+    // rows' drag feedback is actually visible.
+    auto overlay = std::make_shared<cw::Overlay>();
+    overlay->initial_entries = {
+        cw::OverlayEntry::create(std::make_shared<TreeViewApp>()),
+    };
+
     return cw::runApp(
-        std::make_shared<TreeViewApp>(),
+        overlay,
         "campello_widgets — Tree View",
         500.0f,
         600.0f);

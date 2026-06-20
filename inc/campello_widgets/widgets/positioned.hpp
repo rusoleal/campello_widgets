@@ -49,6 +49,8 @@ namespace systems::leal::campello_widgets
 
         WidgetRef build(BuildContext&) const override { return child; }
 
+        std::shared_ptr<Element> createElement() const override;
+
         void debugValidate() const override
         {
             const bool has_horizontal = left.has_value() || right.has_value() || width.has_value();

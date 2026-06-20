@@ -9,6 +9,7 @@
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/gesture_arena_manager.hpp>
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/value_notifier.hpp>
@@ -16,6 +17,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <typeindex>
 
 namespace systems::leal::campello_widgets
@@ -30,7 +32,7 @@ namespace systems::leal::campello_widgets
     // -------------------------------------------------------------------------
 
     template<typename T>
-    class RenderDraggable : public RenderBox
+    class RenderDraggable : public RenderBox, public GestureArenaMember
     {
     public:
         std::function<void(Offset)> on_drag_start;
@@ -69,35 +71,75 @@ namespace systems::leal::campello_widgets
             if (child_) paintChild(ctx, offset);
         }
 
+        // ------------------------------------------------------------------
+        // GestureArenaMember
+        // ------------------------------------------------------------------
+
+        void acceptGesture(int32_t /*pointer_id*/) override
+        {
+            won_arena_ = true;
+            if (pressed_ && !dragging_ && exceedsSlop())
+                startDragging(last_pos_);
+        }
+
+        void rejectGesture(int32_t /*pointer_id*/) override
+        {
+            lost_arena_ = true;
+        }
+
     private:
-        static constexpr float kDragSlop = 10.0f;
+        // Intentionally smaller than RenderTreeView::kTapSlop (8px) and the
+        // analogous thresholds in RenderListView/RenderGridView: when a
+        // Draggable's row content and an ancestor scrollable both exceed
+        // their slop within the same monotonic drag, the smaller threshold
+        // is reached first, so the more specific gesture (dragging the row)
+        // wins the arena over the more generic one (panning the container).
+        static constexpr float kDragSlop = 6.0f;
+
+        bool exceedsSlop() const noexcept
+        {
+            float dx = last_pos_.x - down_pos_.x;
+            float dy = last_pos_.y - down_pos_.y;
+            return (dx * dx + dy * dy) >= kDragSlop * kDragSlop;
+        }
+
+        void startDragging(Offset pos)
+        {
+            if (dragging_) return;
+            dragging_ = true;
+            if (on_drag_start) on_drag_start(pos);
+        }
 
         void onPointerEvent(const PointerEvent& event)
         {
             switch (event.kind)
             {
             case PointerEventKind::down:
-                pressed_  = true;
-                dragging_ = false;
-                down_pos_ = event.position;
-                last_pos_ = event.position;
+                pressed_    = true;
+                dragging_   = false;
+                won_arena_  = false;
+                lost_arena_ = false;
+                down_pos_   = event.position;
+                last_pos_   = event.position;
+                arena_entry_.reset();
+                if (auto* d = PointerDispatcher::activeDispatcher())
+                    arena_entry_.emplace(d->arena().add(event.pointer_id, this));
                 break;
 
             case PointerEventKind::move:
-                if (pressed_)
+                if (pressed_ && !lost_arena_)
                 {
-                    float dx = event.position.x - down_pos_.x;
-                    float dy = event.position.y - down_pos_.y;
-                    if (!dragging_ && (dx * dx + dy * dy) >= kDragSlop * kDragSlop)
+                    last_pos_ = event.position;
+
+                    if (!dragging_ && exceedsSlop())
                     {
-                        dragging_ = true;
-                        if (on_drag_start) on_drag_start(event.position);
+                        if (won_arena_)
+                            startDragging(last_pos_);
+                        else if (arena_entry_)
+                            arena_entry_->resolve(GestureDisposition::accepted);
                     }
-                    if (dragging_)
-                    {
-                        last_pos_ = event.position;
-                        if (on_drag_update) on_drag_update(event.position);
-                    }
+
+                    if (dragging_ && on_drag_update) on_drag_update(event.position);
                 }
                 break;
 
@@ -108,7 +150,8 @@ namespace systems::leal::campello_widgets
                     dragging_ = false;
                     if (on_drag_end) on_drag_end();
                 }
-                pressed_  = false;
+                pressed_ = false;
+                arena_entry_.reset();
                 break;
 
             default:
@@ -118,9 +161,12 @@ namespace systems::leal::campello_widgets
 
         bool   pressed_       = false;
         bool   dragging_      = false;
+        bool   won_arena_     = false;
+        bool   lost_arena_    = false;
         Offset down_pos_;
         Offset last_pos_;
         Offset global_offset_;
+        std::optional<GestureArenaEntry> arena_entry_;
     };
 
     // -------------------------------------------------------------------------
@@ -174,6 +220,13 @@ namespace systems::leal::campello_widgets
         void dispose() override
         {
             endDrag(false);
+
+            // If this instance lazily created the global DragManager, clear
+            // the dangling pointer before own_manager_ is destroyed —
+            // otherwise any other Draggable that outlives this one calls
+            // into freed memory the next time it starts a drag.
+            if (own_manager_ && DragManager::active() == own_manager_.get())
+                DragManager::setActive(nullptr);
         }
 
         WidgetRef build(BuildContext&) override

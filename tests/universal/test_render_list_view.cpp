@@ -242,6 +242,46 @@ TEST(RenderListView, PanGestureScrolls)
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
 }
 
+// Regresses the same class of bug as RenderTreeView's
+// SubSlopJitterDoesNotScrollEvenWhenUncontested: accepting an uncontested
+// arena at pointer-down must not itself start panning before any real
+// movement exceeds kTapSlop.
+TEST(RenderListView, SubSlopJitterDoesNotScrollEvenWhenUncontested)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    lv.attach();
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 150.0f};
+    dispatcher.handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind = cw::PointerEventKind::move;
+    for (float dy : {1.0f, -1.0f, 2.0f, -1.0f})
+    {
+        move.position = {0.0f, 150.0f + dy};
+        dispatcher.handlePointerEvent(move);
+    }
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
 TEST(RenderListView, WheelEventScrolls)
 {
     cw::RenderListView lv;
@@ -267,5 +307,68 @@ TEST(RenderListView, WheelEventScrolls)
     EXPECT_EQ(lv.firstVisibleIndex(), 2);
 
     lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Gesture arena — nested scrollables with perpendicular axes
+// ---------------------------------------------------------------------------
+//
+// Regresses the generic "nested-scroll-plus-scroll" case from TODO.md's
+// Gesture Arena section: a horizontal ListView nested inside a vertical one
+// (e.g. a row of horizontally-scrolling cards inside a vertical feed). Both
+// register independently with PointerDispatcher and would previously have
+// scrolled simultaneously on a diagonal drag; now only one wins the arena.
+
+TEST(RenderListView, NestedPerpendicularListViewInnerWinsArenaTie)
+{
+    cw::RenderListView outer;
+    outer.scroll_axis = cw::Axis::vertical;
+    outer.item_count  = 10;
+    outer.item_extent = 100.0f;
+
+    cw::RenderListView inner;
+    inner.scroll_axis = cw::Axis::horizontal;
+    inner.item_count  = 20;
+    inner.item_extent = 50.0f;
+
+    // inner is item 0's box — outer.performLayout() will size and lay it out.
+    auto inner_box = std::shared_ptr<cw::RenderBox>(&inner, [](cw::RenderBox*) {});
+    outer.setItemBox(0, inner_box);
+
+    auto root = std::shared_ptr<cw::RenderBox>(&outer, [](cw::RenderBox*) {});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    doLayout(outer, 400.0f, 400.0f);
+    outer.attach();
+    inner.attach();
+
+    EXPECT_EQ(outer.firstVisibleIndex(), 0);
+    EXPECT_EQ(inner.firstVisibleIndex(), 0);
+
+    // down inside item 0 (y in [0, 100))
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {100.0f, 50.0f};
+    dispatcher.handlePointerEvent(down);
+
+    // Diagonal jump that exceeds both views' 8px tap slop in one move event.
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {40.0f, -10.0f}; // dx=-60, dy=-60
+    dispatcher.handlePointerEvent(move);
+
+    // inner is deeper in the hit-test path, so it wins the tie: it scrolls,
+    // outer (which would have scrolled too, were it not rejected) does not.
+    EXPECT_NE(inner.firstVisibleIndex(), 0);
+    EXPECT_EQ(outer.firstVisibleIndex(), 0);
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    outer.detach();
+    inner.detach();
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
 }

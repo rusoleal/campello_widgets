@@ -62,8 +62,17 @@ namespace systems::leal::campello_widgets
             else
             {
                 // Positioned: derive constraints from position specs.
+                // Only edges that pin both sides (or an explicit width/height)
+                // determine a definite size; an edge pinned on one side only
+                // (e.g. just `left`/`top`, as a feedback overlay following a
+                // cursor) leaves the child to size itself intrinsically, so
+                // it must get loose — not tight — constraints up to the
+                // remaining space.
                 float x = sc.left.value_or(0.0f);
                 float y = sc.top.value_or(0.0f);
+
+                const bool width_determined  = sc.width.has_value() || (sc.left && sc.right);
+                const bool height_determined = sc.height.has_value() || (sc.top && sc.bottom);
 
                 float child_w = sc.width.value_or(
                     sc.left && sc.right
@@ -81,9 +90,13 @@ namespace systems::leal::campello_widgets
                 if (!sc.top && sc.bottom)
                     y = size_.height - *sc.bottom - child_h;
 
-                sc.box->layout(BoxConstraints::tight(
-                    std::clamp(child_w, 0.0f, size_.width),
-                    std::clamp(child_h, 0.0f, size_.height)));
+                child_w = std::clamp(child_w, 0.0f, size_.width);
+                child_h = std::clamp(child_h, 0.0f, size_.height);
+
+                sc.box->layout(BoxConstraints{
+                    width_determined  ? child_w : 0.0f, child_w,
+                    height_determined ? child_h : 0.0f, child_h,
+                });
                 sc.offset = {x, y};
             }
         }

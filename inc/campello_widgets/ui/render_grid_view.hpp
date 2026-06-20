@@ -4,10 +4,12 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
+#include <campello_widgets/ui/gesture_arena_manager.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -27,7 +29,7 @@ namespace systems::leal::campello_widgets
      * Virtualisation: the `on_visible_range_changed` callback is fired whenever
      * the visible row range changes so GridViewElement can mount / unmount items.
      */
-    class RenderGridView : public RenderBox
+    class RenderGridView : public RenderBox, public GestureArenaMember
     {
     public:
         int   item_count      = 0;
@@ -79,6 +81,13 @@ namespace systems::leal::campello_widgets
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
+        // ------------------------------------------------------------------
+        // GestureArenaMember
+        // ------------------------------------------------------------------
+
+        void acceptGesture(int32_t pointer_id) override;
+        void rejectGesture(int32_t pointer_id) override;
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);
@@ -109,6 +118,9 @@ namespace systems::leal::campello_widgets
 
         bool   pointer_down_  = false;
         bool   panning_       = false;
+        bool   won_arena_     = false;
+        bool   lost_arena_    = false;
+        std::optional<GestureArenaEntry> arena_entry_;
         Offset pan_last_pos_;
         std::chrono::steady_clock::time_point last_pan_time_;
         float  pan_velocity_  = 0.0f;

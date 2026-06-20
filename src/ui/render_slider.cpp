@@ -75,12 +75,33 @@ namespace systems::leal::campello_widgets
 
     // -------------------------------------------------------------------------
 
+    void RenderSlider::acceptGesture(int32_t /*pointer_id*/)
+    {
+        won_arena_ = true;
+    }
+
+    void RenderSlider::rejectGesture(int32_t /*pointer_id*/)
+    {
+        lost_arena_ = true;
+        pressed_    = false;
+    }
+
     void RenderSlider::onPointerEvent(const PointerEvent& event)
     {
         switch (event.kind)
         {
         case PointerEventKind::down:
-            pressed_ = true;
+            pressed_    = true;
+            won_arena_  = false;
+            lost_arena_ = false;
+            arena_entry_.reset();
+            if (auto* d = PointerDispatcher::activeDispatcher())
+            {
+                arena_entry_.emplace(d->arena().add(event.pointer_id, this));
+                // Slider claims immediately (no slop) so it reliably preempts
+                // an ancestor scrollable's pan-to-scroll claim.
+                arena_entry_->resolve(GestureDisposition::accepted);
+            }
             if (on_value_changed) {
                 on_value_changed(positionToValue(event.position.x));
                 if (!RenderObject::isAlive(this)) return;
@@ -88,7 +109,7 @@ namespace systems::leal::campello_widgets
             break;
 
         case PointerEventKind::move:
-            if (pressed_ && on_value_changed) {
+            if (pressed_ && !lost_arena_ && on_value_changed) {
                 on_value_changed(positionToValue(event.position.x));
                 if (!RenderObject::isAlive(this)) return;
             }
@@ -97,6 +118,7 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::up:
         case PointerEventKind::cancel:
             pressed_ = false;
+            arena_entry_.reset();
             break;
 
         default:
