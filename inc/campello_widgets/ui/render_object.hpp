@@ -66,14 +66,16 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Runs the paint pass for this render object.
          *
-         * Calls `performPaint()` if the object is paint-dirty, then clears the
-         * paint-dirty flag.
+         * Calls `performPaint()`, then clears the paint-dirty flag. Virtual so
+         * `RenderRepaintBoundary` can intercept: when clean, it replays a
+         * cached draw-command list instead of calling through to
+         * `performPaint()` at all, skipping the subtree walk entirely.
          *
          * @param context Canvas context to draw into.
          * @param offset  Position of this object's top-left corner in its
          *                parent's coordinate space.
          */
-        void paint(PaintContext& context, const Offset& offset);
+        virtual void paint(PaintContext& context, const Offset& offset);
 
         /**
          * @brief Override to paint debug visualizations.

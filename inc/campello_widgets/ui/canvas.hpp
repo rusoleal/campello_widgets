@@ -273,6 +273,21 @@ namespace systems::leal::campello_widgets
         /** @brief The accumulated draw commands recorded so far. */
         const DrawList& commands() const noexcept { return commands_; }
 
+        /**
+         * @brief Appends a previously-recorded DrawList verbatim.
+         *
+         * Used by `RenderRepaintBoundary` to replay a cached subtree's
+         * commands (recorded in its own local coordinate space via a separate
+         * headless `PaintContext`) into the live recording, without re-walking
+         * the subtree. Callers are responsible for bracketing with
+         * `save()`/`translate()`/`restore()` so the replayed commands land at
+         * the correct current offset.
+         */
+        void appendRecorded(const DrawList& recorded)
+        {
+            commands_.insert(commands_.end(), recorded.begin(), recorded.end());
+        }
+
         // ------------------------------------------------------------------
         // BackdropFilter scope
         // ------------------------------------------------------------------

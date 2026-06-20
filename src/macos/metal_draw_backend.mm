@@ -5,6 +5,7 @@
 #import <campello_gpu/device.hpp>
 #import <campello_gpu/render_pass_encoder.hpp>
 #import <campello_gpu/texture.hpp>
+#import <campello_gpu/buffer.hpp>
 #import <campello_gpu/constants/buffer_usage.hpp>
 #import <campello_gpu/constants/texture_usage.hpp>
 #import <campello_gpu/constants/texture_type.hpp>
@@ -29,6 +30,7 @@
 #include <vector>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <vector_math/vector4.hpp>
 
 namespace GPU = systems::leal::campello_gpu;
@@ -361,6 +363,30 @@ bool MetalDrawBackend::applyScissor(const Rect& clip, GPU::RenderPassEncoder& en
 }
 
 // ---------------------------------------------------------------------------
+// UniformBufferPool
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<GPU::Buffer> MetalDrawBackend::UniformBufferPool::acquire(
+    GPU::Device& device, uint64_t size, const void* data)
+{
+    auto&  buffers = generations_[current_generation_];
+    size_t idx     = next_index_[current_generation_]++;
+
+    if (idx >= buffers.size())
+        buffers.push_back(device.createBuffer(size, GPU::BufferUsage::vertex, const_cast<void*>(data)));
+    else
+        buffers[idx]->upload(0, size, const_cast<void*>(data));
+
+    return buffers[idx];
+}
+
+void MetalDrawBackend::UniformBufferPool::beginFrame() noexcept
+{
+    current_generation_ = (current_generation_ + 1) % kGenerations;
+    next_index_[current_generation_] = 0;
+}
+
+// ---------------------------------------------------------------------------
 // drawRect
 // ---------------------------------------------------------------------------
 
@@ -381,8 +407,7 @@ void MetalDrawBackend::drawFilledRect(
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
 
-    auto ubuf = device_->createBuffer(
-        sizeof(RectUniforms), GPU::BufferUsage::vertex, &u);
+    auto ubuf = rect_uniform_pool_.acquire(*device_, sizeof(RectUniforms), &u);
     if (!ubuf) return;
 
     encoder.setPipeline(rect_pipeline_);
@@ -459,7 +484,7 @@ void MetalDrawBackend::drawShape(
     u.stroke_w    = stroke_w;
     u.kind        = kind;
 
-    auto ubuf = device_->createBuffer(sizeof(ShapeUniforms), GPU::BufferUsage::vertex, &u);
+    auto ubuf = shape_uniform_pool_.acquire(*device_, sizeof(ShapeUniforms), &u);
     if (!ubuf) return;
 
     encoder.setPipeline(shape_pipeline_);
@@ -569,7 +594,7 @@ void MetalDrawBackend::drawLine(
     u.viewport[1] = vp_h_;
     u.stroke_w    = sw;
 
-    auto ubuf = device_->createBuffer(sizeof(LineUniforms), GPU::BufferUsage::vertex, &u);
+    auto ubuf = line_uniform_pool_.acquire(*device_, sizeof(LineUniforms), &u);
     if (!ubuf) return;
 
     encoder.setPipeline(line_pipeline_);
@@ -626,44 +651,66 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
 }
 
 // ---------------------------------------------------------------------------
-// drawText — rasterise with CoreText into a BGRA8 texture, then draw quad
+// Text texture cache
 // ---------------------------------------------------------------------------
 
-void MetalDrawBackend::drawText(
-    const DrawTextCmd&    cmd,
-    const Matrix4&        transform,
-    const Rect&           clip,
-    GPU::RenderPassEncoder& encoder)
+size_t MetalDrawBackend::TextSpanHash::operator()(const TextSpan& s) const noexcept
 {
-    if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
-    if (cmd.span.text.empty()) return;
-    if (!applyScissor(clip, encoder)) return;
+    size_t h = std::hash<std::string>{}(s.text);
+    auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
+    mix(std::hash<std::string>{}(s.style.font_family));
+    mix(std::hash<float>{}(s.style.font_size));
+    mix(std::hash<float>{}(s.style.color.r));
+    mix(std::hash<float>{}(s.style.color.g));
+    mix(std::hash<float>{}(s.style.color.b));
+    mix(std::hash<float>{}(s.style.color.a));
+    mix(std::hash<int>{}(static_cast<int>(s.style.font_weight)));
+    mix(std::hash<bool>{}(s.style.italic));
+    return h;
+}
 
-    // Transform the logical origin to physical pixels.
-    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+void MetalDrawBackend::evictStaleTextTextures()
+{
+    for (auto it = text_texture_cache_.begin(); it != text_texture_cache_.end(); )
+    {
+        if (frame_counter_ - it->second.last_used_frame > kTextTextureMaxAgeFrames)
+            it = text_texture_cache_.erase(it);
+        else
+            ++it;
+    }
+}
+
+const MetalDrawBackend::TextTextureCacheEntry*
+MetalDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
+{
+    if (auto it = text_texture_cache_.find(span); it != text_texture_cache_.end())
+    {
+        it->second.last_used_frame = frame_counter_;
+        return &it->second;
+    }
 
     @autoreleasepool {
-        NSString *nsText = [NSString stringWithUTF8String:cmd.span.text.c_str()];
-        if (!nsText || nsText.length == 0) return;
+        NSString *nsText = [NSString stringWithUTF8String:span.text.c_str()];
+        if (!nsText || nsText.length == 0) return nullptr;
 
         // The font_size stored in the span has already been scaled to physical
         // pixels by RenderText/RenderParagraph (they multiply by
         // activeDevicePixelRatio() before emitting the DrawTextCmd).
         // We use it directly so the CoreText bitmap is in physical pixels.
-        const float physicalFontSize = cmd.span.style.font_size > 0.0f
-                                       ? cmd.span.style.font_size : 14.0f;
+        const float physicalFontSize = span.style.font_size > 0.0f
+                                       ? span.style.font_size : 14.0f;
 
         // Build font
-        NSString *family = cmd.span.style.font_family.empty()
+        NSString *family = span.style.font_family.empty()
                            ? @"Helvetica Neue"
-                           : [NSString stringWithUTF8String:cmd.span.style.font_family.c_str()];
+                           : [NSString stringWithUTF8String:span.style.font_family.c_str()];
 
         CTFontRef ctFont = CTFontCreateWithName(
             (__bridge CFStringRef)family, (CGFloat)physicalFontSize, nullptr);
-        if (!ctFont) return;
+        if (!ctFont) return nullptr;
 
         // Text color
-        const Color& tc = cmd.span.style.color;
+        const Color& tc = span.style.color;
         CGFloat comps[] = { (CGFloat)tc.r, (CGFloat)tc.g, (CGFloat)tc.b, (CGFloat)tc.a };
         CGColorSpaceRef rgbCS = CGColorSpaceCreateDeviceRGB();
         CGColorRef cgTextColor = CGColorCreate(rgbCS, comps);
@@ -690,10 +737,10 @@ void MetalDrawBackend::drawText(
         CGFloat ascent, descent, leading;
         double width = CTLineGetTypographicBounds(measureLine, &ascent, &descent, &leading);
         CFRelease(measureLine);
-        
+
         CGSize fitSize = CGSizeMake((CGFloat)width, ascent + descent + leading);
 
-        if (fitSize.width <= 0.0 || fitSize.height <= 0.0) return;
+        if (fitSize.width <= 0.0 || fitSize.height <= 0.0) return nullptr;
 
         // Texture dimensions in physical pixels (add small padding for anti-aliasing)
         uint32_t texW = (uint32_t)ceil(fitSize.width)  + 2;
@@ -712,7 +759,7 @@ void MetalDrawBackend::drawText(
             pixels.data(), texW, texH, 8, texW * 4, colorSpace,
             (CGBitmapInfo)((uint32_t)kCGBitmapByteOrder32Little | (uint32_t)kCGImageAlphaPremultipliedFirst));
         CGColorSpaceRelease(colorSpace);
-        if (!cgCtx) return;
+        if (!cgCtx) return nullptr;
 
         // Draw text — baseline at y = descent + 1 (1px bottom padding)
         CGContextSetTextMatrix(cgCtx, CGAffineTransformIdentity);
@@ -729,20 +776,70 @@ void MetalDrawBackend::drawText(
             GPU::PixelFormat::bgra8unorm,
             texW, texH, 1, 1, 1,
             GPU::TextureUsage::textureBinding);
-        if (!texture) return;
+        if (!texture) return nullptr;
         texture->upload(0, (uint64_t)pixels.size(), pixels.data());
 
-        // Place the quad at the physical-pixel origin.  The texture is already
-        // in physical pixels, so its pixel dimensions are the correct quad size.
-        // Subtract the 1-physical-pixel padding used above on each side.
-        drawTexturedQuad(
-            texture,
-            t_origin.x() - 1.0f, t_origin.y() - 1.0f,
-            (float)texW, (float)texH,
-            0.0f, 0.0f, 1.0f, 1.0f,
-            1.0f,  // text colour alpha is already baked into the glyph texture
-            encoder);
+        // Build the BindGroup once here too, so a cache hit in drawText()
+        // skips Device::createBindGroup() entirely, not just the texture
+        // rasterization.
+        std::shared_ptr<GPU::BindGroup> bindGroup;
+        if (quad_bgl_ && quad_sampler_)
+        {
+            GPU::BindGroupDescriptor bgDesc{};
+            bgDesc.layout  = quad_bgl_;
+            bgDesc.entries = {
+                GPU::BindGroupEntryDescriptor{ 0, texture },
+                GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
+            };
+            bindGroup = device_->createBindGroup(bgDesc);
+        }
+
+        TextTextureCacheEntry entry;
+        entry.texture          = std::move(texture);
+        entry.bind_group       = std::move(bindGroup);
+        entry.width            = texW;
+        entry.height           = texH;
+        entry.last_used_frame  = frame_counter_;
+        auto [it, inserted] = text_texture_cache_.emplace(span, std::move(entry));
+        return &it->second;
     }
+}
+
+// ---------------------------------------------------------------------------
+// drawText — looks up (or rasterises via CoreText into) a cached BGRA8
+// texture, then draws a quad. See "Text texture cache" above: the expensive
+// CoreText layout/rasterization and GPU texture allocation only happens
+// once per distinct (text, style); unchanged text reuses last frame's
+// texture instead of redoing all of that work every frame.
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawText(
+    const DrawTextCmd&    cmd,
+    const Matrix4&        transform,
+    const Rect&           clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
+    if (cmd.span.text.empty()) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    const TextTextureCacheEntry* entry = lookupOrCreateTextTexture(cmd.span);
+    if (!entry || !entry->texture) return;
+
+    // Transform the logical origin to physical pixels.
+    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+
+    // Place the quad at the physical-pixel origin. The texture is already
+    // in physical pixels, so its pixel dimensions are the correct quad size.
+    // Subtract the 1-physical-pixel padding baked into the cached texture.
+    drawTexturedQuad(
+        entry->texture,
+        t_origin.x() - 1.0f, t_origin.y() - 1.0f,
+        (float)entry->width, (float)entry->height,
+        0.0f, 0.0f, 1.0f, 1.0f,
+        1.0f,  // text colour alpha is already baked into the glyph texture
+        encoder,
+        entry->bind_group);
 }
 
 // ---------------------------------------------------------------------------
@@ -782,25 +879,29 @@ void MetalDrawBackend::drawTexturedQuad(
     float dst_x, float dst_y, float dst_w, float dst_h,
     float src_u0, float src_v0, float src_u1, float src_v1,
     float opacity,
-    GPU::RenderPassEncoder&        encoder)
+    GPU::RenderPassEncoder&        encoder,
+    std::shared_ptr<GPU::BindGroup> cached_bind_group)
 {
-    std::cerr << "[MetalDrawBackend] drawTexturedQuad: tex=" << texture.get() 
-              << " dst=" << dst_x << "," << dst_y << " " << dst_w << "x" << dst_h
-              << " uv=" << src_u0 << "," << src_v0 << "-" << src_u1 << "," << src_v1 << "\n";
-    
     if (!quad_pipeline_) { std::cerr << "[MetalDrawBackend] No pipeline!\n"; return; }
     if (!quad_bgl_) { std::cerr << "[MetalDrawBackend] No bind group layout!\n"; return; }
     if (!quad_sampler_) { std::cerr << "[MetalDrawBackend] No sampler!\n"; return; }
-    
-    // Build bind group for this texture
-    GPU::BindGroupDescriptor bgDesc{};
-    bgDesc.layout  = quad_bgl_;
-    bgDesc.entries = {
-        GPU::BindGroupEntryDescriptor{ 0, texture },
-        GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
-    };
-    auto bindGroup = device_->createBindGroup(bgDesc);
-    if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return; }
+
+    // Reuse the caller-supplied bind group if there is one (see "Text
+    // texture cache" in the header — cached alongside the texture, same
+    // lifetime), otherwise build one (drawImage / drawBackdropFilter, whose
+    // source textures aren't cached here).
+    auto bindGroup = cached_bind_group;
+    if (!bindGroup)
+    {
+        GPU::BindGroupDescriptor bgDesc{};
+        bgDesc.layout  = quad_bgl_;
+        bgDesc.entries = {
+            GPU::BindGroupEntryDescriptor{ 0, texture },
+            GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
+        };
+        bindGroup = device_->createBindGroup(bgDesc);
+        if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return; }
+    }
 
     // Fill uniform buffer
     QuadUniforms u{};
@@ -816,16 +917,13 @@ void MetalDrawBackend::drawTexturedQuad(
     u.viewport[1] = vp_h_;
     u.opacity     = opacity;
 
-    auto ubuf = device_->createBuffer(
-        sizeof(QuadUniforms), GPU::BufferUsage::vertex, &u);
+    auto ubuf = quad_uniform_pool_.acquire(*device_, sizeof(QuadUniforms), &u);
     if (!ubuf) return;
 
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bindGroup);
     encoder.setVertexBuffer(0, ubuf);
     encoder.draw(6);
-    
-    std::cerr << "[MetalDrawBackend] Draw call submitted\n";
 }
 
 // ---------------------------------------------------------------------------

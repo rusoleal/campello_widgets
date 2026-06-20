@@ -106,8 +106,19 @@ namespace systems::leal::campello_widgets
         // encode/submit cost, not full async GPU execution time (which would
         // need a completion-handler timestamp).
         const auto raster_start = std::chrono::steady_clock::now();
+        const bool print_sub_phases = DebugFlags::printRasterSubPhaseTimings;
+        auto       sub_phase_start  = raster_start;
+        auto markSubPhase = [&](const char* label)
+        {
+            if (!print_sub_phases) return;
+            const auto now = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "  [raster] %-16s %6.3f ms\n", label,
+                std::chrono::duration<float, std::milli>(now - sub_phase_start).count());
+            sub_phase_start = now;
+        };
 
         auto encoder = device_->createCommandEncoder();
+        markSubPhase("create encoder");
 
         // Store frame-scoped context so flushDrawList can restart render passes.
         frame_encoder_ = encoder.get();
@@ -152,14 +163,17 @@ namespace systems::leal::campello_widgets
             bd_desc.colorAttachments = {bd_ca};
 
             auto bd_rpe = encoder->beginRenderPass(bd_desc);
+            markSubPhase("backdrop begin");
             flushDrawList(draw_list, bd_rpe,
                           viewport_width, viewport_height,
                           /*backdrop_pass=*/true);
+            markSubPhase("backdrop flush");
             bd_rpe->end();
 
             // Blur the captured backdrop.
             blurred_backdrop_tex_ = draw_backend_->blurTexture(
                 backdrop_tex_, max_sigma_x_, max_sigma_y_, *encoder);
+            markSubPhase("backdrop blur");
         }
 
         // ------------------------------------------------------------------
@@ -180,10 +194,13 @@ namespace systems::leal::campello_widgets
         main_desc.colorAttachments = {main_ca};
 
         auto main_rpe = encoder->beginRenderPass(main_desc);
+        markSubPhase("main begin");
         flushDrawList(draw_list, main_rpe,
                       viewport_width, viewport_height,
                       /*backdrop_pass=*/false);
+        markSubPhase("main flush");
         main_rpe->end();
+        markSubPhase("main end");
 
         frame_encoder_ = nullptr;
         frame_target_.reset();
@@ -197,7 +214,14 @@ namespace systems::leal::campello_widgets
         }
 
         auto cmd_buffer = encoder->finish();
+        markSubPhase("finish");
         device_->submit(std::move(cmd_buffer));
+        markSubPhase("submit");
+
+        if (print_sub_phases)
+            std::fprintf(stderr, "  [raster] %-16s %6.3f ms\n", "TOTAL",
+                std::chrono::duration<float, std::milli>(
+                    std::chrono::steady_clock::now() - raster_start).count());
 
         const auto raster_end = std::chrono::steady_clock::now();
         raster_sampler_.recordDuration(
@@ -323,6 +347,21 @@ namespace systems::leal::campello_widgets
         // BackdropFilter child-skip counter (can nest theoretically).
         int backdrop_skip_depth = 0;
 
+        // Per-draw-command-type timing breakdown (diagnostic only — see
+        // DebugFlags::printRasterSubPhaseTimings doc comment).
+        const bool print_breakdown = !backdrop_pass && DebugFlags::printRasterSubPhaseTimings;
+        struct TypeStats { int count = 0; float ms = 0.0f; };
+        TypeStats rect_stats, text_stats, image_stats, circle_stats, oval_stats, rrect_stats, line_stats;
+        auto timeDraw = [&](TypeStats& stats, auto&& fn)
+        {
+            if (!print_breakdown) { fn(); return; }
+            const auto t0 = std::chrono::steady_clock::now();
+            fn();
+            stats.ms += std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - t0).count();
+            ++stats.count;
+        };
+
         for (const auto& cmd : commands)
         {
             std::visit([&](auto&& c)
@@ -367,31 +406,31 @@ namespace systems::leal::campello_widgets
                 // ── Main dispatch ────────────────────────────────────────
                 if constexpr (std::is_same_v<T, DrawRectCmd>)
                 {
-                    draw_backend_->drawRect(c, current_transform, current_clip, *rpe);
+                    timeDraw(rect_stats, [&] { draw_backend_->drawRect(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, DrawTextCmd>)
                 {
-                    draw_backend_->drawText(c, current_transform, current_clip, *rpe);
+                    timeDraw(text_stats, [&] { draw_backend_->drawText(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, DrawImageCmd>)
                 {
-                    draw_backend_->drawImage(c, current_transform, current_clip, *rpe);
+                    timeDraw(image_stats, [&] { draw_backend_->drawImage(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, DrawCircleCmd>)
                 {
-                    draw_backend_->drawCircle(c, current_transform, current_clip, *rpe);
+                    timeDraw(circle_stats, [&] { draw_backend_->drawCircle(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, DrawOvalCmd>)
                 {
-                    draw_backend_->drawOval(c, current_transform, current_clip, *rpe);
+                    timeDraw(oval_stats, [&] { draw_backend_->drawOval(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, DrawRRectCmd>)
                 {
-                    draw_backend_->drawRRect(c, current_transform, current_clip, *rpe);
+                    timeDraw(rrect_stats, [&] { draw_backend_->drawRRect(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, DrawLineCmd>)
                 {
-                    draw_backend_->drawLine(c, current_transform, current_clip, *rpe);
+                    timeDraw(line_stats, [&] { draw_backend_->drawLine(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, PushTransformCmd>)
                 {
@@ -447,6 +486,24 @@ namespace systems::leal::campello_widgets
                 // for a later phase and silently fall through for now.
 
             }, cmd);
+        }
+
+        if (print_breakdown)
+        {
+            auto printType = [](const char* label, const TypeStats& s)
+            {
+                if (s.count == 0) return;
+                std::fprintf(stderr, "    %-8s n=%-5d total=%6.3f ms  avg=%6.4f ms\n",
+                    label, s.count, s.ms, s.ms / s.count);
+            };
+            std::fprintf(stderr, "  [flush breakdown]\n");
+            printType("rect",   rect_stats);
+            printType("text",   text_stats);
+            printType("image",  image_stats);
+            printType("circle", circle_stats);
+            printType("oval",   oval_stats);
+            printType("rrect",  rrect_stats);
+            printType("line",   line_stats);
         }
     }
 

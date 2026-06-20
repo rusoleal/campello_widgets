@@ -180,10 +180,6 @@ namespace systems::leal::campello_widgets
                     );
                 }
 
-                std::cerr << "[ImageWidget] Rendering image " << current_result_.image->width
-                          << "x" << current_result_.image->height
-                          << " texture_ptr=" << current_result_.image->texture.get() << "\n";
-
                 // Build the actual image display
                 Size display_size = w.width.has_value() && w.height.has_value()
                     ? Size{*w.width, *w.height}
@@ -196,8 +192,6 @@ namespace systems::leal::campello_widgets
                     w.alignment,
                     w.opacity
                 );
-                
-                std::cerr << "[ImageWidget] RawImage created with texture=" << raw_image->texture.get() << "\n";
 
                 // Apply frame builder if provided
                 if (w.frame_builder) {

@@ -544,16 +544,291 @@ metric bug. Two separate things worth investigating:
    batched (e.g. one quad per character, no glyph-atlas batching, no instancing
    for repeated rect/border draws).
 
-**Suggested next steps** (not started):
-- Instrument `Renderer::flushDrawList()` with sub-phase timestamps (encoder
-  creation, backdrop pass, main pass, finish+submit) to see where the ~3.5ms
-  baseline actually goes even for one button.
-- Audit the Metal draw backend (`src/macos/metal_draw_backend.mm`) for batching
-  opportunities — particularly text glyph rendering and repeated rect/border draws,
-  which are likely the largest contributors in a widget-heavy UI like an editor.
-- Re-measure `hello` and the editor after each change to confirm real improvement
-  (the two-lane overlay now makes this directly observable, unlike the old
-  call-cadence metric).
+**Findings (2026-06-20)** — instrumented `Renderer::renderFrame()`/`flushDrawList()`
+with sub-phase timestamps, gated behind a new (zero-cost-when-off)
+`DebugFlags::printRasterSubPhaseTimings`, and measured `hello` in Release:
+
+- **Hypothesis 1 (fixed per-frame overhead) is ruled out.** `createCommandEncoder()`,
+  `beginRenderPass()`, `endRenderPass()`, `finish()`, and `submit()` together cost
+  **<0.3ms total** per frame. Essentially 100% of raster time (3.1–8ms measured) is
+  spent inside `flushDrawList()` actually issuing draw commands.
+- **Hypothesis 2 (no batching) is confirmed, and the cause is worse than "no batching"
+  — there's no caching at all.** Per-draw-command-type breakdown for one `hello`
+  frame: 62–68 `DrawRectCmd`s at ~0.02–0.05ms each (~1.3–3ms total) vs. only
+  **13** `DrawTextCmd`s at **~0.13–0.32ms each** (~1.7–4.2ms total) — text draws are
+  6–10× costlier per call than rects despite being a fifth of the draw-call count.
+- **Root cause located**: `MetalDrawBackend::drawText()`
+  (`src/macos/metal_draw_backend.mm:632-746`). For *every* `DrawTextCmd`, *every
+  frame*, regardless of whether the text/style changed since the last frame, it:
+  1. `CTFontCreateWithName(...)` — font lookup/creation from scratch.
+  2. Builds an `NSAttributedString`, then `CTLineCreateWithAttributedString` +
+     `CTLineGetTypographicBounds` to measure it.
+  3. Allocates a fresh CPU pixel buffer + `CGBitmapContext`.
+  4. `CTLineDraw(...)` — full CoreText glyph layout and CPU rasterization.
+  5. **Allocates a brand-new GPU texture** (`device_->createTexture()`) sized to
+     fit, and `texture->upload()`s the freshly rasterized pixels into it.
+  6. Draws a textured quad with that one-off texture, which is then discarded.
+
+  There is no glyph atlas and no per-string/style texture cache of any kind —
+  static, unchanging text (e.g. a button label that never updates) re-runs this
+  entire CPU rasterize + GPU texture allocate/upload pipeline on every single
+  frame. This scales with *text widget count*, not with whether anything visible
+  actually changed, which is exactly consistent with `campello_editor`'s far
+  worse ~16.6ms (many more, mostly-static, text-bearing widgets: tree labels,
+  inspector fields) and explains why even `hello`'s "trivial" UI (13 text draws)
+  already costs several ms.
+
+**Fix implemented (2026-06-20)**: `MetalDrawBackend` now caches the rasterized
+texture per `TextSpan` (text content + font family/size/color/weight/italic —
+already DPR-correct since `font_size` is pre-scaled to physical pixels before
+reaching the backend). `lookupOrCreateTextTexture()` only runs the CoreText
+rasterize + GPU texture allocate/upload path on a cache miss; a hit just
+returns the existing entry. Eviction: `evictStaleTextTextures()` runs once per
+frame (hooked into the existing `setViewport()` per-frame call) and drops any
+entry not drawn in the last `kTextTextureMaxAgeFrames` (120) frames, so text
+that's scrolled away/unmounted or changes every frame (e.g. a live counter)
+doesn't grow the cache unboundedly — see `src/macos/metal_draw_backend.hpp`/`.mm`.
+
+**Second, larger cause found while verifying the fix**: re-measuring after the
+cache change alone showed **no improvement** — average per-text-draw cost was
+unchanged even with ~7 of 9 distinct strings hitting the cache every frame
+(confirmed via temporary hit/miss logging). The actual dominant cost turned out
+to be in `MetalDrawBackend::drawTexturedQuad()` (used by every text **and**
+image draw), independent of caching:
+1. **Leftover debug `std::cerr` logging on every single call** — two
+   unconditional prints (`"drawTexturedQuad: tex=..."` and `"Draw call
+   submitted"`), executed on every textured-quad draw regardless of any debug
+   flag. Removed.
+2. `device_->createBindGroup()` and `device_->createBuffer()` are still
+   allocated fresh on *every* draw call, cached texture or not — this is a
+   separate, not-yet-addressed cost (see "further work" below).
+
+Removing just the two stray `std::cerr` calls (independent of the text-texture
+cache) is what produced the actual measured improvement.
+
+**Result**: `hello` in Release, steady-state (post-warmup) average raster time
+across 27 frames: **~3.85ms → ~2.15ms (-44%)**. First-frame (cold cache) cost
+is unchanged since every string is necessarily a miss once. Full universal
+test suite (389 tests) still passes; `VisualFidelity*`/`CanvasApiFidelity`
+golden-image tests were skipped in this environment (missing Flutter golden
+fixtures, not GPU-related) so pixel-level correctness of the cached-texture
+path wasn't re-verified by automated tests — manually verified via stderr
+trace (correct hit/miss pattern, no Metal/CoreText errors across 4 runs) since
+screenshot capture isn't available in this sandboxed dev environment (no
+attached display compositor).
+
+**`campello_editor` re-measured (2026-06-20, user-reported)**: moving an empty
+scene now shows **UI: 2.5ms / RASTER: 5.7ms** — down from the original
+~16.6ms raster baseline (**-66%**), a larger drop than `hello`'s -44% as
+predicted (the editor has far more static, mostly-unchanging text: tree
+labels, inspector fields). Confirms the text-texture cache + debug-print
+removal were the right first fix. RASTER is still ~2× the 16ms/frame budget on
+its own (UI 2.5ms + RASTER 5.7ms ≈ 8.2ms total, within budget at 60fps, but
+RASTER alone would blow the budget if UI cost grew), so there's still room —
+see next item.
+
+**`campello_editor` re-measured again after the BindGroup/Buffer fix below
+(2026-06-20, user-reported)**: empty scene now shows **UI: 2.6ms / RASTER:
+1.7ms** — another **-70%** on top of the previous 5.7ms, **-90% from the
+original ~16.6ms baseline**. Again a larger drop than `hello`'s -58% for the
+same fix, consistent with the editor having far more total draw calls per
+frame to amortize the buffer-pool/bind-group-cache savings across. UI (2.6ms)
++ RASTER (1.7ms) ≈ 4.3ms total — comfortable headroom under the 16ms/60fps
+budget even on the editor's heavier UI.
+
+**Fix implemented (2026-06-20)**: addressed the per-draw `createBindGroup`/
+`createBuffer` cost identified above.
+- **BindGroup caching for text**: `TextTextureCacheEntry` now also stores a
+  `BindGroup` built once alongside the texture (same cache, same eviction —
+  see `src/macos/metal_draw_backend.hpp`/`.mm`). `drawTexturedQuad()` takes
+  an optional `cached_bind_group` parameter; `drawText()` passes the cached
+  one through, skipping `Device::createBindGroup()` entirely on a cache hit.
+  `drawImage()`/`drawBackdropFilter()` still build a fresh bind group each
+  call (their source textures aren't in this cache) — not addressed here.
+- **Pooled uniform buffers**: added `UniformBufferPool` (4-generation ring of
+  reusable `Buffer`s; each draw still gets fresh contents via `upload()`, but
+  the underlying GPU buffer objects are recycled across frames instead of
+  calling `Device::createBuffer()` — a real GPU allocation — on every single
+  draw). Wired into all four uniform-buffer call sites: `drawFilledRect`,
+  `drawShape`, `drawLine`, `drawTexturedQuad` (`BlurUniforms`/
+  `ShaderMaskUniforms` in the offscreen-compositing path were left
+  untouched — lower frequency, out of scope for this pass).
+
+**Result**: `hello` in Release, steady-state average raster time:
+**~2.15ms → ~0.89ms (-58%)**, on top of the earlier -44% — **~3.85ms → ~0.89ms
+overall (-77%)** from the original baseline. Per-draw averages now: rect
+~0.004–0.05ms (was ~0.02–0.05ms), text ~0.002–0.05ms (was ~0.13–0.32ms before
+any fix). This is now in Flutter's "well under 1ms for simple content"
+ballpark even with 100+ draw calls (the performance overlay's own scrolling
+history bars). Full test suite (389 tests) still passes; same visual-
+verification caveat as above (no screenshot capture available in this
+sandboxed environment; verified via clean stderr traces across multiple runs
+instead).
+
+**Further work (not started)**:
+- `drawImage()`/`drawBackdropFilter()` still rebuild their `BindGroup` every
+  call — lower priority since images are typically far less numerous than
+  text/rects in this codebase's UIs so far, but worth revisiting if an
+  image-heavy screen shows up as a bottleneck.
+- Get real screenshot/visual verification working in this dev environment
+  (or run the Flutter golden generation step) so future raster changes here
+  can be confirmed pixel-correct, not just by absence of errors.
+
+**UI-side counterpart found (2026-06-20, user-reported)**: same bug, different
+side of the frame. `RenderBox::setChild()` (`src/ui/render_box.cpp`) had two
+unconditional `std::cerr` lines on every call — and `setChild()` is invoked
+from `SingleChildRenderObjectElement::performBuild()` → `syncChildRenderObject()`
+for **every single rebuild** of *any* single-child wrapper widget (`Padding`,
+`Center`, `Container`, `ConstrainedBox`, `Align`, `ClipRect`, `Opacity`,
+`DecoratedBox`, …) — not just at mount. Since that's nearly every widget in a
+typical tree, this fired continuously during any interaction that triggers
+rebuilds (e.g. dragging/moving an object in the editor). Removed both lines.
+
+While auditing for the same pattern, also found and fixed
+`ImageWidgetState::build()` (`src/widgets/image_widget.cpp`) logging twice on
+every rebuild in its steady-state (`completed`) case — same bug, hits any
+`Image` widget in a continuously-rebuilding subtree (icons/thumbnails). Left
+the *other* `std::cerr` calls in `image_loader.cpp`/`image_provider.cpp`
+(async load lifecycle, fires once per actual load, not per rebuild) and
+`run_app.mm`'s mouseDown/mouseUp logging (once per click, not per frame) — not
+hot-path, lower priority, can be cleaned up later as general hygiene rather
+than a performance fix.
+
+Full test suite (389 tests) still passes. Awaiting re-measurement in
+`campello_editor` to quantify the UI-lane improvement.
+
+### RepaintBoundary — paint-level repaint scoping (2026-06-20)
+
+Following up on the `RenderBox::setChild()` fix above, re-measured
+`campello_editor`'s UI time while orbiting the camera over an empty scene:
+**UI: 2.0ms**. Added temporary timing instrumentation directly in
+`scene_editor_tab.cpp` (around `renderScene()` and the rest of
+`buildViewportPanel()`'s `LayoutBuilder` callback, plus `buildHierarchyPanel()`/
+`buildInspectorPanel()` in `build()`) — sum of all of it: **~0.3-0.4ms**,
+leaving **~1.6ms unaccounted for**, not attributable to anything specific to
+`SceneEditorTab`.
+
+**Root cause traced into `campello_widgets` itself**: `RenderObject::layout()`
+(`src/ui/render_object.cpp`) correctly skips `performLayout()` when not dirty
+and constraints are unchanged — but `RenderObject::paint()`, despite its own
+doc comment claiming the same ("Calls `performPaint()` if the object is
+paint-dirty"), called `performPaint()` **unconditionally**, every time. Since
+`markNeedsPaint()` propagates upward to the root, and `root_->paint()` walks
+the *entire* tree once dirty, **every widget in the app — menu bar, dock
+panels, hierarchy, inspector, status bar — re-walked and re-emitted draw
+commands every single frame**, for as long as anything anywhere was dirty
+(e.g. for the whole duration of a camera drag), regardless of whether that
+widget's own content changed.
+
+**Fix — added `RepaintBoundary`** (mirrors Flutter's), the first
+paint-level caching primitive in the framework:
+- `RenderObject::paint()` is now `virtual` (`inc/campello_widgets/ui/render_object.hpp`).
+- `Canvas::appendRecorded(const DrawList&)` (`canvas.hpp`) — bulk-appends a
+  pre-recorded `DrawList` into the live recording, used to "replay" a cached
+  subtree without re-walking it.
+- `RenderRepaintBoundary` (`inc/campello_widgets/ui/render_repaint_boundary.hpp` /
+  `src/ui/render_repaint_boundary.cpp`) overrides `paint()`: if clean and a
+  cache exists, replays the cached `DrawList` (recorded in local coordinates)
+  via `save()`/`translate()`/`appendRecorded()`/`restore()` — **never calls
+  `performPaint()`, never walks the child subtree**. If dirty, records the
+  child's output into a standalone headless `PaintContext` first, caches it,
+  then replays via the same path. No new invalidation plumbing needed —
+  `markNeedsLayout()`/`markNeedsPaint()`'s existing upward propagation already
+  correctly dirties a boundary whenever anything inside it changes.
+- `RepaintBoundary` widget (`inc/campello_widgets/widgets/repaint_boundary.hpp` /
+  `src/widgets/repaint_boundary.cpp`) — mirrors `ClipRect`'s widget/render-object
+  pairing exactly, no clipping (matches Flutter: a pure compositing/caching
+  boundary, not a clip).
+- New tests: `tests/universal/test_render_repaint_boundary.cpp` (4 tests) —
+  verify cache-hit skips `performPaint()` entirely, `markNeedsPaint()` and a
+  constraints change both correctly force re-recording. Full suite: 393/393
+  passing (was 389; +4 new).
+
+**Important caveat found while applying this to the editor's viewport**:
+this fix alone will likely **not** move `campello_editor`'s specific ~1.6ms,
+because the cause there is one level up from paint. Checked
+`Flex::updateRenderObject()` (Row/Column) and `ColoredBox::updateRenderObject()`
+— both call `markNeedsLayout()`/`markNeedsPaint()` **unconditionally on every
+reconciliation pass**, regardless of whether the new value actually differs
+from the old one. This is a consistent framework-wide pattern, not a one-off.
+Since `SceneEditorTabState::build()` reconstructs *all three* panels
+(hierarchy/viewport/inspector) with fresh `WidgetRef` instances on every
+camera-drag frame (via the `setState()` override documented in
+`scene_editor_tab.h`), every render object in all three panels gets
+re-dirtied by its own reconciliation, every frame — independent of any
+`RepaintBoundary`. The boundary helps the *general* Flutter case (an
+unrelated sibling whose Element was never revisited during `buildScope()`),
+not this specific "whole tab rebuilds on every camera tick" architecture.
+
+Applied `RepaintBoundary` around the viewport's content in
+`buildViewportPanel()` anyway (correct, low-risk, real infrastructure other
+screens will benefit from) — built cleanly into `campello_editor` (had to
+force a `cmake` reconfigure of the editor's own build for the new
+campello_widgets sources to be picked up, since `file(GLOB_RECURSE ...)`
+without `CONFIGURE_DEPENDS` doesn't auto-detect new files).
+
+**Real fix for the editor's specific gap — implemented (2026-06-20)**: scoped
+the *rebuild*, not just the paint, entirely within `campello_editor` (no
+further `campello_widgets` changes needed). Extracted `SceneEditorTab`'s
+viewport into its own `ViewportPanel`/`ViewportPanelState`
+(`inc/editor/tabs/viewport_panel.h` / `src/editor/tabs/viewport_panel.cpp`),
+owning its own `setState()`. Camera orbit/pan/zoom now only marks that nested
+Element dirty; `SceneEditorTabState`'s Element is never revisited during a
+pure camera-drag frame, so hierarchy/inspector's render objects' `needs_paint_`
+genuinely stays false — which is what makes wrapping them in `RepaintBoundary`
+(in `SceneEditorTabState::build()`, moved off the viewport since it no longer
+needs it there) actually skip their repaint.
+
+Two cases still need to reach the parent explicitly, since they mutate scene
+data the (sibling, not ancestor) inspector displays — `ViewportPanel` gained
+an `onSceneMutated` callback prop for these: gizmo-axis dragging (mutates the
+selected entity's `TransformComponent` directly) and GLTF drag-drop import
+(adds entities). Plain camera movement doesn't touch it.
+
+Verified: full `campello_widgets` test suite unaffected (394/394, this was a
+`campello_editor`-only change). Awaiting user re-measurement of UI time during
+camera orbit, and functional verification that gizmo-drag still live-updates
+the inspector and GLTF drop still refreshes the hierarchy.
+
+**Visual regression found and fixed (2026-06-20, user-reported)**: as
+predicted, no measurable UI-time change in the editor — but the user also
+reported the scene viewport rendering *wrong-clipped*, with the floor grid
+visible outside the viewport widget's bounds, "like the clipping area has
+some x offset." Root cause: `RenderRepaintBoundary`'s first implementation
+recorded the child's paint into a **separate, origin-relative headless
+`PaintContext`** (offset `{0,0}`), then replayed the cached `DrawList` by
+wrapping it in `canvas.translate(offset)` on the live context. That's correct
+for ordinary draw-command geometry, which is *transform-deferred* — each
+command's coordinates are multiplied by the ambient transform at flush time
+(`Renderer::flushDrawList()`), so a `PushTransformCmd{translate(offset)}`
+wrapper correctly relocates them. **Clip rects are not transform-deferred**:
+`Canvas::clipRect()` bakes an *absolute* rect at record time, and
+`flushDrawList()`'s `PushClipRectCmd` handling is a direct assignment
+(`current_clip = c.rect;`) with no transform applied at flush time. So the
+viewport's `ClipRect` (around its content, to keep projected grid/gizmo lines
+that land outside the viewport's pixel rect from bleeding into other panels)
+got recorded as clipping to `(0,0)-(w,h)` — the fabricated local origin — and
+the wrapping translate never moved it, leaving the clip stuck at the
+top-left of the screen while the (correctly-translated) draw commands
+rendered at the real position.
+
+**Fix**: record the cache by painting the child into the *live* context at
+its real on-screen offset (no separate headless context), and remember which
+slice of the resulting `DrawList` that produced; replay is then a direct
+`appendRecorded()` with no translate wrapper, since the cached commands
+already have everything — including clip rects — baked in correctly for that
+exact offset. Documented the resulting constraint clearly in
+`RenderRepaintBoundary`'s class doc: a clean replay assumes the boundary's
+on-screen offset hasn't changed since it was recorded (`positionChild()`,
+used by `Stack`/`Positioned`, deliberately doesn't mark needs-paint on a pure
+reposition — don't wrap something repositioned without also dirtying it).
+Added a dedicated regression test,
+`RenderRepaintBoundary.CleanReplayKeepsClipRectAtCorrectAbsolutePosition`
+(wraps a `RenderClipRect` — the same shape as the production usage — and
+asserts the recorded/replayed `PushClipRectCmd` lands at the real offset, not
+a fabricated origin); confirmed it fails against the old implementation.
+Suite: 394/394 passing (+1 from this test). Editor rebuilt cleanly; awaiting
+visual confirmation the clipping is now correct.
 
 ### Evaluation: Splitting UI and Raster into Two Real Threads (Flutter-style) (2026-06-19)
 

@@ -198,6 +198,7 @@
 #include <campello_widgets/ui/render_clip_rrect.hpp>
 #include <campello_widgets/ui/render_clip_oval.hpp>
 #include <campello_widgets/ui/render_clip_path.hpp>
+#include <campello_widgets/ui/render_repaint_boundary.hpp>
 #include <campello_widgets/widgets/constrained_box.hpp>
 #include <campello_widgets/widgets/aspect_ratio.hpp>
 #include <campello_widgets/widgets/fractionally_sized_box.hpp>
@@ -208,6 +209,7 @@
 #include <campello_widgets/widgets/clip_rrect.hpp>
 #include <campello_widgets/widgets/clip_oval.hpp>
 #include <campello_widgets/widgets/clip_path.hpp>
+#include <campello_widgets/widgets/repaint_boundary.hpp>
 
 // Animation transitions (explicit)
 #include <campello_widgets/widgets/fade_transition.hpp>

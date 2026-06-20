@@ -73,7 +73,20 @@
       "Bash(/Users/rubenleal/Documents/GitHub/campello_widgets/build/darwin/tests/campello_widgets_tests --gtest_filter=\"RenderSlider.*\")",
       "Bash(rm -rf /tmp/cw_configure_test)",
       "Bash(cmake -S . -B /tmp/cw_configure_test -DBUILD_TESTS=ON)",
-      "Bash(cmake -S . -B build/darwin -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Debug)"
+      "Bash(cmake -S . -B build/darwin -DBUILD_TESTS=ON -DBUILD_EXAMPLES=OFF -DCMAKE_BUILD_TYPE=Debug)",
+      "Bash(cmake -S . -B build/darwin-release -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON)",
+      "Bash(cmake --build build/darwin-release --target campello_widgets_hello -j8)",
+      "Bash(timeout 3 ./campello_widgets_hello)",
+      "Read(//tmp/**)",
+      "Bash(awk '/MISS \"RASTER/{c++} c==1{print} /MISS \"RASTER/{if\\(c==2\\) exit}' /tmp/cache_debug.log)",
+      "Bash(awk *)",
+      "Bash(open build/darwin-release/examples/macos_hello/campello_widgets_hello.app)",
+      "Bash(screencapture -x /tmp/hello_screenshot3.png)",
+      "Bash(pkill -f campello_widgets_hello)",
+      "Bash(grep *)",
+      "Bash(ls dependencies/)",
+      "Bash(cat dependencies/campello_widgets.cmake)",
+      "Bash(cmake --build build --target CampelloEditor -j8)"
     ]
   }
 }

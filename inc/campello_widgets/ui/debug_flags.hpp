@@ -94,6 +94,17 @@ namespace systems::leal::campello_widgets
          * Equivalent to Flutter's `debugPaintPointersEnabled`.
          */
         inline static bool paintPointersEnabled = false;
+
+        /**
+         * @brief Print a breakdown of `Renderer::renderFrame()`'s raster
+         * phase (encoder creation, render-pass begin/end, draw-list flush,
+         * finish + submit) to stderr every frame.
+         *
+         * Diagnostic-only — the raster lane on the performance overlay
+         * (`showPerformanceOverlay`) reports a single total; this breaks
+         * that total down to find where the cost actually goes.
+         */
+        inline static bool printRasterSubPhaseTimings = false;
     };
 
 } // namespace systems::leal::campello_widgets
