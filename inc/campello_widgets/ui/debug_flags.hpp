@@ -52,15 +52,20 @@ namespace systems::leal::campello_widgets
         inline static bool showDebugBanner = false;
 
         /**
-         * @brief Draw an FPS performance overlay in the bottom-left corner.
+         * @brief Draw a unified frame-timing overlay in the bottom-left corner.
          *
-         * Displays a scrolling bar chart of the last 64 frame times and a
-         * live FPS / ms-per-frame label, mirroring Flutter's
-         * `showPerformanceOverlay`. Bar heights are scaled so that 3× the
-         * target frame budget (48 ms at 60 fps) fills the chart area.
-         * Bars are green when the frame was on budget, red when it exceeded
-         * the 16 ms target. Horizontal guide lines mark 16 ms (green) and
-         * 32 ms (red).
+         * Mirrors Flutter DevTools' "Flutter frames chart": each frame is
+         * a group of two adjacent bars (UI build/layout/paint, then raster
+         * encode/submit) followed by a blank gap, sharing a single chart
+         * area and a single budget reference line, over the most recent
+         * ~20 frames (the underlying samplers retain more history, used
+         * for the averages shown in the label). Bar heights are scaled so
+         * that 2× the target frame budget (33.3 ms at 60 fps) fills the
+         * chart area — the reference line therefore sits at the panel's
+         * vertical midpoint, and a bar filling the whole panel height is
+         * 30fps-equivalent cost. Each bar is colored by phase (UI vs
+         * raster) when within the 16.6 ms target, or red when it exceeded
+         * the target.
          */
         inline static bool showPerformanceOverlay = false;
 

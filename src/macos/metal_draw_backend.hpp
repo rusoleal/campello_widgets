@@ -143,7 +143,7 @@ public:
         line_uniform_pool_.beginFrame();
         quad_uniform_pool_.beginFrame();
     }
-    void setDevicePixelRatio(float dpr) noexcept { dpr_ = dpr; }
+    void setDevicePixelRatio(float dpr) noexcept override { dpr_ = dpr; }
 
     /** Returns true if all render pipelines were successfully compiled. */
     bool isValid() const noexcept { return rect_pipeline_ != nullptr; }

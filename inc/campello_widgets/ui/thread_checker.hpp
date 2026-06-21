@@ -27,16 +27,36 @@ namespace systems::leal::campello_widgets
 class ThreadChecker
 {
 public:
+    /// The UI-thread checker — bound once at startup by the platform's
+    /// runApp() entry point. Unchanged by the raster-thread split: every
+    /// existing call site (Renderer::buildFrame, RenderObject::markNeeds*,
+    /// PointerDispatcher, FocusManager, TickerScheduler, AnimationController)
+    /// keeps asserting against this same instance.
     static ThreadChecker& instance() noexcept;
 
-    /// Records the current thread as the UI thread. Called once at startup.
+    /**
+     * @brief A second, independent checker for the raster thread.
+     *
+     * Bound by `RasterThread::workerLoop()` on platforms that adopt a
+     * dedicated raster thread. Unbound (hasBinding() == false) on
+     * platforms that still call `Renderer::rasterFrame()` synchronously
+     * from the UI thread via the `renderFrame()` back-compat wrapper —
+     * code that wants to assert "I'm on the raster thread" should check
+     * `hasBinding()` first so it doesn't fire on those platforms.
+     */
+    static ThreadChecker& rasterInstance() noexcept;
+
+    /// Records the current thread as the bound thread. Called once at startup.
     void bindToCurrentThread() noexcept;
 
-    /// Returns true if the current thread matches the bound UI thread.
+    /// Returns true if the current thread matches the bound thread.
     bool isOnBoundThread() const noexcept;
 
+    /// Returns true if bindToCurrentThread() has been called on this instance.
+    bool hasBinding() const noexcept { return bound_; }
+
     /**
-     * @brief Crashes with a helpful message if not on the UI thread.
+     * @brief Crashes with a helpful message if not on the bound thread.
      *
      * No-op if bindToCurrentThread() has not yet been called (e.g. in unit
      * tests that don't call runApp()).

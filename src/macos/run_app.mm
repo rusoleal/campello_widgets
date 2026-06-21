@@ -14,6 +14,7 @@
 #import <campello_widgets/ui/ticker.hpp>
 #import <campello_widgets/ui/frame_scheduler.hpp>
 #import <campello_widgets/ui/thread_checker.hpp>
+#import <campello_widgets/ui/raster_thread.hpp>
 #import <campello_widgets/diagnostics/widget_inspector.hpp>
 
 #include <chrono>
@@ -635,25 +636,54 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 
 @interface CampelloMTKDelegate : NSObject <MTKViewDelegate>
 - (instancetype)initWithDevice:(std::shared_ptr<GPU::Device>)device
-                      renderer:(std::shared_ptr<Widgets::Renderer>)renderer
-                   backendPtr:(Widgets::MetalDrawBackend*)backendPtr;
+                      renderer:(std::shared_ptr<Widgets::Renderer>)renderer;
+
+/// Stops and joins the raster thread immediately. Safe to call defensively
+/// from applicationWillTerminate: in case process exit short-circuits
+/// normal Cocoa dealloc ordering. Idempotent — -dealloc calls this again.
+- (void)stopRasterThread;
 @end
 
 @implementation CampelloMTKDelegate {
-    std::shared_ptr<GPU::Device>         _device;
-    std::shared_ptr<Widgets::Renderer>   _renderer;
-    Widgets::MetalDrawBackend*           _backendPtr;
+    std::shared_ptr<GPU::Device>           _device;
+    std::shared_ptr<Widgets::Renderer>     _renderer;
+    // Declared last so its destructor (stop()+join) runs before _device/
+    // _renderer would otherwise be released by ARC's reverse-declaration-
+    // order ivar teardown — but -dealloc below resets it explicitly first
+    // anyway, so this ordering is belt-and-suspenders, not load-bearing.
+    std::unique_ptr<Widgets::RasterThread> _rasterThread;
 }
 
 - (instancetype)initWithDevice:(std::shared_ptr<GPU::Device>)device
                       renderer:(std::shared_ptr<Widgets::Renderer>)renderer
-                   backendPtr:(Widgets::MetalDrawBackend*)backendPtr
 {
     if (!(self = [super init])) return nil;
-    _device     = device;
-    _renderer   = renderer;
-    _backendPtr = backendPtr;
+    _device   = device;
+    _renderer = renderer;
+
+    _rasterThread = std::make_unique<Widgets::RasterThread>(
+        [renderer = _renderer](const Widgets::FramePackage& pkg) {
+            renderer->rasterFrame(pkg);
+        });
+    _rasterThread->start();
+
     return self;
+}
+
+- (void)stopRasterThread
+{
+    _rasterThread.reset();
+}
+
+- (void)dealloc
+{
+    // Must run before _renderer/_device are released: stop() blocks until
+    // any in-flight raster work finishes and joins the worker thread, so
+    // no raster call can ever observe a half-destroyed Renderer/Device.
+    [self stopRasterThread];
+#if !__has_feature(objc_arc)
+    [super dealloc];
+#endif
 }
 
 - (void)drawInMTKView:(MTKView *)view
@@ -672,25 +702,52 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     float w = (float)drawableSize.width;
     float h = (float)drawableSize.height;
 
+    // Still UI-thread state: marks the root dirty on change, read back by
+    // the next buildFrame()/layoutPass() call on this same thread.
     _renderer->setDevicePixelRatio(static_cast<float>(scale));
-    _backendPtr->setViewport(w, h);
-    _backendPtr->setDevicePixelRatio(static_cast<float>(scale));
 
     // Note: PointerDispatcher/TickerScheduler are ticked inside
-    // Renderer::renderFrame() itself — don't duplicate that here.
+    // Renderer::buildFrame() itself — don't duplicate that here.
     auto colorView = GPU::TextureView::fromNative((__bridge void *)drawable.texture);
-    _renderer->setPendingDrawable((__bridge void *)drawable);
-    bool rendered = colorView && _renderer->renderFrame(colorView, w, h);
+    if (!colorView) return;
 
-    if (!rendered) {
-        // renderFrame skipped (widget tree not dirty) — clear the scheduled
+    auto package = _renderer->buildFrame(w, h);
+    if (!package) {
+        // buildFrame skipped (widget tree not dirty) — clear the scheduled
         // present so the pointer doesn't dangle into the next frame.
         _device->scheduleNextPresent(nullptr);
+        return;
+    }
+
+    package->target = colorView;
+
+    // The drawable must stay alive until the raster thread has scheduled
+    // its presentation and submitted the command buffer — which may run
+    // well past this call's autorelease pool. CFBridgingRetain()/
+    // CFBridgingRelease() (the *functions*, not the __bridge_retained cast
+    // qualifier) correctly retain/release under both ARC and MRC, so this
+    // keeps working unchanged regardless of this file's ARC setting.
+    // Tying the retain to the package's shared_ptr<void> ties the
+    // drawable's lifetime to the FramePackage itself, not to this stack
+    // frame, and releases it automatically (even on an early return inside
+    // rasterFrame()) when the package is destroyed.
+    package->retained_drawable = std::shared_ptr<void>(
+        (void*)CFBridgingRetain(drawable),
+        [](void* p) { if (p) CFBridgingRelease(p); });
+
+    if (_rasterThread) {
+        _rasterThread->submit(std::move(*package));
+    } else {
+        _renderer->rasterFrame(*package);
     }
 }
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size
 {
+    // No-op: under the depth-1 UI/raster handoff, at most one stale-sized
+    // FramePackage can ever be in flight, and the next drawInMTKView: call
+    // simply reads the new drawableSize — there's no separate "current
+    // size" state here to invalidate.
     (void)view;
     (void)size;
 }
@@ -885,7 +942,6 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 
     auto backendOwned = std::make_unique<Widgets::MetalDrawBackend>(
         _device, bgColor, pixelFmt);
-    Widgets::MetalDrawBackend* backendPtr = backendOwned.get();
 
     _renderer = std::make_shared<Widgets::Renderer>(
         _device, renderBox, bgColor);
@@ -904,8 +960,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // -----------------------------------------------------------------------
     _mtkDelegate = [[CampelloMTKDelegate alloc]
         initWithDevice:_device
-              renderer:_renderer
-           backendPtr:backendPtr];
+              renderer:_renderer];
     _metalView.delegate = _mtkDelegate;
 
     // -----------------------------------------------------------------------
@@ -956,6 +1011,16 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 {
     (void)sender;
     return YES;
+}
+
+- (void)applicationWillTerminate:(NSNotification *)notification
+{
+    (void)notification;
+    // Defensive: NSApp terminate: can short-circuit straight to exit()
+    // without guaranteeing -dealloc runs on the delegate chain. Stop the
+    // raster thread explicitly here too, so it's never left running
+    // against a Renderer/Device that's about to be torn down.
+    [_mtkDelegate stopRasterThread];
 }
 
 // ---------------------------------------------------------------------------

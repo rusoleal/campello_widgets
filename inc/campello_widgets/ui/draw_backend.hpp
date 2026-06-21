@@ -47,6 +47,17 @@ namespace systems::leal::campello_widgets
         virtual void setViewport(float /*w*/, float /*h*/) noexcept {}
 
         /**
+         * @brief Set the device pixel ratio for the current frame.
+         *
+         * Called from Renderer::rasterFrame() (the raster phase) with the
+         * DPR value frozen into that frame's FramePackage — backends that
+         * cache rasterized content keyed partly by physical-pixel size
+         * (e.g. a glyph/text-texture cache) must treat this as exclusively
+         * raster-phase state, not read it from elsewhere.
+         */
+        virtual void setDevicePixelRatio(float /*dpr*/) noexcept {}
+
+        /**
          * @brief Draw a filled or stroked rectangle.
          *
          * @param cmd       The draw rect command (rect + paint).

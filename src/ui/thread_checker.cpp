@@ -12,6 +12,12 @@ ThreadChecker& ThreadChecker::instance() noexcept
     return checker;
 }
 
+ThreadChecker& ThreadChecker::rasterInstance() noexcept
+{
+    static ThreadChecker checker;
+    return checker;
+}
+
 void ThreadChecker::bindToCurrentThread() noexcept
 {
     bound_id_ = std::this_thread::get_id();

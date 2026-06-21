@@ -63,12 +63,9 @@ namespace systems::leal::campello_widgets
         }
     }
 
-    bool Renderer::renderFrame(
-        std::shared_ptr<campello_gpu::TextureView> target,
-        float viewport_width,
-        float viewport_height)
+    std::optional<FramePackage> Renderer::buildFrame(float viewport_width, float viewport_height)
     {
-        ThreadChecker::instance().assertOnBoundThread("Renderer::renderFrame");
+        ThreadChecker::instance().assertOnBoundThread("Renderer::buildFrame");
         const auto now_tp = std::chrono::steady_clock::now().time_since_epoch();
         const uint64_t now_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
@@ -89,17 +86,75 @@ namespace systems::leal::campello_widgets
         layoutPass(viewport_width, viewport_height);
 
         if (!root_ || !root_->needsPaint())
-            return false;
+            return std::nullopt;
 
-        // Generate the draw list once (headless — no encoder).
-        const DrawList draw_list = generateDrawList(viewport_width, viewport_height);
+        // Generate the draw list once (headless — no encoder). This also
+        // paints the performance overlay, which reads raster_sampler_ —
+        // guard with sampler_mutex_ since rasterFrame() may be writing it
+        // concurrently on a separate raster thread.
+        DrawList draw_list;
+        {
+            std::lock_guard<std::mutex> lock(sampler_mutex_);
+            draw_list = generateDrawList(viewport_width, viewport_height);
+        }
 
         const auto build_end = std::chrono::steady_clock::now();
-        build_sampler_.recordDuration(
-            std::chrono::duration<float, std::milli>(build_end - build_start).count());
+        {
+            std::lock_guard<std::mutex> lock(sampler_mutex_);
+            build_sampler_.recordDuration(
+                std::chrono::duration<float, std::milli>(build_end - build_start).count());
+        }
 
         if (draw_list.empty())
-            return false;
+            return std::nullopt;
+
+        // Snapshot everything the raster phase needs into an immutable
+        // package — the raster phase must never read these Renderer
+        // members live, since buildFrame() may be called again (for the
+        // next frame) while rasterFrame() is still processing this one.
+        FramePackage package;
+        package.draw_list           = std::move(draw_list);
+        package.viewport_width      = viewport_width;
+        package.viewport_height     = viewport_height;
+        package.device_pixel_ratio  = device_pixel_ratio_;
+        package.clear_color         = clear_color_;
+        package.has_backdrop_filter = has_backdrop_filter_;
+        package.max_sigma_x         = max_sigma_x_;
+        package.max_sigma_y         = max_sigma_y_;
+
+        // Consume-and-clear the pending drawable, mirroring the old
+        // single-threaded contract exactly. Wrapped in a non-owning
+        // shared_ptr<void> so back-compat callers (setPendingDrawable() +
+        // renderFrame(), used by iOS/Android/Windows/Linux today) need no
+        // changes; platforms adopting a real raster thread should instead
+        // assign package.retained_drawable directly with an owning deleter
+        // after buildFrame() returns (see RasterThread-based platforms).
+        if (pending_drawable_) {
+            package.retained_drawable = std::shared_ptr<void>(pending_drawable_, [](void*) {});
+            pending_drawable_ = nullptr;
+        }
+
+        return package;
+    }
+
+    bool Renderer::rasterFrame(const FramePackage& package)
+    {
+        // Only asserted when a RasterThread has actually bound this checker
+        // (RasterThread::workerLoop()) — platforms that still call
+        // rasterFrame() synchronously from the UI thread via the
+        // renderFrame() back-compat wrapper have no binding here, so this
+        // is a no-op for them.
+        if (ThreadChecker::rasterInstance().hasBinding())
+            ThreadChecker::rasterInstance().assertOnBoundThread("Renderer::rasterFrame");
+
+        std::shared_ptr<campello_gpu::TextureView> target = package.target;
+        if (!target) return false;
+
+        const float dpr = package.device_pixel_ratio;
+        if (draw_backend_) {
+            draw_backend_->setViewport(package.viewport_width, package.viewport_height);
+            draw_backend_->setDevicePixelRatio(dpr);
+        }
 
         // "Raster" phase: GPU command encoding + submission — mirrors
         // Flutter's raster-thread timing. Note this measures CPU-side
@@ -129,10 +184,10 @@ namespace systems::leal::campello_widgets
         // Render the full scene to `backdrop_tex_` with backdrop-filter
         // children skipped.  The result is then blurred for use in Pass 2.
         // ------------------------------------------------------------------
-        if (has_backdrop_filter_ && draw_backend_)
+        if (package.has_backdrop_filter && draw_backend_)
         {
-            const uint32_t tw = static_cast<uint32_t>(viewport_width);
-            const uint32_t th = static_cast<uint32_t>(viewport_height);
+            const uint32_t tw = static_cast<uint32_t>(package.viewport_width);
+            const uint32_t th = static_cast<uint32_t>(package.viewport_height);
 
             // Allocate (or reuse) the backdrop texture.
             if (!backdrop_tex_ || backdrop_tex_w_ != tw || backdrop_tex_h_ != th)
@@ -154,25 +209,25 @@ namespace systems::leal::campello_widgets
             bd_ca.view          = bd_view;
             bd_ca.loadOp        = GPU::LoadOp::clear;
             bd_ca.storeOp       = GPU::StoreOp::store;
-            bd_ca.clearValue[0] = clear_color_.r;
-            bd_ca.clearValue[1] = clear_color_.g;
-            bd_ca.clearValue[2] = clear_color_.b;
-            bd_ca.clearValue[3] = clear_color_.a;
+            bd_ca.clearValue[0] = package.clear_color.r;
+            bd_ca.clearValue[1] = package.clear_color.g;
+            bd_ca.clearValue[2] = package.clear_color.b;
+            bd_ca.clearValue[3] = package.clear_color.a;
 
             GPU::BeginRenderPassDescriptor bd_desc{};
             bd_desc.colorAttachments = {bd_ca};
 
             auto bd_rpe = encoder->beginRenderPass(bd_desc);
             markSubPhase("backdrop begin");
-            flushDrawList(draw_list, bd_rpe,
-                          viewport_width, viewport_height,
+            flushDrawList(package.draw_list, bd_rpe,
+                          package.viewport_width, package.viewport_height, dpr,
                           /*backdrop_pass=*/true);
             markSubPhase("backdrop flush");
             bd_rpe->end();
 
             // Blur the captured backdrop.
             blurred_backdrop_tex_ = draw_backend_->blurTexture(
-                backdrop_tex_, max_sigma_x_, max_sigma_y_, *encoder);
+                backdrop_tex_, package.max_sigma_x, package.max_sigma_y, *encoder);
             markSubPhase("backdrop blur");
         }
 
@@ -185,18 +240,18 @@ namespace systems::leal::campello_widgets
         main_ca.view          = target;
         main_ca.loadOp        = GPU::LoadOp::clear;
         main_ca.storeOp       = GPU::StoreOp::store;
-        main_ca.clearValue[0] = clear_color_.r;
-        main_ca.clearValue[1] = clear_color_.g;
-        main_ca.clearValue[2] = clear_color_.b;
-        main_ca.clearValue[3] = clear_color_.a;
+        main_ca.clearValue[0] = package.clear_color.r;
+        main_ca.clearValue[1] = package.clear_color.g;
+        main_ca.clearValue[2] = package.clear_color.b;
+        main_ca.clearValue[3] = package.clear_color.a;
 
         GPU::BeginRenderPassDescriptor main_desc{};
         main_desc.colorAttachments = {main_ca};
 
         auto main_rpe = encoder->beginRenderPass(main_desc);
         markSubPhase("main begin");
-        flushDrawList(draw_list, main_rpe,
-                      viewport_width, viewport_height,
+        flushDrawList(package.draw_list, main_rpe,
+                      package.viewport_width, package.viewport_height, dpr,
                       /*backdrop_pass=*/false);
         markSubPhase("main flush");
         main_rpe->end();
@@ -208,9 +263,8 @@ namespace systems::leal::campello_widgets
         // Schedule swapchain presentation just before our submit() so that
         // nested submit() calls (e.g. from offscreen renderers triggered
         // during the layout pass) cannot steal the drawable.
-        if (pending_drawable_) {
-            device_->scheduleNextPresent(pending_drawable_);
-            pending_drawable_ = nullptr;
+        if (package.retained_drawable) {
+            device_->scheduleNextPresent(package.retained_drawable.get());
         }
 
         auto cmd_buffer = encoder->finish();
@@ -224,10 +278,24 @@ namespace systems::leal::campello_widgets
                     std::chrono::steady_clock::now() - raster_start).count());
 
         const auto raster_end = std::chrono::steady_clock::now();
-        raster_sampler_.recordDuration(
-            std::chrono::duration<float, std::milli>(raster_end - raster_start).count());
+        {
+            std::lock_guard<std::mutex> lock(sampler_mutex_);
+            raster_sampler_.recordDuration(
+                std::chrono::duration<float, std::milli>(raster_end - raster_start).count());
+        }
 
         return true;
+    }
+
+    bool Renderer::renderFrame(
+        std::shared_ptr<campello_gpu::TextureView> target,
+        float viewport_width,
+        float viewport_height)
+    {
+        auto package = buildFrame(viewport_width, viewport_height);
+        if (!package) return false;
+        package->target = std::move(target);
+        return rasterFrame(*package);
     }
 
     // ------------------------------------------------------------------
@@ -325,16 +393,20 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
         float viewport_width,
         float viewport_height,
+        float dpr,
         bool  backdrop_pass)
     {
         if (!draw_backend_) return;
 
         // Seed the transform with the DPR scale so all logical draw-command
         // coordinates are converted to physical pixels before the Metal
-        // shaders divide by the physical viewport to produce NDC.
+        // shaders divide by the physical viewport to produce NDC. `dpr` is
+        // read from the caller's FramePackage, not the device_pixel_ratio_
+        // member — this may run on the raster thread while the UI thread
+        // has already moved on to building the next frame.
         Matrix4 current_transform = Matrix4::identity();
-        current_transform.data[0] = device_pixel_ratio_;
-        current_transform.data[5] = device_pixel_ratio_;
+        current_transform.data[0] = dpr;
+        current_transform.data[5] = dpr;
         Rect                 current_clip      = Rect::fromLTWH(0, 0, 1e9f, 1e9f);
         std::vector<Matrix4> transform_stack;
         std::vector<Rect>    clip_stack;
@@ -375,7 +447,7 @@ namespace systems::leal::campello_widgets
                     {
                         in_shader_mask = false;
                         applyShaderMask(shader_mask_info, shader_mask_cmds,
-                                        rpe, viewport_width, viewport_height,
+                                        rpe, viewport_width, viewport_height, dpr,
                                         current_transform, current_clip);
                         shader_mask_cmds.clear();
                     }
@@ -513,6 +585,7 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
         float /*viewport_width*/,
         float /*viewport_height*/,
+        float dpr,
         const Matrix4& transform,
         const Rect&    /*clip*/)
     {
@@ -520,8 +593,8 @@ namespace systems::leal::campello_widgets
 
         // Offscreen texture must be in physical pixels so that the DPR-scaled
         // draw commands (from flushDrawList's initial DPR transform) fill it correctly.
-        const uint32_t tw = static_cast<uint32_t>(std::ceil(cmd.bounds.width  * device_pixel_ratio_));
-        const uint32_t th = static_cast<uint32_t>(std::ceil(cmd.bounds.height * device_pixel_ratio_));
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(cmd.bounds.width  * dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(cmd.bounds.height * dpr));
         if (tw == 0 || th == 0) return;
 
         auto child_tex = draw_backend_->createOffscreenTexture(tw, th);
@@ -547,7 +620,7 @@ namespace systems::leal::campello_widgets
             translated.push_back(PopTransformCmd{});
 
             flushDrawList(translated, child_rpe,
-                          static_cast<float>(tw), static_cast<float>(th),
+                          static_cast<float>(tw), static_cast<float>(th), dpr,
                           /*backdrop_pass=*/false);
             child_rpe->end();
         }
@@ -580,66 +653,109 @@ namespace systems::leal::campello_widgets
     }
 
     // ------------------------------------------------------------------
-    // Performance overlay — Flutter-style two-lane timing chart.
+    // Performance overlay — unified frame chart, matching Flutter
+    // DevTools' "Flutter frames chart": one pair of adjacent bars per
+    // frame (UI + raster), sharing a single chart area and a single
+    // budget reference line at the panel's vertical midpoint (full panel
+    // height == 2x the 60fps budget), with over-budget frames flagged in
+    // red.
     //
-    // Each lane shows the *measured duration* of one frame phase (raster
-    // encode/submit on top, UI build+layout+paint on bottom), not how often
-    // a frame was requested — see the build_sampler_/raster_sampler_
-    // recordDuration() calls in renderFrame() for where these are bracketed.
+    // Each bar shows the *measured duration* of one frame phase, not how
+    // often a frame was requested — see the build_sampler_/raster_sampler_
+    // recordDuration() calls in buildFrame()/rasterFrame() for where these
+    // are bracketed.
     // ------------------------------------------------------------------
 
-    void Renderer::paintTimingLane(
+    void Renderer::paintUnifiedFrameChart(
         PaintContext&                         ctx,
-        const campello_gpu::FrameTimeSampler& sampler,
-        const char*                           label,
-        float                                 lane_top,
-        float                                 lane_w,
+        const campello_gpu::FrameTimeSampler& build_sampler,
+        const campello_gpu::FrameTimeSampler& raster_sampler,
+        float                                 chart_top,
+        float                                 chart_w,
         float                                 panel_h,
         float                                 label_h,
         float                                 target_ms,
         float                                 max_ms,
-        float                                 bar_w)
+        float                                 bar_w,
+        int                                   max_frames)
     {
-        const int   n      = sampler.count();
-        const float avg_ms = (n > 0) ? sampler.averageMs() : 0.0f;
+        const int   ui_total    = build_sampler.count();
+        const int   raster_total = raster_sampler.count();
+        const float ui_avg    = (ui_total > 0) ? build_sampler.averageMs() : 0.0f;
+        const float raster_avg = (raster_total > 0) ? raster_sampler.averageMs() : 0.0f;
 
-        char buf[64];
-        std::snprintf(buf, sizeof(buf), "%s: %.1f ms", label, avg_ms);
+        // Only plot the most recent max_frames samples — the samplers
+        // retain more history than that (kCapacity), so this lets the
+        // chart show fewer, wider bars without discarding the rest of the
+        // retained history (still reflected in the averages above).
+        const int ui_n      = std::min(ui_total, max_frames);
+        const int raster_n  = std::min(raster_total, max_frames);
+        const int ui_skip     = ui_total - ui_n;
+        const int raster_skip = raster_total - raster_n;
+
+        // UI and raster colors mirror Flutter DevTools' frame chart (a
+        // light blue/cyan UI bar, a purple raster bar); over-budget bars
+        // are flagged red regardless of phase, same as DevTools' jank
+        // overlay, so the color split (which phase dominates) is only
+        // meaningful for frames within budget.
+        const Color kUiColor     = Color::fromRGBA(0.30f, 0.70f, 0.90f, 1.0f);
+        const Color kRasterColor = Color::fromRGBA(0.65f, 0.40f, 0.85f, 1.0f);
+        const Color kJankColor   = Color::fromRGBA(0.90f, 0.20f, 0.20f, 1.0f);
+
+        char buf[96];
+        std::snprintf(buf, sizeof(buf), "UI: %.1f ms   RASTER: %.1f ms", ui_avg, raster_avg);
         ctx.canvas().drawText(
             TextSpan{buf, TextStyle{Color::white(), 11.0f, {}}},
-            Offset{6.0f, lane_top + 4.0f});
+            Offset{6.0f, chart_top + 4.0f});
 
-        const float chart_top    = lane_top + label_h;
-        const float chart_bottom = chart_top + panel_h;
+        const float chart_bottom = chart_top + label_h + panel_h;
+
+        const int   n      = std::max(ui_n, raster_n);
+        // Each frame group is three equal segments: UI bar, raster bar,
+        // then a blank segment of the same width before the next group —
+        // so a frame's UI+RASTER pair reads as one visually adjacent
+        // block, clearly separated from the next frame's pair.
+        const float seg_w  = bar_w / 3.0f;
 
         for (int i = 0; i < n; ++i)
         {
-            const float ms    = sampler.at(i);
-            const float frac  = std::min(ms / max_ms, 1.0f);
-            const float bar_h = frac * panel_h;
-            const float bx    = static_cast<float>(i) * bar_w;
-            const float by    = chart_bottom - bar_h;
+            const float group_x = static_cast<float>(i) * bar_w;
 
-            const Color bar_color = (ms > target_ms)
-                ? Color::fromRGBA(0.90f, 0.20f, 0.20f, 1.0f)
-                : Color::fromRGBA(0.20f, 0.75f, 0.20f, 1.0f);
+            if (i < ui_n)
+            {
+                const float ms    = build_sampler.at(ui_skip + i);
+                const float frac  = std::min(ms / max_ms, 1.0f);
+                const float bar_h = frac * panel_h;
+                const Color color = (ms > target_ms) ? kJankColor : kUiColor;
+                ctx.canvas().drawRect(
+                    Rect::fromLTWH(group_x, chart_bottom - bar_h, seg_w, bar_h),
+                    Paint::filled(color));
+            }
 
-            ctx.canvas().drawRect(
-                Rect::fromLTWH(bx, by, bar_w - 1.0f, bar_h),
-                Paint::filled(bar_color));
+            if (i < raster_n)
+            {
+                const float ms    = raster_sampler.at(raster_skip + i);
+                const float frac  = std::min(ms / max_ms, 1.0f);
+                const float bar_h = frac * panel_h;
+                const Color color = (ms > target_ms) ? kJankColor : kRasterColor;
+                ctx.canvas().drawRect(
+                    Rect::fromLTWH(group_x + seg_w, chart_bottom - bar_h, seg_w, bar_h),
+                    Paint::filled(color));
+            }
+
+            // group_x + 2*seg_w .. group_x + 3*seg_w is the blank segment —
+            // intentionally left undrawn so the background shows through.
         }
 
+        // Single budget reference line at target_ms — with max_ms == 2 ×
+        // target_ms (see paintPerformanceOverlay), this sits exactly at
+        // the panel's vertical midpoint, so a bar filling the full panel
+        // height represents 2 × target_ms (i.e. 30fps-equivalent cost).
         {
             const float line_y = chart_bottom - (target_ms / max_ms) * panel_h;
             ctx.canvas().drawRect(
-                Rect::fromLTWH(0.0f, line_y, lane_w, 1.0f),
-                Paint::filled(Color::fromRGBA(0.20f, 0.90f, 0.20f, 0.90f)));
-        }
-        {
-            const float line_y = chart_bottom - (2.0f * target_ms / max_ms) * panel_h;
-            ctx.canvas().drawRect(
-                Rect::fromLTWH(0.0f, line_y, lane_w, 1.0f),
-                Paint::filled(Color::fromRGBA(0.90f, 0.20f, 0.20f, 0.90f)));
+                Rect::fromLTWH(0.0f, line_y, chart_w, 1.0f),
+                Paint::filled(Color::fromRGBA(0.90f, 0.90f, 0.90f, 0.70f)));
         }
     }
 
@@ -648,14 +764,26 @@ namespace systems::leal::campello_widgets
         float         /*viewport_width*/,
         float         viewport_height)
     {
-        constexpr float kOverlayW  = 300.0f;
-        constexpr float kPanelH    = 70.0f;
-        constexpr float kLabelH    = 16.0f;
-        constexpr float kLaneH     = kPanelH + kLabelH;
-        constexpr float kTotalH    = 2.0f * kLaneH;
-        constexpr float kTargetMs  = 1000.0f / 60.0f;
-        constexpr float kMaxMs     = 3.0f * kTargetMs;
-        constexpr float kBarW      = kOverlayW / static_cast<float>(campello_gpu::FrameTimeSampler::kCapacity);
+        constexpr float kPanelH   = 90.0f;
+        constexpr float kLabelH   = 16.0f;
+        constexpr float kTotalH   = kLabelH + kPanelH;
+        constexpr float kTargetMs = 1000.0f / 60.0f;
+        // Full panel height represents 2x the 60fps budget, so the single
+        // budget line sits at the panel's vertical midpoint — a bar
+        // filling the whole panel is 30fps-equivalent cost.
+        constexpr float kMaxMs    = 2.0f * kTargetMs;
+
+        // Each frame group is three 4px segments — UI bar, raster bar,
+        // blank gap — so a frame's UI+RASTER pair reads as one adjacent
+        // block, clearly separated from the next frame's pair (see
+        // paintUnifiedFrameChart). Show fewer, wider bars than the full
+        // retained sample history (campello_gpu::FrameTimeSampler::
+        // kCapacity, currently 64) — the samplers still retain the full
+        // history for the averages shown in the label.
+        constexpr float kSegmentW        = 4.0f;
+        constexpr float kBarW            = 3.0f * kSegmentW;
+        constexpr int   kDisplayedFrames = 20;
+        constexpr float kOverlayW        = kBarW * static_cast<float>(kDisplayedFrames);
 
         const float oy = viewport_height - kTotalH;
 
@@ -663,20 +791,9 @@ namespace systems::leal::campello_widgets
             Rect::fromLTWH(0.0f, oy, kOverlayW, kTotalH),
             Paint::filled(Color::fromRGBA(0.10f, 0.10f, 0.10f, 0.80f)));
 
-        // Top lane: raster (GPU encode/submit) — matches Flutter's top "GPU" graph.
-        paintTimingLane(ctx, raster_sampler_, "RASTER", oy,
-                        kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW);
-
-        // Bottom lane: UI (build + layout + paint recording).
-        paintTimingLane(ctx, build_sampler_, "UI", oy + kLaneH,
-                        kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW);
-
-        {
-            const float divider_y = oy + kLaneH;
-            ctx.canvas().drawRect(
-                Rect::fromLTWH(0.0f, divider_y, kOverlayW, 1.0f),
-                Paint::filled(Color::fromRGBA(0.35f, 0.35f, 0.35f, 0.80f)));
-        }
+        paintUnifiedFrameChart(ctx, build_sampler_, raster_sampler_, oy,
+                               kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW,
+                               kDisplayedFrames);
     }
 
 } // namespace systems::leal::campello_widgets

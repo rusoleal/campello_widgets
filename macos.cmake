@@ -35,6 +35,25 @@ target_link_libraries(campello_widgets
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)
 
+# Enable Automatic Reference Counting for Objective-C++ files, matching
+# ios.cmake. The flag is ignored for regular C++ sources, so we apply it to
+# all files. Without this, .mm files compiled under MRC by default — which
+# previously meant __bridge_retained/__bridge_transfer casts were silent
+# no-ops (caught via the -Warc-bridge-casts-disallowed-in-nonarc warning in
+# run_app.mm).
+target_compile_options(campello_widgets PRIVATE -fobjc-arc)
+
+# platform_menu_delegate.mm deliberately leaks menu objects forever (see its
+# own comments: a documented workaround for an AppKit issue where the async
+# keyboard-shortcut updater accesses menu items after the menu bar has been
+# replaced). Under ARC, its NSMutableArray* members would be __strong and
+# get auto-released when MacOSPlatformMenuDelegate's destructor runs,
+# silently undoing that workaround. Opt this one file out of ARC so its
+# existing manual retain/never-release behavior is unchanged.
+set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/macos/platform_menu_delegate.mm"
+    PROPERTIES COMPILE_OPTIONS "-fno-objc-arc")
+
 # Exclude .mm (Objective-C++) files from unity build — they cannot be combined
 # with regular C++ files in a unity batch.  The .cpp files are still unity-built.
 foreach(src ${CAMPELLO_WIDGETS_SOURCES})

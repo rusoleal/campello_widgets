@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <campello_gpu/frame_time_sampler.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/draw_command.hpp>
@@ -9,6 +11,7 @@
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <campello_widgets/ui/image_filter.hpp>
+#include <campello_widgets/ui/frame_package.hpp>
 
 // campello_gpu forward declarations
 namespace systems::leal::campello_gpu
@@ -89,10 +92,53 @@ namespace systems::leal::campello_widgets
         // ------------------------------------------------------------------
 
         /**
-         * @brief Renders one frame to `target`.
+         * @brief UI-thread phase: ticks input/animation, rebuilds the widget
+         *        tree, lays out and paints it into a value-type `DrawList`,
+         *        and packages everything the raster phase needs into a
+         *        `FramePackage`.
          *
          * Must be called from the UI thread (the same thread that owns the
-         * widget tree and the platform event loop). Safe to call every vsync.
+         * widget tree and the platform event loop). Returns `std::nullopt`
+         * if nothing changed this frame (mirrors the old `renderFrame()`'s
+         * `return false` path) — the caller should skip rastering entirely
+         * in that case.
+         *
+         * The returned `FramePackage` does not yet have `target` set;
+         * callers must assign it before passing the package to
+         * `rasterFrame()` (kept as a separate step so the swapchain
+         * texture/drawable can be acquired by the platform layer either
+         * before or after `buildFrame()`, as convenient).
+         *
+         * @param viewport_width   Viewport width in logical pixels.
+         * @param viewport_height  Viewport height in logical pixels.
+         */
+        std::optional<FramePackage> buildFrame(float viewport_width, float viewport_height);
+
+        /**
+         * @brief Raster phase: encodes and submits GPU commands for an
+         *        already-built `FramePackage`.
+         *
+         * Reads only the immutable `package` parameter and `Renderer`
+         * members that are exclusively raster-phase-owned (`frame_encoder_`,
+         * `frame_target_`, `backdrop_tex_`, `blurred_backdrop_tex_`,
+         * `draw_backend_`) — never a `Renderer` member that `buildFrame()`
+         * might mutate for a later frame. Safe to call from a dedicated
+         * raster thread as long as `rasterFrame()` is never called
+         * concurrently with itself (e.g. via `RasterThread`'s single-worker
+         * depth-1 handoff).
+         *
+         * @param package  A `FramePackage` produced by `buildFrame()`, with
+         *                 `target` assigned.
+         */
+        bool rasterFrame(const FramePackage& package);
+
+        /**
+         * @brief Renders one frame to `target` — `buildFrame()` followed by
+         *        `rasterFrame()` on the calling thread.
+         *
+         * Kept for platforms that have not adopted a separate raster
+         * thread; behaviourally identical to calling `buildFrame()` then
+         * `rasterFrame()` directly.
          *
          * @warning This method is **not** thread-safe. Concurrent calls from
          *          multiple threads, or calls while the widget tree is being
@@ -240,6 +286,7 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
             float viewport_width,
             float viewport_height,
+            float dpr,
             bool  backdrop_pass = false);
 
         // Applies a ShaderMask region: renders child commands to an offscreen
@@ -250,6 +297,7 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
             float viewport_width,
             float viewport_height,
+            float dpr,
             const Matrix4& transform,
             const Rect&    clip);
 
@@ -258,30 +306,42 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::RenderPassEncoder> restartMainRenderPass();
 
         /**
-         * @brief Draws the Flutter-style performance overlay: two lanes
-         * (raster on top, UI/build on bottom), each showing the actual
-         * measured duration of that phase per frame — not how often a
-         * frame was requested. See renderFrame() for where each phase is
-         * bracketed with start/end timestamps.
+         * @brief Draws the performance overlay: a single unified frame
+         * chart, matching Flutter DevTools' "Flutter frames chart" — one
+         * pair of adjacent bars per frame (UI + raster), sharing one chart
+         * area and one budget reference line (at the panel's vertical
+         * midpoint — full panel height is 2x the 60fps budget), with
+         * frames over budget highlighted in red. See buildFrame()/
+         * rasterFrame() for where each phase is bracketed with start/end
+         * timestamps.
          */
         void paintPerformanceOverlay(
             PaintContext& ctx,
             float         viewport_width,
             float         viewport_height);
 
-        // Draws one lane (label + bar chart + budget reference lines) of the
-        // performance overlay. Shared by the raster and UI/build lanes.
-        void paintTimingLane(
+        // Draws the unified frame chart: each frame occupies a group of
+        // three equal segments — UI bar, raster bar, then a blank segment
+        // — so a frame's UI+RASTER pair reads as one adjacent block,
+        // clearly separated from the next frame's pair. `bar_w` is the
+        // full group width (3 segments); the per-bar width is bar_w / 3.
+        // Drawn against a shared background and shared budget reference
+        // lines. Only the most recent `max_frames` samples are drawn (the
+        // samplers retain more — see campello_gpu::FrameTimeSampler::
+        // kCapacity — so the chart can show fewer, wider bars than the
+        // full retained history).
+        void paintUnifiedFrameChart(
             PaintContext&                         ctx,
-            const campello_gpu::FrameTimeSampler& sampler,
-            const char*                           label,
-            float                                 lane_top,
-            float                                 lane_w,
+            const campello_gpu::FrameTimeSampler& build_sampler,
+            const campello_gpu::FrameTimeSampler& raster_sampler,
+            float                                 chart_top,
+            float                                 chart_w,
             float                                 panel_h,
             float                                 label_h,
             float                                 target_ms,
             float                                 max_ms,
-            float                                 bar_w);
+            float                                 bar_w,
+            int                                   max_frames);
 
         std::shared_ptr<campello_gpu::Device> device_;
         std::shared_ptr<RenderBox>            root_;
@@ -290,7 +350,18 @@ namespace systems::leal::campello_widgets
 
         // --- performance overlay state ---
         // Actual measured phase durations per frame (not call-to-call
-        // cadence) — see renderFrame() for the start/end brackets.
+        // cadence) — see buildFrame()/rasterFrame() for the start/end
+        // brackets. build_sampler_ is written by buildFrame() (UI thread)
+        // and read by paintPerformanceOverlay() (also UI thread, inside
+        // buildFrame()'s generateDrawList() call) — no cross-thread access.
+        // raster_sampler_ is written by rasterFrame(), which may run on a
+        // separate raster thread, while it's read by the *next* frame's
+        // buildFrame() on the UI thread — sampler_mutex_ guards both
+        // samplers against that cross-thread access. FrameTimeSampler
+        // itself documents "not thread-safe, call only from the render
+        // thread" — this mutex is what makes that contract hold once
+        // build and raster run on different threads.
+        mutable std::mutex             sampler_mutex_;
         campello_gpu::FrameTimeSampler build_sampler_;  // build + layout + paint recording
         campello_gpu::FrameTimeSampler raster_sampler_; // GPU encode + submit
 
