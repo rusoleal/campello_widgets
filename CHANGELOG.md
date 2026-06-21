@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.6] - 2026-06-21
+
+### Added
+
+- **UI/raster thread split on macOS** — `Renderer::renderFrame()` is now split into `buildFrame()` (UI thread: tick input/animation, rebuild, layout, paint-record into an immutable `FramePackage`) and `rasterFrame()` (GPU encode/submit/present, may run on a dedicated thread), per the evaluation recorded in `TODO.md` on 2026-06-19. `renderFrame()` remains as a synchronous back-compat wrapper, so iOS/Android/Windows/Linux are unaffected. New `RasterThread` (`inc/campello_widgets/ui/raster_thread.hpp` / `src/ui/raster_thread.cpp`) implements a depth-1 handoff — `submit()` blocks the UI thread only until the raster thread has *picked up* the previous package (not until it's finished processing it), so the UI thread can build frame N+1 while frame N is still being rastered, but never more than one frame ahead. Wired into `CampelloMTKDelegate` on macOS (`src/macos/run_app.mm`); `ThreadChecker::rasterInstance()` added as a second, independent thread-binding check alongside the existing UI-thread `instance()`. Verified with `sample`-captured per-thread stacks showing the main thread idling in AppKit's run loop while `RasterThread::workerLoop()` does the encode/submit/present work concurrently.
+- **`FramePackage`** (`inc/campello_widgets/ui/frame_package.hpp`) — immutable per-frame snapshot (draw list, viewport, DPR, clear color, backdrop-filter state, target, retained drawable) produced by `buildFrame()` and consumed by `rasterFrame()`, so the raster phase never reads a live, UI-thread-mutable `Renderer` member.
+
+### Changed
+
+- **Enabled ARC for the macOS target** (`macos.cmake`), matching `ios.cmake`. Previously `.mm` files on macOS compiled under MRC by default, which meant `__bridge_retained`/`__bridge_transfer` cast qualifiers were silent no-ops there — found via the easy-to-miss `-Warc-bridge-casts-disallowed-in-nonarc` warning while extending a `CAMetalDrawable`'s lifetime past its call stack for the raster-thread handoff above. `src/macos/platform_menu_delegate.mm` is explicitly opted out of ARC (`-fno-objc-arc` source property) since it deliberately leaks menu objects forever to dodge an AppKit issue where the async keyboard-shortcut updater accesses menu items after the menu bar is replaced — ARC would auto-release those on destruction and reintroduce the crash that leak exists to prevent.
+- **Performance overlay redesigned again** — replaced the two-lane layout introduced in 0.3.4 with a single unified frame chart matching Flutter DevTools' actual "Flutter frames chart" (confirmed via the real DevTools docs, not just the in-app `PerformanceOverlay` widget the previous design mimicked): each frame is a UI bar + raster bar pair followed by a blank segment of equal width (`Renderer::paintUnifiedFrameChart()`, `src/ui/renderer.cpp`), sharing one chart area and one budget reference line at the panel's vertical midpoint (full panel height now represents 2× the 60fps budget, i.e. a full-height bar is 30fps-equivalent cost, down from 3× previously). Shows the most recent 20 frames at a fixed 4px segment width rather than the full 64-frame sampler history spread thin (previously under 1px per bar and effectively invisible); the samplers still retain the full history for the averages shown in the label.
+
+### Fixed
+
+- **`RenderRepaintBoundary` replayed a stale cache after being repositioned without being repainted** — its cache bakes in absolute on-screen coordinates (including clip rects, which aren't transform-deferred at flush time) recorded at a specific offset, but nothing checked whether that offset was still current before a clean replay. A `Row`/`Column` repositioning a wrapped child (e.g. `campello_editor`'s Scene tab hierarchy/inspector panels on window resize) does so without calling `markNeedsPaint()` — correct in general, since every other `RenderObject` always repaints at the fresh offset regardless of dirty state. The boundary now remembers the offset it last painted/cached at and treats a change as dirty, forcing a fresh recording. New regression test `RenderRepaintBoundary.RepositionWithoutMarkNeedsPaintForcesReRecordingAtNewOffset` in `tests/universal/test_render_repaint_boundary.cpp`.
+
+Full universal test suite: 487/487 passing (8 new tests this release: 4 in `test_raster_thread.cpp`, 3 in `test_renderer.cpp`, 1 in `test_render_repaint_boundary.cpp`).
+
 ## [0.3.5] - 2026-06-20
 
 ### Added

@@ -830,6 +830,26 @@ a fabricated origin); confirmed it fails against the old implementation.
 Suite: 394/394 passing (+1 from this test). Editor rebuilt cleanly; awaiting
 visual confirmation the clipping is now correct.
 
+**The documented caveat above was hit for real (2026-06-21, user-reported)** —
+and not by `Stack`/`Positioned` as originally worried about, but by plain
+`Row`/`Column`: in `campello_editor`'s Scene tab, the hierarchy/inspector
+panels wrapped in `RepaintBoundary` (see above) stayed visually stuck at
+their old position, unclipped to their new bounds, when the window was
+resized. `RenderFlex::performLayout()` recomputes each child's offset on
+every layout pass but — correctly, by the same logic as `positionChild()` —
+never calls `markNeedsPaint()` for a pure reposition, since every other
+`RenderObject` always repaints at the fresh offset regardless. The boundary
+had no way to know its cached offset had gone stale.
+
+**Fix**: `RenderRepaintBoundary` now tracks the offset it last
+painted/cached at itself and treats a change as dirty (forces a fresh
+recording), instead of relying on every caller to remember not to
+reposition it without also repainting it. Fully self-contained — no changes
+needed to `RenderFlex`/`Stack`/`positionChild()`, which were never the
+problem. New regression test:
+`RenderRepaintBoundary.RepositionWithoutMarkNeedsPaintForcesReRecordingAtNewOffset`.
+See CHANGELOG `[0.3.6]`.
+
 ### Evaluation: Splitting UI and Raster into Two Real Threads (Flutter-style) (2026-06-19)
 
 Today everything — widget rebuild, layout, paint-command recording, **and** GPU
@@ -914,6 +934,48 @@ under load, but doesn't fix the root cause already identified above.
 per-draw-call overhead — see "Suggested next steps" above) first. Revisit a
 UI/raster thread split afterward, once raster is cheaper and there's less
 margin for the synchronization issues described in points 1–6 to matter.
+
+**Implemented (2026-06-21).** The raster-cost root cause above was fixed
+first (see the per-frame raster-cost section earlier in this doc: ~3.85ms →
+~0.89ms on `hello`), so this was revisited proactively ahead of an
+anticipated heavier-scene workload, not as a reaction to a live regression.
+Scoped to **macOS only**, with a **depth-1** handoff (UI can build frame N+1
+while raster is still encoding/submitting/presenting frame N, never more
+than one frame ahead) rather than Flutter's full depth-2 pipeline — see
+CHANGELOG `[0.3.6]` for the user-facing summary. Notes on how the six
+blockers above actually played out:
+
+- **Blockers #2 (global atomics) and #6 (campello_gpu Device thread-safety)
+  turned out to be non-issues on inspection**, not things that needed
+  fixing: `RenderObject::s_active_backend_`/`s_active_dpr_` are only ever
+  touched during layout/paint-recording (confirmed by grep — no call site
+  exists in the raster-side code), and campello_gpu's Metal `Device`/
+  `MTLCommandQueue` is safe to call from a different thread than created it
+  (`MTLCommandQueue` is created once and reused; campello_gpu's own
+  bookkeeping is atomics-only).
+- **Blocker #1 (no pipeline) was the real work**: new `FramePackage` (value
+  type, see CHANGELOG) and `RasterThread` (single-slot mailbox where pickup,
+  not completion, unblocks the next `submit()`).
+- **Blocker #3 (`ThreadChecker` assumes one thread)**: solved additively —
+  `rasterInstance()` is a second, independent checker; the original
+  `instance()` and all its existing call sites are untouched.
+- **Blocker #5 (platform run loops drive raster on the main thread)**: only
+  addressed for macOS (`CampelloMTKDelegate` in `src/macos/run_app.mm`).
+  iOS/Android/Windows/Linux still call the synchronous `renderFrame()`
+  back-compat wrapper unchanged — still an open item if this gets extended
+  to those platforms.
+- **A new bug class surfaced and was fixed along the way, unrelated to the
+  six original blockers**: `run_app.mm` turned out to compile under MRC
+  (`macos.cmake` never had `-fobjc-arc`, unlike `ios.cmake`), so the
+  drawable-retain code needed for the cross-thread handoff had to use
+  `CFBridgingRetain`/`CFBridgingRelease` rather than `__bridge_retained`
+  (a silent no-op under MRC). Fixed properly by enabling ARC for the whole
+  macOS target instead of working around it locally — see CHANGELOG
+  `[0.3.6]` for why `platform_menu_delegate.mm` stays opted out.
+- **Verification**: full test suite (487/487) plus `sample`-captured
+  per-thread stacks confirming the main thread sits idle in AppKit's run
+  loop while `RasterThread::workerLoop()` does the raster work
+  concurrently — not just "it compiles."
 
 ### IME (Input Method Editor) Platform Gaps
 
