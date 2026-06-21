@@ -25,3 +25,4 @@ flutter_fidelity_tester/.dart_tool/
 flutter_fidelity_tester/build/
 flutter_fidelity_tester/pubspec.lock
 *.spv
+.claude/settings.local.json
