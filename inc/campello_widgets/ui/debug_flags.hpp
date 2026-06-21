@@ -1,5 +1,22 @@
 #pragma once
 
+// On Windows, campello_widgets builds as a DLL with WINDOWS_EXPORT_ALL_SYMBOLS
+// ON (windows.cmake) — but that CMake mechanism only auto-exports *function*
+// symbols, not *data* symbols. Without an explicit dllexport/dllimport
+// annotation, the DLL and any executable linking against it (e.g. the test
+// binary) each get their own private copy of every `inline static` member
+// below, so toggling a flag from outside the DLL is invisible to framework
+// code running inside it. CAMPELLO_WIDGETS_BUILDING_DLL is set as a PRIVATE
+// compile definition on the campello_widgets target itself (windows.cmake),
+// so it's defined while compiling the library but not for consumers.
+#if defined(_WIN32) && defined(CAMPELLO_WIDGETS_BUILDING_DLL)
+    #define CW_DEBUG_FLAGS_API __declspec(dllexport)
+#elif defined(_WIN32)
+    #define CW_DEBUG_FLAGS_API __declspec(dllimport)
+#else
+    #define CW_DEBUG_FLAGS_API
+#endif
+
 namespace systems::leal::campello_widgets
 {
 
@@ -17,7 +34,7 @@ namespace systems::leal::campello_widgets
      * DebugFlags::showDebugBanner       = true;  // top-right DEBUG ribbon
      * @endcode
      */
-    struct DebugFlags
+    struct CW_DEBUG_FLAGS_API DebugFlags
     {
         /**
          * @brief Outline every RenderObject with a coloured 1-pixel border.

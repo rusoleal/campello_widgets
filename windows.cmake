@@ -7,6 +7,14 @@ list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 add_library(campello_widgets SHARED ${CAMPELLO_WIDGETS_SOURCES})
 set_target_properties(campello_widgets PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
+# WINDOWS_EXPORT_ALL_SYMBOLS only auto-exports function symbols, not data
+# symbols (e.g. C++17 `inline static` class members like DebugFlags' flags).
+# CAMPELLO_WIDGETS_BUILDING_DLL is checked in debug_flags.hpp to apply an
+# explicit dllexport/dllimport so that storage is shared across the DLL
+# boundary instead of duplicated per translation unit. PRIVATE: only the
+# library's own sources see this, not consumers (tests, examples).
+target_compile_definitions(campello_widgets PRIVATE CAMPELLO_WIDGETS_BUILDING_DLL)
+
 target_include_directories(campello_widgets
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/inc>
