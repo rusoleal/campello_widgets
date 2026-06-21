@@ -2,6 +2,7 @@
 
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/draw_command.hpp>
+#include <campello_widgets/ui/offset.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -14,7 +15,8 @@ namespace systems::leal::campello_widgets
      * this box's constraints and this box takes the child's size.
      *
      * Paint is where this differs from every other RenderBox: when this node
-     * is clean (`needsPaint() == false`) and a cache already exists, `paint()`
+     * is clean (`needsPaint() == false`), its on-screen offset hasn't changed
+     * since the cache was recorded, and a cache already exists, `paint()`
      * skips `performPaint()`/the child subtree entirely and replays the cached
      * `DrawList` slice instead. This is the only RenderObject in the tree
      * that overrides `paint()` itself rather than just `performPaint()` —
@@ -29,11 +31,15 @@ namespace systems::leal::campello_widgets
      * geometry, which defers its transform to flush time), so a clip
      * recorded against a local origin and later translated on replay would
      * land in the wrong place. Recording at the real offset sidesteps that
-     * entirely, at the cost of an assumption: **this boundary's on-screen
-     * offset must stay constant between the recording and a clean replay**.
-     * `positionChild()` (used by `Stack`/`Positioned`) deliberately doesn't
-     * mark needs-paint on a pure reposition, so don't wrap something whose
-     * position changes without also dirtying it.
+     * entirely, at the cost of an assumption: this boundary's on-screen
+     * offset must stay constant between the recording and a clean replay.
+     * Ordinary repositioning (e.g. a `Row`/`Column` child shifting when a
+     * sibling resizes, or `positionChild()` as used by `Stack`/`Positioned`)
+     * deliberately doesn't mark needs-paint on its own — that's correct for
+     * every other RenderObject, which always repaints at the fresh offset
+     * regardless — so this class tracks the offset it was last painted at
+     * itself and treats a change as dirty, rather than relying on every
+     * caller to remember not to reposition it without also repainting it.
      *
      * Mirrors Flutter's `RepaintBoundary`, minus layer/texture compositing —
      * here "the layer" is just a cached `DrawList` slice, which is cheap to
@@ -47,7 +53,8 @@ namespace systems::leal::campello_widgets
 
     private:
         DrawList cached_commands_;
-        bool     has_cache_ = false;
+        bool     has_cache_     = false;
+        Offset   cached_offset_{};
     };
 
 } // namespace systems::leal::campello_widgets

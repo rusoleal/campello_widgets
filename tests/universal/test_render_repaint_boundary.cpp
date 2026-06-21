@@ -158,6 +158,58 @@ TEST(RenderRepaintBoundary, CleanReplayKeepsClipRectAtCorrectAbsolutePosition)
     EXPECT_FLOAT_EQ(replayedClip->y, realOffset.y);
 }
 
+TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintForcesReRecordingAtNewOffset)
+{
+    // Regression test for the bug where a Row/Column repositions a child
+    // (e.g. on window resize) without calling markNeedsPaint() on it —
+    // correct for every other RenderObject (which always repaints at the
+    // fresh offset regardless), but RenderRepaintBoundary's clean-replay
+    // path used to trust the *old* cached offset, leaving the boundary
+    // visually stuck at its old position, unclipped to its new bounds.
+    auto child = std::make_shared<CountingRenderBox>();
+    auto clip  = std::make_shared<cw::RenderClipRect>();
+    clip->setChild(child);
+
+    cw::RenderRepaintBoundary boundary;
+    boundary.setChild(clip);
+    boundary.layout(cw::BoxConstraints::loose(200.0f, 200.0f));
+
+    const cw::Offset firstOffset{10.0f, 10.0f};
+    cw::PaintContext ctx1(200.0f, 200.0f);
+    boundary.paint(ctx1, firstOffset);
+    ASSERT_EQ(child->paintCount, 1);
+    ASSERT_FALSE(boundary.needsPaint());
+
+    // Reposition WITHOUT calling markNeedsPaint() — exactly what a Row's
+    // performLayout() does when a sibling's size change shifts this
+    // child's offset.
+    const cw::Offset secondOffset{60.0f, 10.0f};
+    ASSERT_FALSE(boundary.needsPaint());
+    cw::PaintContext ctx2(200.0f, 200.0f);
+    boundary.paint(ctx2, secondOffset);
+
+    EXPECT_EQ(child->paintCount, 2)
+        << "an offset change must force a fresh recording, not a stale replay";
+
+    auto findClipRect = [](const cw::DrawList& cmds) -> const cw::Rect* {
+        for (const auto& cmd : cmds)
+            if (std::holds_alternative<cw::PushClipRectCmd>(cmd))
+                return &std::get<cw::PushClipRectCmd>(cmd).rect;
+        return nullptr;
+    };
+
+    const cw::Rect* clipAtSecondOffset = findClipRect(ctx2.commands());
+    ASSERT_NE(clipAtSecondOffset, nullptr);
+    EXPECT_FLOAT_EQ(clipAtSecondOffset->x, secondOffset.x)
+        << "clip must reflect the new offset, not the stale cached one";
+    EXPECT_FLOAT_EQ(clipAtSecondOffset->y, secondOffset.y);
+
+    // A third paint at the same (second) offset should now replay cleanly.
+    cw::PaintContext ctx3(200.0f, 200.0f);
+    boundary.paint(ctx3, secondOffset);
+    EXPECT_EQ(child->paintCount, 2) << "unchanged offset should replay the cache again";
+}
+
 TEST(RenderRepaintBoundary, ConstraintsChangeForcesReRecording)
 {
     auto child = std::make_shared<CountingRenderBox>();
