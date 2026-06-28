@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.7] - 2026-06-28
+
+### Changed
+
+- **`campello_gpu` upgraded from v0.13.2 → v0.16.0** — picks up four releases of backend fixes and additions:
+  - **v0.13.3 (Metal)** — `Fence::wait()` no longer returns immediately on a freshly created fence (`MetalFenceData::signaled` defaulted to `true`, causing `Device::submit(cmdBuffer, fence)` + `wait()` to be a no-op); `Buffer::download()` now encodes a blit-encoder `synchronizeResource:` before `memcpy` on `Managed` storage-mode buffers, so GPU writes are visible to the CPU on systems that require it (was silently reading stale data).
+  - **v0.14.0** — `ComputePipeline::getWorkgroupSize()` added (returns `threadExecutionWidth()` on Metal; `{1,1,1}` on other backends); fixed missing `<cstdint>` in `compute_pipeline.hpp` that broke GCC 13 / Ubuntu 24.04 builds.
+  - **v0.15.0 (Vulkan/Linux)** — Vulkan 1.3 core dynamic-rendering entry points with `VK_KHR_dynamic_rendering` fallback; `VK_KHR_surface` no longer required for headless contexts; portability ICD support (`VK_KHR_portability_enumeration`); compute pipeline null-safety; various Linux crash fixes (no-attachment render passes, unbound pipeline draws, depth/stencil usage on color targets).
+  - **v0.16.0 (Vulkan)** — Optional `CAMPELLO_GPU_VALIDATION` CMake flag wires up `VK_LAYER_KHRONOS_validation`; fixed swapchain `minImageCount=0` hang on drivers where `maxImageCount == 0` means "no limit"; fixed `waitStage` dangling pointer in `Device::submit()` (UB on every Vulkan submit with a swapchain); fixed `deviceData->surfaceFormat` always being `VK_FORMAT_UNDEFINED` (shadowed inner declaration caused every dynamic-rendering draw call to be silently rejected by the driver).
+
 ## [0.3.6] - 2026-06-21
 
 ### Added

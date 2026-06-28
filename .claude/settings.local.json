@@ -86,7 +86,10 @@
       "Bash(grep *)",
       "Bash(ls dependencies/)",
       "Bash(cat dependencies/campello_widgets.cmake)",
-      "Bash(cmake --build build --target CampelloEditor -j8)"
+      "Bash(cmake --build build --target CampelloEditor -j8)",
+      "Bash(gh api *)",
+      "Bash(git ls-remote *)",
+      "Bash(git clone *)"
     ]
   }
 }
