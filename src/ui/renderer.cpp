@@ -147,8 +147,10 @@ namespace systems::leal::campello_widgets
         if (ThreadChecker::rasterInstance().hasBinding())
             ThreadChecker::rasterInstance().assertOnBoundThread("Renderer::rasterFrame");
 
+        // target may be nullptr on Vulkan — that signals "render to swapchain".
+        // campello_gpu's beginRenderPass acquires the swapchain image automatically
+        // when view == nullptr, so we do not guard against null here.
         std::shared_ptr<campello_gpu::TextureView> target = package.target;
-        if (!target) return false;
 
         const float dpr = package.device_pixel_ratio;
         if (draw_backend_) {
@@ -639,9 +641,10 @@ namespace systems::leal::campello_widgets
 
     std::shared_ptr<campello_gpu::RenderPassEncoder> Renderer::restartMainRenderPass()
     {
-        if (!frame_encoder_ || !frame_target_) return nullptr;
+        if (!frame_encoder_) return nullptr;
 
         GPU::ColorAttachment ca{};
+        // frame_target_ may be nullptr on Vulkan (swapchain), which is valid.
         ca.view    = frame_target_;
         ca.loadOp  = GPU::LoadOp::load;    // preserve what was drawn before
         ca.storeOp = GPU::StoreOp::store;

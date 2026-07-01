@@ -55,6 +55,9 @@ namespace systems::leal::campello_widgets
         void acceptGesture(int32_t pointer_id) override;
         void rejectGesture(int32_t pointer_id) override;
 
+        // Transparent layout: size to child without loosening constraints.
+        void performLayout() override;
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);

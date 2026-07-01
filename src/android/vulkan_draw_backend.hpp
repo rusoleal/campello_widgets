@@ -64,6 +64,14 @@ public:
 
     void setViewport(float w, float h) noexcept override { vp_w_ = w; vp_h_ = h; }
 
+    void onBeginFlush() noexcept override
+    {
+        last_scissor_x_ = -1.0f;
+        last_scissor_y_ = -1.0f;
+        last_scissor_w_ = -1.0f;
+        last_scissor_h_ = -1.0f;
+    }
+
     campello_gpu::PixelFormat offscreenPixelFormat() const noexcept override
     {
         return pixel_format_;

@@ -48,7 +48,10 @@ namespace systems::leal::campello_widgets
         ~RenderDraggable() override
         {
             if (auto* d = PointerDispatcher::activeDispatcher())
+            {
+                d->arena().removeMember(this);
                 d->removeHandler(this);
+            }
         }
 
         void performLayout() override

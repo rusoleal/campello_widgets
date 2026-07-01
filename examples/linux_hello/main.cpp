@@ -47,6 +47,8 @@ public:
 
 int main()
 {
+    cw::DebugFlags::showPerformanceOverlay = true;
+
     return cw::runApp(
         "campello_widgets — Linux Hello",
         800, 600,

@@ -105,11 +105,11 @@ namespace systems::leal::campello_widgets
     {
         if (!conn_) return;
 
-        dbus_connection_remove_filter(conn_, dbusFilter, this);
-
         if (!ic_path_.empty())
         {
-            // Remove signal matches
+            // Filter and match are only added when createInputContext() succeeds
+            dbus_connection_remove_filter(conn_, dbusFilter, this);
+
             std::string match =
                 "type='signal',interface='org.freedesktop.IBus.InputContext',path='" +
                 ic_path_ + "'";

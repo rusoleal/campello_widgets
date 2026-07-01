@@ -120,6 +120,14 @@ namespace systems::leal::campello_widgets
          */
         void reset() noexcept { arenas_.clear(); }
 
+        /**
+         * @brief Removes a member from every active arena without firing any
+         * callbacks on it.  Called from the member's destructor or detach() so
+         * that a dying render object is never called back into via sweep() or
+         * resolve().
+         */
+        void removeMember(GestureArenaMember* member) noexcept;
+
         static void                 setActive(GestureArenaManager* manager) noexcept { s_instance_ = manager; }
         static GestureArenaManager* active() noexcept { return s_instance_; }
 

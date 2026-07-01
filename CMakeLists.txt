@@ -12,6 +12,7 @@ option(BUILD_TESTS            "Build universal tests (no GPU required)"       OF
 option(BUILD_INTEGRATION_TESTS "Build platform-specific integration tests"   OFF)
 option(BUILD_EXAMPLES         "Build example applications"                    OFF)
 option(ENABLE_UNITY_BUILD     "Enable Unity Build for faster compilation"     ON)
+option(CAMPELLO_GPU_VALIDATION "Enable Vulkan validation layers (debug only)" OFF)
 
 if(BUILD_INTEGRATION_TESTS)
     set(BUILD_TESTS ON)

@@ -102,6 +102,19 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void GestureArenaManager::removeMember(GestureArenaMember* member) noexcept
+    {
+        for (auto& [id, state] : arenas_)
+        {
+            auto& members = state.members;
+            members.erase(
+                std::remove(members.begin(), members.end(), member),
+                members.end());
+            if (state.eager_winner == member)
+                state.eager_winner = nullptr;
+        }
+    }
+
     void GestureArenaManager::resolveInFavorOf(int32_t pointer_id, ArenaState& state, GestureArenaMember* member)
     {
         std::vector<GestureArenaMember*> losers;

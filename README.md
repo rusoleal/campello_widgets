@@ -232,6 +232,133 @@ find_package(campello_widgets REQUIRED)
 target_link_libraries(my_app PRIVATE campello_widgets)
 ```
 
+## Platform Development
+
+### macOS
+
+**Requirements:** Xcode (provides Clang, Metal, Cocoa, CoreText and all other required system frameworks — no extra installs needed).
+
+**Build:**
+```bash
+./build.sh darwin
+```
+
+**Run examples:**
+```bash
+./run_macos_example.sh        # Hello World
+./run_macos_counter.sh        # StatefulWidget counter
+./run_macos_listview.sh       # ListView
+./run_macos_animated.sh       # Animated transitions
+./run_macos_gestures.sh       # Gesture detection
+./run_macos_textfield.sh      # TextField + IME
+./run_macos_keyboard.sh       # Keyboard input
+./run_macos_image.sh          # Image loading
+./run_macos_showcase.sh       # Full widget showcase
+./run_macos_table_view.sh     # Table view
+./run_macos_tree_view.sh      # Tree view
+./run_macos_menu_test.sh      # Platform menus
+```
+
+Release variants are available as `run_macos_*_release.sh`.
+
+---
+
+### Linux
+
+**Requirements:** The following system packages must be installed before building. These are OS-level interface libraries (display server, font subsystem, IME) that cannot be bundled via CMake — they need to match the running system.
+
+```bash
+sudo apt-get install -y \
+    pkg-config \
+    libx11-dev \
+    libdbus-1-dev \
+    libfreetype-dev \
+    libharfbuzz-dev \
+    libfontconfig-dev \
+    libwayland-dev \
+    libxkbcommon-dev \
+    libcurl4-openssl-dev
+```
+
+| Package | Role |
+|---|---|
+| `pkg-config` | Required by CMake to locate system libraries |
+| `libx11-dev` | X11 display server client library |
+| `libdbus-1-dev` | D-Bus, used for IBus IME integration |
+| `libfreetype-dev` | Font rasterization |
+| `libharfbuzz-dev` | Text shaping |
+| `libfontconfig-dev` | System font discovery and configuration |
+| `libwayland-dev` | Wayland display protocol (optional, enabled if found) |
+| `libxkbcommon-dev` | Keyboard layout handling for Wayland |
+| `libcurl4-openssl-dev` | HTTP client for network image loading |
+
+**Build:**
+```bash
+./build.sh linux
+```
+
+**Run example:**
+```bash
+./examples/linux_hello/run.sh
+```
+
+Or manually after building:
+```bash
+./build/linux-release/campello_widgets_linux_hello
+```
+
+---
+
+### Windows
+
+**Requirements:** Visual Studio 2022 (or later) with the **Desktop development with C++** workload. All Windows API dependencies (`DirectWrite`, `Direct2D`, `DXGI`, `Direct3D`, `WinHTTP`, `IMM32`) are part of the Windows SDK included with Visual Studio — no extra installs needed.
+
+**Build:**
+```bat
+build.bat
+```
+
+Or with CMake directly:
+```bat
+cmake -S . -B build\windows -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON
+cmake --build build\windows --config Release
+```
+
+---
+
+### iOS
+
+**Requirements:** Xcode on macOS with the iOS SDK installed. Build is cross-compiled from macOS targeting an iOS device or simulator.
+
+```bash
+cmake -S . -B build/ios \
+    -DCMAKE_SYSTEM_NAME=iOS \
+    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 \
+    -DBUILD_EXAMPLES=ON
+cmake --build build/ios --config Release
+```
+
+The library is built as a static archive (`libcampello_widgets.a`) to be embedded in an Xcode project or app bundle.
+
+---
+
+### Android
+
+**Requirements:** Android NDK (r25 or later). Set the `ANDROID_NDK_HOME` environment variable or pass `-DANDROID_NDK=<path>` to CMake. The NDK provides all required headers and system libraries.
+
+```bash
+cmake -S . -B build/android \
+    -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
+    -DANDROID_ABI=arm64-v8a \
+    -DANDROID_PLATFORM=android-26 \
+    -DBUILD_EXAMPLES=ON
+cmake --build build/android --config Release
+```
+
+Supported ABIs: `arm64-v8a`, `x86_64`. Minimum API level: 26 (Android 8.0).
+
+---
+
 ## License
 
 See [LICENSE](LICENSE).

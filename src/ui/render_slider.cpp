@@ -27,7 +27,10 @@ namespace systems::leal::campello_widgets
     void RenderSlider::detach()
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
+        {
+            d->arena().removeMember(this);
             d->removeHandler(this);
+        }
     }
 
     void RenderSlider::performLayout()

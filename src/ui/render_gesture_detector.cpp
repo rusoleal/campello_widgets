@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
+            d->arena().removeMember(this);
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
@@ -32,6 +33,7 @@ namespace systems::leal::campello_widgets
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
+            d->arena().removeMember(this);
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
@@ -193,6 +195,23 @@ namespace systems::leal::campello_widgets
             if (on_scroll)
                 on_scroll({event.scroll_delta_x, event.scroll_delta_y});
             break;
+        }
+    }
+
+    void RenderGestureDetector::performLayout()
+    {
+        // Transparent: pass constraints through unchanged (same as RenderMouseRegion).
+        // Using RenderBox::performLayout's loosen+center default would give children
+        // loose constraints, causing Stacks and other fill-to-max widgets to claim
+        // infinite height when placed in an unbounded main axis (e.g. Column).
+        if (child_)
+        {
+            layoutChild(*child_, constraints_);
+            size_ = child_->size();
+        }
+        else
+        {
+            size_ = constraints_.constrain({0.0f, 0.0f});
         }
     }
 

@@ -21,8 +21,9 @@ void main()
     vec2 t  = kQuadCorners[gl_VertexIndex];
     vec2 px = vec2(u.dstRect.x + t.x * u.dstRect.z,
                    u.dstRect.y + t.y * u.dstRect.w);
+    // campello_gpu uses a standard positive-height Vulkan viewport:
+    // y=-1 is TOP, y=+1 is BOTTOM. (px/viewport)*2-1 already gives correct NDC.
     vec2 ndc = (px / u.viewport) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
 
     gl_Position = vec4(ndc, 0.0, 1.0);
     v_uv = vec2(u.srcRect.x + t.x * (u.srcRect.z - u.srcRect.x),

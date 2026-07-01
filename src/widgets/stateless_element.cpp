@@ -22,9 +22,9 @@ namespace systems::leal::campello_widgets
 
     void StatelessElement::performBuild()
     {
-        const auto& w   = static_cast<const StatelessWidget&>(*widget_);
+        const auto& w     = static_cast<const StatelessWidget&>(*widget_);
         WidgetRef   built = w.build(*this);
-        child_          = updateChild(child_, std::move(built), this);
+        child_            = updateChild(child_, std::move(built), this);
     }
 
 } // namespace systems::leal::campello_widgets

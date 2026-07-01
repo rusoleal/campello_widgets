@@ -13,6 +13,7 @@
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include <campello_widgets/ui/raster_thread.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -77,6 +78,7 @@ struct WindowState
     std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
     std::unique_ptr<Widgets::TextInputManager>  text_input_manager;
     std::unique_ptr<Widgets::IbusIme>           ibus_ime;
+    std::unique_ptr<Widgets::RasterThread>      raster_thread;
 
     bool running = true;
     bool needs_redraw = true;
@@ -94,7 +96,8 @@ static void rebuildMediaQuery(WindowState* state);
 // Dark-mode D-Bus monitor (xdg-desktop-portal)
 // ---------------------------------------------------------------------------
 
-static DBusConnection* gDarkModeConn = nullptr;
+static DBusConnection* gDarkModeConn  = nullptr;
+static WindowState*    gDarkModeState = nullptr;
 
 static DBusHandlerResult darkModeDBusFilter(DBusConnection* /*connection*/,
                                               DBusMessage* msg,
@@ -175,6 +178,7 @@ static bool initializeDarkModeMonitor(WindowState* state)
         return false;
     }
 
+    gDarkModeState = state;
     dbus_connection_add_filter(gDarkModeConn, darkModeDBusFilter, state, nullptr);
     return true;
 }
@@ -182,7 +186,8 @@ static bool initializeDarkModeMonitor(WindowState* state)
 static void shutdownDarkModeMonitor()
 {
     if (!gDarkModeConn) return;
-    dbus_connection_remove_filter(gDarkModeConn, darkModeDBusFilter, nullptr);
+    dbus_connection_remove_filter(gDarkModeConn, darkModeDBusFilter, gDarkModeState);
+    gDarkModeState = nullptr;
     dbus_connection_unref(gDarkModeConn);
     gDarkModeConn = nullptr;
 }
@@ -597,19 +602,16 @@ static void renderFrame(WindowState* state)
 {
     if (!state || !state->renderer || !state->device) return;
 
-    auto color_view = state->device->getSwapchainTextureView();
-    if (!color_view) return;
-
-    // Note: PointerDispatcher/TickerScheduler are ticked inside
-    // Renderer::renderFrame() itself — don't duplicate that here.
-    if (auto* backend = state->renderer->drawBackend()) {
-        backend->setViewport(static_cast<float>(gWidth), static_cast<float>(gHeight));
-    }
-
-    state->renderer->renderFrame(
-        color_view,
+    auto package = state->renderer->buildFrame(
         static_cast<float>(gWidth),
         static_cast<float>(gHeight));
+    if (!package) return;
+
+    // On Vulkan, getSwapchainTextureView() returns nullptr — campello_gpu's
+    // beginRenderPass acquires the swapchain image automatically when target is null.
+    package->target = state->device->getSwapchainTextureView();
+
+    state->raster_thread->submit(std::move(*package));
 }
 
 // ---------------------------------------------------------------------------
@@ -640,8 +642,10 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     const char* wayland_display = std::getenv("WAYLAND_DISPLAY");
     if (wayland_display && wayland_display[0] != '\0') {
 #ifdef CAMPHELLO_WIDGETS_HAS_WAYLAND
-        std::cerr << "[Linux] Wayland detected (" << wayland_display << "), using Wayland backend.\n";
-        return runAppWayland(title, width, height, gRootWidget, resizable);
+        std::cerr << "[Linux] Wayland detected (" << wayland_display << "), trying Wayland backend.\n";
+        int result = runAppWayland(title, width, height, gRootWidget, resizable);
+        if (result != 2) return result; // 2 = GPU init failed, fall back to X11
+        std::cerr << "[Linux] Wayland GPU init failed; falling back to X11 (XWayland).\n";
 #else
         std::cerr << "[Linux] Wayland display detected but Wayland support not compiled in.\n";
         std::cerr << "[Linux] Falling back to X11 (may fail under pure Wayland compositors).\n";
@@ -813,6 +817,12 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         device, render_box, bgColor);
     state.renderer->setDrawBackend(std::move(backendOwned));
 
+    state.raster_thread = std::make_unique<Widgets::RasterThread>(
+        [renderer = state.renderer](const Widgets::FramePackage& pkg) {
+            renderer->rasterFrame(pkg);
+        });
+    state.raster_thread->start();
+
     // Initial draw
     state.needs_redraw = true;
 
@@ -857,6 +867,11 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::FocusManager::setActiveManager(nullptr);
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
+
+    // Stop the raster thread before releasing the renderer — stop() blocks
+    // until any in-flight rasterFrame() call completes and joins the thread,
+    // so no raster work can ever observe a half-destroyed Renderer/Device.
+    state.raster_thread.reset();
 
     state.renderer.reset();
     state.device.reset();

@@ -24,6 +24,7 @@
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include <campello_widgets/ui/raster_thread.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -46,11 +47,17 @@
 #include <iostream>
 #include <climits>
 #include <cstdlib>
-
-#include "protocols/xdg-shell-client-protocol.h"
+#include <libdecor.h>
 
 namespace GPU     = ::systems::leal::campello_gpu;
 namespace Widgets = ::systems::leal::campello_widgets;
+
+// ---------------------------------------------------------------------------
+
+// campello_gpu internal helper (not in device.hpp) — resizes the Wayland
+// swapchain in-place without destroying the VkDevice.  Defined in
+// campello_gpu/src/vulkan/device.cpp; resolved at link time.
+extern "C" void campello_gpu_wayland_resize(uint32_t w, uint32_t h);
 
 // ============================================================================
 // Shared helpers (duplicated from run_app.cpp to avoid cross-file coupling)
@@ -190,9 +197,8 @@ struct WaylandWindowState
     struct wl_seat*       seat         = nullptr;
     struct wl_pointer*    pointer      = nullptr;
     struct wl_keyboard*   keyboard     = nullptr;
-    struct xdg_wm_base*   xdg_wm_base  = nullptr;
-    struct xdg_surface*   xdg_surface  = nullptr;
-    struct xdg_toplevel*  xdg_toplevel = nullptr;
+    struct libdecor*                        libdecor_ctx         = nullptr;
+    struct libdecor_frame*                  decor_frame          = nullptr;
 
     struct xkb_context*   xkb_ctx      = nullptr;
     struct xkb_keymap*    xkb_keymap   = nullptr;
@@ -206,16 +212,20 @@ struct WaylandWindowState
     std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
     std::unique_ptr<Widgets::TextInputManager>  text_input_manager;
     std::unique_ptr<Widgets::IbusIme>           ibus_ime;
+    std::unique_ptr<Widgets::RasterThread>      raster_thread;
 
-    bool running      = true;
-    bool needs_redraw = true;
-    bool configured   = false;
-    bool closed       = false;
-    int  width        = 800;
-    int  height       = 600;
-    bool mouse_pressed = false;
-    float last_pointer_x = 0.0f;
-    float last_pointer_y = 0.0f;
+    bool running             = true;
+    bool needs_redraw        = true;
+    bool needs_device_resize = false;
+    bool configured          = false;
+    bool closed              = false;
+    int  width               = 800;
+    int  height              = 600;
+    int  device_width        = 0;    // size at which the current GPU device was created
+    int  device_height       = 0;
+    bool mouse_pressed       = false;
+    float last_pointer_x     = 0.0f;
+    float last_pointer_y     = 0.0f;
 };
 
 // ============================================================================
@@ -233,9 +243,6 @@ static void registry_global(void* data, struct wl_registry* registry,
     } else if (std::strcmp(interface, wl_seat_interface.name) == 0) {
         state->seat = static_cast<struct wl_seat*>(
             wl_registry_bind(registry, name, &wl_seat_interface, 7));
-    } else if (std::strcmp(interface, xdg_wm_base_interface.name) == 0) {
-        state->xdg_wm_base = static_cast<struct xdg_wm_base*>(
-            wl_registry_bind(registry, name, &xdg_wm_base_interface, 1));
     }
 }
 
@@ -246,49 +253,68 @@ static const struct wl_registry_listener registry_listener = {
     registry_global_remove
 };
 
-// --- xdg_wm_base ---
-static void xdg_wm_base_ping(void* data, struct xdg_wm_base* xdg_wm_base, uint32_t serial)
+// --- libdecor context interface ---
+static void libdecor_error_cb(struct libdecor*, enum libdecor_error, const char* msg)
 {
-    xdg_wm_base_pong(xdg_wm_base, serial);
+    std::cerr << "[Linux/Wayland] libdecor error: " << msg << "\n";
 }
 
-static const struct xdg_wm_base_listener xdg_wm_base_listener_impl = {
-    xdg_wm_base_ping
+static const struct libdecor_interface libdecor_iface = {
+    libdecor_error_cb,
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
 };
 
-// --- xdg_surface ---
-static void xdg_surface_configure(void* data, struct xdg_surface* xdg_surface, uint32_t serial)
+// --- libdecor frame interface ---
+static void frame_configure(struct libdecor_frame* frame,
+    struct libdecor_configuration* config, void* user_data)
 {
-    auto* state = static_cast<WaylandWindowState*>(data);
-    xdg_surface_ack_configure(xdg_surface, serial);
-    state->configured = true;
+    auto* state = static_cast<WaylandWindowState*>(user_data);
+
+    int w = state->width, h = state->height;
+    libdecor_configuration_get_content_size(config, frame, &w, &h);
+    if (w > 0) state->width  = w;
+    if (h > 0) state->height = h;
+
+    struct libdecor_state* ls = libdecor_state_new(state->width, state->height);
+    libdecor_frame_commit(frame, ls, config);
+    libdecor_state_free(ls);
+
+    // If the device already exists and the window size changed, the Vulkan
+    // swapchain must be recreated at the new dimensions. On Wayland,
+    // vkGetPhysicalDeviceSurfaceCapabilitiesKHR always returns currentExtent
+    // = UINT32_MAX, so the swapchain cannot self-detect the resize. We
+    // recreate the device (analogous to Metal's automatic drawableSize update
+    // on macOS) before the next frame.
+    if (state->device &&
+        (state->width != state->device_width || state->height != state->device_height)) {
+        state->needs_device_resize = true;
+    }
+
+    state->configured   = true;
     state->needs_redraw = true;
 }
 
-static const struct xdg_surface_listener xdg_surface_listener_impl = {
-    xdg_surface_configure
-};
-
-// --- xdg_toplevel ---
-static void xdg_toplevel_configure(void* data, struct xdg_toplevel* toplevel,
-                                   int32_t width, int32_t height, struct wl_array* states)
+static void frame_close(struct libdecor_frame*, void* user_data)
 {
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (width > 0)  state->width  = width;
-    if (height > 0) state->height = height;
-    state->needs_redraw = true;
-}
-
-static void xdg_toplevel_close(void* data, struct xdg_toplevel* toplevel)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    state->closed = true;
+    auto* state = static_cast<WaylandWindowState*>(user_data);
+    state->closed  = true;
     state->running = false;
 }
 
-static const struct xdg_toplevel_listener xdg_toplevel_listener_impl = {
-    xdg_toplevel_configure,
-    xdg_toplevel_close
+static void frame_commit(struct libdecor_frame*, void* user_data)
+{
+    auto* state = static_cast<WaylandWindowState*>(user_data);
+    wl_surface_commit(state->surface);
+}
+
+static void frame_dismiss_popup(struct libdecor_frame*, const char*, void*) {}
+
+static const struct libdecor_frame_interface libdecor_frame_iface = {
+    frame_configure,
+    frame_close,
+    frame_commit,
+    frame_dismiss_popup,
+    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
 };
 
 // --- wl_pointer ---
@@ -346,12 +372,26 @@ static void pointer_button(void* data, struct wl_pointer* pointer,
 static void pointer_axis(void* data, struct wl_pointer* pointer,
                          uint32_t time, uint32_t axis, wl_fixed_t value) {}
 
+// wl_pointer version 5+ events — not used, required for listener completeness.
+static void pointer_frame(void*, struct wl_pointer*) {}
+static void pointer_axis_source(void*, struct wl_pointer*, uint32_t) {}
+static void pointer_axis_stop(void*, struct wl_pointer*, uint32_t, uint32_t) {}
+static void pointer_axis_discrete(void*, struct wl_pointer*, uint32_t, int32_t) {}
+static void pointer_axis_value120(void*, struct wl_pointer*, uint32_t, int32_t) {}
+static void pointer_axis_relative_direction(void*, struct wl_pointer*, uint32_t, uint32_t) {}
+
 static const struct wl_pointer_listener pointer_listener = {
     pointer_enter,
     pointer_leave,
     pointer_motion,
     pointer_button,
-    pointer_axis
+    pointer_axis,
+    pointer_frame,
+    pointer_axis_source,
+    pointer_axis_stop,
+    pointer_axis_discrete,
+    pointer_axis_value120,
+    pointer_axis_relative_direction,
 };
 
 // --- wl_keyboard ---
@@ -456,12 +496,17 @@ static void keyboard_modifiers(void* data, struct wl_keyboard* keyboard,
     }
 }
 
+// wl_keyboard version 3+: key repeat rate/delay; we don't implement key repeat.
+static void keyboard_repeat_info(void* data, struct wl_keyboard* keyboard,
+                                 int32_t rate, int32_t delay) {}
+
 static const struct wl_keyboard_listener keyboard_listener = {
     keyboard_keymap,
     keyboard_enter,
     keyboard_leave,
     keyboard_key,
-    keyboard_modifiers
+    keyboard_modifiers,
+    keyboard_repeat_info
 };
 
 // --- Frame callback ---
@@ -484,20 +529,17 @@ static void renderFrame(WaylandWindowState* state)
 {
     if (!state || !state->renderer || !state->device) return;
 
-    auto color_view = state->device->getSwapchainTextureView();
-    if (!color_view) return;
-
-    // Note: PointerDispatcher/TickerScheduler are ticked inside
-    // Renderer::renderFrame() itself — don't duplicate that here.
-    if (auto* backend = state->renderer->drawBackend()) {
-        backend->setViewport(static_cast<float>(state->width),
-                             static_cast<float>(state->height));
-    }
-
-    state->renderer->renderFrame(
-        color_view,
+    auto package = state->renderer->buildFrame(
         static_cast<float>(state->width),
         static_cast<float>(state->height));
+
+    if (!package) return;
+
+    // On Vulkan, getSwapchainTextureView() returns nullptr — campello_gpu's
+    // beginRenderPass acquires the swapchain image automatically when target is null.
+    package->target = state->device->getSwapchainTextureView();
+
+    state->raster_thread->submit(std::move(*package));
 }
 
 // ============================================================================
@@ -561,16 +603,12 @@ int runAppWayland(const std::string& title, int width, int height,
         wl_display_disconnect(display);
         return 1;
     }
-    if (!state.xdg_wm_base) {
-        std::cerr << "[Linux/Wayland] xdg_wm_base not available\n";
-        wl_display_disconnect(display);
-        return 1;
-    }
-
-    xdg_wm_base_add_listener(state.xdg_wm_base, &xdg_wm_base_listener_impl, &state);
 
     // -------------------------------------------------------------------------
-    // Create surface and XDG toplevel
+    // Create wl_surface and decorate it with libdecor
+    // libdecor creates the xdg_surface + xdg_toplevel internally, negotiates
+    // server-side decorations when available, and draws GNOME-style client-side
+    // decorations as a fallback.
     // -------------------------------------------------------------------------
     state.surface = wl_compositor_create_surface(state.compositor);
     if (!state.surface) {
@@ -579,21 +617,42 @@ int runAppWayland(const std::string& title, int width, int height,
         return 1;
     }
 
-    state.xdg_surface = xdg_wm_base_get_xdg_surface(state.xdg_wm_base, state.surface);
-    xdg_surface_add_listener(state.xdg_surface, &xdg_surface_listener_impl, &state);
+    state.libdecor_ctx = libdecor_new(display,
+        const_cast<struct libdecor_interface*>(&libdecor_iface));
+    if (!state.libdecor_ctx) {
+        std::cerr << "[Linux/Wayland] Failed to create libdecor context\n";
+        wl_surface_destroy(state.surface);
+        wl_display_disconnect(display);
+        return 1;
+    }
 
-    state.xdg_toplevel = xdg_surface_get_toplevel(state.xdg_surface);
-    xdg_toplevel_add_listener(state.xdg_toplevel, &xdg_toplevel_listener_impl, &state);
-    xdg_toplevel_set_title(state.xdg_toplevel, title.c_str());
+    state.decor_frame = libdecor_decorate(state.libdecor_ctx, state.surface,
+        const_cast<struct libdecor_frame_interface*>(&libdecor_frame_iface), &state);
+    if (!state.decor_frame) {
+        std::cerr << "[Linux/Wayland] Failed to decorate surface\n";
+        libdecor_unref(state.libdecor_ctx);
+        wl_surface_destroy(state.surface);
+        wl_display_disconnect(display);
+        return 1;
+    }
 
-    wl_surface_commit(state.surface);
-    wl_display_roundtrip(display);
+    libdecor_frame_set_title(state.decor_frame, title.c_str());
+    libdecor_frame_set_capabilities(state.decor_frame,
+        static_cast<enum libdecor_capabilities>(
+            LIBDECOR_ACTION_MOVE     |
+            LIBDECOR_ACTION_RESIZE   |
+            LIBDECOR_ACTION_MINIMIZE |
+            LIBDECOR_ACTION_CLOSE));
+    libdecor_frame_map(state.decor_frame);
 
-    // Wait for the first configure before rendering
+    // Wait for the first configure event (libdecor dispatches from its own
+    // internal queue — this replaces the raw wl_display_dispatch wait).
     while (!state.configured && state.running) {
-        wl_display_dispatch(display);
+        if (libdecor_dispatch(state.libdecor_ctx, 16) < 0) break;
     }
     if (!state.running) {
+        libdecor_frame_unref(state.decor_frame);
+        libdecor_unref(state.libdecor_ctx);
         wl_display_disconnect(display);
         return 0;
     }
@@ -620,18 +679,22 @@ int runAppWayland(const std::string& title, int width, int height,
     surfaceInfo.display = display;
     surfaceInfo.window  = state.surface;
     surfaceInfo.api     = GPU::LinuxWindowApi::wayland;
+    surfaceInfo.width   = static_cast<uint32_t>(state.width);
+    surfaceInfo.height  = static_cast<uint32_t>(state.height);
 
     auto device = GPU::Device::createDefaultDevice(&surfaceInfo);
     if (!device) {
-        std::cerr << "[Linux/Wayland] Failed to create campello_gpu device\n";
+        std::cerr << "[Linux/Wayland] Failed to create campello_gpu device; will fall back to X11.\n";
         wl_display_disconnect(display);
-        return 1;
+        return 2; // sentinel: GPU init failed, caller should retry with X11
     }
 
     std::cerr << "[Linux/Wayland] Device: " << device->getName()
               << "  Engine: " << GPU::Device::getEngineVersion() << "\n";
 
-    state.device = device;
+    state.device        = device;
+    state.device_width  = state.width;
+    state.device_height = state.height;
 
     // -------------------------------------------------------------------------
     // Create dispatcher, focus manager, ticker, text input
@@ -716,6 +779,12 @@ int runAppWayland(const std::string& title, int width, int height,
         device, render_box, bgColor);
     state.renderer->setDrawBackend(std::move(backendOwned));
 
+    state.raster_thread = std::make_unique<Widgets::RasterThread>(
+        [renderer = state.renderer](const Widgets::FramePackage& pkg) {
+            renderer->rasterFrame(pkg);
+        });
+    state.raster_thread->start();
+
     state.needs_redraw = true;
 
     // -------------------------------------------------------------------------
@@ -724,6 +793,8 @@ int runAppWayland(const std::string& title, int width, int height,
     while (state.running) {
         // Process all pending Wayland events
         wl_display_dispatch_pending(display);
+        // Dispatch libdecor events (decoration redraws, resize negotiations, etc.)
+        libdecor_dispatch(state.libdecor_ctx, 0);
         wl_display_flush(display);
 
         // Pump IBus D-Bus signals
@@ -731,8 +802,29 @@ int runAppWayland(const std::string& title, int width, int height,
             state.ibus_ime->dispatchEvents();
         }
 
+        // Resize the Vulkan swapchain when the window size changed. On Wayland,
+        // vkGetPhysicalDeviceSurfaceCapabilitiesKHR always returns currentExtent
+        // = UINT32_MAX, so the swapchain cannot self-detect the new dimensions.
+        // campello_gpu_wayland_resize() patches imageExtent and calls
+        // recreateSwapchain() internally, keeping the VkDevice alive —
+        // analogous to Metal's transparent drawableSize update on macOS.
+        if (state.needs_device_resize && state.device) {
+            state.needs_device_resize = false;
+            // Wait for the raster thread to finish its current frame before
+            // recreating the swapchain — destroying swapchain images while
+            // the raster thread still holds a command buffer recording against
+            // them causes a Vulkan validation error and crash.
+            if (state.raster_thread)
+                state.raster_thread->drain();
+            campello_gpu_wayland_resize(
+                static_cast<uint32_t>(state.width),
+                static_cast<uint32_t>(state.height));
+            state.device_width  = state.width;
+            state.device_height = state.height;
+        }
+
         // Render if needed
-        if (state.needs_redraw) {
+        if (state.needs_redraw && state.renderer) {
             state.needs_redraw = false;
             renderFrame(&state);
 
@@ -769,8 +861,21 @@ int runAppWayland(const std::string& title, int width, int height,
     }
 
     // -------------------------------------------------------------------------
-    // Cleanup
+    // Cleanup — order matters:
+    //   1. Stop scheduling / dispatch first to prevent stale callbacks.
+    //   2. Tear down the widget / element tree while managers are still live
+    //      (elements may call activeDispatcher() or activeManager() on detach).
+    //   3. Release GPU objects before the Wayland surface is destroyed, so
+    //      the Vulkan WSI can clean up its Wayland resources while the surface
+    //      is still valid.
+    //   4. Wayland object destruction: children before parents, libdecor before
+    //      wl_surface (libdecor owns xdg_surface / xdg_toplevel on top of it).
     // -------------------------------------------------------------------------
+
+    // Stop frame scheduling immediately — the lambda captures &state and must
+    // not fire after runAppWayland returns.
+    Widgets::FrameScheduler::setCallback({});
+
     state.ibus_ime.reset();
 
     Widgets::PointerDispatcher::setActiveDispatcher(nullptr);
@@ -778,20 +883,36 @@ int runAppWayland(const std::string& title, int width, int height,
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
 
+    // Unmount the element / render-object tree while managers are still reachable
+    // (RenderTextField::detach() checks activeDispatcher(), etc.).
+    state.root_element.reset();
+
+    // Stop the raster thread before releasing the renderer — stop() blocks
+    // until any in-flight rasterFrame() call completes and joins the thread,
+    // so no raster work can ever observe a half-destroyed Renderer/Device.
+    state.raster_thread.reset();
+
     state.renderer.reset();
+
     state.device.reset();
+    // The local `device` variable also holds a ref to the GPU::Device; reset it
+    // here so vkDestroySurfaceKHR fires while the Wayland display is still open.
+    // On hasvk/Wayland, vkDestroySurfaceKHR sends a null-commit to the compositor
+    // — if the display is already disconnected that commit crashes the WSI.
+    device.reset();
 
     if (state.xkb_state)  xkb_state_unref(state.xkb_state);
     if (state.xkb_keymap) xkb_keymap_unref(state.xkb_keymap);
     if (state.xkb_ctx)    xkb_context_unref(state.xkb_ctx);
 
-    if (state.keyboard)   wl_keyboard_release(state.keyboard);
-    if (state.pointer)    wl_pointer_release(state.pointer);
-    if (state.seat)       wl_seat_destroy(state.seat);
-    if (state.xdg_toplevel) xdg_toplevel_destroy(state.xdg_toplevel);
-    if (state.xdg_surface)  xdg_surface_destroy(state.xdg_surface);
+    if (state.keyboard)     wl_keyboard_release(state.keyboard);
+    if (state.pointer)      wl_pointer_release(state.pointer);
+    // wl_seat version ≥5 requires the release request (not just proxy destroy).
+    // We bind version 7, so wl_seat_release is mandatory.
+    if (state.seat)         wl_seat_release(state.seat);
+    if (state.decor_frame)  libdecor_frame_unref(state.decor_frame);
+    if (state.libdecor_ctx) libdecor_unref(state.libdecor_ctx);
     if (state.surface)      wl_surface_destroy(state.surface);
-    if (state.xdg_wm_base)  xdg_wm_base_destroy(state.xdg_wm_base);
     if (state.compositor)   wl_compositor_destroy(state.compositor);
     if (state.registry)     wl_registry_destroy(state.registry);
 

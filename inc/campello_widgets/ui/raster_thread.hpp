@@ -67,6 +67,16 @@ namespace systems::leal::campello_widgets
          */
         void submit(FramePackage package);
 
+        /**
+         * @brief Blocks until the raster thread has finished processing its
+         *        current frame and is idle (not inside raster_fn_).
+         *
+         * Must be called before any operation that destroys GPU resources the
+         * raster thread may currently be using (e.g. swapchain recreation on
+         * resize). Safe to call even if no frame was ever submitted.
+         */
+        void drain();
+
         /// True if start() was called and stop() has not completed.
         bool isRunning() const noexcept;
 
@@ -79,9 +89,11 @@ namespace systems::leal::campello_widgets
         mutable std::mutex      mutex_;
         std::condition_variable slot_empty_cv_;  // signaled when pending_ becomes empty (picked up)
         std::condition_variable slot_filled_cv_; // signaled when pending_ becomes non-empty
+        std::condition_variable idle_cv_;         // signaled when worker finishes raster_fn_
         std::optional<FramePackage> pending_;
         bool stop_requested_ = false;
         bool running_        = false;
+        bool busy_           = false;
     };
 
 } // namespace systems::leal::campello_widgets

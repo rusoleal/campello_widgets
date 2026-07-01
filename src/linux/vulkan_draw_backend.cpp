@@ -15,6 +15,7 @@
 #include <campello_gpu/buffer.hpp>
 #include <campello_gpu/constants/buffer_usage.hpp>
 #include <campello_gpu/constants/texture_usage.hpp>
+#include <campello_gpu/constants/texture_usage.hpp>
 #include <campello_gpu/constants/shader_stage.hpp>
 #include <campello_gpu/constants/primitive_topology.hpp>
 
@@ -38,6 +39,15 @@ struct alignas(16) RectUniforms
     float color[4];     // r, g, b, a
     float viewport[2];  // w, h
     float _pad[2];
+};
+
+struct alignas(16) RRectUniforms
+{
+    float rect[4];      // x, y, w, h
+    float color[4];     // r, g, b, a
+    float viewport[2];  // w, h
+    float radius;
+    float _pad;
 };
 
 struct alignas(16) QuadUniforms
@@ -88,12 +98,14 @@ VulkanDrawBackend::VulkanDrawBackend(
     , pixel_format_(pixel_format)
 {
     // Load SPIR-V shader modules
-    auto rect_vert = loadSpv(device_, shaders::krect_vert_spv, shaders::krect_vert_spvSize);
-    auto rect_frag = loadSpv(device_, shaders::krect_frag_spv, shaders::krect_frag_spvSize);
-    auto quad_vert = loadSpv(device_, shaders::kquad_vert_spv,  shaders::kquad_vert_spvSize);
-    auto quad_frag = loadSpv(device_, shaders::kquad_frag_spv,  shaders::kquad_frag_spvSize);
+    auto rect_vert  = loadSpv(device_, shaders::krect_vert_spv,  shaders::krect_vert_spvSize);
+    auto rect_frag  = loadSpv(device_, shaders::krect_frag_spv,  shaders::krect_frag_spvSize);
+    auto rrect_vert = loadSpv(device_, shaders::krrect_vert_spv, shaders::krrect_vert_spvSize);
+    auto rrect_frag = loadSpv(device_, shaders::krrect_frag_spv, shaders::krrect_frag_spvSize);
+    auto quad_vert  = loadSpv(device_, shaders::kquad_vert_spv,  shaders::kquad_vert_spvSize);
+    auto quad_frag  = loadSpv(device_, shaders::kquad_frag_spv,  shaders::kquad_frag_spvSize);
 
-    if (!rect_vert || !rect_frag || !quad_vert || !quad_frag) {
+    if (!rect_vert || !rect_frag || !rrect_vert || !rrect_frag || !quad_vert || !quad_frag) {
         // Shader loading failed — pipelines remain null, backend is effectively no-op
         return;
     }
@@ -115,8 +127,19 @@ VulkanDrawBackend::VulkanDrawBackend(
         uniforms_bgl_ = device_->createBindGroupLayout(desc);
     }
 
-    // Bind group layout: texture @ 1, sampler @ 2 (fragment only)
+    // Bind group layout for quad: uniform @ 0 (vert+frag), texture @ 1, sampler @ 2 (frag)
+    // All three are in Set 0 as declared in quad.vert / quad.frag.
     {
+        GPU::EntryObject uni_entry{};
+        uni_entry.binding    = 0;
+        uni_entry.visibility = static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment));
+        uni_entry.type       = GPU::EntryObjectType::buffer;
+        uni_entry.data.buffer.type             = GPU::EntryObjectBufferType::uniform;
+        uni_entry.data.buffer.hasDinamicOffaset = false;
+        uni_entry.data.buffer.minBindingSize   = sizeof(QuadUniforms);
+
         GPU::EntryObject tex_entry{};
         tex_entry.binding    = 1;
         tex_entry.visibility = GPU::ShaderStage::fragment;
@@ -132,7 +155,7 @@ VulkanDrawBackend::VulkanDrawBackend(
         smp_entry.data.sampler.type = GPU::EntryObjectSamplerType::filtering;
 
         GPU::BindGroupLayoutDescriptor desc{};
-        desc.entries = { tex_entry, smp_entry };
+        desc.entries = { uni_entry, tex_entry, smp_entry };
         quad_bgl_ = device_->createBindGroupLayout(desc);
     }
 
@@ -157,17 +180,39 @@ VulkanDrawBackend::VulkanDrawBackend(
     // Shared blend state
     auto blend = premultipliedAlphaBlend();
 
+    // Pipeline layout: Set 0 = uniforms (rect pipeline)
+    // Stored as a member so the VkPipelineLayout stays valid for the
+    // lifetime of the backend (vkCmdBindDescriptorSets requires it).
+    {
+        GPU::PipelineLayoutDescriptor desc{};
+        desc.bindGroupLayouts = { uniforms_bgl_ };
+        rect_layout_ = device_->createPipelineLayout(desc);
+    }
+
+    // Pipeline layout: Set 0 = uniforms (rrect pipeline — same BGL as rect)
+    {
+        GPU::PipelineLayoutDescriptor desc{};
+        desc.bindGroupLayouts = { uniforms_bgl_ };
+        rrect_layout_ = device_->createPipelineLayout(desc);
+    }
+
+    // Pipeline layout: Set 0 = uniform+texture+sampler (quad pipeline)
+    {
+        GPU::PipelineLayoutDescriptor desc{};
+        desc.bindGroupLayouts = { quad_bgl_ };
+        quad_layout_ = device_->createPipelineLayout(desc);
+    }
+
     // Rect pipeline
     {
         GPU::RenderPipelineDescriptor desc{};
-        // desc.layout omitted — campello_gpu creates empty layout automatically
+        desc.layout      = rect_layout_;
         desc.topology    = GPU::PrimitiveTopology::triangleList;
         desc.cullMode    = GPU::CullMode::none;
         desc.frontFace   = GPU::FrontFace::ccw;
 
         desc.vertex.module     = rect_vert;
         desc.vertex.entryPoint = "main";
-        // No vertex buffers — geometry generated from gl_VertexIndex
 
         GPU::FragmentDescriptor frag{};
         frag.module     = rect_frag;
@@ -178,10 +223,30 @@ VulkanDrawBackend::VulkanDrawBackend(
         rect_pipeline_ = device_->createRenderPipeline(desc);
     }
 
+    // RRect pipeline (SDF rounded rectangle)
+    {
+        GPU::RenderPipelineDescriptor desc{};
+        desc.layout      = rrect_layout_;
+        desc.topology    = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode    = GPU::CullMode::none;
+        desc.frontFace   = GPU::FrontFace::ccw;
+
+        desc.vertex.module     = rrect_vert;
+        desc.vertex.entryPoint = "main";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = rrect_frag;
+        frag.entryPoint = "main";
+        frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+        desc.fragment   = frag;
+
+        rrect_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
     // Quad pipeline
     {
         GPU::RenderPipelineDescriptor desc{};
-        // desc.layout omitted — campello_gpu creates empty layout automatically
+        desc.layout      = quad_layout_;
         desc.topology    = GPU::PrimitiveTopology::triangleList;
         desc.cullMode    = GPU::CullMode::none;
         desc.frontFace   = GPU::FrontFace::ccw;
@@ -251,10 +316,43 @@ void VulkanDrawBackend::drawRect(
     const float max_x = std::max({c00.x(), c10.x(), c01.x(), c11.x()});
     const float max_y = std::max({c00.y(), c10.y(), c01.y(), c11.y()});
 
-    // For now, only fill is supported. Stroke can be decomposed later.
     const float w = max_x - min_x;
     const float h = max_y - min_y;
     if (w <= 0.0f || h <= 0.0f) return;
+
+    // Stroke: decompose into 4 thin filled edge rects.
+    if (cmd.paint.style == PaintStyle::stroke) {
+        const float sw = std::max(1.0f, cmd.paint.stroke_width);
+        const struct { float x, y, w, h; } edges[4] = {
+            { min_x,        min_y,        w,  sw }, // top
+            { min_x,        max_y - sw,   w,  sw }, // bottom
+            { min_x,        min_y,        sw, h  }, // left
+            { max_x - sw,   min_y,        sw, h  }, // right
+        };
+        for (const auto& e : edges) {
+            if (e.w <= 0.0f || e.h <= 0.0f) continue;
+            RectUniforms u{};
+            u.rect[0] = e.x; u.rect[1] = e.y; u.rect[2] = e.w; u.rect[3] = e.h;
+            u.color[0] = cmd.paint.color.r; u.color[1] = cmd.paint.color.g;
+            u.color[2] = cmd.paint.color.b; u.color[3] = cmd.paint.color.a;
+            u.viewport[0] = vp_w_; u.viewport[1] = vp_h_;
+            auto ubuf = device_->createBuffer(sizeof(RectUniforms),
+                static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
+                                              static_cast<int>(GPU::BufferUsage::copyDst)), &u);
+            if (!ubuf) continue;
+            frame_buffers_.push_back(ubuf);
+            GPU::BindGroupDescriptor bg{};
+            bg.layout  = uniforms_bgl_;
+            bg.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RectUniforms) } } };
+            auto bind_group = device_->createBindGroup(bg);
+            if (!bind_group) continue;
+            applyScissor(clip, encoder);
+            encoder.setPipeline(rect_pipeline_);
+            encoder.setBindGroup(0, bind_group);
+            encoder.draw(6);
+        }
+        return;
+    }
 
     RectUniforms u{};
     u.rect[0] = min_x;
@@ -274,6 +372,7 @@ void VulkanDrawBackend::drawRect(
                                            static_cast<int>(GPU::BufferUsage::copyDst)),
                                        &u);
     if (!ubuf) return;
+    frame_buffers_.push_back(ubuf);  // keep alive until next frame (GPU may still reference it)
 
     GPU::BindGroupDescriptor bg_desc{};
     bg_desc.layout = uniforms_bgl_;
@@ -285,6 +384,70 @@ void VulkanDrawBackend::drawRect(
 
     applyScissor(clip, encoder);
     encoder.setPipeline(rect_pipeline_);
+    encoder.setBindGroup(0, bind_group);
+    encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// drawRRect
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::drawRRect(
+    const DrawRRectCmd&              cmd,
+    const Matrix4&                   transform,
+    const Rect&                      clip,
+    GPU::RenderPassEncoder&          encoder)
+{
+    if (!rrect_pipeline_ || !uniforms_bgl_) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    const Rect& r = cmd.rrect.rect;
+    auto c00 = transform * vm::Vector4<float>(r.left(),  r.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(r.right(), r.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(r.left(),  r.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(r.right(), r.bottom(), 0.0f, 1.0f);
+
+    const float min_x = std::min({c00.x(), c10.x(), c01.x(), c11.x()});
+    const float min_y = std::min({c00.y(), c10.y(), c01.y(), c11.y()});
+    const float max_x = std::max({c00.x(), c10.x(), c01.x(), c11.x()});
+    const float max_y = std::max({c00.y(), c10.y(), c01.y(), c11.y()});
+
+    const float w = max_x - min_x;
+    const float h = max_y - min_y;
+    if (w <= 0.0f || h <= 0.0f) return;
+
+    RRectUniforms u{};
+    u.rect[0] = min_x;
+    u.rect[1] = min_y;
+    u.rect[2] = w;
+    u.rect[3] = h;
+    u.color[0] = cmd.paint.color.r;
+    u.color[1] = cmd.paint.color.g;
+    u.color[2] = cmd.paint.color.b;
+    u.color[3] = cmd.paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.radius = std::min(cmd.rrect.radius_x, cmd.rrect.radius_y);
+
+    auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
+                                       static_cast<GPU::BufferUsage>(
+                                           static_cast<int>(GPU::BufferUsage::uniform) |
+                                           static_cast<int>(GPU::BufferUsage::copyDst)),
+                                       &u);
+    if (!ubuf) return;
+    frame_buffers_.push_back(ubuf);
+
+    GPU::BindGroupDescriptor bg_desc{};
+    bg_desc.layout = uniforms_bgl_;
+    bg_desc.entries = {
+        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RRectUniforms) } }
+    };
+    auto bind_group = device_->createBindGroup(bg_desc);
+    if (!bind_group) return;
+
+    applyScissor(clip, encoder);
+    encoder.setPipeline(rrect_pipeline_);
     encoder.setBindGroup(0, bind_group);
     encoder.draw(6);
 }
@@ -323,28 +486,21 @@ void VulkanDrawBackend::drawTexturedQuad(
                                            static_cast<int>(GPU::BufferUsage::copyDst)),
                                        &u);
     if (!ubuf) return;
+    frame_buffers_.push_back(ubuf);  // keep alive until next frame
 
-    GPU::BindGroupDescriptor ubg_desc{};
-    ubg_desc.layout = uniforms_bgl_;
-    ubg_desc.entries = {
-        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(QuadUniforms) } }
-    };
-    auto u_bind_group = device_->createBindGroup(ubg_desc);
-    if (!u_bind_group) return;
-
-    GPU::BindGroupDescriptor tbg_desc{};
-    tbg_desc.layout = quad_bgl_;
-    tbg_desc.entries = {
+    GPU::BindGroupDescriptor bg_desc{};
+    bg_desc.layout = quad_bgl_;
+    bg_desc.entries = {
+        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(QuadUniforms) } },
         { 1, texture },
         { 2, linear_sampler_ }
     };
-    auto t_bind_group = device_->createBindGroup(tbg_desc);
-    if (!t_bind_group) return;
+    auto bind_group = device_->createBindGroup(bg_desc);
+    if (!bind_group) return;
 
     applyScissor(clip, encoder);
     encoder.setPipeline(quad_pipeline_);
-    encoder.setBindGroup(0, u_bind_group);
-    encoder.setBindGroup(1, t_bind_group);
+    encoder.setBindGroup(0, bind_group);
     encoder.draw(6);
 }
 
@@ -420,8 +576,11 @@ void VulkanDrawBackend::drawText(
         static_cast<uint32_t>(bitmap.width),
         static_cast<uint32_t>(bitmap.height),
         1, 1, 1,
-        GPU::TextureUsage::textureBinding);
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copyDst)));
     if (!texture) return;
+    frame_textures_.push_back(texture);  // keep alive until next frame
 
     texture->upload(0, bitmap.pixels.size(), bitmap.pixels.data());
 

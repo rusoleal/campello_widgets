@@ -58,6 +58,17 @@ namespace systems::leal::campello_widgets
         virtual void setDevicePixelRatio(float /*dpr*/) noexcept {}
 
         /**
+         * @brief Called at the start of each flushDrawList() invocation.
+         *
+         * Each call to flushDrawList() follows a beginRenderPass(), which
+         * resets GPU dynamic state (viewport, scissor). Implementations that
+         * cache GPU state (e.g. scissor rect) must invalidate their cache here
+         * so that the first draw command after beginRenderPass always re-emits
+         * the necessary GPU state.
+         */
+        virtual void onBeginFlush() noexcept {}
+
+        /**
          * @brief Draw a filled or stroked rectangle.
          *
          * @param cmd       The draw rect command (rect + paint).

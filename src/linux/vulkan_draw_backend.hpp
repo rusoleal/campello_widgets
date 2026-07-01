@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 #include <memory>
+#include <vector>
 
 namespace systems::leal::campello_gpu
 {
@@ -13,6 +14,7 @@ namespace systems::leal::campello_gpu
     class PipelineLayout;
     class Sampler;
     class Texture;
+    class Buffer;
 }
 
 namespace systems::leal::campello_widgets
@@ -26,8 +28,8 @@ class LinuxTextRasterizer;
 // IDrawBackend implementation for Linux/Vulkan.
 // Uses campello_gpu's public API with pre-compiled SPIR-V shaders.
 //
-// Supported:  drawRect, drawImage, drawText (FreeType + HarfBuzz)
-// No-op:      drawCircle, drawOval, drawRRect, drawLine,
+// Supported:  drawRect, drawRRect, drawImage, drawText (FreeType + HarfBuzz)
+// No-op:      drawCircle, drawOval, drawLine,
 //             blurTexture, drawBackdropFilter, drawShaderMaskComposite
 //
 // Call setViewport(w, h) once per frame before Renderer::renderFrame().
@@ -48,6 +50,12 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawRRect(
+        const DrawRRectCmd&              cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     void drawImage(
         const DrawImageCmd&              cmd,
         const Matrix4&                   transform,
@@ -62,7 +70,26 @@ public:
 
     Size measureText(const TextSpan& span) const override;
 
-    void setViewport(float w, float h) noexcept override { vp_w_ = w; vp_h_ = h; }
+    void setViewport(float w, float h) noexcept override
+    {
+        // Safe to clear previous frame's buffers here: the renderer calls
+        // vkQueueWaitIdle inside submit() before returning, so the GPU is
+        // done with the prior frame by the time this is called again.
+        frame_buffers_.clear();
+        frame_textures_.clear();
+        vp_w_ = w; vp_h_ = h;
+    }
+
+    void onBeginFlush() noexcept override
+    {
+        // beginRenderPass() resets the GPU scissor to the full render area.
+        // Invalidate our cache so the first applyScissor() call always emits
+        // vkCmdSetScissor rather than incorrectly reusing the previous value.
+        last_scissor_x_ = -1.0f;
+        last_scissor_y_ = -1.0f;
+        last_scissor_w_ = -1.0f;
+        last_scissor_h_ = -1.0f;
+    }
 
     campello_gpu::PixelFormat offscreenPixelFormat() const noexcept override
     {
@@ -87,10 +114,18 @@ private:
     campello_gpu::PixelFormat                      pixel_format_;
 
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  rrect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::BindGroupLayout> uniforms_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout> quad_bgl_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  rect_layout_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  rrect_layout_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  quad_layout_;
     std::shared_ptr<campello_gpu::Sampler>          linear_sampler_;
+    // Per-frame uniform buffers kept alive until the start of the next frame
+    // (vkQueueWaitIdle in submit() ensures GPU is done before they're cleared).
+    std::vector<std::shared_ptr<campello_gpu::Buffer>>  frame_buffers_;
+    std::vector<std::shared_ptr<campello_gpu::Texture>> frame_textures_;
 
     std::unique_ptr<LinuxTextRasterizer>           text_rasterizer_;
 

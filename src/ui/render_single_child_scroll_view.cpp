@@ -37,6 +37,7 @@ namespace systems::leal::campello_widgets
     {
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
+            d->arena().removeMember(this);
             d->removeHandler(this);
             d->removeTickHandler(this);
         }

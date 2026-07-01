@@ -43,18 +43,12 @@ namespace systems::leal::campello_widgets
         explicit ScaleTransition(
             std::shared_ptr<AnimationController> ctrl,
             WidgetRef c = nullptr)
-            : controller(std::move(ctrl)), child(std::move(c))
-        {
-            CW_ASSERT_MSG(ctrl != nullptr, "ScaleTransition.controller must be set");
-}
+            : controller(std::move(ctrl)), child(std::move(c)) {}
         explicit ScaleTransition(
             std::shared_ptr<AnimationController> ctrl,
             Tween<float> scl,
             WidgetRef c = nullptr)
-            : controller(std::move(ctrl)), scale(scl), child(std::move(c))
-        {
-            CW_ASSERT_MSG(ctrl != nullptr, "ScaleTransition.controller must be set");
-}
+            : controller(std::move(ctrl)), scale(scl), child(std::move(c)) {}
 
         std::unique_ptr<StateBase> createState() const override;
         void debugValidate() const override

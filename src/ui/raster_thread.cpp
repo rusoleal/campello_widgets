@@ -55,6 +55,14 @@ namespace systems::leal::campello_widgets
         return running_;
     }
 
+    void RasterThread::drain()
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        // Wait until neither a package is pending pickup NOR the worker is
+        // actively inside raster_fn_ — i.e. the raster thread is truly idle.
+        idle_cv_.wait(lock, [&] { return (!busy_ && !pending_.has_value()) || stop_requested_; });
+    }
+
     void RasterThread::workerLoop()
     {
         ThreadChecker::rasterInstance().bindToCurrentThread();
@@ -69,10 +77,16 @@ namespace systems::leal::campello_widgets
                     return;
                 pkg = std::move(*pending_);
                 pending_.reset(); // "pickup" happens here, before raster_fn_ runs
+                busy_ = true;
             }
-            slot_empty_cv_.notify_one(); // unblocks a UI thread waiting in submit()
-            raster_fn_(pkg);             // may run concurrently with the UI thread
-                                          // already building the next frame
+            slot_empty_cv_.notify_one(); // unblocks submit()
+            idle_cv_.notify_all();       // unblocks drain(): pending_ just cleared (busy_ still true, but re-check)
+            raster_fn_(pkg);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                busy_ = false;
+            }
+            idle_cv_.notify_all();       // unblocks drain(): busy_ cleared, truly idle now
         }
     }
 

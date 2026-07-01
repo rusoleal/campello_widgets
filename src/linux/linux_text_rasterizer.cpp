@@ -47,6 +47,7 @@ static bool shapeAndLayout(
     if (!face || !hb_font || !text || text[0] == '\0') return false;
 
     FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(std::max(1.0f, size)));
+    hb_ft_font_changed(hb_font);  // sync HarfBuzz scale after FT size change
 
     hb_buffer_t* buf = hb_buffer_create();
     hb_buffer_add_utf8(buf, text, -1, 0, -1);
