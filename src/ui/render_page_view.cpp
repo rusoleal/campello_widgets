@@ -164,6 +164,14 @@ namespace systems::leal::campello_widgets
         canvas.restore();
     }
 
+    void RenderPageView::paint(PaintContext& context, const Offset& offset)
+    {
+        if (!offset_layer_.maybeReplay(context, offset, size_, needsPaint()))
+            offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
+
+        needs_paint_ = false;
+    }
+
     // ------------------------------------------------------------------
     // Hit testing
     // ------------------------------------------------------------------
@@ -252,7 +260,7 @@ namespace systems::leal::campello_widgets
     void RenderPageView::acceptGesture(int32_t /*pointer_id*/)
     {
         // Only records the win. panning_ starts once a move actually exceeds
-        // kTapSlop (see onPointerEvent) — accepting here just means we're no
+        // pan slop (see onPointerEvent) — accepting here just means we're no
         // longer competing, not that movement has happened yet (e.g. a sole,
         // uncontested arena resolves immediately at pointer-down).
         won_arena_ = true;
@@ -274,6 +282,7 @@ namespace systems::leal::campello_widgets
             won_arena_     = false;
             lost_arena_    = false;
             pan_last_pos_  = event.position;
+            device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
             pan_velocity_  = 0.0f;
             last_pan_time_ = std::chrono::steady_clock::now();
@@ -287,10 +296,18 @@ namespace systems::leal::campello_widgets
             if (!pointer_down_ || lost_arena_)
                 break;
 
-            const float dx = event.position.x - pan_last_pos_.x;
-            const float dy = event.position.y - pan_last_pos_.y;
+            const bool  is_h = (scroll_direction == Axis::horizontal);
+            const float dx   = event.position.x - pan_last_pos_.x;
+            const float dy   = event.position.y - pan_last_pos_.y;
 
-            if (!panning_ && std::sqrt(dx * dx + dy * dy) > kTapSlop)
+            // Only this view's own scroll direction counts toward the
+            // pan-slop threshold — not total Euclidean movement — so a
+            // scrollable nested inside another with a different axis only
+            // claims the gesture arena for drags actually aligned with its
+            // own axis. Mirrors Flutter's VerticalDragGestureRecognizer/
+            // HorizontalDragGestureRecognizer, which likewise measure only
+            // their own axis's displacement, not the diagonal distance.
+            if (!panning_ && std::abs(is_h ? dx : dy) > computePanSlop(device_kind_))
             {
                 if (won_arena_)
                 {
@@ -304,7 +321,6 @@ namespace systems::leal::campello_widgets
             }
 
             if (panning_) {
-                const bool  is_h  = (scroll_direction == Axis::horizontal);
                 const float delta = is_h ? dx : dy;
                 applyPageDelta(-delta);
 

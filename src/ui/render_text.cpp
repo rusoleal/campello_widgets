@@ -12,6 +12,7 @@ namespace systems::leal::campello_widgets
 
     void RenderText::setTextSpan(TextSpan span) noexcept
     {
+        if (span_ == span) return;
         span_ = std::move(span);
         markNeedsLayout();
         markNeedsPaint();

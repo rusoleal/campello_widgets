@@ -21,7 +21,9 @@ namespace systems::leal::campello_widgets
         const auto& fw = static_cast<const Flex&>(*widget_);
         auto&       rf = static_cast<RenderFlex&>(*render_object_);
 
-        rf.clearChildren();
+        struct Entry { int index; std::shared_ptr<RenderBox> box; int flex; };
+        std::vector<Entry> entries;
+        entries.reserve(child_elements_.size());
 
         for (int i = 0; i < static_cast<int>(child_elements_.size()); ++i)
         {
@@ -40,8 +42,22 @@ namespace systems::leal::campello_widgets
                     flex = f->flex;
             }
 
-            rf.insertChild(std::move(box), i, flex);
+            entries.push_back({i, std::move(box), flex});
         }
+
+        std::vector<SyncedChild> new_synced;
+        new_synced.reserve(entries.size());
+        for (const auto& e : entries)
+            new_synced.push_back({e.index, e.box.get(), e.flex});
+
+        if (new_synced == last_synced_)
+            return; // identity and flex factors unchanged — nothing to resync
+
+        rf.clearChildren();
+        for (const auto& e : entries)
+            rf.insertChild(e.box, e.index, e.flex);
+
+        last_synced_ = std::move(new_synced);
     }
 
     // ------------------------------------------------------------------
@@ -66,7 +82,13 @@ namespace systems::leal::campello_widgets
 
     void Flex::updateRenderObject(RenderObject& ro) const
     {
-        auto& rf                = static_cast<RenderFlex&>(ro);
+        auto& rf = static_cast<RenderFlex&>(ro);
+        if (rf.axis == axis &&
+            rf.main_axis_alignment == main_axis_alignment &&
+            rf.cross_axis_alignment == cross_axis_alignment &&
+            rf.main_axis_size == main_axis_size)
+            return;
+
         rf.axis                 = axis;
         rf.main_axis_alignment  = main_axis_alignment;
         rf.cross_axis_alignment = cross_axis_alignment;

@@ -1,6 +1,8 @@
 #include "gallery_app.hpp"
+#include "assets/mountains_jpeg.h"
 #include <campello_widgets/campello_widgets.hpp>
 
+#include <cmath>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -37,6 +39,13 @@ static cw::WidgetRef ptr(cw::WidgetRef child)
     r->cursor = cw::SystemMouseCursor::pointer;
     r->child  = std::move(child);
     return r;
+}
+
+static cw::WidgetRef repaintBoundary(cw::WidgetRef child)
+{
+    auto rb  = std::make_shared<cw::RepaintBoundary>();
+    rb->child = std::move(child);
+    return rb;
 }
 
 static cw::WidgetRef card(cw::WidgetRef content, float pad = 16.0f)
@@ -527,19 +536,29 @@ public:
         show_a_    = true;
         align_idx_ = 0;
         ctrl_      = std::make_shared<cw::AnimationController>(700.0);
+
+        // AnimatedSwitcher determines "did the child change" by pointer
+        // identity, not content — build() must hand it the same WidgetRef
+        // every time show_a_ hasn't actually changed, or every unrelated
+        // setState() in this section (Play, Next corner, ...) spuriously
+        // retriggers its cross-fade. Build both variants once and pick
+        // between the stable instances instead of constructing fresh each
+        // build().
+        auto make_sw_box = [](const cw::Color& color, const char* label) {
+            auto box = std::make_shared<cw::Container>();
+            box->width = 160.0f; box->height = 60.0f; box->color = color;
+            box->child = cw::mw<cw::Center>(cw::mw<cw::Text>(label, ts(15.0f, cw::Color::white())));
+            return box;
+        };
+        widget_a_box_ = make_sw_box(kBlue, "Widget A");
+        widget_b_box_ = make_sw_box(kGreen, "Widget B");
     }
 
     cw::WidgetRef build(cw::BuildContext&) override
     {
         // AnimatedSwitcher
-        const cw::Color sw_colors[] = { kBlue, kGreen, kOrange, kPurple };
-        int color_idx = show_a_ ? 0 : 1;
-        auto sw_box = std::make_shared<cw::Container>();
-        sw_box->width = 160.0f; sw_box->height = 60.0f; sw_box->color = sw_colors[color_idx];
-        sw_box->child = cw::mw<cw::Center>(
-            cw::mw<cw::Text>(show_a_ ? "Widget A" : "Widget B", ts(15.0f, cw::Color::white())));
         auto switcher = std::make_shared<cw::AnimatedSwitcher>();
-        switcher->child       = sw_box;
+        switcher->child       = show_a_ ? widget_a_box_ : widget_b_box_;
         switcher->duration_ms = 350.0;
 
         // AnimatedAlign
@@ -654,6 +673,8 @@ private:
     bool  show_a_    = true;
     int   align_idx_ = 0;
     std::shared_ptr<cw::AnimationController> ctrl_;
+    cw::WidgetRef widget_a_box_;
+    cw::WidgetRef widget_b_box_;
 };
 
 class AnimationsSection : public cw::StatefulWidget {
@@ -695,7 +716,6 @@ public:
             };
         }
         auto zone_bg = std::make_shared<cw::Container>();
-        zone_bg->height = 150.0f;
         zone_bg->color  = zone_color_;
         zone_bg->child  = cw::mw<cw::Center>(zone_center);
 
@@ -782,13 +802,11 @@ public:
                 cw::mw<cw::Text>("→", ts(20.0f, cw::Color::fromRGB(0.6f,0.6f,0.6f))),
                 hspace(24.0f), target_widget });
 
-        auto scroll = std::make_shared<cw::SingleChildScrollView>();
-        scroll->physics = std::make_shared<cw::BouncingScrollPhysics>();
-        scroll->child   = cw::mw<cw::Padding>(cw::EdgeInsets::all(20.0f),
+        auto content = cw::mw<cw::Padding>(cw::EdgeInsets::all(20.0f),
             cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
                 cw::WidgetList{
                     subheading("GESTURE DETECTOR — tap · double-tap · long-press · pan · scroll"),
-                    card(detector, 0.0f),
+                    cw::mw<cw::Expanded>(card(detector, 0.0f)),
                     vspace(20.0f),
                     subheading("DRAGGABLE + DRAG TARGET"),
                     card(dnd_row),
@@ -796,7 +814,7 @@ public:
 
         auto bg = std::make_shared<cw::Container>();
         bg->color = kContent;
-        bg->child = scroll;
+        bg->child = content;
         return bg;
     }
 
@@ -1006,8 +1024,11 @@ public:
             log_items.push_back(cw::mw<cw::Text>(*it,
                 ts(11.0f, cw::Color::fromRGB(0.55f, 0.55f, 0.6f))));
         }
-        auto log_col = cw::mw<cw::Column>(cw::MainAxisAlignment::start,
-            cw::CrossAxisAlignment::start, log_items);
+        auto log_col = std::make_shared<cw::Column>();
+        log_col->main_axis_alignment  = cw::MainAxisAlignment::start;
+        log_col->cross_axis_alignment = cw::CrossAxisAlignment::start;
+        log_col->main_axis_size       = cw::MainAxisSize::min;
+        log_col->children             = log_items;
 
         auto center_content = cw::mw<cw::Column>(
             cw::MainAxisAlignment::center, cw::CrossAxisAlignment::center,
@@ -1078,11 +1099,278 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// 9. IMAGES — ImageWidget, BoxFit, decorations, transforms, blur
+// ---------------------------------------------------------------------------
+
+// Mount Robson, CC0 1.0 Universal Public Domain Dedication — see
+// assets/mountains_jpeg.h for provenance. Every call decodes against the
+// same cache key (MemoryImage::cacheKey() hashes the bytes), so repeated
+// calls below don't each re-decode the JPEG.
+static cw::WidgetRef mountainsImage(
+    cw::BoxFit fit, std::optional<float> w = std::nullopt, std::optional<float> h = std::nullopt)
+{
+    return cw::ImageWidget::memory(
+        std::vector<uint8_t>(
+            cw::gallery_assets::kMountainsJpeg,
+            cw::gallery_assets::kMountainsJpeg + cw::gallery_assets::kMountainsJpegSize),
+        fit, w, h);
+}
+
+// Square container — lets every BoxFit mode be checked against the same
+// width and height, which is the case that actually distinguishes them
+// (fitWidth vs. fitHeight are indistinguishable on a non-square box).
+static constexpr float kFitSampleBoxSize = 120.0f;
+
+static cw::WidgetRef fitSample(const std::string& label, cw::BoxFit fit)
+{
+    auto box = std::make_shared<cw::Container>();
+    box->width  = kFitSampleBoxSize;
+    box->height = kFitSampleBoxSize;
+    box->color  = cw::Color::fromRGB(0.90f, 0.90f, 0.93f);
+    box->child  = mountainsImage(fit, kFitSampleBoxSize, kFitSampleBoxSize);
+    auto clipped = std::make_shared<cw::ClipRRect>(8.0f, box);
+
+    return cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+        cw::WidgetList{
+            clipped,
+            vspace(6.0f),
+            cw::mw<cw::Text>(label, ts(11.0f, cw::Color::fromRGB(0.4f, 0.4f, 0.45f))),
+        });
+}
+
+// ---------------------------------------------------------------------------
+// RotatingTransformRow — isolated in its own small StatefulWidget so its
+// per-frame animation only rebuilds these four images, not the rest of the
+// Images tab (which was the cause of the ~40ms/frame UI time: everything —
+// all 7 BoxFit samples, all 3 decoration samples, the blur backdrop — was
+// rebuilding on every animation tick before this was split out).
+//
+// X/Y rotation is now genuine 3D perspective rotation, not the earlier
+// scale-based flip approximation: the Metal backend was rewritten (see
+// TODO.md's "Real per-vertex quad rendering" entry) to build every quad
+// from real, independently-transformed corners and emit a true clip-space
+// w the GPU hardware perspective-divides, instead of collapsing corners to
+// an axis-aligned dstRect with a hardcoded w=1. `perspectiveRotation()`
+// below mirrors Flutter's well-known `Matrix4.identity()..setEntry(3,2,
+// small)..rotateX(angle)` trick — this renderer's Matrix4 uses the same
+// row-major, column-vector convention, so the same recipe applies
+// directly: `data[14]` is row 3, column 2 (`data[r*4+c]`), and injecting a
+// small value there before composing the rotation makes the GPU's
+// perspective divide produce real foreshortening once the rotated point's
+// Z becomes non-zero.
+// ---------------------------------------------------------------------------
+class RotatingTransformRow;
+
+static cw::Matrix4 perspectiveRotationX(float angle)
+{
+    cw::Matrix4 m = cw::Matrix4::identity();
+    m.data[14] = -0.0025f;
+    return m * cw::Matrix4::rotateX(angle);
+}
+
+static cw::Matrix4 perspectiveRotationY(float angle)
+{
+    cw::Matrix4 m = cw::Matrix4::identity();
+    m.data[14] = -0.0025f;
+    return m * cw::Matrix4::rotateY(angle);
+}
+
+static cw::WidgetRef labeledTransform(const char* label, cw::WidgetRef image, cw::Matrix4 transform)
+{
+    auto t = std::make_shared<cw::Transform>();
+    t->transform = transform;
+    t->child = std::make_shared<cw::ClipRRect>(8.0f, std::move(image));
+
+    return cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+        cw::WidgetList{
+            t, vspace(6.0f),
+            cw::mw<cw::Text>(label, ts(11.0f, cw::Color::fromRGB(0.4f, 0.4f, 0.45f))),
+        });
+}
+
+class RotatingTransformRowState : public cw::State<RotatingTransformRow>
+{
+public:
+    void initState() override
+    {
+        anim_ctrl_ = std::make_unique<cw::AnimationController>(6000.0, 0.0, 6.283185307);
+        listener_id_ = anim_ctrl_->addListener([this]() {
+            if (anim_ctrl_->status() == cw::AnimationStatus::completed)
+                anim_ctrl_->forward(0.0);
+            setState([] {});
+        });
+        anim_ctrl_->forward();
+
+        // The image content never changes between ticks — only the
+        // Transform's rotation angle does. Building a fresh ImageWidget
+        // every tick (60x/sec) forced a ~200KB byte-vector copy plus a
+        // full StatefulElement rebuild cascade every single frame, purely
+        // as a side effect of reconstructing a widget whose content was
+        // always identical anyway. Constructing these once here and
+        // reusing the *same* WidgetRef in build() lets Element::updateChild()'s
+        // identical-pointer fast path (see element.cpp) skip that whole
+        // subtree's reconciliation on every tick where only the ancestor
+        // Transform actually changed.
+        image_x_     = mountainsImage(cw::BoxFit::cover, 110.0f, 80.0f);
+        image_y_     = mountainsImage(cw::BoxFit::cover, 110.0f, 80.0f);
+        image_z_     = mountainsImage(cw::BoxFit::cover, 110.0f, 80.0f);
+        image_scale_ = mountainsImage(cw::BoxFit::cover, 110.0f, 80.0f);
+    }
+
+    void dispose() override
+    {
+        if (anim_ctrl_) anim_ctrl_->removeListener(listener_id_);
+    }
+
+    cw::WidgetRef build(cw::BuildContext&) override
+    {
+        const float angle = static_cast<float>(anim_ctrl_->value());
+
+        return cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{
+                labeledTransform("rotate — X axis", image_x_,
+                    perspectiveRotationX(angle)),
+                hspace(24.0f),
+                labeledTransform("rotate — Y axis", image_y_,
+                    perspectiveRotationY(angle + 1.2f)),
+                hspace(24.0f),
+                labeledTransform("rotate — Z axis", image_z_,
+                    cw::RenderTransform::rotation(angle)),
+                hspace(24.0f),
+                labeledTransform("scale", image_scale_,
+                    cw::RenderTransform::scaling(0.65f + 0.15f * std::sin(angle))),
+            });
+    }
+
+private:
+    cw::WidgetRef image_x_;
+    cw::WidgetRef image_y_;
+    cw::WidgetRef image_z_;
+    cw::WidgetRef image_scale_;
+    std::unique_ptr<cw::AnimationController> anim_ctrl_;
+    uint64_t                                 listener_id_ = 0;
+};
+
+class RotatingTransformRow : public cw::StatefulWidget {
+public:
+    std::unique_ptr<cw::StateBase> createState() const override
+    { return std::make_unique<RotatingTransformRowState>(); }
+};
+
+class ImagesSection : public cw::StatelessWidget
+{
+public:
+    cw::WidgetRef build(cw::BuildContext&) const override
+    {
+        // BoxFit — same source image, same square box, every fit mode.
+        // A horizontal ListView (rather than a Row) so the sample strip
+        // scrolls if the window is too narrow to show all seven at once.
+        static const std::vector<std::pair<std::string, cw::BoxFit>> kFitModes{
+            {"fill", cw::BoxFit::fill},
+            {"contain", cw::BoxFit::contain},
+            {"cover", cw::BoxFit::cover},
+            {"fitWidth", cw::BoxFit::fitWidth},
+            {"fitHeight", cw::BoxFit::fitHeight},
+            {"none", cw::BoxFit::none},
+            {"scaleDown", cw::BoxFit::scaleDown},
+        };
+        auto fit_list_view = std::make_shared<cw::ListView>();
+        fit_list_view->scroll_axis = cw::Axis::horizontal;
+        fit_list_view->item_count  = static_cast<int>(kFitModes.size());
+        fit_list_view->item_extent = kFitSampleBoxSize + 16.0f;
+        fit_list_view->builder = [](cw::BuildContext&, int i) -> cw::WidgetRef {
+            const auto& [label, fit] = kFitModes[static_cast<size_t>(i)];
+            return cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 0.0f, 16.0f, 0.0f),
+                fitSample(label, fit));
+        };
+        auto fit_list = cw::SizedBox::from_height(kFitSampleBoxSize + 40.0f, fit_list_view);
+
+        // Decorations — ClipRRect, ClipOval, border + shadow.
+        auto rrect_img = std::make_shared<cw::ClipRRect>(
+            16.0f, mountainsImage(cw::BoxFit::cover, 140.0f, 100.0f));
+
+        auto oval_img = std::make_shared<cw::ClipOval>(
+            mountainsImage(cw::BoxFit::cover, 100.0f, 100.0f));
+
+        cw::BoxDecoration framed_deco;
+        framed_deco.border_radius = 10.0f;
+        framed_deco.border        = cw::BoxBorder::all(kBlue, 3.0f);
+        framed_deco.box_shadow    = {
+            cw::BoxShadow{cw::Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.20f), {0.0f, 6.0f}, 14.0f, 0.0f}};
+        auto framed_box = std::make_shared<cw::DecoratedBox>(framed_deco);
+        framed_box->child = std::make_shared<cw::ClipRRect>(
+            10.0f, mountainsImage(cw::BoxFit::cover, 140.0f, 100.0f));
+
+        auto deco_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{
+                rrect_img, hspace(20.0f),
+                oval_img, hspace(20.0f),
+                framed_box,
+            });
+
+        // Transform — isolated in its own StatefulWidget; see
+        // RotatingTransformRow's doc comment for why.
+        auto transform_row = std::make_shared<RotatingTransformRow>();
+
+        // BackdropFilter — blur the photo itself, frosted-glass panel on top.
+        auto frost_content = std::make_shared<cw::Container>();
+        frost_content->color = cw::Color::fromRGBA(1.0f, 1.0f, 1.0f, 0.25f);
+        frost_content->child = cw::mw<cw::Center>(cw::mw<cw::Padding>(
+            cw::EdgeInsets::all(16.0f),
+            cw::mw<cw::Text>("BackdropFilter\nblur σ=10 over the photo",
+                ts(14.0f, cw::Color::white()))));
+
+        auto bf = std::make_shared<cw::BackdropFilter>();
+        bf->filter = cw::ImageFilter::blur(10.0f);
+        bf->child  = frost_content;
+
+        auto frost_pos = std::make_shared<cw::Positioned>();
+        frost_pos->left = 40.0f; frost_pos->top = 20.0f;
+        frost_pos->right = 40.0f; frost_pos->bottom = 20.0f;
+        frost_pos->child = bf;
+
+        auto blur_container = std::make_shared<cw::Container>();
+        blur_container->height = 180.0f;
+        auto blur_stack = std::make_shared<cw::Stack>();
+        blur_stack->fit = cw::StackFit::expand;
+        blur_stack->children = {
+            cw::Positioned::fill(mountainsImage(cw::BoxFit::cover)),
+            frost_pos,
+        };
+        blur_container->child = blur_stack;
+
+        auto scroll = std::make_shared<cw::SingleChildScrollView>();
+        scroll->physics = std::make_shared<cw::BouncingScrollPhysics>();
+        scroll->child = cw::mw<cw::Padding>(cw::EdgeInsets::all(20.0f),
+            cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+                cw::WidgetList{
+                    subheading("BOX FIT — fill · contain · cover · fitWidth · fitHeight · none · scaleDown"),
+                    repaintBoundary(card(fit_list)),
+                    vspace(20.0f),
+                    subheading("DECORATIONS — ClipRRect · ClipOval · border + shadow"),
+                    repaintBoundary(card(deco_row)),
+                    vspace(20.0f),
+                    subheading("TRANSFORM — animated flip (X/Y) · rotation (Z) · scale"),
+                    repaintBoundary(card(transform_row)),
+                    vspace(20.0f),
+                    subheading("BACKDROP FILTER — blur the photo itself"),
+                    repaintBoundary(blur_container),
+                    vspace(20.0f),
+                }));
+
+        auto root = std::make_shared<cw::Container>();
+        root->color = kContent;
+        root->child = scroll;
+        return root;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // Gallery Shell — left sidebar nav + section content
 // ---------------------------------------------------------------------------
 static const std::vector<std::string> kSectionNames = {
     "Layout", "Controls", "Text & Input", "Lists",
-    "Animations", "Gestures", "Clipping & FX", "Keyboard",
+    "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images",
 };
 
 static cw::WidgetRef buildSection(int idx)
@@ -1096,6 +1384,7 @@ static cw::WidgetRef buildSection(int idx)
         case 5: return std::make_shared<GesturesSection>();
         case 6: return std::make_shared<ClippingSection>();
         case 7: return std::make_shared<KeyboardSection>();
+        case 8: return std::make_shared<ImagesSection>();
         default: return std::make_shared<LayoutSection>();
     }
 }
@@ -1208,6 +1497,8 @@ namespace systems::leal::campello_widgets
 {
     std::shared_ptr<Widget> buildGalleryApp()
     {
+        ImageLoader::instance().initialize(4);
+
         auto shell = std::make_shared<GalleryShell>();
         auto entry = std::make_shared<OverlayEntry>(shell);
         return std::make_shared<Overlay>(

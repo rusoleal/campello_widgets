@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <vector>
 #include <campello_widgets/ui/render_list_view.hpp>
+#include <campello_widgets/ui/debug_flags.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/scroll_controller.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/rect.hpp>
@@ -81,14 +84,26 @@ namespace systems::leal::campello_widgets
     int RenderListView::firstVisibleIndex() const noexcept
     {
         if (item_extent <= 0.0f || item_count <= 0) return 0;
-        const float scroll = scrollOffset();
+        // Clamp the *input* to the boundary, not just the resulting index.
+        // BouncingScrollPhysics only resists overscroll, it doesn't cap it,
+        // so scrollOffset() can sit well past [min_extent_, max_extent_]
+        // during spring-back. Feeding that raw value in here would make the
+        // visible-range keep changing every tick throughout the whole
+        // bounce (edge items mounting/unmounting on a churn that has no
+        // visual purpose — nothing new is ever revealed beyond the first or
+        // last item), which shows up as items flickering at the boundary.
+        // Pinning the range to what's visible exactly at the boundary keeps
+        // it constant for the entire overscroll; only the paint offset
+        // (which reads the real, unclamped scrollOffset()) moves.
+        const float scroll = std::clamp(scrollOffset(), min_extent_, max_extent_);
         return std::max(0, static_cast<int>(scroll / item_extent));
     }
 
     int RenderListView::lastVisibleIndex() const noexcept
     {
         if (item_extent <= 0.0f || item_count <= 0) return -1;
-        const float scroll = scrollOffset();
+        // See firstVisibleIndex()'s comment — same input clamp.
+        const float scroll = std::clamp(scrollOffset(), min_extent_, max_extent_);
         const int   last   = static_cast<int>((scroll + viewport_extent_) / item_extent);
         return std::min(item_count - 1, last);
     }
@@ -119,6 +134,7 @@ namespace systems::leal::campello_widgets
         else
         {
             internal_offset_ = std::clamp(internal_offset_, min_extent_, max_extent_);
+            raw_offset_       = internal_offset_;
         }
 
         const float scroll       = scrollOffset();
@@ -168,6 +184,14 @@ namespace systems::leal::campello_widgets
         canvas.restore();
     }
 
+    void RenderListView::paint(PaintContext& context, const Offset& offset)
+    {
+        if (!offset_layer_.maybeReplay(context, offset, size_, needsPaint()))
+            offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
+
+        needs_paint_ = false;
+    }
+
     // -------------------------------------------------------------------------
     // Hit testing
     // -------------------------------------------------------------------------
@@ -203,10 +227,40 @@ namespace systems::leal::campello_widgets
         return controller_ ? controller_->offset() : internal_offset_;
     }
 
-    void RenderListView::applyScrollDelta(float delta)
+    void RenderListView::applyScrollDelta(float delta, const char* source)
     {
-        const float raw     = scrollOffset() + delta;
-        const float clamped = physics_->applyBoundaryConditions(raw, min_extent_, max_extent_);
+        // raw_offset_ is the single source of truth being mutated here —
+        // the true, unresisted cumulative position. The displayed offset
+        // is always a fresh function of it via the physics, never fed
+        // back into itself: `ScrollPhysics::applyBoundaryConditions()` is
+        // a position-remapping formula (over = distance past boundary,
+        // displayed = boundary ± over * resistance), and remapping an
+        // already-remapped value compounds the resistance each call,
+        // which can *retract* the displayed overscroll even while the
+        // user keeps dragging further in the same direction whenever the
+        // per-event delta shrinks (see the regression this fixed). Easing
+        // raw_offset_ itself during spring-back (onTick) keeps the same
+        // single source of truth for that phase too.
+        const float old_offset = scrollOffset();
+        raw_offset_ += delta;
+        const float clamped = physics_->applyBoundaryConditions(raw_offset_, min_extent_, max_extent_);
+
+        if (DebugFlags::printScrollTrace)
+        {
+            const float applied = clamped - old_offset;
+            // Boundary resistance may only ever shrink |applied| relative
+            // to |delta| (elastic damping) or leave it unchanged (in
+            // bounds) — it should never grow it, and it should never flip
+            // its sign. Either of those means something moved the offset
+            // by more than this call's own input explains.
+            const bool jump = (std::abs(delta) > 1e-4f &&
+                                   (std::abs(applied) > std::abs(delta) + 0.5f ||
+                                    (applied * delta < 0.0f && std::abs(applied) > 0.5f))) ||
+                               (std::abs(delta) <= 1e-4f && std::abs(applied) > 0.5f);
+            std::fprintf(stderr,
+                "[scroll:list] %-9s old=%8.2f delta=%8.2f raw_off=%8.2f clamped=%8.2f applied=%8.2f%s\n",
+                source, old_offset, delta, raw_offset_, clamped, applied, jump ? "  <-- JUMP" : "");
+        }
 
         if (controller_)
         {
@@ -242,7 +296,7 @@ namespace systems::leal::campello_widgets
     void RenderListView::acceptGesture(int32_t /*pointer_id*/)
     {
         // Only records the win. panning_ starts once a move actually exceeds
-        // kTapSlop (see onPointerEvent) — accepting here just means we're no
+        // pan slop (see onPointerEvent) — accepting here just means we're no
         // longer competing, not that movement has happened yet (e.g. a sole,
         // uncontested arena resolves immediately at pointer-down).
         won_arena_ = true;
@@ -268,6 +322,7 @@ namespace systems::leal::campello_widgets
             won_arena_     = false;
             lost_arena_    = false;
             pan_last_pos_  = event.position;
+            device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
             pan_velocity_  = 0.0f;
             last_pan_time_ = std::chrono::steady_clock::now();
@@ -285,7 +340,14 @@ namespace systems::leal::campello_widgets
             const float dx   = event.position.x - pan_last_pos_.x;
             const float dy   = event.position.y - pan_last_pos_.y;
 
-            if (!panning_ && std::sqrt(dx * dx + dy * dy) > kTapSlop)
+            // Only this list's own scroll axis counts toward the pan-slop
+            // threshold — not total Euclidean movement — so a horizontal
+            // list nested inside a vertical one (or vice versa) only
+            // claims the gesture arena for drags actually aligned with its
+            // own axis. Mirrors Flutter's VerticalDragGestureRecognizer/
+            // HorizontalDragGestureRecognizer, which likewise measure only
+            // their own axis's displacement, not the diagonal distance.
+            if (!panning_ && std::abs(is_v ? dy : dx) > computePanSlop(device_kind_))
             {
                 if (won_arena_)
                 {
@@ -332,8 +394,46 @@ namespace systems::leal::campello_widgets
 
         case PointerEventKind::scroll:
         {
-            const bool is_v = (scroll_axis == Axis::vertical);
-            applyScrollDelta(is_v ? event.scroll_delta_y : event.scroll_delta_x);
+            // Registered via the signal resolver, not applied directly —
+            // see PointerSignalResolver's doc. Always register; mark
+            // `dominant` when this axis is the larger component of the
+            // event, so a genuine cross-axis swipe still routes to an
+            // ancestor/sibling scrolling the other way. Registering
+            // unconditionally (rather than skipping when non-dominant)
+            // matters when this is the *only* scrollable in the hit path —
+            // the resolver's fallback tier ensures the event still applies
+            // instead of silently dropping on trackpad noise.
+            const bool  is_v   = (scroll_axis == Axis::vertical);
+            const float delta       = is_v ? event.scroll_delta_y : event.scroll_delta_x;
+            const float cross_delta = is_v ? event.scroll_delta_x : event.scroll_delta_y;
+            const bool  dominant    = std::abs(delta) >= std::abs(cross_delta);
+            // While overscrolled, a trailing sub-threshold delta (macOS's
+            // own rapidly-decaying momentum tail, which keeps sending
+            // events for well over a second after the fingers lift) is
+            // dropped entirely rather than applied — letting the spring
+            // alone govern recovery. Applying it too (even without
+            // refreshing the "still active" gate below) would still nudge
+            // raw_offset_ away from the boundary on the very tick the
+            // spring is easing it back, so the two fight and the list
+            // never quite settles exactly at the limit. A delta at or
+            // above the threshold is real, still-intentional input and
+            // always applies normally, overscrolled or not.
+            const bool overscrolled = (raw_offset_ < min_extent_ || raw_offset_ > max_extent_);
+            if (overscrolled && std::abs(delta) < kSignificantScrollDelta)
+                break;
+            if (auto* d = PointerDispatcher::activeDispatcher())
+            {
+                // Only a *meaningful* delta counts as "still actively
+                // scrolling" for the gate below — see the doc above for
+                // why trailing OS momentum trickle shouldn't count.
+                if (std::abs(delta) >= kSignificantScrollDelta)
+                {
+                    last_scroll_event_ms_ = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch()).count());
+                }
+                d->signalResolver().registerHandler([this, delta] { applyScrollDelta(delta, "wheel"); }, dominant);
+            }
             break;
         }
         }
@@ -341,26 +441,79 @@ namespace systems::leal::campello_widgets
 
     void RenderListView::onTick(uint64_t now_ms)
     {
+        if (DebugFlags::printScrollTrace)
+        {
+            std::fprintf(stderr,
+                "[tick:list]  now=%10llu panning=%d gate_ms=%6lld raw_off=%8.2f min=%8.2f max=%8.2f vel=%8.2f\n",
+                static_cast<unsigned long long>(now_ms), panning_ ? 1 : 0,
+                static_cast<long long>(now_ms - last_scroll_event_ms_),
+                raw_offset_, min_extent_, max_extent_, velocity_px_s_);
+        }
         if (panning_) { last_tick_ms_ = now_ms; return; }
+        // The OS is still actively delivering trackpad/wheel scroll events
+        // for this gesture (including its own momentum tail) — let those
+        // keep driving the (resistance-damped) overscroll; spring-back
+        // would otherwise fight them every tick. See
+        // last_scroll_event_ms_'s doc.
+        if (now_ms - last_scroll_event_ms_ < kScrollActiveWindowMs)
+        {
+            last_tick_ms_ = now_ms;
+            // Frames on this platform are demand-driven (no free-running
+            // vsync loop) — a frame is only built when something requests
+            // one. If this is the *last* scroll event of the gesture, its
+            // own triggered frame is the one hitting this early return
+            // (now_ms is ~0ms past last_scroll_event_ms_), and nothing
+            // else will ask for another frame once this window closes.
+            // Without a self-requested frame here, a pending overscroll
+            // would freeze forever instead of spring-back ever getting a
+            // chance to run. Only bother when there's actually something
+            // to resolve once the window clears.
+            //
+            // Must call FrameScheduler::scheduleFrame() directly, not
+            // markNeedsPaint() — markNeedsPaint() no-ops whenever
+            // needs_paint_ is already true (near-guaranteed here, since
+            // that's *why* this frame is happening at all), so it can
+            // never actually request the *next* frame from inside onTick,
+            // which runs before this frame's own paint() call clears that
+            // flag. scheduleFrame() itself has no such dedup state.
+            if (raw_offset_ < min_extent_ || raw_offset_ > max_extent_ ||
+                std::abs(velocity_px_s_) >= kMinVelocity)
+                FrameScheduler::scheduleFrame();
+            return;
+        }
         if (last_tick_ms_ == 0) { last_tick_ms_ = now_ms; return; }
 
         const float dt_s = static_cast<float>(now_ms - last_tick_ms_) / 1000.0f;
         last_tick_ms_ = now_ms;
 
-        const float current = scrollOffset();
-
-        if (current < min_extent_ || current > max_extent_)
+        // Spring back when overscrolled (BouncingScrollPhysics use case).
+        // Eases raw_offset_ — the same single source of truth
+        // applyScrollDelta() mutates — not the displayed/resisted offset;
+        // see applyScrollDelta()'s doc for why re-resisting an
+        // already-resisted value compounds incorrectly.
+        if (raw_offset_ < min_extent_ || raw_offset_ > max_extent_)
         {
-            const float target   = std::clamp(current, min_extent_, max_extent_);
-            const float spring_v = (target - current) * kSpringCoeff;
-            velocity_px_s_       = spring_v + velocity_px_s_ * 0.7f;
-            applyScrollDelta(velocity_px_s_ * dt_s);
+            const float target = std::clamp(raw_offset_, min_extent_, max_extent_);
+            // Exponential ease of the overscroll distance toward zero —
+            // unconditionally stable regardless of dt/frame rate, unlike
+            // a velocity-based spring (`velocity = k*displacement +
+            // velocity*damping`), which can accumulate velocity faster
+            // than the position converges and overshoot past the target
+            // with real residual speed — carrying that speed into the
+            // momentum phase below and bouncing off the *opposite* edge,
+            // felt as sustained vibration rather than a settle.
+            const float eased_overscroll = (raw_offset_ - target) * std::exp(-kSpringCoeff * dt_s);
+            // Snap once close enough — see kSpringSettleThreshold's doc.
+            const float new_raw = (std::abs(eased_overscroll) < kSpringSettleThreshold)
+                ? target : (target + eased_overscroll);
+            applyScrollDelta(new_raw - raw_offset_, "spring");
+            velocity_px_s_ = 0.0f;
             return;
         }
 
         if (std::abs(velocity_px_s_) < kMinVelocity) { velocity_px_s_ = 0.0f; return; }
 
-        applyScrollDelta(velocity_px_s_ * dt_s);
+        applyScrollDelta(velocity_px_s_ * dt_s, "momentum");
         velocity_px_s_ = physics_->applyFriction(velocity_px_s_, dt_s);
     }
 

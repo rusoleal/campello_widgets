@@ -12,12 +12,14 @@ namespace systems::leal::campello_widgets
     void RenderImage::setTexture(
         std::shared_ptr<campello_gpu::Texture> texture) noexcept
     {
+        if (texture_ == texture) return;
         texture_ = std::move(texture);
         markNeedsPaint();
     }
 
     void RenderImage::setExplicitSize(Size size) noexcept
     {
+        if (explicit_size_ == size) return;
         explicit_size_ = size;
         markNeedsLayout();
     }

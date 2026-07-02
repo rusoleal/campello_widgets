@@ -220,14 +220,14 @@ TEST(RenderListView, PanGestureScrolls)
     down.position = {0.0f, 150.0f};
     dispatcher.handlePointerEvent(down);
 
-    // move far enough to exceed tap slop and trigger panning
-    // Drag UP (decreasing y) to scroll down and reveal lower items.
+    // move far enough to exceed pan slop (36px, touch default) and trigger
+    // panning. Drag UP (decreasing y) to scroll down and reveal lower items.
     cw::PointerEvent move;
     move.kind     = cw::PointerEventKind::move;
-    move.position = {0.0f, 130.0f};
+    move.position = {0.0f, 100.0f};
     dispatcher.handlePointerEvent(move);
 
-    // scroll down by 100 px → 100/50 = 2 items scrolled
+    // scroll down by 100 px total → 100/50 = 2 items scrolled
     move.position = {0.0f, 50.0f};
     dispatcher.handlePointerEvent(move);
 

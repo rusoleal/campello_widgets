@@ -210,6 +210,47 @@ TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintForcesReRecordingAtNe
     EXPECT_EQ(child->paintCount, 2) << "unchanged offset should replay the cache again";
 }
 
+TEST(RenderRepaintBoundary, RepositionWithClipFreeChildReplaysViaDeltaTranslateWithoutRewalkingChild)
+{
+    // Stage 0d: unlike the ClipRect-wrapped case above (which must still
+    // fall back to a full re-record — clip rects bake absolute geometry),
+    // clip-free content can be repositioned via a cheap delta translate
+    // instead of re-walking the child. See OffsetLayer's doc comment.
+    auto child = std::make_shared<CountingRenderBox>();
+    cw::RenderRepaintBoundary boundary;
+    boundary.setChild(child);
+    boundary.layout(cw::BoxConstraints::loose(200.0f, 200.0f));
+
+    const cw::Offset firstOffset{10.0f, 10.0f};
+    cw::PaintContext ctx1(200.0f, 200.0f);
+    boundary.paint(ctx1, firstOffset);
+    ASSERT_EQ(child->paintCount, 1);
+    ASSERT_FALSE(boundary.needsPaint());
+
+    const cw::Offset secondOffset{60.0f, 25.0f};
+    cw::PaintContext ctx2(200.0f, 200.0f);
+    boundary.paint(ctx2, secondOffset);
+
+    EXPECT_EQ(child->paintCount, 1)
+        << "clip-free reposition should replay via delta translate, not re-walk the child";
+
+    // The replayed rect's baked geometry stays at the *original* offset —
+    // repositioning happens via a wrapping PushTransformCmd, not by
+    // re-baking the cached command.
+    bool foundRect = false;
+    for (const auto& cmd : ctx2.commands())
+    {
+        if (std::holds_alternative<cw::DrawRectCmd>(cmd))
+        {
+            const auto& rect = std::get<cw::DrawRectCmd>(cmd).rect;
+            EXPECT_FLOAT_EQ(rect.x, firstOffset.x);
+            EXPECT_FLOAT_EQ(rect.y, firstOffset.y);
+            foundRect = true;
+        }
+    }
+    EXPECT_TRUE(foundRect);
+}
+
 TEST(RenderRepaintBoundary, ConstraintsChangeForcesReRecording)
 {
     auto child = std::make_shared<CountingRenderBox>();

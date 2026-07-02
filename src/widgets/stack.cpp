@@ -94,7 +94,8 @@ namespace systems::leal::campello_widgets
     void Stack::updateRenderObject(RenderObject& ro) const
     {
         auto& rs = static_cast<RenderStack&>(ro);
-        rs.fit   = fit;
+        if (rs.fit == fit) return;
+        rs.fit = fit;
         rs.markNeedsLayout();
     }
 

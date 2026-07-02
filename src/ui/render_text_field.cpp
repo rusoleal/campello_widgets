@@ -9,6 +9,7 @@
 #include <campello_widgets/ui/draw_backend.hpp>
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -175,7 +176,21 @@ namespace systems::leal::campello_widgets
                 ph_style.color = placeholder_color;
                 canvas.drawText(TextSpan{placeholder, ph_style}, {ix, iy});
             }
-            else if (!empty)
+
+            if (empty)
+            {
+                // Cursor for an empty field: there are no lines to iterate
+                // below, so draw it directly at the start position — a
+                // focused, empty field must still show a blinking cursor,
+                // same as Flutter.
+                if (focused && cursor_visible_ && controller)
+                {
+                    canvas.drawRect(
+                        Rect::fromLTWH(ix, iy, kCursorWidth, line_h),
+                        Paint::filled(cursor_color));
+                }
+            }
+            else
             {
                 // Get wrapped lines
                 getLineCount();
@@ -314,14 +329,14 @@ namespace systems::leal::campello_widgets
                 {
                     int comp_start = controller->composingStart();
                     int comp_end = controller->composingEnd();
-                    
+
                     float comp_x0 = ix + measurePrefix(comp_start);
                     float comp_x1 = ix + measurePrefix(comp_end);
                     float underline_y = ty + line_h - 3.0f;  // 3px from bottom
-                    
+
                     // Draw underline for composing text
                     Paint underline_paint = Paint::stroked(
-                        Color::fromARGB(kComposingUnderlineColor), 
+                        Color::fromARGB(kComposingUnderlineColor),
                         1.5f  // underline thickness
                     );
                     canvas.drawLine(
@@ -330,16 +345,17 @@ namespace systems::leal::campello_widgets
                         underline_paint
                     );
                 }
+            }
 
-                // Cursor
-                if (focused && cursor_visible_ && controller)
-                {
-                    int cursor_pos = controller->selectionEnd();
-                    float cx = ix + measurePrefix(cursor_pos);
-                    canvas.drawRect(
-                        Rect::fromLTWH(cx, ty, kCursorWidth, line_h),
-                        Paint::filled(cursor_color));
-                }
+            // Cursor — independent of `empty`: a focused, empty field must
+            // still show a blinking cursor at the start, same as Flutter.
+            if (focused && cursor_visible_ && controller)
+            {
+                int cursor_pos = controller->selectionEnd();
+                float cx = ix + measurePrefix(cursor_pos);
+                canvas.drawRect(
+                    Rect::fromLTWH(cx, ty, kCursorWidth, line_h),
+                    Paint::filled(cursor_color));
             }
         }
 
@@ -684,7 +700,17 @@ namespace systems::leal::campello_widgets
         {
             cursor_visible_ = !cursor_visible_;
             last_blink_ms_  = now_ms;
-            markNeedsPaint();
+            markNeedsPaint(); // bubbles up and requests the next frame
+        }
+        else
+        {
+            // Frames are only produced on demand (see FrameScheduler) — an
+            // idle, focused field doesn't otherwise invalidate anything, so
+            // without this the blink timer would only ever advance when some
+            // unrelated frame happens to be scheduled (typing, hovering
+            // something else, ...), making the cursor blink at irregular,
+            // effectively random intervals instead of every kBlinkPeriodMs.
+            FrameScheduler::scheduleFrame();
         }
     }
 

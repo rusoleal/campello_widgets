@@ -80,6 +80,12 @@ namespace systems::leal::campello_widgets
             return Rect::fromLTRB(l, t, r, b);
         }
 
+        // Expands the rect by `dx`/`dy` on each side (negative shrinks).
+        Rect inflate(float dx, float dy) const noexcept
+        {
+            return Rect::fromLTRB(x - dx, y - dy, right() + dx, bottom() + dy);
+        }
+
         bool operator==(const Rect&) const noexcept = default;
     };
 

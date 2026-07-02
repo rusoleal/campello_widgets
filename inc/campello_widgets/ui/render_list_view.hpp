@@ -11,6 +11,8 @@
 #include <campello_widgets/ui/axis.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
+#include <campello_widgets/ui/gesture_constants.hpp>
+#include <campello_widgets/ui/offset_layer.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -19,6 +21,10 @@ namespace systems::leal::campello_widgets
 
     /**
      * @brief RenderBox for a virtualised, fixed-extent list.
+     *
+     * Self-boundaries its own paint output via `OffsetLayer` — see
+     * `RenderSingleChildScrollView`'s class doc for the rationale, which
+     * applies identically here.
      *
      * Content model: item_count items each occupying item_extent logical pixels
      * on the scroll axis (height for vertical, width for horizontal). Total
@@ -81,8 +87,15 @@ namespace systems::leal::campello_widgets
 
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
+        void paint(PaintContext& context, const Offset& offset) override;
+        bool isRepaintBoundary() const noexcept override { return true; }
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
+
+        // Must claim hits within its own viewport (e.g. empty space below
+        // the last item) to receive pan-to-scroll gestures there — see
+        // RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
 
         // ------------------------------------------------------------------
         // GestureArenaMember
@@ -96,13 +109,24 @@ namespace systems::leal::campello_widgets
         void onTick(uint64_t now_ms);
 
         float scrollOffset() const noexcept;
-        void  applyScrollDelta(float delta);
+        void  applyScrollDelta(float delta, const char* source = "drag");
         void  checkVisibleRangeChanged();
 
         std::shared_ptr<ScrollController> controller_;
         std::shared_ptr<ScrollPhysics>    physics_;
+        OffsetLayer                       offset_layer_;
 
         float internal_offset_ = 0.0f;
+        // True, unresisted cumulative scroll position — always the base
+        // for the next applyScrollDelta() call. Kept separate from the
+        // displayed (possibly boundary-resisted) offset above: feeding an
+        // already-resisted value back through
+        // ScrollPhysics::applyBoundaryConditions() repeatedly compresses
+        // it further each call rather than reflecting the true drag
+        // distance past the boundary, which snaps the displayed position
+        // back toward the boundary whenever the delta shrinks — even
+        // mid-drag, same direction. See applyScrollDelta()'s doc.
+        float raw_offset_      = 0.0f;
         float min_extent_      = 0.0f;
         float max_extent_      = 0.0f;
         float viewport_extent_ = 0.0f;
@@ -127,14 +151,39 @@ namespace systems::leal::campello_widgets
         bool   lost_arena_    = false;
         std::optional<GestureArenaEntry> arena_entry_;
         Offset pan_last_pos_;
+        PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
         std::chrono::steady_clock::time_point last_pan_time_;
         float  pan_velocity_  = 0.0f;
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
 
-        static constexpr float kTapSlop     = 8.0f;
-        static constexpr float kMinVelocity = 1.0f;
-        static constexpr float kSpringCoeff = 12.0f;
+        // See RenderSingleChildScrollView::last_scroll_event_ms_'s doc —
+        // lets onTick() defer spring-back while the OS is still actively
+        // delivering scroll events (including its own momentum tail) for
+        // this gesture, instead of fighting them every tick.
+        uint64_t last_scroll_event_ms_ = 0;
+
+        static constexpr float    kMinVelocity = 1.0f;
+        // 20.0 matches the snappier feel used elsewhere in this codebase
+        // (RenderPageView's page-settle spring) and is closer to iOS
+        // UIScrollView's bounce timing than the original 12.0, which felt
+        // noticeably slower to settle.
+        static constexpr float    kSpringCoeff = 20.0f;
+        // See onPointerEvent()'s scroll case doc — only a delta at least
+        // this large (px) refreshes last_scroll_event_ms_'s "still
+        // actively scrolling" gate. Raised from 2.0 — a firm trackpad
+        // swipe's OS-generated momentum tail decays gradually over many
+        // events, and a lot of that tail was still >2px per event, so
+        // spring-back kept waiting on it far longer than felt natural.
+        static constexpr float    kSignificantScrollDelta = 8.0f;
+        // Below this many px of remaining overscroll, snap to the boundary
+        // exactly instead of continuing to ease — exponential decay
+        // asymptotically approaches but never exactly reaches zero, so
+        // without a settle threshold the spring branch (and the frame it
+        // requests) would keep re-triggering forever, imperceptibly, after
+        // every bounce.
+        static constexpr float    kSpringSettleThreshold = 0.05f;
+        static constexpr uint64_t kScrollActiveWindowMs = 80;
     };
 
 } // namespace systems::leal::campello_widgets

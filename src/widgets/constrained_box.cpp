@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
     void ConstrainedBox::updateRenderObject(RenderObject& ro) const
     {
         auto& rcb = static_cast<RenderConstrainedBox&>(ro);
+        if (rcb.additional_constraints == additional_constraints) return;
         rcb.additional_constraints = additional_constraints;
         rcb.markNeedsLayout();
     }

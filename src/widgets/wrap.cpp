@@ -19,6 +19,14 @@ namespace systems::leal::campello_widgets
     void Wrap::updateRenderObject(RenderObject& ro) const
     {
         auto& rw = static_cast<RenderWrap&>(ro);
+        if (rw.direction == direction &&
+            rw.alignment == alignment &&
+            rw.spacing == spacing &&
+            rw.run_alignment == run_alignment &&
+            rw.run_spacing == run_spacing &&
+            rw.cross_axis_alignment == cross_axis_alignment)
+            return;
+
         rw.direction            = direction;
         rw.alignment            = alignment;
         rw.spacing              = spacing;

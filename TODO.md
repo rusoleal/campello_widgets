@@ -850,6 +850,620 @@ problem. New regression test:
 `RenderRepaintBoundary.RepositionWithoutMarkNeedsPaintForcesReRecordingAtNewOffset`.
 See CHANGELOG `[0.3.6]`.
 
+### Paint/Compositing Architecture — Closing the Gap with Flutter (2026-07-01)
+
+Prompted by a gallery-app performance report (continuous animation in one small
+widget driving ~10ms UI / ~50% GPU on a page with only 4 animated images),
+fixed short-term by manually wrapping the page's independent sections in
+`RepaintBoundary` (see gallery `ImagesSection` / `RotatingTransformRow`,
+`examples/gallery/gallery_app.cpp`). This section is the precise, code-grounded
+answer to the follow-up question: what's actually missing to make our
+paint/compositing pipeline behave like Flutter's, not just patchable
+case-by-case.
+
+**What we already have (verified, not assumed):**
+- `RenderObject::layout()` (`src/ui/render_object.cpp:74-87`) already skips
+  `performLayout()` per-node when clean and constraints are unchanged —
+  layout is not part of this gap.
+- Frame-level gating already exists: `Renderer::renderFrame()` bails before
+  even generating a draw list when `!root_->needsPaint()`
+  (`src/ui/renderer.cpp:89-90`), and `FrameScheduler` only requests a frame
+  when something calls `scheduleFrame()` — an idle app costs ~0.
+- `RepaintBoundary`/`RenderRepaintBoundary` (added 2026-06-20, hardened
+  2026-06-20/21 — see above) is a real, working, Flutter-mirroring paint
+  cache: it's the *only* place in the framework that checks `needsPaint()`
+  before deciding whether to re-walk a subtree at all.
+- Scroll offset changes correctly call `markNeedsPaint()`
+  (`render_single_child_scroll_view.cpp:165`), so `RepaintBoundary`'s
+  existing offset/dirty check is not silently bypassed by scroll — confirmed
+  by reading the code, not assumed.
+- Draw-call-level costs (text texture cache, bind-group/buffer pooling, UI/
+  raster thread split) are already addressed — see the sections above. This
+  section is specifically about the *tree-walk* and *compositing* layer, one
+  level above those fixes.
+
+**The real, remaining gaps vs Flutter, in order of impact:**
+
+1. **No dirty-node list — paint is always O(whole reachable tree), not
+   O(dirty boundaries).** `RenderObject::paint()` (`render_object.hpp:78`,
+   `render_object.cpp:89-105`) calls `performPaint()` **unconditionally** —
+   there is no `if (needsPaint())` gate anywhere except inside
+   `RenderRepaintBoundary`'s own override. `RenderBox::paintChild()`
+   (`render_box.cpp:26-30`) likewise calls `child_->paint()` unconditionally.
+   So when `root_->paint()` runs (which it does every frame *anything*
+   anywhere is dirty, since `markNeedsPaint()` always propagates to root),
+   it re-walks and re-emits draw commands for **every** node in the tree,
+   clean or not, unless that specific node happens to be a boundary that's
+   currently clean. Flutter's `PipelineOwner.flushPaint()` iterates only
+   `_nodesNeedingPaint` (a flat list of dirty repaint-boundary layers) —
+   clean subtrees are never visited during paint, full stop, no manual
+   wrapping required to get *that* baseline behavior for the boundaries that
+   do exist.
+
+2. **`RepaintBoundary` caches a flat `DrawList` slice, not an independent
+   layer — so a cache hit still costs a full GPU resubmit, and a
+   reposition still forces a full re-record.** Confirmed in
+   `render_repaint_boundary.cpp` and `renderer.cpp:561-577`:
+   `flushDrawList()` re-derives the composited transform/clip stack by
+   replaying commands in order every frame (`current_transform =
+   current_transform * c.transform`), and a boundary's "replay" is just
+   `appendRecorded()` — splicing raw commands back into the same flat list.
+   Two consequences: (a) a cache hit skips the C++ tree-walk/re-record cost
+   but **not** the Metal draw-call submission cost — already flagged in this
+   file's "further work" notes on the raster-cost investigation, but never
+   tied back to `RepaintBoundary` specifically; (b) because there's no
+   independent transform a parent can update without touching the cached
+   geometry, any reposition must invalidate the whole cache (this is why
+   `RenderRepaintBoundary` had to grow the `cached_offset_` check at
+   2026-06-21 — a correct fix for a symptom of not having real layers, not a
+   bug in that fix itself).
+
+3. **Zero automatic repaint-boundary promotion anywhere in the framework.**
+   Flutter's `RenderViewport`/`RenderShrinkWrappingViewport` unconditionally
+   override `isRepaintBoundary => true` — every `ListView`, `GridView`,
+   `SingleChildScrollView`, `PageView` in a Flutter app is a boundary whether
+   or not the app author thinks about it, so scrolling never repaints the
+   rest of the page and vice versa, automatically. Grepping this codebase
+   (`grep -rn RenderRepaintBoundary src/ inc/`) turns up exactly one
+   production usage site before today: the widget's own definition — every
+   other use is 100% manual app-level opt-in (including the gallery fix that
+   prompted this analysis). This is the single highest-leverage, lowest-risk
+   item here: making our own `RenderSingleChildScrollView` / `RenderListView`
+   / `RenderGridView` / `RenderPageView` internally boundary themselves closes
+   the most common real-world case for free, no app code changes required.
+
+4. **`markNeedsLayout`/`markNeedsPaint` always propagate all the way to
+   root — no "relayout boundary" short-circuit.** Flutter stops
+   `markNeedsLayout()` at the nearest ancestor whose own size can't depend on
+   the child (`relayoutBoundary`), so a leaf resize inside a
+   tightly-constrained subtree dirties nothing above that point. Ours
+   (`render_object.cpp:48-58`) always calls `parent_->markNeedsLayout()`
+   unconditionally to the root. Lower severity than #1 because `layout()`
+   still dirty-checks per node (ancestors' `performLayout()` gets skipped
+   correctly), but it compounds #1: every ancestor still gets *visited* by
+   `paint()`, and paint has no per-node skip to fall back on.
+
+5. **Widget-level reconciliation over-marks dirty regardless of value
+   equality.** Already noted once in this file in passing (see the
+   `campello_editor` RepaintBoundary writeup) but worth calling out as its
+   own gap: `Flex`/`ColoredBox`'s `updateRenderObject()` call
+   `markNeedsLayout()`/`markNeedsPaint()` unconditionally on every
+   reconciliation, even when the new value is bit-identical to the old one.
+   This is the pattern most likely to silently defeat every other fix on
+   this list, since it's copy-pasted across most `RenderObjectWidget`s, not
+   confined to one file.
+
+**Why #1/#2 together are the real "Flutter parity" blocker**: fixing #1
+alone (a dirty-node list) has nowhere to splice a skipped boundary's cached
+output back into the frame without walking through its non-boundary
+ancestors anyway — you need #2 (each boundary owns a persistent,
+independently-positionable output) for #1 to actually pay off. In Flutter
+these are the same feature: the `Layer` tree (`ContainerLayer`,
+`PictureLayer`, `TransformLayer`, `ClipRectLayer`, `OpacityLayer`,
+`OffsetLayer`) *is* both the dirty-list anchor and the thing that lets a
+parent recomposite without touching a child's rasterized content. We don't
+have a layer tree — `DrawList` is a flat, order-dependent command stream
+where ambient state (transform/clip/opacity) is baked in via
+Push/Pop-command pairs, not an addressable tree of independently-cacheable
+nodes. That's the actual, single structural gap; everything above is a
+symptom of not having it.
+
+**Staged proposal:**
+
+- [x] **Stage 0a — kill unconditional dirty-marking on reconciliation
+      (gap #5) — implemented 2026-07-01.** Added `operator==` (defaulted)
+      to `BoxBorder`, `BoxShadow`, `BoxDecoration` (`inc/campello_widgets/
+      ui/box_border.hpp`/`box_shadow.hpp`/`box_decoration.hpp` — `EdgeInsets`
+      and `Color` already had one). Guarded `Flex::updateRenderObject()`
+      (`src/widgets/flex.cpp`), `ColoredBox::updateRenderObject()`
+      (`colored_box.cpp`), `DecoratedBox::updateRenderObject()`
+      (`decorated_box.cpp`), and `Padding::updateRenderObject()`
+      (`padding.cpp`) with an equality check before touching the render
+      object and calling `markNeedsLayout()`/`markNeedsPaint()`. Full
+      universal suite unaffected (402/402 before → still 402/402 after,
+      pre-existing coverage; no test asserted on the old always-dirty
+      behavior). Not yet extended past these four — same pattern should be
+      applied opportunistically to other `RenderObjectWidget`s as they're
+      touched.
+
+      **Extended 2026-07-01**: audited every `updateRenderObject()` in
+      `src/widgets/` for the same unconditional-dirty-marking pattern.
+      Found and fixed 11 more: `Align`, `AspectRatio`, `ClipRRect`,
+      `ConstrainedBox`, `FractionallySizedBox`, `IntrinsicHeight`,
+      `IntrinsicWidth`, `SizedBox`, `Stack`, `Transform`, `Wrap` — several
+      of which are extremely common (`Transform` is the exact widget
+      driving the gallery's own animation; `Stack`/`Align`/`SizedBox`
+      appear in nearly every layout). `Transform`'s guard compares its
+      `Matrix4` field via `vector_math::Mat`'s inherited `operator==` (no
+      manual comparison needed — `Matrix4` extends `Mat<float,4,4>` which
+      extends `Vec<float,16>`, which already has one). `ClipPath` was
+      *not* fixed — its `clip_path_builder` field is a
+      `std::function<Path(Size)>`, which has no meaningful equality
+      comparison, so no guard is possible there. Full suite: still 424/424
+      (no new tests — this exercises the same reconciliation path the
+      Stage 0a tests already implicitly cover; the risk here is purely
+      "did the equality comparison compile/typecheck correctly for each
+      field," which the build itself verifies). Gallery rebuilt/relaunched
+      for a visual sanity check.
+- [x] **Stage 0b — auto-boundary the scrollables (gap #3) — implemented
+      2026-07-01.** Extracted `RenderRepaintBoundary`'s caching mechanism
+      into a standalone, composable `PaintCache`
+      (`inc/campello_widgets/ui/paint_cache.hpp` / `src/ui/paint_cache.cpp`)
+      — `maybeReplay(context, offset, dirty)` / `record(context, offset,
+      paintContentFn)`, exactly the same offset-tracking/absolute-clip-rect
+      semantics as before, just no longer tied to being a
+      `RenderRepaintBoundary`. `RenderRepaintBoundary::paint()` itself now
+      just delegates to a `PaintCache` member (refactor only, behavior
+      identical — all 6 existing `RenderRepaintBoundary` tests pass
+      unchanged). `RenderSingleChildScrollView`, `RenderListView`,
+      `RenderGridView`, `RenderPageView` each gained their own `PaintCache`
+      member and a `paint()` override that composes it around their
+      existing `performPaint()`, mirroring Flutter's
+      `RenderViewport.isRepaintBoundary` — every scrollable in the
+      framework is now an implicit repaint boundary with no app code
+      changes required. New test file
+      `tests/universal/test_render_scrollable_paint_cache.cpp` (8 tests, 2
+      per class: clean-replay-skips-child, dirty-forces-re-record) — note
+      this verifies the *wiring*, not the underlying cache mechanics
+      (already covered exhaustively by `test_render_repaint_boundary.cpp`).
+      Full suite: 410/410 (402 + 8 new).
+
+      *Superseded 2026-07-01 by Stage 0d below*: `PaintCache` was replaced
+      by `PictureLayer`/`OffsetLayer` in all 5 classes named above, and
+      `paint_cache.hpp`/`.cpp` were deleted. The 8 tests here still pass
+      unchanged (same suite names, migrated implementation underneath) —
+      see Stage 0d for what actually changed and why.
+- [x] **Stage 0c — measure — done 2026-07-01.** Re-measured after 0a+0b+0d
+      (UI 11ms / raster 2.5ms, unchanged from the 0a/0b baseline as expected —
+      Stage 0d only helps clip-free content and this page has none) and again
+      after the offscreen-texture-pooling fix below (raster 1.6ms, GPU
+      ~50%→15-20%). See that section for the full result and the decision to
+      stop there rather than pursue Stage 1/2/3.
+- [x] **Stage 0d — `PictureLayer`/`OffsetLayer`: safe reposition without a
+      full re-record (a narrow slice of gap #2 only) — implemented
+      2026-07-01.** The user asked to proceed to "Stage 1" (below); before
+      attempting the full rewrite, investigated (3 parallel Explore agents +
+      1 Plan agent, cross-verified by hand against `render_object.cpp`/
+      `canvas.cpp`/`renderer.cpp`) whether a smaller, safe first slice could
+      ship without the full-rewrite risk. Two findings changed the scope:
+      (1) a `Renderer`-owned dirty-layer registry doesn't pay off at any
+      scope smaller than the full 41-class rewrite, since `markNeedsPaint()`
+      (`render_object.cpp:60-72`) has no boundary short-circuit and
+      `generateDrawList()` always walks `root_->paint()` unconditionally
+      once root is dirty — so a registry would have nowhere new to plug in;
+      (2) naively repositioning cached content via a wrapping
+      `canvas.translate()` is *unsafe* for any content containing a clip,
+      backdrop filter, or shader mask — `Renderer::flushDrawList()` treats
+      `PushClipRectCmd` as an absolute reassignment
+      (`current_clip = c.rect;`, `renderer.cpp:574-577`), never composed
+      with the transform stack the way `PushTransformCmd` is
+      (`current_transform = current_transform * c.transform`,
+      `renderer.cpp:564`) — so a cached slice with a nested clip/backdrop-
+      filter/shader-mask would silently clip/blur/mask at the *old* position
+      after a naive translate-based reposition. Confirmed this isn't
+      hypothetical: the gallery app that motivated this whole investigation
+      wraps its images in `ClipRRect`.
+
+      **Scope shipped** (user explicitly chose this over the full rewrite —
+      see the two other options below, still undecided): extracted
+      `PaintCache`'s mechanism into two classes —
+      `PictureLayer` (`inc/campello_widgets/ui/picture_layer.hpp` /
+      `src/ui/picture_layer.cpp`) records a `DrawList` slice and scans it
+      once for the exact command types `flushDrawList()` treats as
+      absolute-baked (`PushClipRectCmd`/`PushClipRRectCmd`/
+      `PushClipOvalCmd`/`PushClipPathCmd`/`DrawBackdropFilterBeginCmd`/
+      `DrawShaderMaskBeginCmd`/`SaveLayerCmd`), setting
+      `hasUnsafeGeometry()`; `OffsetLayer`
+      (`inc/campello_widgets/ui/offset_layer.hpp` / `src/ui/offset_layer.cpp`)
+      composes a `PictureLayer` and is a strict, provably-safe superset of
+      `PaintCache` — every path `PaintCache` handled is byte-identical
+      (dirty/no-cache forces re-record, identity replay skips straight to
+      `appendRecorded()`), plus one new path: when only the offset changed
+      and the picture has no unsafe geometry, it replays under an
+      additional delta `canvas.translate()` instead of re-invoking
+      `paintContent` — safe because ordinary draw geometry *is*
+      transform-deferred, confirmed by the Metal backend applying
+      `transform` to every drawn quad's vertices.
+      `RenderRepaintBoundary`/`RenderSingleChildScrollView`/
+      `RenderListView`/`RenderGridView`/`RenderPageView` all migrated from
+      `PaintCache` to `OffsetLayer` (mechanical two-line swap each);
+      `paint_cache.hpp`/`.cpp` deleted (grepped for zero remaining
+      references first).
+
+      **Honest result, not oversold**: only `RenderRepaintBoundary` actually
+      benefits from the new cheap-reposition path — its content is often
+      clip-free (new test:
+      `RenderRepaintBoundary.RepositionWithClipFreeChildReplaysViaDeltaTranslateWithoutRewalkingChild`).
+      The four scrollables *always* clip their own content to their own
+      viewport inside `performPaint()`, so `hasUnsafeGeometry()` is always
+      true for them and the cheap path never triggers — reposition still
+      falls back to a full re-record for all four, identical to
+      `PaintCache`'s behavior (new tests, one per class:
+      `RepositionForcesReRecordDueToOwnViewportClip` in
+      `test_render_scrollable_paint_cache.cpp`, asserting the *unchanged*
+      behavior explicitly rather than a win that doesn't apply to them).
+      This slice does **not** reduce the O(tree) paint-walk cost to
+      O(dirty) — that's still gap #1, unaddressed, and still requires the
+      full `Layer` tree below. It also does **not** fix the original
+      gallery GPU-usage complaint, since the gallery's `ClipRRect`-wrapped
+      images are exactly the unsafe-geometry case that still falls back to
+      full re-record — Stage 3 (GPU-side raster cache) remains the actual
+      fix for that, unchanged from the original analysis.
+
+      New tests: `tests/universal/test_picture_layer.cpp` (4),
+      `tests/universal/test_offset_layer.cpp` (5, including
+      `RepositionWithClipFreeContentReplaysViaDeltaTranslate` — the
+      standalone mechanism test — and `RepositionWithUnsafeGeometryForces
+      ReRecording`), plus 1 new `RenderRepaintBoundary` test and 4 new
+      scrollable tests as above. Full suite: 424/424 (410 + 4 + 5 + 1 + 4).
+
+### Offscreen texture pooling for `applyClipShape()`/`applyShaderMask()` (2026-07-01)
+
+Re-measuring the gallery's Images tab after Stage 0d found UI time
+unchanged (~11ms, was ~10ms) — expected, since Stage 0d only helps
+clip-free content and every image on that page is wrapped in `ClipRRect`.
+Rather than chase gap #1's full `Layer` tree (still unstarted, see Stage 1
+below) or gap #2(a)'s GPU raster cache (Stage 3, targets *static* content),
+identified a more targeted, narrower fix for the specific workload that
+motivated this whole investigation: `RotatingTransformRow`'s 4
+continuously-animating `ClipRRect`-wrapped images. This content is dirty
+*every single frame by design* (it's an active animation) — no caching
+strategy, including Stage 3's, can help it, since there's never a clean
+state to cache. What actually costs real GPU time on every one of those
+frames is `Renderer::applyClipShape()`
+(`src/ui/renderer.cpp:745-821`, also `applyShaderMask()` at `renderer.cpp:665-743`)
+calling `draw_backend_->createOffscreenTexture()` — which, in
+`MetalDrawBackend` (`src/macos/metal_draw_backend.mm`), called
+`device_->createTexture()` — a real GPU allocation — **on every single
+call, every frame, with zero reuse**, despite the `IDrawBackend` interface's
+own doc comment already saying "Allocates (or reuses)..."
+(`inc/campello_widgets/ui/draw_backend.hpp:190-197`) — the "reuses" half was
+never actually implemented.
+
+**Fix**: added `MetalDrawBackend::OffscreenTexturePool`
+(`src/macos/metal_draw_backend.hpp`/`.mm`), mirroring the existing
+`UniformBufferPool` pattern exactly (a `kGenerations=4`-deep ring, advanced
+once per real frame via `setViewport()` — not `setViewportSize()`, for the
+same reason documented on `UniformBufferPool`: `setViewportSize()` is
+called mid-frame, possibly several times per composite, and must not
+advance the ring or it corrupts earlier not-yet-submitted draws in the same
+command buffer that still reference a pooled resource by index). Textures
+are pooled keyed by `(width, height)` since offscreen bounds vary per
+widget (unlike uniform buffers, which have one fixed struct size per pool
+instance) — a repeated `(size, count-per-frame)` pattern converges to zero
+new GPU allocations after a ~4-frame warmup (one warmup frame per
+generation slot). No `upload()`-equivalent refresh step is needed on reuse,
+since `beginOffscreenPass()`'s `loadOp=clear` already re-clears the texture
+before each use. Size buckets not acquired in `kMaxAgeFrames=120` frames are
+evicted (mirroring `evictStaleTextTextures()`'s existing eviction pattern
+exactly) so window resizes — which generate a whole new set of distinct
+sizes each time — don't grow the pool unboundedly.
+`MetalDrawBackend::createOffscreenTexture()` now delegates to the pool
+instead of allocating directly.
+
+Universal suite unaffected (still 424/424 — this is a macOS/Metal-backend-
+only change with no CPU-testable surface). GPU visual-fidelity golden tests
+remain skipped in this sandboxed dev environment (missing Flutter golden
+fixtures, pre-existing limitation, unrelated to this change) so pixel
+correctness wasn't re-verified by automated tests; verified instead via a
+clean `darwin-debug-integration` build/run (real Metal device, Intel UHD
+Graphics 630, created successfully) and a full gallery rebuild/relaunch,
+with the user confirming correct rendering.
+
+**Result (2026-07-01, user-reported)**: Images tab, `RotatingTransformRow`
+animating — **raster: 2.5ms → 1.6ms** (-36%, on top of the earlier
+Stage-0d-era 4ms → 2.5ms from the `RepaintBoundary`/self-boundaring work,
+so ~3ms → 1.6ms overall for this specific fix's target). UI time unchanged
+(~10-11ms), exactly as expected — this fix is GPU/raster-side only, no
+CPU-side paint-recording cost was touched. **GPU utilization: ~50% → 15-20%**
+— the actual metric from the original complaint ("I think very very high to
+just 4 simple widgets") and the real headline result: roughly a 3× reduction.
+Combined with the earlier session's manual `RepaintBoundary` wraps around
+the page's static sections (which already stopped the ~50% baseline from
+including the *static* BoxFit/Decorations rows' and BackdropFilter's
+offscreen-composite/blur work re-running every animation frame — those
+sections now clean-replay instead), the remaining 15-20% is plausibly close
+to the floor achievable without a deeper architecture change: it's the
+genuine, unavoidable cost of 4 GPU offscreen-composite passes per frame for
+content that's continuously dirty by design (an active animation), which no
+caching strategy — including Stage 3's raster cache — can reduce further,
+since there's never a clean state to cache.
+
+**If further reduction is wanted later**: the next real lever isn't Stage 1
+or Stage 3, but replacing `ClipRRect`/`ClipOval`'s offscreen-texture+SDF-
+composite approach with in-pass GPU clipping (stencil buffer or shader-
+based), avoiding the extra render pass entirely for the animating case —
+already flagged as a known simplification in `Canvas::clipRRect()`/
+`clipOval()`'s own code comments ("For now, clip to the bounding rect... 
+full implementation would need GPU stencil buffer or shader-based
+clipping"), independent of anything in the Stage 1 Layer-tree discussion.
+Not started; no immediate need given the result above.
+
+### Bug: `BackdropFilter` inside a scroll didn't respect offset (2026-07-01, user-reported)
+
+Root-caused as a real correctness bug in the paint-caching mechanism itself
+(`RenderRepaintBoundary`/`OffsetLayer`), introduced by the `repaintBoundary
+(blur_container)` wrap from earlier in this session (the very first manual
+fix, before any of the "Stage 0" work) — a case where general-purpose paint
+caching is fundamentally unsafe for one specific widget's semantics.
+
+**Chain of causes**: (1) `blur_container` (the gallery's `BackdropFilter`
+demo) is wrapped in a `RenderRepaintBoundary`. (2) When the page's outer
+`SingleChildScrollView` scrolls, it calls `markNeedsPaint()` on *itself*
+only — dirty propagation is upward-only (`render_object.cpp:60-66`), so
+`blur_container`'s own `needs_paint_` never gets set. (3) `blur_container`'s
+*logical* offset within its parent `Column` doesn't change during scroll
+either — scrolling shifts content via `canvas.translate()`, a separate,
+parallel mechanism from the `offset` parameter threaded through `paint()`
+calls. (4) So `RenderRepaintBoundary::paint()` sees `needsPaint()==false`
+and `offset == cached_offset_` → takes the clean **identity replay** path
+(`OffsetLayer::maybeReplay()`, `canvas.appendRecorded(...)`) — which never
+re-invokes `paintChild()`/`RenderBackdropFilter::performPaint()`.
+(5) `RenderBackdropFilter::performPaint()`'s call to `Renderer::
+noteBackdropFilter()` (`render_backdrop_filter.cpp:33-34`) therefore never
+fires that frame. (6) `package.has_backdrop_filter` stays false →
+`rasterFrame()` skips the entire full-viewport backdrop-capture-and-blur
+pre-pass for that frame (`renderer.cpp:186-238`). (7) `blurred_backdrop_
+tex_` never gets re-captured — it stays frozen at whatever was behind the
+widget the last time it was genuinely re-recorded. Meanwhile the
+*destination* quad position (`drawBackdropFilter()`'s `transform *
+Vector4(cmd.bounds...)`, `metal_draw_backend.mm:1207-1208`) **does**
+correctly track the ambient transform (including the scroll's translate),
+since ordinary ambient-transform composition is unaffected by any of this
+— so the frosted panel visually *slides* with the scroll, while the blur
+it displays stays stale/frozen. That mismatch is exactly "doesn't respect
+offset."
+
+**Why this is a real, general hazard, not a one-off**: `RenderClipRRect`/
+`RenderClipOval`/`RenderShaderMask` are all safely cacheable — their
+offscreen-composite output depends *only* on their own child content, so
+replaying a cached recording is semantically correct. `BackdropFilter` is
+different: its output depends on ambient, external state (whatever's
+currently behind it), refreshed via a side effect
+(`noteBackdropFilter()`) that paint-caching's whole design intentionally
+skips on a cache hit. Any future paint-caching mechanism — Stage 1's
+`Layer` tree included — needs to keep BackdropFilter content permanently
+uncacheable for this same reason, not just work around it locally.
+
+**Fix**: added `PictureLayer::hasBackdropFilter()`
+(`inc/campello_widgets/ui/picture_layer.hpp` / `src/ui/picture_layer.cpp`)
+— a stricter, separate flag from `hasUnsafeGeometry()`, set when a
+recording contains `DrawBackdropFilterBeginCmd`. `OffsetLayer::
+maybeReplay()` now checks it *before* the identity-offset fast path (not
+just the reposition fast path `hasUnsafeGeometry()` already gated) and
+returns `false` unconditionally — forcing every caller
+(`RenderRepaintBoundary` and all four self-boundaring scrollables) to
+`record()` fresh on every single paint call, dirty or clean, moved or not,
+whenever backdrop-filter content is present anywhere in the cached
+subtree. This sacrifices the CPU-side caching benefit specifically for
+BackdropFilter-containing content, which is correct and low-cost: the
+backdrop-capture-and-blur pre-pass it triggers is already expensive
+regardless of paint-caching, so skipping the (comparatively cheap)
+`paintChild()` re-walk isn't adding meaningful additional overhead.
+
+New tests: `PictureLayer.PlainClipContentHasNoBackdropFilter` (confirms
+the two flags are independent — an ordinary clip must not trip the
+backdrop-filter-specific lockout) and a `hasBackdropFilter()` assertion
+added to the existing `PictureLayer.BackdropFilterContentIsUnsafe` test;
+`OffsetLayer.BackdropFilterContentNeverReplaysEvenAtUnchangedOffset` (the
+core regression test — proves an identity-offset, clean replay still
+forces `record()`, three times in a row, not just once as a fallback).
+Full suite: 426/426 (424 + 2 new). Gallery rebuilt/relaunched; awaiting
+user confirmation that scrolling the Images tab now keeps the frosted
+panel's blur content live instead of frozen.
+
+### Bug: `Transform` content vanishes past a negative-scale rotation angle (2026-07-01, user-reported)
+
+User reported the gallery's animated `Transform` demos (`RenderTransform::
+scaling()`-based flip effects simulating X/Y-axis 3D rotation, see
+`examples/gallery/gallery_app.cpp`'s `RotatingTransformRow`) make their
+child "disappear... like the backside is disabled" for part of the
+rotation cycle. Root-caused via the shader math, not by guessing:
+
+Every `labeledTransform()` demo wraps its image in a `ClipRRect`, whose
+paint goes through `Renderer::applyClipShape()` →
+`MetalDrawBackend::drawClipShapeComposite()`. That function transforms the
+clip bounds' corners by the ambient `transform`
+(`tl = transform * Vector4(bounds.left, bounds.top, 0, 1)`, similarly for
+`br`) and passed `dstRect = {tl.x, tl.y, br.x-tl.x, br.y-tl.y}` straight
+into `ClipShapeUniforms` — **unnormalized**. When the ambient transform has
+a negative scale axis (exactly what `scaling(1, cos(angle))`/
+`scaling(cos(angle), 1)` produce for roughly half of every rotation cycle,
+by design — that's how the flip effect works), `tl.x() > br.x()` (or
+`.y()`), making `dstRect`'s width or height **negative**.
+
+The fragment shader (`shaders/metal/widgets.metal`,
+`clipShapeFragment()`) computes the rounded-rect/ellipse SDF as
+`hs = rect_size * 0.5; q = abs(p) - hs + r; d = length(max(q,0)) +
+min(max(q.x,q.y),0) - r`, assuming `hs` (half-extents) is non-negative. A
+negative `rect_size` makes `hs` negative, which (traced through the
+algebra) makes `d` large and positive everywhere, and `alpha =
+1.0 - smoothstep(-0.5, 0.5, d)` saturates to **exactly 0** — fully
+transparent, for the *entire* shape, not just clipped at an edge. This
+exactly matches the reported symptom: the *destination position* of the
+flipped content still correctly tracks the ambient transform (ordinary
+transform composition is unaffected), so it looks like it's still
+rotating right up until it silently vanishes. Backface culling was
+checked and ruled out first (`CullMode::none` on every pipeline,
+confirmed by grep) before tracing into the shader math. `ShaderMask`'s
+fragment shader was also checked and confirmed *not* to have this
+class of bug — its gradient math uses absolute fragment position, not a
+sign-sensitive half-extent computation, so it was left untouched.
+
+**Fix**: `drawClipShapeComposite()` now normalizes `dstRect` to always be
+non-negative (`x0/y0 = min(tl,br)`, width/height via `std::abs`), and
+separately computes `flip[2]` booleans from the original corner
+ordering. `ClipShapeUniforms` gained a `float2 flip` field (both the C++
+struct in `metal_draw_backend.mm` and the shader struct in
+`widgets.metal`, kept in sync by hand — no shared header between them).
+The vertex shader (`clipShapeVertex()`) still computes screen *position*
+from the un-mirrored quad-corner interpolant against the now-always-positive
+`dstRect` (correct — position must stay a normal, un-mirrored rect in
+screen space), but computes the *UV* used for both texture sampling and
+the SDF's local-position math as `flip.x > 0.5 ? 1.0-t.x : t.x` (and same
+for `.y`) — mirroring the sampled content and preserving the SDF's
+symmetry (`abs(p)` is unaffected by which direction UV runs) at the same
+time. Rebuilt the shader via `./build_metal_shaders.sh` (the `.metal`
+source is compiled offline into `src/shaders/metal_widgets.h`, a
+generated header — editing the `.metal` file alone does nothing until
+this script reruns).
+
+No new automated test — this is a Metal/GPU-shader-only change with no
+CPU-testable surface, and the golden-image visual-fidelity tests remain
+skipped in this sandboxed environment (same pre-existing limitation noted
+throughout this file). Full universal suite unaffected (426/426, expected
+— nothing here touches CPU-side code). Verified via a clean build (shader
+compiled without error) and gallery rebuild/relaunch; awaiting user
+visual confirmation that the flip demos no longer vanish past their
+zero-crossing angle.
+
+**Separately raised, not fixed here — genuine 3D perspective**: the user
+also asked why axis rotations don't have "3D perspective feeling." This
+is a different, much larger question — not fixable as a small patch, and
+not part of the paint/compositing Stage 1-3 sequence above (orthogonal
+capability, not a caching/dirty-tracking gap). Recorded here as its own
+backlog item.
+
+### Backlog: genuine 3D perspective for `Transform` (raised 2026-07-01, not started — scope corrected same day)
+
+**Initial framing (superseded below)**: originally described as "missing a
+perspective (W) divide" — true, but investigation the same day found this
+significantly understates the gap.
+
+**Corrected understanding, verified by reading every quad-drawing vertex
+shader in `shaders/metal/widgets.metal` (`quadVertex`, `shapeVertex`,
+`clipShapeVertex`, `shaderMaskVertex`), not assumed from memory**: every
+one of them builds its four vertices as `pos = dstRect.xy + t * dstRect.zw`
+— one origin corner plus a width/height, interpolated by a corner selector
+`t ∈ {0,1}²`. That expression can only ever produce an **axis-aligned
+rectangle** on screen; there is no shader anywhere in this renderer that
+accepts four independent vertex positions. On the C++ side,
+`MetalDrawBackend::drawRect()` transforms all four corners by the ambient
+matrix but then explicitly takes their axis-aligned bounding box (comment
+in the code: *"exact for translate and scale transforms... for rotation
+the AABB will be larger than the actual rotated quad"*); `drawImage()`
+transforms only two opposite corners and subtracts to get a width/height.
+Both discard rotation before it ever reaches the GPU — a rotated
+rectangle becomes a resized axis-aligned box, not a tilted one.
+
+This means the missing W-divide was the *smaller* of two problems. Even
+with a perspective-correct divide added, there is currently nowhere in
+the pipeline to route the resulting four independently-projected corners
+— every shader would still collapse them back into a bounding box.
+**The real prerequisite is arbitrary-quad rendering** (shaders taking four
+independent vertex positions, backend code that stops collapsing
+transformed corners into a bounding box) — perspective is the *second*
+step on top of that, not the first.
+
+**Why Flutter/Skia/Impeller's `setEntry(3,2,0.001)..rotateX(angle)` trick
+can't just be ported as-is**: it works in Flutter because Skia (and
+Impeller) transform a rect's four corners independently and rasterize
+whatever quadrilateral results — rotated, skewed, or a perspective
+trapezoid, all the same general mechanism, with the GPU rasterizer's
+native perspective-correct interpolation handling texture mapping across
+it. This renderer never had that general capability at all, independent
+of perspective.
+
+**User's explicit direction (2026-07-01): move toward this general
+capability — "the exact way skia/impeller works," aiming for 1:1
+rendering fidelity.** This is a large, foundational rendering-pipeline
+change, not a bounded bug fix, and has not been scoped into concrete
+steps yet — see the scoping conversation this triggered (Plan Mode) for
+whatever gets decided as the first real step. Recording the shape of the
+work as currently understood, for whoever picks this up:
+
+- A general "arbitrary quad" (or full mesh) draw primitive: shaders
+  accepting four (or more) independently-positioned, independently-UV'd
+  vertices instead of `dstRect`+corner-selector. Needed for rotation to
+  render as a genuinely tilted shape at all, before perspective is even
+  relevant.
+- True clip-space vertex output (`float4(x, y, z, w)` from a real
+  projection matrix) with a GPU-native perspective divide, replacing the
+  current `ndc = (px/viewport)*2-1` pattern used by every shader.
+- `DrawRectCmd`/`DrawImageCmd` (or new commands) carrying real corner
+  geometry instead of an axis-aligned `(x,y,w,h)` rect — a
+  draw-command-contract change every backend must implement, not an
+  internal-only change.
+- The composite/offscreen paths (`applyClipShape()`, `applyShaderMask()`,
+  backdrop-filter capture) have the *same* two-corner/bounding-box
+  limitation as the primary draw paths (confirmed while fixing the
+  negative-`dstRect` bug above — `drawClipShapeComposite()` still reduces
+  the clip shape's own destination to an axis-aligned box) — meaning a
+  `ClipRRect`-wrapped rotated/perspective widget would need this fixed at
+  the composite layer too, not just the leaf draw calls, or the visible
+  clip boundary would stay a flat rectangle even while the content inside
+  it correctly tilts.
+- Mirrored across Metal, Vulkan, and D3D for consistency, since this is a
+  public rendering-capability change.
+- "1:1 fidelity with Skia/Impeller" as a general target is effectively
+  open-ended (those are mature, general-purpose 2D rendering engines with
+  vastly larger scope — arbitrary paths, gradients, blend modes, full
+  perspective-correct mesh rendering, etc.) — worth explicitly narrowing
+  to "what `Transform` specifically needs" as a first bounded milestone
+  rather than treating the whole engine's fidelity as one undertaking.
+
+Not started. Scope/sequencing to be decided via the Plan Mode conversation
+this direction triggered.
+
+---
+
+- [ ] **Stage 1 — introduce a real `Layer` tree (gaps #1 + #2, the
+      structural fix).** New `Layer` base + `ContainerLayer`, `PictureLayer`
+      (leaf; owns a recorded `DrawList`), `TransformLayer`, `ClipRectLayer`/
+      `ClipRRectLayer`/`ClipPathLayer`, `OpacityLayer`, `OffsetLayer`.
+      `RenderObject::paint()` records into this tree instead of directly
+      into one flat `DrawList`. A `Renderer`-owned dirty-layer list
+      (`PipelineOwner` equivalent) is populated by layer-owning nodes
+      instead of (or alongside) the current upward `markNeedsPaint`
+      propagation. This is the biggest, riskiest item on this list — it
+      touches every `performPaint()` call site in the framework — and
+      should be scoped as its own dedicated multi-week effort with its own
+      test plan, not folded into an unrelated feature/bugfix branch.
+- [ ] **Stage 2 — compositor pass over the Layer tree.** A
+      `SceneBuilder`-equivalent that flattens the `Layer` tree into GPU
+      commands, visiting only layers whose subtree is actually dirty;
+      `TransformLayer`/`OffsetLayer` wrapping a clean `PictureLayer` updates
+      its matrix without touching the picture. Depends on Stage 1 existing
+      first.
+- [ ] **Stage 3 — GPU-side raster cache for clean `PictureLayer`s (closes
+      the "(a)" half of gap #2).** For pictures that are expensive to
+      rasterize and rarely change (static `ClipRRect`/`BackdropFilter`
+      content — the exact case from the original gallery complaint),
+      opportunistically rasterize once to an offscreen texture and reuse it
+      across frames instead of resubmitting Metal draw calls every frame.
+      Mirrors Flutter/Skia's `RasterCache`. This is the piece that actually
+      answers "why is the GPU at 50% for 4 simple widgets" at the root,
+      rather than working around it by scoping what repaints.
+
+**Recommendation**: do Stage 0 first — it's low-risk, ships independently,
+and directly extends work already landed today (the gallery
+`RepaintBoundary` fix). Re-measure before committing to Stage 1+, since
+that's a genuine framework-core rewrite (comparable in scope to the UI/
+raster thread split evaluated below) and its cost/risk should be weighed
+against the *measured* remainder, not the current guess.
+
+---
+
 ### Evaluation: Splitting UI and Raster into Two Real Threads (Flutter-style) (2026-06-19)
 
 Today everything — widget rebuild, layout, paint-command recording, **and** GPU
@@ -977,7 +1591,282 @@ blockers above actually played out:
   loop while `RasterThread::workerLoop()` does the raster work
   concurrently — not just "it compiles."
 
-### IME (Input Method Editor) Platform Gaps
+### Backlog: `BackdropFilter` GPU cost — downsample the capture before blurring (raised 2026-07-01, not started)
+
+After fixing the "BackdropFilter inside a scroll doesn't respect offset" bug
+(above — the fix that made `OffsetLayer` never cache/replay backdrop-filter
+content), GPU usage in the gallery's Images tab went from ~15-20% to
+**~40%** while `RotatingTransformRow` animates. This is not a new bug — it's
+the honest cost of the fix being correct. Traced precisely
+(`src/ui/renderer.cpp:186-238`, the backdrop-capture pre-pass in
+`rasterFrame()`):
+
+- `backdrop_tex_` is allocated at **full physical viewport resolution**
+  (`tw/th = package.viewport_width/height`, `renderer.cpp:192-193`) — no
+  downsampling anywhere.
+- The capture re-renders **the entire scene** (`flushDrawList(package.
+  draw_list, ...)`, the *full* draw list, not just the region behind the
+  `BackdropFilter` widget) into that full-res texture every time it runs.
+- `blurTexture()` then runs a full-resolution, 2-pass separable Gaussian
+  blur over the *entire* captured frame.
+
+Before today's correctness fix, this pass almost never actually ran —
+`RenderRepaintBoundary`'s clean-replay path silently skipped
+`RenderBackdropFilter::performPaint()` (and therefore the `noteBackdropFilter()`
+call that gates this pass) on all but the first frame, which is exactly what
+made the blur go stale/frozen. Now it correctly runs every single frame
+while anything on the page keeps triggering a repaint (in the gallery,
+`RotatingTransformRow`'s continuous animation). Trading a visible
+correctness bug for a real, honest GPU cost was the right call, but the
+cost itself is worth reducing.
+
+**Concrete next step, not started**: downsample the backdrop capture
+before blurring — industry-standard for this exact feature (Skia/Flutter's
+real `BackdropFilter` does this too; blur quality doesn't need full-
+resolution input, since blurring is inherently a low-frequency operation).
+Capture into a texture at, say, 1/2 or 1/4 linear resolution, blur *that*,
+then let the existing compositing step (`drawBackdropFilter()`, already
+doing a textured-quad draw) upsample naturally via the sampler's linear
+filtering when compositing back at full size. Would cut both the capture
+render's fill cost and the blur pass's per-pixel cost roughly by the square
+of the downsample factor (4× at half-res, 16× at quarter-res) — the main
+open question is how small the backdrop texture can go before the
+blurred result looks visibly different from a full-res blur, which needs
+empirical tuning against `ImageFilter::blur()`'s actual sigma range.
+
+### Backlog: image caching — mostly good, one small redundant copy (raised 2026-07-01, not started)
+
+User asked how the gallery's repeated single image (`mountains.jpg`,
+embedded as `kMountainsJpeg`, drawn ~15 times across `fitSample`/deco/
+`RotatingTransformRow`/`blur_container`) is cached. Investigated for the
+record:
+
+- **Decode + GPU texture: already cached correctly.** `ImageCache`
+  (`inc/campello_widgets/ui/image_cache.hpp`, a global LRU singleton
+  explicitly modeled on Flutter's `ImageCache`) is keyed by
+  `ImageProvider::cacheKey()`. `MemoryImage::cacheKey()`
+  (`src/ui/image_provider.cpp:364-373`) hashes the image *content* (first
+  1KB of bytes), not any per-call identity — so all ~15 `mountainsImage()`
+  call sites in the gallery, despite each constructing an independent
+  `MemoryImage` provider, resolve to the *same* cache key and share one
+  `LoadedImage` (`inc/campello_widgets/ui/image_provider.hpp:45-58`, which
+  holds both the decoded pixels and the `campello_gpu::Texture`). Net
+  result: exactly one JPEG decode and one GPU texture upload for the whole
+  gallery, regardless of instance count — this part already works as
+  intended.
+- **One real, minor inefficiency**: `mountainsImage()`
+  (`examples/gallery/gallery_app.cpp:1109-1117`) constructs a fresh
+  `std::vector<uint8_t>` — a ~200KB copy of the embedded byte array — on
+  *every call*, before that copy is even used to compute the (identical)
+  cache key. 15 copies on initial build, plus 4 more every single
+  animation frame (`RotatingTransformRow::build()` calls `image_for()` 4×
+  per frame). A sub-millisecond memcpy each, so not a measured bottleneck
+  today, but pure waste — the cache key doesn't need the whole array
+  copied to be computed, and a cache hit doesn't need it retained either.
+  Fix would be gallery-app-level (cache the `std::vector` once at startup
+  and pass a reference/span instead of reconstructing it per call), not a
+  framework change.
+
+Not started — recorded for a future caching-improvement pass, not because
+of any current measured impact.
+
+### Dirty-region tracking — skip `BackdropFilter`'s capture pass when nothing relevant changed (2026-07-02, done)
+
+Follow-up to the GPU-cost backlog entry above. Rather than downsampling
+(which only reduces per-frame cost, not frequency), added a framework-wide
+but narrowly-scoped dirty-region mechanism so the capture+blur pre-pass
+(`Renderer::rasterFrame()`, `src/ui/renderer.cpp:186-238`) only runs when
+something within blur range of a `BackdropFilter` actually changed —
+instead of unconditionally, every frame that rasterizes at all.
+
+**Mechanism** (see `inc/campello_widgets/ui/dirty_region.hpp` for the
+core decision function):
+- `Renderer` accumulates a per-frame list of dirty rects (capped at 32,
+  overflow falls back to "assume everything dirty" — safe, conservative)
+  and a list of each `BackdropFilter`'s own bounds
+  (`noteDirtyRegion()`/`noteBackdropFilter()`, both reset each frame in
+  `layoutPass()`).
+- `RenderObject::paint()` (`src/ui/render_object.cpp`) reports a node's
+  bounds as dirty whenever it was actually marked dirty (`needs_paint_`)
+  — required no changes to any `markNeedsPaint()` call site, since
+  `offset` (confirmed global/absolute, traced through
+  `RenderBox::paintChild()`'s offset accumulation) and `size_` were
+  already in scope there.
+- `OffsetLayer::maybeReplay()` (`src/ui/offset_layer.cpp`) — the one place
+  `RenderRepaintBoundary` and the 4 self-boundaring scrollables funnel
+  through, all of which override `paint()` and so bypass the hook above —
+  centrally reports dirty bounds for all 3 cases that mean "content
+  visibly changed": genuinely dirty (`needsPaint()==true`), a cheap
+  delta-translate reposition, and a forced full re-record due to unsafe
+  geometry. Only the backdrop-filter-forced-safety re-record (dirty or
+  not, moved or not, `noteBackdropFilter()`'s side effect must still fire
+  every frame — unchanged from the earlier scroll-offset fix) is
+  correctly excluded from counting as dirty.
+- `Renderer::buildFrame()` gates the capture, once, *after* the full paint
+  walk completes (not mid-walk) — a `BackdropFilter` can sample content
+  painted anywhere in the frame, including subtrees walked after it, so
+  the decision needs the complete picture. Margin = 2.5×sigma capped at
+  12px, matching the blur shader's own kernel radius
+  (`shaders/metal/widgets.metal`'s `RADIUS = min(ceil(2.5*sigma), 12)`).
+
+**Bug found and fixed during verification** (worth remembering): the
+first version only added dirty-reporting to `OffsetLayer`'s *reposition*
+branch, missing the case where a boundary/scrollable is directly dirty
+(`needsPaint()==true`) — since those 5 classes override `paint()` and
+never hit the base-class hook. This meant active scrolling could look
+"nothing changed" to the gate. Fixed by centralizing all 3 report cases
+inside `maybeReplay()` itself (see above) rather than scattering partial
+logic across call sites.
+
+**Verified via a temporary trace flag** (`DebugFlags::printDirtyRegionTrace`,
+left in place per user request — toggle with `CW_TRACE_DIRTY=1` when
+launching the gallery from a terminal, `CW_TRACE_RASTER=1` for the
+existing `printRasterSubPhaseTimings`): confirmed the gallery's
+Clipping & FX tab (fully static `BackdropFilter` demo) goes completely
+idle — zero frames rendered at all — once settled, measured at 0% GPU.
+The Images tab stays at ~40% because `RotatingTransformRow` (a
+perpetually-looping rotation demo) sits in the same scrollable column as
+that tab's `BackdropFilter`, so every frame is genuinely dirty nearby —
+correct behavior, not a regression; the fix simply can't help when
+something is actually animating in range.
+
+**Known, accepted limitation**: the 32-rect cap overflows quickly on
+busy/animated screens, since every ancestor along a dirty leaf's
+propagation chain reports its own (largely redundant, superset) bounds —
+not just the leaf. Not incorrect (falls back to the safe "assume dirty"
+path), just means the optimization provides less benefit than it could on
+screens with continuous animation elsewhere. Worth revisiting (e.g. only
+reporting the deepest dirty node per propagation chain) if a future
+screen needs the optimization to survive nearby animation — not needed
+for the motivating case (a static `BackdropFilter` demo).
+
+The downsampling idea above is still valid as a complementary,
+independent optimization (reduces per-capture cost; this fix reduces
+capture frequency) — not started.
+
+### Widget/RenderObject over-invalidation — a chain of "always dirty regardless of change" bugs (2026-07-02, done)
+
+Follow-up investigation after the dirty-region fix above didn't move the
+gallery's Images-tab numbers at all — `RotatingTransformRow` (a
+perpetually-looping rotation demo) kept the whole tab's paint/layout
+state thrashing every frame regardless. Traced with new tracing tools
+(`DebugFlags::printDirtyRegionTrace`, toggled via `CW_TRACE_DIRTY=1`;
+`DebugFlags::printRasterSubPhaseTimings`, via `CW_TRACE_RASTER=1` — both
+wired into `examples/gallery/macos/main.mm`, left in place) that revealed
+a *chain* of distinct bugs, each masking the next once fixed:
+
+1. **`markNeedsPaint()` bubbled unconditionally to the true root**
+   (`src/ui/render_object.cpp`), unlike Flutter's, which stops at the
+   nearest `isRepaintBoundary`. Added `RenderObject::isRepaintBoundary()`
+   (default false, overridden true by `RenderRepaintBoundary` and the 4
+   self-boundaring scrollables) and made `markNeedsPaint()` stop
+   propagating there — request a frame either way via a new decoupled
+   `Renderer::notePaintRequested()` latch (`buildFrame()` now consumes
+   this instead of checking `root_->needsPaint()`, since a dirty leaf
+   under a boundary no longer reaches root at all).
+2. **`RenderObjectElement::update()`** (`src/widgets/render_object_element.cpp`)
+   called `render_object_->markNeedsLayout()` **unconditionally after every
+   single widget update**, completely bypassing every widget's own
+   equality-guarded `updateRenderObject()` override (Transform, SizedBox,
+   Flex, etc.) — found via a captured backtrace at the exact
+   `markNeedsLayout()` call site. Removed the blanket call; audited all 32
+   `updateRenderObject()` overrides in `src/widgets/` first (most already
+   self-guard correctly; `PageView`/`GridView`/`ListView` were missing
+   guards on genuinely layout-relevant fields — fixed; `TableView` calls
+   `markNeedsLayout()` explicitly now since its span types have no
+   `operator==`; `TreeView` was already safe via `invalidateRowCache()`).
+3. **`RenderFlex::insertChild()`/`clearChildren()`** (`src/ui/render_flex.cpp`)
+   — the *actual* dominant cost, found only after fixing #2 exposed it —
+   called unconditionally on **every** rebuild via
+   `FlexElement::syncChildRenderObjects()` (`src/widgets/flex.cpp`),
+   regardless of whether the child list or flex factors changed, because
+   `clearChildren()` destroys the previous state before any comparison is
+   possible. Fixed by computing the new (index, box, flex-factor) list
+   first in `FlexElement`, comparing against what was last actually synced
+   (`FlexElement::last_synced_`, `inc/campello_widgets/widgets/flex_element.hpp`),
+   and skipping `clearChildren()`+`insertChild()` entirely when identical.
+   `StackElement`/`Positioned` likely has the same latent issue (not yet
+   hit in practice, not fixed — same fix shape would apply if it ever is).
+4. **`RotatingTransformRowState::build()`** (`examples/gallery/gallery_app.cpp`)
+   reconstructed a fresh `ImageWidget` (via `mountainsImage()`) on every
+   tick even though the image content never changes — only the ancestor
+   `Transform`'s rotation angle does. Each fresh `std::vector<uint8_t>`
+   construction from the embedded JPEG measured ~1.1-1.6ms on its own
+   (confirmed via direct timing — this is the same "redundant copy" noted
+   in the image-caching backlog entry above, previously assessed as
+   sub-millisecond and dismissed; that assessment was wrong), ×4 images
+   ×60/sec. Fixed by constructing the 4 image `WidgetRef`s once in
+   `initState()` and reusing the same pointer every `build()` — lets
+   `Element::updateChild()`'s identical-widget-pointer fast path
+   (`src/widgets/element.cpp:193`) skip that entire subtree's
+   reconciliation (including the full `ImageWidgetState` rebuild cascade)
+   on every tick, since only the ancestor `Transform` actually changes.
+
+**Combined measured effect** (gallery Images tab, active rotation, `darwin-debug`
+build): GPU 40% → 9%, UI (build-phase) 10ms → 0.8ms, `buildScope()`
+specifically ~9.5ms → ~0.2ms. Full universal suite stayed green (439/439)
+throughout every step. Verified no regressions by clicking through Lists,
+Controls, Animations, and Gestures tabs after the final fix.
+
+**Reusable diagnostic tools added** (all gated behind existing/new
+`DebugFlags`, safe to leave permanently):
+- `CW_TRACE_DIRTY=1` — prints `RenderObject::paint()`/`OffsetLayer`
+  dirty-region reports, `Renderer::buildFrame()`'s per-frame dirty-rect
+  summary, and `markNeedsLayout()`'s TRUE_ORIGIN-vs-propagated trace
+  (`src/ui/render_object.cpp` — distinguishes "this node was actually
+  marked dirty externally" from "this node is just hearing about a
+  descendant," via a `s_layout_propagation_depth` counter).
+- `CW_TRACE_RASTER=1` — prints both raster sub-phase timings (existing)
+  and new build-phase sub-phase timings (`buildScope`/`layoutPass`/
+  `generateDrawList`, `src/ui/renderer.cpp`).
+- `Element::rebuild()` (`src/widgets/element.cpp`) prints per-element
+  wall-clock cost and `typeid` under `CW_TRACE_DIRTY`, zero overhead when
+  disabled (branches to the untimed path).
+
+### Bug: `BackdropFilter` inside a scroll showed mismatched blur (2026-07-02, user-reported, fixed)
+
+Regression from the dirty-region tracking work above — user noticed the
+Images tab's BackdropFilter demo showed the blur sampling from the wrong
+part of the scrolled background ("parts of the background don't match")
+while scrolling.
+
+**Root cause**: the dirty-region system assumed `offset` (as threaded
+through `paint()`/`performPaint()`) is always a widget's true on-screen
+position. False for anything painted inside `RenderSingleChildScrollView`/
+`RenderListView`/`RenderGridView`/`RenderPageView` — all four apply their
+scroll offset via `canvas.translate()` in `performPaint()`, never by
+adjusting `offset` itself (confirmed via `RenderSingleChildScrollView::
+performPaint()`, `src/ui/render_single_child_scroll_view.cpp:109-123`).
+So `RenderBackdropFilter::performPaint()`'s reported bounds (used only for
+the capture-skip *decision* — the actual sample/quad geometry was already
+correctly transform-deferred to flush time, confirmed by tracing
+`MetalDrawBackend::drawBackdropFilter()`, `src/macos/metal_draw_backend.mm:1356-1408`,
+which applies `transform` to `cmd.bounds`' corners) stayed frozen at its
+*logical*, unscrolled position, while the scroll view's own dirty report
+(`OffsetLayer::maybeReplay()`'s `dirty` branch) correctly used its true,
+never-moves screen position. Two different coordinate spaces being
+compared for intersection meant the check could silently miss, skipping
+the capture on scroll frames — correct current-position sampling geometry,
+stale captured content.
+
+**Fix**: added `projectedBounds(transform, local_rect)`
+(`inc/campello_widgets/ui/dirty_region.hpp`) — projects a logical rect's
+four corners through `Canvas::currentTransform()` (which *does* include
+ambient scroll translates and Transform-widget matrices, composed via
+`PushTransformCmd`s during recording) and returns their axis-aligned
+bounding box. Applied at all three dirty-region report sites:
+`RenderObject::paint()`, `OffsetLayer::maybeReplay()`, and
+`RenderBackdropFilter::performPaint()` (only for the `noteBackdropFilter()`
+gating call — the `beginBackdropFilter()` draw command keeps the original
+logical `bounds`, since that one is correctly transformed later at flush
+time; projecting it here too would double-transform).
+
+New regression tests in `tests/universal/test_dirty_region.cpp`
+(`ProjectedBounds.*`) — including one that reconstructs the exact
+coordinate-mismatch scenario (a filter's logical bounds vs. a scroll
+view's true viewport) and asserts they only intersect once projected.
+Full suite 442/442 throughout. Verified fixed by the user directly in the
+gallery.
 
 | Platform | Status | Notes |
 |----------|--------|-------|

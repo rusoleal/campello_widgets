@@ -1,6 +1,7 @@
 #include <campello_widgets/ui/campello_design_system.hpp>
 
 // Widgets
+#include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/button.hpp>
 #include <campello_widgets/widgets/card.hpp>
 #include <campello_widgets/widgets/checkbox.hpp>

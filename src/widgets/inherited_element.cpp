@@ -21,7 +21,13 @@ namespace systems::leal::campello_widgets
 
     void InheritedElement::update(WidgetRef new_widget)
     {
-        const auto& old_w = static_cast<const InheritedWidget&>(*widget_);
+        // See StatefulElement::update() for why the old widget must be kept
+        // alive (as a shared_ptr) across Element::update(), not just
+        // referenced — that call reassigns widget_ and, when nothing else
+        // references the previous widget, destroys it immediately, which
+        // would leave old_w dangling for the updateShouldNotify() call below.
+        WidgetRef old_widget = widget_;
+        const auto& old_w = static_cast<const InheritedWidget&>(*old_widget);
         Element::update(std::move(new_widget));
         const auto& new_w = static_cast<const InheritedWidget&>(*widget_);
         if (new_w.updateShouldNotify(old_w))
@@ -41,8 +47,13 @@ namespace systems::leal::campello_widgets
 
     void InheritedElement::performBuild()
     {
-        const auto& w = static_cast<const InheritedWidget&>(*widget_);
-        child_ = updateChild(child_, w.child, this);
+        const auto& w        = static_cast<const InheritedWidget&>(*widget_);
+        auto        old_child = child_;
+        child_               = updateChild(child_, w.child, this);
+
+        // See StatelessElement::performBuild() / StatefulElement::performBuild().
+        if (child_ != old_child)
+            onDescendantRenderObjectChanged();
     }
 
     void InheritedElement::notifyDependents()

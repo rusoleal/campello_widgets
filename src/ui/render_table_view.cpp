@@ -621,6 +621,9 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::scroll:
             // Invert scroll direction for natural scrolling feel on macOS
             applyScrollDelta(-event.scroll_delta_x, -event.scroll_delta_y);
+            last_scroll_event_ms_ = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             break;
         }
     }
@@ -628,6 +631,12 @@ namespace systems::leal::campello_widgets
     void RenderTableView::onTick(uint64_t now_ms)
     {
         if (panning_) { last_tick_ms_ = now_ms; return; }
+        // The OS is still actively delivering trackpad/wheel scroll events
+        // for this gesture (including its own momentum tail) — let those
+        // keep driving the (resistance-damped) overscroll; spring-back
+        // would otherwise fight them every tick. See
+        // last_scroll_event_ms_'s doc.
+        if (now_ms - last_scroll_event_ms_ < kScrollActiveWindowMs) { last_tick_ms_ = now_ms; return; }
         if (last_tick_ms_ == 0) { last_tick_ms_ = now_ms; return; }
 
         float dt_s = static_cast<float>(now_ms - last_tick_ms_) / 1000.0f;
@@ -635,42 +644,56 @@ namespace systems::leal::campello_widgets
 
         float scroll_x = scrollX();
         float scroll_y = scrollY();
+        float delta_x  = 0.0f;
+        float delta_y  = 0.0f;
 
-        // Handle overscroll springback for X
+        // Handle overscroll springback for X. Exponential ease of the
+        // overscroll distance toward zero — unconditionally stable
+        // regardless of dt/frame rate, unlike a velocity-based spring
+        // (`velocity = k*displacement + velocity*damping`), which can
+        // accumulate velocity faster than the position converges and
+        // overshoot past the target with real residual speed — carrying
+        // that speed into the momentum phase below and bouncing off the
+        // *opposite* edge, felt as sustained vibration rather than a
+        // settle.
         if (scroll_x < min_scroll_x_ || scroll_x > max_scroll_x_)
         {
             float target_x = std::clamp(scroll_x, min_scroll_x_, max_scroll_x_);
-            float spring_vx = (target_x - scroll_x) * kSpringCoeff;
-            velocity_x_ = spring_vx + velocity_x_ * 0.7f;
+            float eased_x  = (scroll_x - target_x) * std::exp(-kSpringCoeff * dt_s);
+            delta_x        = (target_x + eased_x) - scroll_x;
+            velocity_x_    = 0.0f;
         }
         else if (std::abs(velocity_x_) >= kMinVelocity)
         {
             velocity_x_ = physics_->applyFriction(velocity_x_, dt_s);
+            delta_x     = velocity_x_ * dt_s;
         }
         else
         {
             velocity_x_ = 0.0f;
         }
 
-        // Handle overscroll springback for Y
+        // Handle overscroll springback for Y — same reasoning as X above.
         if (scroll_y < min_scroll_y_ || scroll_y > max_scroll_y_)
         {
             float target_y = std::clamp(scroll_y, min_scroll_y_, max_scroll_y_);
-            float spring_vy = (target_y - scroll_y) * kSpringCoeff;
-            velocity_y_ = spring_vy + velocity_y_ * 0.7f;
+            float eased_y  = (scroll_y - target_y) * std::exp(-kSpringCoeff * dt_s);
+            delta_y        = (target_y + eased_y) - scroll_y;
+            velocity_y_    = 0.0f;
         }
         else if (std::abs(velocity_y_) >= kMinVelocity)
         {
             velocity_y_ = physics_->applyFriction(velocity_y_, dt_s);
+            delta_y     = velocity_y_ * dt_s;
         }
         else
         {
             velocity_y_ = 0.0f;
         }
 
-        if (std::abs(velocity_x_) > 0.0f || std::abs(velocity_y_) > 0.0f)
+        if (std::abs(delta_x) > 0.0f || std::abs(delta_y) > 0.0f)
         {
-            applyScrollDelta(velocity_x_ * dt_s, velocity_y_ * dt_s);
+            applyScrollDelta(delta_x, delta_y);
         }
     }
 

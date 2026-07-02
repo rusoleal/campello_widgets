@@ -39,6 +39,11 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& ctx, const Offset& offset) override;
 
+        // A slider is a leaf (no child RenderBox — track/thumb are painted
+        // directly), so it must claim its own bounds to receive taps at
+        // all — see RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
+
         // ------------------------------------------------------------------
         // GestureArenaMember
         // ------------------------------------------------------------------

@@ -78,6 +78,11 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& ctx, const Offset& offset) override;
 
+        // A field is a leaf (no child RenderBox — text/cursor are painted
+        // directly), so it must claim its own bounds to receive taps at
+        // all — see RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
+
         /**
          * @brief Forward a keyboard event from the FocusNode to this render object.
          * @return true if the event was consumed.

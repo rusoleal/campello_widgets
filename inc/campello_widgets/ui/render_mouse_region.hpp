@@ -33,6 +33,10 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& ctx, const Offset& offset) override;
 
+        // Must claim hits within its own bounds to detect hover over areas
+        // with no other interactive descendant — see RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);

@@ -5,6 +5,7 @@ namespace systems::leal::campello_widgets
 
     void RenderBox::setChild(std::shared_ptr<RenderBox> child) noexcept
     {
+        if (child_ == child) return;
         if (child_) child_->setParent(nullptr);
         child_ = std::move(child);
         if (child_) child_->setParent(this);
@@ -67,7 +68,19 @@ namespace systems::leal::campello_widgets
 
     bool RenderBox::hitTestSelf(const Offset&) const
     {
-        return true;
+        // Mirrors Flutter's RenderBox.hitTestSelf default (false): a plain
+        // layout box (Align, Padding, Center, SizedBox, ...) is transparent
+        // to pointer events at points where none of its children claimed
+        // the hit. Only widgets that actually register their own pointer
+        // handling (GestureDetector, TextField, Slider, Draggable,
+        // scrollables, MouseRegion, ...) override this to true. Without
+        // that split, an oversized invisible wrapper (e.g. an Align sized
+        // to fill its parent via StackFit::expand so it can center a small
+        // child) would swallow every tap within its bounds — including taps
+        // nowhere near its visible content — silently stealing hits from
+        // whatever sits behind it in a Stack (e.g. a ModalBarrier meant to
+        // dismiss on outside taps).
+        return false;
     }
 
     bool RenderBox::hitTestChildren(HitTestResult& result, const Offset& position)

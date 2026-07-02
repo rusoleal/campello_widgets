@@ -37,12 +37,12 @@ namespace systems::leal::campello_widgets
         const auto& new_widget = widget();
 
         // Check if provider changed
-        if (!new_widget.provider || 
-            (old_widget.provider && new_widget.provider && 
+        if (!new_widget.provider ||
+            (old_widget.provider && new_widget.provider &&
              !(*old_widget.provider == *new_widget.provider)) ||
             (!old_widget.provider && new_widget.provider) ||
             (old_widget.provider && !new_widget.provider)) {
-            
+
             cancelLoading();
             current_result_ = ImageLoadResult{};
             startLoading();

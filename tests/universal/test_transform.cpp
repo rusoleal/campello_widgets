@@ -77,10 +77,11 @@ TEST(RenderTransform, RotationMatrix)
     float c = std::cos(angle);
     float s = std::sin(angle);
     
-    // Check rotation matrix structure
+    // Check rotation matrix structure — clockwise-on-screen for positive
+    // angle, matching Flutter's Matrix4.rotationZ() convention.
     EXPECT_FLOAT_EQ(mat.data[0], c);   // cos(angle)
-    EXPECT_FLOAT_EQ(mat.data[1], s);   // sin(angle)
-    EXPECT_FLOAT_EQ(mat.data[4], -s);  // -sin(angle)
+    EXPECT_FLOAT_EQ(mat.data[1], -s);  // -sin(angle)
+    EXPECT_FLOAT_EQ(mat.data[4], s);   // sin(angle)
     EXPECT_FLOAT_EQ(mat.data[5], c);   // cos(angle)
     EXPECT_FLOAT_EQ(mat.data[10], 1.0f); // Z unchanged
     EXPECT_FLOAT_EQ(mat.data[15], 1.0f); // W component
@@ -187,12 +188,12 @@ TEST(TransformWidget, FactoryRotate)
     EXPECT_FLOAT_EQ(transform->alignment.x, 0.0f); // center
     EXPECT_FLOAT_EQ(transform->alignment.y, 0.0f);
     
-    // Verify rotation matrix
+    // Verify rotation matrix — clockwise-on-screen for positive angle.
     float c = std::cos(0.75f);
     float s = std::sin(0.75f);
     EXPECT_FLOAT_EQ(transform->transform.data[0], c);
-    EXPECT_FLOAT_EQ(transform->transform.data[1], s);
-    EXPECT_FLOAT_EQ(transform->transform.data[4], -s);
+    EXPECT_FLOAT_EQ(transform->transform.data[1], -s);
+    EXPECT_FLOAT_EQ(transform->transform.data[4], s);
     EXPECT_FLOAT_EQ(transform->transform.data[5], c);
 }
 
@@ -243,8 +244,8 @@ TEST(TransformWidget, RotationHelper)
     float s = std::sin(0.3f);
     
     EXPECT_FLOAT_EQ(mat.data[0], c);
-    EXPECT_FLOAT_EQ(mat.data[1], s);
-    EXPECT_FLOAT_EQ(mat.data[4], -s);
+    EXPECT_FLOAT_EQ(mat.data[1], -s);
+    EXPECT_FLOAT_EQ(mat.data[4], s);
     EXPECT_FLOAT_EQ(mat.data[5], c);
 }
 

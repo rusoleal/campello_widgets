@@ -16,8 +16,12 @@ namespace systems::leal::campello_widgets
     void PageView::updateRenderObject(RenderObject& ro) const
     {
         auto& rv = static_cast<RenderPageView&>(ro);
-        rv.scroll_direction = scroll_direction;
-        rv.on_page_changed  = on_page_changed;
+        if (rv.scroll_direction != scroll_direction)
+        {
+            rv.scroll_direction = scroll_direction;
+            rv.markNeedsLayout();
+        }
+        rv.on_page_changed = on_page_changed;
         if (controller) rv.setController(controller);
     }
 

@@ -15,7 +15,8 @@ namespace systems::leal::campello_widgets
 
     void SizedBox::updateRenderObject(RenderObject& ro) const
     {
-        auto& rsb  = static_cast<RenderSizedBox&>(ro);
+        auto& rsb = static_cast<RenderSizedBox&>(ro);
+        if (rsb.width == width && rsb.height == height) return;
         rsb.width  = width;
         rsb.height = height;
         rsb.markNeedsLayout();

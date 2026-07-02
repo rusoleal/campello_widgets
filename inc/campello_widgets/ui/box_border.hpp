@@ -20,6 +20,8 @@ namespace systems::leal::campello_widgets
         {
             return {c, w};
         }
+
+        bool operator==(const BoxBorder&) const noexcept = default;
     };
 
 } // namespace systems::leal::campello_widgets

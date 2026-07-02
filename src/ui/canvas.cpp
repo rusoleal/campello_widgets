@@ -310,6 +310,16 @@ namespace systems::leal::campello_widgets
             ++save_stack_.back().pushed_clips;
     }
 
+    void Canvas::clipOval(const Rect& rect)
+    {
+        const Rect clipped = current_clip_.intersection(rect);
+        commands_.push_back(PushClipOvalCmd{rect});
+        current_clip_ = clipped;
+
+        if (!save_stack_.empty())
+            ++save_stack_.back().pushed_clips;
+    }
+
     void Canvas::clipPath(const Path& path)
     {
         // For now, clip to the path bounds

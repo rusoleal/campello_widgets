@@ -41,10 +41,30 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Set the viewport dimensions for the current frame.
          *
-         * Must be called before renderFrame() each frame so the backend
-         * knows the output size for coordinate transforms.
+         * Must be called exactly once per real frame, before renderFrame().
+         * Besides recording (w, h), this advances per-frame bookkeeping
+         * (uniform-buffer pool generations, the text-texture-cache eviction
+         * counter, the scissor-redundancy cache) — calling it more than once
+         * within a single still-being-encoded frame wraps that bookkeeping
+         * around and can make an in-flight draw's pooled uniform buffer get
+         * overwritten by a later draw before the GPU ever reads it. Code
+         * that needs to temporarily point coordinate transforms at a
+         * differently-sized offscreen target mid-frame (e.g. ClipRRect/
+         * ShaderMask's offscreen composites) must use setViewportSize()
+         * instead, which only updates the transform-facing (w, h).
          */
         virtual void setViewport(float /*w*/, float /*h*/) noexcept {}
+
+        /**
+         * @brief Updates only the (w, h) used for NDC/scissor conversion,
+         * without the once-per-frame bookkeeping setViewport() performs.
+         *
+         * Safe to call multiple times within a single frame — e.g. to
+         * temporarily target a smaller offscreen texture during a
+         * ClipRRect/ClipOval/ShaderMask composite, then restore the
+         * frame's real viewport size afterward.
+         */
+        virtual void setViewportSize(float /*w*/, float /*h*/) noexcept {}
 
         /**
          * @brief Set the device pixel ratio for the current frame.
@@ -229,6 +249,31 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<campello_gpu::Texture>        /*child_tex*/,
             const DrawShaderMaskBeginCmd&                 /*cmd*/,
             const Matrix4&                                /*transform*/,
+            const Rect&                                   /*clip*/,
+            campello_gpu::RenderPassEncoder&              /*encoder*/) {}
+
+        /**
+         * @brief Composites `child_tex` through a rounded-rect/oval SDF mask.
+         *
+         * `child_tex` contains ClipRRect/ClipOval's children rendered to an
+         * offscreen buffer. The implementation evaluates a signed-distance
+         * mask (rounded rect when `is_oval` is false, ellipse when true) over
+         * `bounds` and draws `child_tex * mask_alpha` at `bounds` in the
+         * current render pass. `corner_radius` is in the same (logical)
+         * units as `bounds` and is ignored when `is_oval` is true. `clip` is
+         * the ancestor clip in effect where the ClipRRect/ClipOval was
+         * encountered (e.g. a scrollable's viewport) — without applying it,
+         * the composited quad ignores any ancestor clipping, so content
+         * (e.g. an avatar image, a grid cell) can bleed past a scrolled
+         * list's edge into whatever is painted above it.
+         */
+        virtual void drawClipShapeComposite(
+            std::shared_ptr<campello_gpu::Texture>        /*child_tex*/,
+            const Rect&                                   /*bounds*/,
+            float                                          /*corner_radius*/,
+            bool                                           /*is_oval*/,
+            const Matrix4&                                /*transform*/,
+            const Rect&                                   /*clip*/,
             campello_gpu::RenderPassEncoder&              /*encoder*/) {}
     };
 

@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
     void IntrinsicHeight::updateRenderObject(RenderObject& ro) const
     {
         auto& rih = static_cast<RenderIntrinsicHeight&>(ro);
+        if (rih.step_height == step_height) return;
         rih.step_height = step_height;
         rih.markNeedsLayout();
     }

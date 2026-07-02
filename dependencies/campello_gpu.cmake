@@ -11,7 +11,8 @@ include(FetchContent)
 
 FetchContent_Declare(
     campello_gpu
-    SOURCE_DIR /home/ruben/repos/campello_gpu
+    GIT_REPOSITORY https://github.com/rusoleal/campello_gpu
+    GIT_TAG        v0.17.0
 )
 
 if(NOT campello_gpu_POPULATED)

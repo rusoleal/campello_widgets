@@ -10,16 +10,20 @@
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/row.hpp>
-#include <campello_widgets/widgets/align.hpp>
+#include <campello_widgets/widgets/positioned.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
 #include <campello_widgets/widgets/text.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
 #include <campello_widgets/widgets/stack.hpp>
+#include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/ui/box_decoration.hpp>
 #include <campello_widgets/ui/box_shadow.hpp>
-#include <campello_widgets/ui/alignment.hpp>
 #include <campello_widgets/ui/text_style.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
+#include <campello_widgets/ui/render_gesture_detector.hpp>
+#include <campello_widgets/ui/render_dropdown_menu_positioner.hpp>
+#include <campello_widgets/ui/size.hpp>
+#include <campello_widgets/ui/key.hpp>
 
 #include <functional>
 #include <memory>
@@ -29,6 +33,36 @@
 
 namespace systems::leal::campello_widgets
 {
+
+    namespace detail
+    {
+        /**
+         * @brief Widget counterpart of RenderDropdownMenuPositioner —
+         * internal to DropdownButton, not part of the public API.
+         */
+        class DropdownMenuPositionerWidget : public SingleChildRenderObjectWidget
+        {
+        public:
+            Offset anchor_pos;
+            Size   anchor_size;
+
+            std::shared_ptr<RenderObject> createRenderObject() const override
+            {
+                auto r = std::make_shared<RenderDropdownMenuPositioner>();
+                r->anchor_pos  = anchor_pos;
+                r->anchor_size = anchor_size;
+                return r;
+            }
+
+            void updateRenderObject(RenderObject& ro) const override
+            {
+                auto& r = static_cast<RenderDropdownMenuPositioner&>(ro);
+                r.anchor_pos  = anchor_pos;
+                r.anchor_size = anchor_size;
+                r.markNeedsLayout();
+            }
+        };
+    }
 
     /**
      * @brief A single item in a DropdownButton menu.
@@ -91,6 +125,11 @@ namespace systems::leal::campello_widgets
         class DropdownButtonState : public State<DropdownButton<T>>
         {
         public:
+            void initState() override
+            {
+                anchor_key_ = std::make_shared<GlobalKey>();
+            }
+
             void dispose() override { close(); }
 
             WidgetRef build(BuildContext& ctx) override
@@ -143,6 +182,7 @@ namespace systems::leal::campello_widgets
                 decorated->child      = padded;
 
                 auto gesture = std::make_shared<GestureDetector>();
+                gesture->key    = anchor_key_;
                 gesture->on_tap = [this]() { open(); };
                 gesture->child  = decorated;
 
@@ -152,6 +192,7 @@ namespace systems::leal::campello_widgets
         private:
             std::shared_ptr<OverlayEntry> barrier_entry_;
             std::shared_ptr<OverlayEntry> menu_entry_;
+            std::shared_ptr<GlobalKey>    anchor_key_;
             Color resolved_dropdown_color_ = Color::white();
 
             void open()
@@ -159,6 +200,26 @@ namespace systems::leal::campello_widgets
                 if (menu_entry_) return;
                 const auto& w = this->widget();
                 const Color dropdown_bg = resolved_dropdown_color_;
+
+                // Locate the button's own on-screen position/size so the
+                // menu can open anchored to it, like Flutter's real
+                // DropdownButton, instead of centered on screen. Looked up
+                // fresh every time open() runs (not cached), so it's
+                // always correct regardless of window size/resizes.
+                Offset anchor_pos;
+                Size   anchor_size = Size::zero();
+                if (anchor_key_) {
+                    if (auto* element = anchor_key_->currentElement()) {
+                        if (auto* roe = element->findDescendantRenderObjectElement()) {
+                            auto box = std::dynamic_pointer_cast<RenderGestureDetector>(
+                                roe->sharedRenderObject());
+                            if (box) {
+                                anchor_pos  = box->globalOffset();
+                                anchor_size = box->size();
+                            }
+                        }
+                    }
+                }
 
                 // Build menu items
                 std::vector<WidgetRef> item_widgets;
@@ -187,7 +248,13 @@ namespace systems::leal::campello_widgets
 
                 auto col = std::make_shared<Column>();
                 col->main_axis_size = MainAxisSize::min;
-                col->cross_axis_alignment = CrossAxisAlignment::stretch;
+                // start (not stretch): the menu sits inside a Positioned
+                // child of a Stack::expand, which hands it a very wide
+                // (effectively full-screen) max-width constraint. stretch
+                // would make the column claim that entire width for itself
+                // instead of sizing to its widest item, making the menu
+                // span edge-to-edge.
+                col->cross_axis_alignment = CrossAxisAlignment::start;
                 col->children = std::move(item_widgets);
 
                 BoxDecoration menu_deco;
@@ -205,17 +272,24 @@ namespace systems::leal::campello_widgets
                 menu_box->decoration = menu_deco;
                 menu_box->child      = col;
 
-                // Center the menu on screen
-                auto aligned = std::make_shared<Align>();
-                aligned->alignment = Alignment::center();
-                aligned->child     = menu_box;
+                // Anchor the menu to the button, left edges aligned — like
+                // Flutter's real DropdownButton, not centered on screen.
+                // RenderDropdownMenuPositioner measures menu_box's actual
+                // laid-out size during its own layout (it fills the Stack,
+                // so its constraints equal the live viewport) and decides
+                // above-vs-below from that real number, instead of a
+                // pre-computed guess — see its doc comment.
+                auto positioner = std::make_shared<detail::DropdownMenuPositionerWidget>();
+                positioner->anchor_pos  = anchor_pos;
+                positioner->anchor_size = anchor_size;
+                positioner->child       = menu_box;
 
                 // Barrier + menu in a stack
                 auto dismiss = [this]() { close(); };
                 auto barrier = ModalBarrier::create(
                     Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.0f), true, dismiss);
 
-                std::vector<WidgetRef> stack_children = {barrier, aligned};
+                std::vector<WidgetRef> stack_children = {barrier, Positioned::fill(positioner)};
                 auto stack = Stack::create(stack_children);
                 stack->fit = StackFit::expand;
 

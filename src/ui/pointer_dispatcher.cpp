@@ -222,7 +222,15 @@ namespace systems::leal::campello_widgets
             HitTestResult result;
             if (root_) root_->hitTest(result, event.position);
 
+            // dispatch() calls every handler in the path, but a scroll
+            // signal should only be acted on once — see
+            // PointerSignalResolver's doc for why (nested scrollables with
+            // different axes would otherwise both react to the same
+            // event). Each scrollable's handler registers a candidate
+            // instead of applying its delta directly; resolve() here runs
+            // only the first (innermost) one.
             dispatch(result.path(), event);
+            signal_resolver_.resolve();
             break;
         }
         }

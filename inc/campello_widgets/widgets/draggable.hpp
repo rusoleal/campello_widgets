@@ -9,6 +9,7 @@
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/gesture_constants.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/rect.hpp>
@@ -35,9 +36,14 @@ namespace systems::leal::campello_widgets
     class RenderDraggable : public RenderBox, public GestureArenaMember
     {
     public:
-        std::function<void(Offset)> on_drag_start;
-        std::function<void(Offset)> on_drag_update;
-        std::function<void()>       on_drag_end;
+        // Offset carries the current pointer position; the second Offset is
+        // the point (in this box's local coordinates) where the pointer went
+        // down, so the feedback widget can keep that same point under the
+        // cursor for the whole drag instead of snapping its top-left corner
+        // to the pointer the instant dragging starts.
+        std::function<void(Offset, Offset)> on_drag_start;
+        std::function<void(Offset)>         on_drag_update;
+        std::function<void()>               on_drag_end;
 
         RenderDraggable()
         {
@@ -74,6 +80,11 @@ namespace systems::leal::campello_widgets
             if (child_) paintChild(ctx, offset);
         }
 
+        // Must claim hits within its own bounds so dragging works even when
+        // `child_`'s own content has no interactive descendant of its own
+        // (e.g. a plain Container/Text) — see RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
+
         // ------------------------------------------------------------------
         // GestureArenaMember
         // ------------------------------------------------------------------
@@ -91,26 +102,35 @@ namespace systems::leal::campello_widgets
         }
 
     private:
-        // Intentionally smaller than RenderTreeView::kTapSlop (8px) and the
-        // analogous thresholds in RenderListView/RenderGridView: when a
-        // Draggable's row content and an ancestor scrollable both exceed
-        // their slop within the same monotonic drag, the smaller threshold
-        // is reached first, so the more specific gesture (dragging the row)
-        // wins the arena over the more generic one (panning the container).
-        static constexpr float kDragSlop = 6.0f;
-
+        // Mirrors Flutter's MultiDragGestureRecognizer (which backs
+        // Draggable), resolving on hit slop rather than pan slop. Since hit
+        // slop is smaller than the pan slop used by scrollables
+        // (RenderListView, RenderGridView, ...), when a Draggable's row
+        // content and an ancestor scrollable both exceed their slop within
+        // the same monotonic drag, the smaller threshold is reached first,
+        // so the more specific gesture (dragging the row) wins the arena
+        // over the more generic one (panning the container).
         bool exceedsSlop() const noexcept
         {
+            const float slop = computeHitSlop(device_kind_);
             float dx = last_pos_.x - down_pos_.x;
             float dy = last_pos_.y - down_pos_.y;
-            return (dx * dx + dy * dy) >= kDragSlop * kDragSlop;
+            return (dx * dx + dy * dy) >= slop * slop;
         }
 
         void startDragging(Offset pos)
         {
             if (dragging_) return;
             dragging_ = true;
-            if (on_drag_start) on_drag_start(pos);
+            // Anchor to where the pointer actually went down (down_pos_),
+            // not `pos` (which has already moved past the slop threshold by
+            // the time this fires) — that's the point under the cursor the
+            // feedback widget should keep tracking for the rest of the drag.
+            const Offset grab_offset = {
+                down_pos_.x - global_offset_.x,
+                down_pos_.y - global_offset_.y,
+            };
+            if (on_drag_start) on_drag_start(pos, grab_offset);
         }
 
         void onPointerEvent(const PointerEvent& event)
@@ -118,12 +138,13 @@ namespace systems::leal::campello_widgets
             switch (event.kind)
             {
             case PointerEventKind::down:
-                pressed_    = true;
-                dragging_   = false;
-                won_arena_  = false;
-                lost_arena_ = false;
-                down_pos_   = event.position;
-                last_pos_   = event.position;
+                pressed_     = true;
+                dragging_    = false;
+                won_arena_   = false;
+                lost_arena_  = false;
+                down_pos_    = event.position;
+                last_pos_    = event.position;
+                device_kind_ = event.device_kind;
                 arena_entry_.reset();
                 if (auto* d = PointerDispatcher::activeDispatcher())
                     arena_entry_.emplace(d->arena().add(event.pointer_id, this));
@@ -162,10 +183,11 @@ namespace systems::leal::campello_widgets
             }
         }
 
-        bool   pressed_       = false;
-        bool   dragging_      = false;
-        bool   won_arena_     = false;
-        bool   lost_arena_    = false;
+        bool              pressed_       = false;
+        bool              dragging_      = false;
+        bool              won_arena_     = false;
+        bool              lost_arena_    = false;
+        PointerDeviceKind device_kind_   = PointerDeviceKind::touch;
         Offset down_pos_;
         Offset last_pos_;
         Offset global_offset_;
@@ -180,9 +202,9 @@ namespace systems::leal::campello_widgets
     class DraggableProxy : public SingleChildRenderObjectWidget
     {
     public:
-        std::function<void(Offset)> on_drag_start;
-        std::function<void(Offset)> on_drag_update;
-        std::function<void()>       on_drag_end;
+        std::function<void(Offset, Offset)> on_drag_start;
+        std::function<void(Offset)>         on_drag_update;
+        std::function<void()>               on_drag_end;
 
         std::shared_ptr<RenderObject> createRenderObject() const override
         {
@@ -240,14 +262,14 @@ namespace systems::leal::campello_widgets
             proxy->child = dragging_ ? (w.child_when_dragging ? w.child_when_dragging : w.child)
                                      : w.child;
 
-            proxy->on_drag_start  = [this](Offset pos) { onDragStart(pos); };
+            proxy->on_drag_start  = [this](Offset pos, Offset grab) { onDragStart(pos, grab); };
             proxy->on_drag_update = [this](Offset pos) { onDragUpdate(pos); };
             proxy->on_drag_end    = [this]()             { onDragEnd();      };
             return proxy;
         }
 
     private:
-        void onDragStart(Offset pos)
+        void onDragStart(Offset pos, Offset grab_offset)
         {
             drag_data_    = this->widget().data;
             dragging_     = true;
@@ -266,10 +288,15 @@ namespace systems::leal::campello_widgets
 
             auto vlb = std::make_shared<ValueListenableBuilder<Offset>>();
             vlb->valueListenable = pos_notifier;
-            vlb->builder = [fw = feedback_widget](BuildContext&, const Offset& p, WidgetRef) -> WidgetRef {
+            // Subtract grab_offset so the point the user actually grabbed
+            // (e.g. the center of the drag handle) stays under the cursor,
+            // instead of always snapping the feedback's top-left corner to
+            // the pointer the moment the drag starts.
+            vlb->builder = [fw = feedback_widget, grab_offset](
+                                BuildContext&, const Offset& p, WidgetRef) -> WidgetRef {
                 auto pos_widget = std::make_shared<Positioned>();
-                pos_widget->left  = p.x;
-                pos_widget->top   = p.y;
+                pos_widget->left  = p.x - grab_offset.x;
+                pos_widget->top   = p.y - grab_offset.y;
                 pos_widget->child = fw;
                 return pos_widget;
             };

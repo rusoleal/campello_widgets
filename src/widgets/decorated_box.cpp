@@ -15,7 +15,8 @@ namespace systems::leal::campello_widgets
 
     void DecoratedBox::updateRenderObject(RenderObject& render_object) const
     {
-        auto& rdb      = static_cast<RenderDecoratedBox&>(render_object);
+        auto& rdb = static_cast<RenderDecoratedBox&>(render_object);
+        if (rdb.decoration == decoration && rdb.position == position) return;
         rdb.decoration = decoration;
         rdb.position   = position;
         rdb.markNeedsPaint();

@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
     void AspectRatio::updateRenderObject(RenderObject& ro) const
     {
         auto& rar = static_cast<RenderAspectRatio&>(ro);
+        if (rar.aspect_ratio == aspect_ratio) return;
         rar.aspect_ratio = aspect_ratio;
         rar.markNeedsLayout();
     }

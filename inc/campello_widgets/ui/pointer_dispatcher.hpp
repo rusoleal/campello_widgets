@@ -10,6 +10,7 @@
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
+#include <campello_widgets/ui/pointer_signal_resolver.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -155,6 +156,19 @@ namespace systems::leal::campello_widgets
         GestureArenaManager& arena() noexcept { return arena_; }
 
         // ------------------------------------------------------------------
+        // Pointer signal resolver (scroll/wheel events)
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Resolves which handler actually acts on a scroll event
+         * when multiple scrollables are in the same hit-test path (e.g. a
+         * horizontal ListView nested inside a vertical page) — see
+         * PointerSignalResolver's doc. handlePointerEvent() resets and
+         * resolves this once per scroll event, around dispatch().
+         */
+        PointerSignalResolver& signalResolver() noexcept { return signal_resolver_; }
+
+        // ------------------------------------------------------------------
         // Debug: pointer position tracking
         // ------------------------------------------------------------------
 
@@ -192,6 +206,7 @@ namespace systems::leal::campello_widgets
         std::unordered_map<int32_t, RenderBox*>          captured_pointers_;  ///< pointer_id -> capturing box
         std::vector<PointerPosition>                     recent_positions_;
         GestureArenaManager                              arena_;
+        PointerSignalResolver                            signal_resolver_;
 
         static std::atomic<PointerDispatcher*> s_active_dispatcher_;
     };

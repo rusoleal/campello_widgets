@@ -18,7 +18,12 @@ namespace systems::leal::campello_widgets
 
     void Align::updateRenderObject(RenderObject& ro) const
     {
-        auto& ra          = static_cast<RenderAlign&>(ro);
+        auto& ra = static_cast<RenderAlign&>(ro);
+        if (ra.alignment == alignment &&
+            ra.width_factor == width_factor &&
+            ra.height_factor == height_factor)
+            return;
+
         ra.alignment      = alignment;
         ra.width_factor   = width_factor;
         ra.height_factor  = height_factor;

@@ -13,11 +13,19 @@ namespace systems::leal::campello_widgets
 
     RenderTransform::Matrix4 RenderTransform::rotation(float radians)
     {
+        // Positive `radians` rotates clockwise on screen, matching
+        // Flutter's Matrix4.rotationZ() convention — verified by tracing a
+        // concrete case: at radians=pi/2, a point at screen-right (1,0)
+        // maps to (0,1) (screen-down, since y+ is down), i.e. 3 o'clock to
+        // 6 o'clock, which is clockwise. (An earlier version of this
+        // matrix had the sin terms' signs swapped, producing
+        // counter-clockwise rotation for positive angles instead —
+        // internally consistent, but a mismatch against Flutter.)
         float c = std::cos(radians);
         float s = std::sin(radians);
         Matrix4 m = Matrix4::identity();
-        m.data[0] = c;   m.data[1] = s;
-        m.data[4] = -s;  m.data[5] = c;
+        m.data[0] = c;   m.data[1] = -s;
+        m.data[4] = s;   m.data[5] = c;
         return m;
     }
 

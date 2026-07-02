@@ -46,6 +46,7 @@ namespace systems::leal::campello_widgets
     void Transform::updateRenderObject(RenderObject& ro) const
     {
         auto& rt = static_cast<RenderTransform&>(ro);
+        if (rt.transform == transform && rt.alignment == alignment) return;
         rt.transform = transform;
         rt.alignment = alignment;
         rt.markNeedsPaint();

@@ -38,6 +38,8 @@ namespace systems::leal::campello_widgets
 
         /** Shadows painted below the background. Empty = no shadow. */
         std::vector<BoxShadow>   box_shadow;
+
+        bool operator==(const BoxDecoration&) const noexcept = default;
     };
 
 } // namespace systems::leal::campello_widgets

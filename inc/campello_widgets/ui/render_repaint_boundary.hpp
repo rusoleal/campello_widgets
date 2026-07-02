@@ -1,8 +1,8 @@
 #pragma once
 
 #include <campello_widgets/ui/render_box.hpp>
-#include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/offset.hpp>
+#include <campello_widgets/ui/offset_layer.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -44,17 +44,23 @@ namespace systems::leal::campello_widgets
      * Mirrors Flutter's `RepaintBoundary`, minus layer/texture compositing —
      * here "the layer" is just a cached `DrawList` slice, which is cheap to
      * copy since this framework has no GPU-side retained layers yet.
+     *
+     * The caching mechanism itself lives in `OffsetLayer` (composing a
+     * `PictureLayer`) so other RenderObjects can self-boundary the same way
+     * without being a RenderRepaintBoundary (e.g. scrollable viewports
+     * mirroring Flutter's `RenderViewport.isRepaintBoundary`) — see its
+     * class doc for the mechanism; this comment is the canonical
+     * explanation of *why*.
      */
     class RenderRepaintBoundary : public RenderBox
     {
     public:
         void performLayout() override;
         void paint(PaintContext& context, const Offset& offset) override;
+        bool isRepaintBoundary() const noexcept override { return true; }
 
     private:
-        DrawList cached_commands_;
-        bool     has_cache_     = false;
-        Offset   cached_offset_{};
+        OffsetLayer offset_layer_;
     };
 
 } // namespace systems::leal::campello_widgets

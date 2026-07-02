@@ -33,8 +33,19 @@ namespace systems::leal::campello_widgets
 
     void RenderStack::performLayout()
     {
-        // The stack fills all available space.
-        size_ = constraints_.constrain({constraints_.max_width, constraints_.max_height});
+        // Pass 1: non-positioned children first. StackFit::expand claims all
+        // available space up front (matches the old unconditional
+        // behavior), but StackFit::loose/passthrough (the default) must
+        // size the stack to CONTAIN its children, not just grab the full
+        // incoming max constraints — those can be effectively unbounded
+        // (e.g. the vertical axis inside a SingleChildScrollView), which
+        // would make the stack balloon to a huge size for one layout pass
+        // instead of matching its content.
+        float content_w = 0.0f;
+        float content_h = 0.0f;
+
+        const Size expand_size =
+            constraints_.constrain({constraints_.max_width, constraints_.max_height});
 
         for (auto& sc : stack_children_)
         {
@@ -42,24 +53,39 @@ namespace systems::leal::campello_widgets
 
             const bool is_positioned =
                 sc.left || sc.top || sc.right || sc.bottom || sc.width || sc.height;
+            if (is_positioned) continue;
 
-            if (!is_positioned)
+            // Non-positioned: size according to StackFit.
+            BoxConstraints cc;
+            switch (fit)
             {
-                // Non-positioned: size according to StackFit.
-                BoxConstraints cc;
-                switch (fit)
-                {
-                    case StackFit::loose:
-                        cc = constraints_.loosen(); break;
-                    case StackFit::expand:
-                        cc = BoxConstraints::tight(size_); break;
-                    case StackFit::passthrough:
-                        cc = constraints_; break;
-                }
-                sc.box->layout(cc);
-                sc.offset = {0.0f, 0.0f};
+                case StackFit::loose:
+                    cc = constraints_.loosen(); break;
+                case StackFit::expand:
+                    cc = BoxConstraints::tight(expand_size); break;
+                case StackFit::passthrough:
+                    cc = constraints_; break;
             }
-            else
+            sc.box->layout(cc);
+            sc.offset = {0.0f, 0.0f};
+            content_w = std::max(content_w, sc.box->size().width);
+            content_h = std::max(content_h, sc.box->size().height);
+        }
+
+        size_ = (fit == StackFit::expand)
+            ? expand_size
+            : constraints_.constrain({content_w, content_h});
+
+        // Pass 2: positioned children, now that size_ (needed for their
+        // percentage/edge math below) is final.
+        for (auto& sc : stack_children_)
+        {
+            if (!sc.box) continue;
+
+            const bool is_positioned =
+                sc.left || sc.top || sc.right || sc.bottom || sc.width || sc.height;
+
+            if (is_positioned)
             {
                 // Positioned: derive constraints from position specs.
                 // Only edges that pin both sides (or an explicit width/height)
@@ -84,12 +110,6 @@ namespace systems::leal::campello_widgets
                         ? std::max(0.0f, size_.height - *sc.top - *sc.bottom)
                         : constraints_.max_height);
 
-                if (!sc.left && sc.right)
-                    x = size_.width - *sc.right - child_w;
-
-                if (!sc.top && sc.bottom)
-                    y = size_.height - *sc.bottom - child_h;
-
                 child_w = std::clamp(child_w, 0.0f, size_.width);
                 child_h = std::clamp(child_h, 0.0f, size_.height);
 
@@ -97,6 +117,20 @@ namespace systems::leal::campello_widgets
                     width_determined  ? child_w : 0.0f, child_w,
                     height_determined ? child_h : 0.0f, child_h,
                 });
+
+                // Edges pinned on only one side (right without left, bottom
+                // without top — e.g. "open upward, sized to content") must
+                // be positioned using the child's ACTUAL laid-out size, not
+                // child_w/child_h above — those are just the incoming
+                // constraint bound (e.g. the full stack size) whenever the
+                // child was left to size itself intrinsically, not what it
+                // actually chose to be.
+                const Size actual = sc.box->size();
+                if (!sc.left && sc.right)
+                    x = size_.width - *sc.right - actual.width;
+                if (!sc.top && sc.bottom)
+                    y = size_.height - *sc.bottom - actual.height;
+
                 sc.offset = {x, y};
             }
         }

@@ -8,10 +8,12 @@
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include <vector_math/vector3.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <utility>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/command_encoder.hpp>
@@ -28,6 +30,15 @@ namespace GPU = systems::leal::campello_gpu;
 
 namespace systems::leal::campello_widgets
 {
+    namespace
+    {
+        // Mirrors the Gaussian kernel radius the blur shader actually uses
+        // (shaders/metal/widgets.metal: RADIUS = min(ceil(2.5 * sigma), 12))
+        // so the dirty-region margin matches how far blur sampling actually
+        // reaches, on each axis, beyond a BackdropFilter's exact footprint.
+        constexpr float kBlurMarginFactor = 2.5f;
+        constexpr float kBlurMarginCap    = 12.0f;
+    }
 
     Renderer::Renderer(
         std::shared_ptr<campello_gpu::Device> device,
@@ -80,12 +91,30 @@ namespace systems::leal::campello_widgets
         // mirrors Flutter's UI-thread timing. Bracketed with wall-clock
         // timestamps so the overlay shows actual work cost, not request rate.
         const auto build_start = std::chrono::steady_clock::now();
+        const bool print_sub_phases = DebugFlags::printRasterSubPhaseTimings;
+        auto       sub_phase_start  = build_start;
+        auto markBuildSubPhase = [&](const char* label)
+        {
+            if (!print_sub_phases) return;
+            const auto now = std::chrono::steady_clock::now();
+            std::fprintf(stderr, "  [build]  %-16s %6.3f ms\n", label,
+                std::chrono::duration<float, std::milli>(now - sub_phase_start).count());
+            sub_phase_start = now;
+        };
 
         Element::buildScope();
+        markBuildSubPhase("buildScope");
 
         layoutPass(viewport_width, viewport_height);
+        markBuildSubPhase("layoutPass");
 
-        if (!root_ || !root_->needsPaint())
+        // Consume the paint-requested latch instead of checking
+        // root_->needsPaint(): markNeedsPaint() now stops propagating once
+        // it reaches a repaint boundary (see RenderObject::
+        // isRepaintBoundary()'s doc), so a dirty leaf under a boundary
+        // never reaches root — root's own flag can no longer answer "does
+        // anything need painting." See notePaintRequested()'s doc.
+        if (!root_ || !std::exchange(paint_requested_, false))
             return std::nullopt;
 
         // Generate the draw list once (headless — no encoder). This also
@@ -97,6 +126,7 @@ namespace systems::leal::campello_widgets
             std::lock_guard<std::mutex> lock(sampler_mutex_);
             draw_list = generateDrawList(viewport_width, viewport_height);
         }
+        markBuildSubPhase("generateDrawList");
 
         const auto build_end = std::chrono::steady_clock::now();
         {
@@ -112,13 +142,41 @@ namespace systems::leal::campello_widgets
         // package — the raster phase must never read these Renderer
         // members live, since buildFrame() may be called again (for the
         // next frame) while rasterFrame() is still processing this one.
+        //
+        // has_backdrop_filter_ tells us at least one BackdropFilter painted
+        // this frame, but the capture pass it gates is only worth its cost
+        // if content within blur range of one of those filters actually
+        // changed — evaluated now, after the full paint walk, since a
+        // filter can sample content painted anywhere in the frame,
+        // including subtrees walked after it (see anyRegionDirty()'s doc).
+        const float margin_x = std::min(max_sigma_x_ * kBlurMarginFactor, kBlurMarginCap);
+        const float margin_y = std::min(max_sigma_y_ * kBlurMarginFactor, kBlurMarginCap);
+        const bool  needs_backdrop_capture = has_backdrop_filter_ &&
+            anyRegionDirty(backdrop_regions_, margin_x, margin_y,
+                           dirty_rects_, dirty_region_overflowed_);
+
+        if (DebugFlags::printDirtyRegionTrace)
+        {
+            static uint64_t frame_no = 0;
+            std::fprintf(stderr,
+                "[dirty] frame %llu: dirty_rects=%zu overflowed=%d backdrop_regions=%zu "
+                "margin=(%.1f,%.1f) has_backdrop_filter=%d -> needs_capture=%d\n",
+                static_cast<unsigned long long>(frame_no++), dirty_rects_.size(),
+                dirty_region_overflowed_ ? 1 : 0, backdrop_regions_.size(),
+                margin_x, margin_y, has_backdrop_filter_ ? 1 : 0,
+                needs_backdrop_capture ? 1 : 0);
+            for (const Rect& r : backdrop_regions_)
+                std::fprintf(stderr, "[dirty]   backdrop region (%.0f,%.0f %.0fx%.0f)\n",
+                             r.x, r.y, r.width, r.height);
+        }
+
         FramePackage package;
         package.draw_list           = std::move(draw_list);
         package.viewport_width      = viewport_width;
         package.viewport_height     = viewport_height;
         package.device_pixel_ratio  = device_pixel_ratio_;
         package.clear_color         = clear_color_;
-        package.has_backdrop_filter = has_backdrop_filter_;
+        package.has_backdrop_filter = needs_backdrop_capture;
         package.max_sigma_x         = max_sigma_x_;
         package.max_sigma_y         = max_sigma_y_;
 
@@ -206,7 +264,10 @@ namespace systems::leal::campello_widgets
             }
 
             // Render scene (backdrop-only mode) into backdrop_tex_.
-            auto bd_view = backdrop_tex_->createView(draw_backend_->offscreenPixelFormat());
+            // arrayLayerCount = 1 (non-array 2D texture) — the default (-1,
+            // an unsigned sentinel) produces an out-of-bounds slice range
+            // that Metal's argument validation rejects.
+            auto bd_view = backdrop_tex_->createView(draw_backend_->offscreenPixelFormat(), 1);
             GPU::ColorAttachment bd_ca{};
             bd_ca.view          = bd_view;
             bd_ca.loadOp        = GPU::LoadOp::clear;
@@ -221,7 +282,7 @@ namespace systems::leal::campello_widgets
 
             auto bd_rpe = encoder->beginRenderPass(bd_desc);
             markSubPhase("backdrop begin");
-            flushDrawList(package.draw_list, bd_rpe,
+            flushDrawList(package.draw_list, bd_rpe, bd_view,
                           package.viewport_width, package.viewport_height, dpr,
                           /*backdrop_pass=*/true);
             markSubPhase("backdrop flush");
@@ -252,7 +313,7 @@ namespace systems::leal::campello_widgets
 
         auto main_rpe = encoder->beginRenderPass(main_desc);
         markSubPhase("main begin");
-        flushDrawList(package.draw_list, main_rpe,
+        flushDrawList(package.draw_list, main_rpe, target,
                       package.viewport_width, package.viewport_height, dpr,
                       /*backdrop_pass=*/false);
         markSubPhase("main flush");
@@ -312,6 +373,11 @@ namespace systems::leal::campello_widgets
         has_backdrop_filter_ = false;
         max_sigma_x_         = 0.0f;
         max_sigma_y_         = 0.0f;
+        backdrop_regions_.clear();
+
+        // Reset per-frame dirty-region tracking before traversal.
+        dirty_rects_.clear();
+        dirty_region_overflowed_ = false;
 
         // Convert physical viewport dimensions to logical pixels for layout.
         // All widget layout operates in logical (device-independent) pixels.
@@ -393,6 +459,7 @@ namespace systems::leal::campello_widgets
     void Renderer::flushDrawList(
         const DrawList&                                    commands,
         std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
         float viewport_width,
         float viewport_height,
         float dpr,
@@ -417,6 +484,18 @@ namespace systems::leal::campello_widgets
         bool                  in_shader_mask  = false;
         DrawList              shader_mask_cmds;
         DrawShaderMaskBeginCmd shader_mask_info{Rect{}, LinearGradient{}};
+
+        // ClipRRect/ClipOval accumulation state. Unlike ShaderMask, clip
+        // pushes share a single generic PopClipRectCmd with plain
+        // PushClipRectCmd, so the matching pop is found by tracking the
+        // nesting depth of every clip push/pop encountered while
+        // accumulating (rather than a dedicated end command).
+        bool     in_clip_shape    = false;
+        int      clip_shape_depth = 0;
+        DrawList clip_shape_cmds;
+        Rect     clip_shape_bounds;
+        float    clip_shape_corner_r = 0.0f;
+        bool     clip_shape_is_oval  = false;
 
         // BackdropFilter child-skip counter (can nest theoretically).
         int backdrop_skip_depth = 0;
@@ -449,7 +528,7 @@ namespace systems::leal::campello_widgets
                     {
                         in_shader_mask = false;
                         applyShaderMask(shader_mask_info, shader_mask_cmds,
-                                        rpe, viewport_width, viewport_height, dpr,
+                                        rpe, target_view, viewport_width, viewport_height, dpr,
                                         current_transform, current_clip);
                         shader_mask_cmds.clear();
                     }
@@ -457,6 +536,41 @@ namespace systems::leal::campello_widgets
                     {
                         // Accumulate all commands (including nested begin/end).
                         shader_mask_cmds.push_back(c);
+                    }
+                    return;
+                }
+
+                // ── ClipRRect/ClipOval child accumulation ────────────────
+                if (in_clip_shape)
+                {
+                    if constexpr (std::is_same_v<T, PushClipRectCmd>   ||
+                                  std::is_same_v<T, PushClipRRectCmd>  ||
+                                  std::is_same_v<T, PushClipOvalCmd>   ||
+                                  std::is_same_v<T, PushClipPathCmd>)
+                    {
+                        ++clip_shape_depth;
+                        clip_shape_cmds.push_back(c);
+                    }
+                    else if constexpr (std::is_same_v<T, PopClipRectCmd>)
+                    {
+                        --clip_shape_depth;
+                        if (clip_shape_depth == 0)
+                        {
+                            in_clip_shape = false;
+                            applyClipShape(clip_shape_bounds, clip_shape_corner_r,
+                                           clip_shape_is_oval, clip_shape_cmds,
+                                           rpe, target_view, viewport_width, viewport_height, dpr,
+                                           current_transform, current_clip);
+                            clip_shape_cmds.clear();
+                        }
+                        else
+                        {
+                            clip_shape_cmds.push_back(c);
+                        }
+                    }
+                    else
+                    {
+                        clip_shape_cmds.push_back(c);
                     }
                     return;
                 }
@@ -524,6 +638,35 @@ namespace systems::leal::campello_widgets
                     clip_stack.push_back(current_clip);
                     current_clip = c.rect;
                 }
+                else if constexpr (std::is_same_v<T, PushClipPathCmd>)
+                {
+                    // No general path-shaped clip yet — fall back to the
+                    // path's bounding box (better than no clip at all).
+                    clip_stack.push_back(current_clip);
+                    current_clip = current_clip.intersection(c.path.getBounds());
+                }
+                else if constexpr (std::is_same_v<T, PushClipRRectCmd> ||
+                                    std::is_same_v<T, PushClipOvalCmd>)
+                {
+                    // Begin accumulating this clip scope's commands so they
+                    // can be rendered offscreen and composited through an
+                    // SDF rounded-rect/ellipse mask — see applyClipShape().
+                    in_clip_shape    = true;
+                    clip_shape_depth = 1;
+                    clip_shape_cmds.clear();
+                    if constexpr (std::is_same_v<T, PushClipRRectCmd>)
+                    {
+                        clip_shape_bounds   = c.rrect.rect;
+                        clip_shape_corner_r = c.rrect.radius_x;
+                        clip_shape_is_oval  = false;
+                    }
+                    else
+                    {
+                        clip_shape_bounds   = c.rect;
+                        clip_shape_corner_r = 0.0f;
+                        clip_shape_is_oval  = true;
+                    }
+                }
                 else if constexpr (std::is_same_v<T, PopClipRectCmd>)
                 {
                     if (!clip_stack.empty())
@@ -585,11 +728,12 @@ namespace systems::leal::campello_widgets
         const DrawShaderMaskBeginCmd&                      cmd,
         const DrawList&                                    child_cmds,
         std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
-        float /*viewport_width*/,
-        float /*viewport_height*/,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
         float dpr,
         const Matrix4& transform,
-        const Rect&    /*clip*/)
+        const Rect&    clip)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
 
@@ -611,41 +755,141 @@ namespace systems::leal::campello_widgets
         {
             // Translate child commands so they paint at (0,0) in the offscreen tex.
             // The translation is in logical pixels; flushDrawList's DPR initial
-            // transform scales it to physical pixels automatically.
-            Matrix4 offset_mat = Matrix4::identity();
-            offset_mat.data[12] = -cmd.bounds.x;
-            offset_mat.data[13] = -cmd.bounds.y;
+            // transform scales it to physical pixels automatically. Matrix4's
+            // translation components live at data[3]/data[7]/data[11] (last
+            // column of rows 0-2) — data[12]/data[13] are part of row 3 (the
+            // W-component coefficients), not X/Y translation.
+            Matrix4 offset_mat = Matrix4::translate(
+                vector_math::Vector3<float>(-cmd.bounds.x, -cmd.bounds.y, 0.0f));
 
             DrawList translated;
             translated.push_back(PushTransformCmd{offset_mat});
             for (const auto& cc : child_cmds) translated.push_back(cc);
             translated.push_back(PopTransformCmd{});
 
-            flushDrawList(translated, child_rpe,
+            // See applyClipShape() for why the backend viewport must track
+            // the offscreen texture's own resolution during this sub-pass —
+            // and why this must be setViewportSize(), not setViewport(): the
+            // latter also cycles the uniform-buffer pools' per-frame ring
+            // generation, which must only advance once per real frame. Doing
+            // it here (mid-frame, possibly several times for several
+            // composites) wraps the ring around while earlier draws in this
+            // same not-yet-submitted command buffer still reference pooled
+            // buffers by index, so a later draw's upload() can silently
+            // overwrite an earlier draw's uniforms before the GPU ever reads
+            // them — corrupting unrelated draws recorded earlier in the pass.
+            draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
+
+            // A view of child_tex itself, in case a nested ShaderMask/
+            // ClipRRect/ClipOval inside this one needs to restart against
+            // it (see flushDrawList()'s target_view contract).
+            auto child_view = child_tex->createView(draw_backend_->offscreenPixelFormat(), 1);
+            flushDrawList(translated, child_rpe, child_view,
                           static_cast<float>(tw), static_cast<float>(th), dpr,
                           /*backdrop_pass=*/false);
             child_rpe->end();
+
+            draw_backend_->setViewportSize(viewport_width, viewport_height);
         }
 
-        // Restart the main render pass preserving existing content.
-        rpe = restartMainRenderPass();
+        // Restart whatever render pass was active before this composite.
+        rpe = restartRenderPass(target_view);
 
         // Composite child_tex × shader mask → main pass.
         // Pass the DPR transform so the compositor places the result in physical pixels.
         if (child_rpe)
         {
             draw_backend_->drawShaderMaskComposite(
-                child_tex, cmd, transform, *rpe);
+                child_tex, cmd, transform, clip, *rpe);
         }
     }
 
-    std::shared_ptr<campello_gpu::RenderPassEncoder> Renderer::restartMainRenderPass()
+    void Renderer::applyClipShape(
+        const Rect&                                        bounds,
+        float                                               corner_radius,
+        bool                                                is_oval,
+        const DrawList&                                    child_cmds,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
+        float dpr,
+        const Matrix4& transform,
+        const Rect&    clip)
+    {
+        if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
+
+        // Offscreen texture must be in physical pixels so that the DPR-scaled
+        // draw commands (from flushDrawList's initial DPR transform) fill it correctly.
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(bounds.width  * dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(bounds.height * dpr));
+        if (tw == 0 || th == 0) return;
+
+        auto child_tex = draw_backend_->createOffscreenTexture(tw, th);
+        if (!child_tex) return;
+
+        // End the current main render pass.
+        rpe->end();
+
+        // Render the clip scope's children into child_tex.
+        auto child_rpe = draw_backend_->beginOffscreenPass(child_tex, *frame_encoder_);
+        if (child_rpe)
+        {
+            // Translate child commands so they paint at (0,0) in the offscreen tex.
+            // See applyShaderMask() above for why translate() must be used
+            // instead of poking data[12]/data[13] directly.
+            Matrix4 offset_mat = Matrix4::translate(
+                vector_math::Vector3<float>(-bounds.x, -bounds.y, 0.0f));
+
+            DrawList translated;
+            translated.push_back(PushTransformCmd{offset_mat});
+            for (const auto& cc : child_cmds) translated.push_back(cc);
+            translated.push_back(PopTransformCmd{});
+
+            // The offscreen pass renders at child_tex's own resolution, not
+            // the main framebuffer's — draw commands convert pixel coords to
+            // NDC using the backend's viewport uniform, so it must match the
+            // texture being rendered into or the content lands squeezed into
+            // a sliver of NDC space (and samples as transparent everywhere
+            // else once composited). Restore the outer viewport size
+            // afterward. Must be setViewportSize(), not setViewport() —
+            // the latter also cycles the per-frame uniform-buffer pool
+            // generation, which corrupts other draws already recorded (but
+            // not yet submitted/executed) earlier in this same frame if
+            // called more than once per real frame. See applyShaderMask().
+            draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
+
+            // A view of child_tex itself, in case a nested ShaderMask/
+            // ClipRRect/ClipOval inside this one needs to restart against
+            // it (see flushDrawList()'s target_view contract).
+            auto child_view = child_tex->createView(draw_backend_->offscreenPixelFormat(), 1);
+            flushDrawList(translated, child_rpe, child_view,
+                          static_cast<float>(tw), static_cast<float>(th), dpr,
+                          /*backdrop_pass=*/false);
+            child_rpe->end();
+
+            draw_backend_->setViewportSize(viewport_width, viewport_height);
+        }
+
+        // Restart whatever render pass was active before this composite.
+        rpe = restartRenderPass(target_view);
+
+        // Composite child_tex × rounded-rect/ellipse SDF mask → main pass.
+        if (child_rpe)
+        {
+            draw_backend_->drawClipShapeComposite(
+                child_tex, bounds, corner_radius, is_oval, transform, clip, *rpe);
+        }
+    }
+
+    std::shared_ptr<campello_gpu::RenderPassEncoder> Renderer::restartRenderPass(
+        std::shared_ptr<campello_gpu::TextureView> target_view)
     {
         if (!frame_encoder_) return nullptr;
 
         GPU::ColorAttachment ca{};
-        // frame_target_ may be nullptr on Vulkan (swapchain), which is valid.
-        ca.view    = frame_target_;
+        // target_view may be nullptr on Vulkan (swapchain), which is valid.
+        ca.view    = target_view;
         ca.loadOp  = GPU::LoadOp::load;    // preserve what was drawn before
         ca.storeOp = GPU::StoreOp::store;
 

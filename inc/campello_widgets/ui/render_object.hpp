@@ -109,13 +109,32 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Marks this object as needing a paint pass.
          *
-         * Propagates upward so the root (and thus the Renderer) knows
-         * that at least one node in the tree needs repainting.
+         * Propagates upward only until it reaches a node for which
+         * `isRepaintBoundary()` is true (or the root) — that node owns its
+         * own paint cache (see `OffsetLayer`) and will independently decide
+         * whether to replay or re-record next paint, so ancestors above it
+         * don't need to be told. Matches Flutter's
+         * `RenderObject.markNeedsPaint()`, which stops at the nearest
+         * `isRepaintBoundary` ancestor rather than bubbling all the way to
+         * root. A frame is still requested (`FrameScheduler::scheduleFrame()`)
+         * regardless of where propagation stops.
          */
         void markNeedsPaint() noexcept;
 
         bool needsLayout() const noexcept { return needs_layout_; }
         bool needsPaint()  const noexcept { return needs_paint_;  }
+
+        /**
+         * @brief True for nodes that own their own paint cache (`OffsetLayer`)
+         * and independently decide replay-vs-record — `RenderRepaintBoundary`
+         * and the self-boundaring scrollables (`RenderListView`,
+         * `RenderGridView`, `RenderPageView`,
+         * `RenderSingleChildScrollView`). `markNeedsPaint()` stops
+         * propagating once it reaches such a node, since that node's own
+         * paint() will handle repainting its subtree without needing its
+         * ancestors to also be told. Default false.
+         */
+        virtual bool isRepaintBoundary() const noexcept { return false; }
 
         // ------------------------------------------------------------------
         // Lifetime tracking
@@ -146,6 +165,18 @@ namespace systems::leal::campello_widgets
             if (parent && !old_parent)
                 attach();
         }
+
+        /**
+         * @brief This object's parent in the render tree, or nullptr at the root.
+         *
+         * Lets code outside the normal layout/paint traversal (e.g. an
+         * overlay anchoring itself to a widget's position) walk up to the
+         * root to read its current size — the root's size always equals
+         * the live viewport, so this is a reliable, always-fresh
+         * alternative to caching a viewport size that can go stale between
+         * whenever it was captured and whenever it's actually used.
+         */
+        RenderObject* parent() const noexcept { return parent_; }
 
         // ------------------------------------------------------------------
         // Layout-time backend access

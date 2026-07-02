@@ -230,6 +230,14 @@ namespace systems::leal::campello_widgets
         void clipRRect(const RRect& rrect);
 
         /**
+         * @brief Clips to the oval inscribed in `rect`, intersected with the
+         *        current clip's bounding box.
+         *
+         * Emits a PushClipOvalCmd. Must be within a save/restore pair.
+         */
+        void clipOval(const Rect& rect);
+
+        /**
          * @brief Intersects `path` with the current clip.
          */
         void clipPath(const Path& path);

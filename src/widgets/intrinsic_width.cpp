@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
     void IntrinsicWidth::updateRenderObject(RenderObject& ro) const
     {
         auto& riw = static_cast<RenderIntrinsicWidth&>(ro);
+        if (riw.step_width == step_width) return;
         riw.step_width = step_width;
         riw.markNeedsLayout();
     }

@@ -4,6 +4,8 @@
 #include <campello_widgets/ui/axis.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
+#include <campello_widgets/ui/gesture_constants.hpp>
+#include <campello_widgets/ui/offset_layer.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -24,6 +26,10 @@ namespace systems::leal::campello_widgets
      * Each child receives tight constraints equal to the viewport size.
      * Only adjacent pages are painted. Swipe gestures snap to the nearest
      * integer page index.
+     *
+     * Self-boundaries its own paint output via `OffsetLayer` — see
+     * `RenderSingleChildScrollView`'s class doc for the rationale, which
+     * applies identically here.
      */
     class RenderPageView : public RenderBox, public GestureArenaMember
     {
@@ -62,8 +68,14 @@ namespace systems::leal::campello_widgets
 
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
+        void paint(PaintContext& context, const Offset& offset) override;
+        bool isRepaintBoundary() const noexcept override { return true; }
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
+
+        // Must claim hits within its own viewport to receive pan-to-swipe
+        // gestures — see RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
 
         // ------------------------------------------------------------------
         // GestureArenaMember
@@ -86,6 +98,7 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<RenderBox> box;
         };
         std::vector<PageChild> children_;
+        OffsetLayer            offset_layer_;
 
         std::shared_ptr<PageController> controller_;
 
@@ -98,13 +111,13 @@ namespace systems::leal::campello_widgets
         bool     lost_arena_     = false;
         std::optional<GestureArenaEntry> arena_entry_;
         Offset   pan_last_pos_;
+        PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
         std::chrono::steady_clock::time_point last_pan_time_;
         float    pan_velocity_   = 0.0f;
 
         float    velocity_px_s_  = 0.0f;
         uint64_t last_tick_ms_   = 0;
 
-        static constexpr float kTapSlop               = 8.0f;
         static constexpr float kSnapVelocityThreshold = 300.0f;
         static constexpr float kSpringCoeff           = 20.0f;
         static constexpr float kMinVelocity           = 0.5f;

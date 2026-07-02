@@ -14,6 +14,7 @@ namespace systems::leal::campello_widgets
     void ClipRRect::updateRenderObject(RenderObject& ro) const
     {
         auto& rcrr = static_cast<RenderClipRRect&>(ro);
+        if (rcrr.border_radius == border_radius) return;
         rcrr.border_radius = border_radius;
         rcrr.markNeedsLayout();
     }

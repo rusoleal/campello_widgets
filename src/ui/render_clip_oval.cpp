@@ -1,6 +1,5 @@
 #include <campello_widgets/ui/render_clip_oval.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
-#include <campello_widgets/ui/path.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -21,12 +20,9 @@ namespace systems::leal::campello_widgets
 
     void RenderClipOval::performPaint(PaintContext& context, const Offset& offset)
     {
-        Path clip;
-        clip.addOval(Rect::fromLTWH(offset.x, offset.y, size_.width, size_.height));
-
         Canvas& canvas = context.canvas();
         canvas.save();
-        canvas.clipPath(clip);
+        canvas.clipOval(Rect::fromLTWH(offset.x, offset.y, size_.width, size_.height));
         paintChild(context, offset);
         canvas.restore();
     }

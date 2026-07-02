@@ -18,7 +18,6 @@
 #import <campello_widgets/diagnostics/widget_inspector.hpp>
 
 #include <chrono>
-#include <iostream>
 
 #import <campello_gpu/device.hpp>
 #import <campello_gpu/texture_view.hpp>
@@ -127,10 +126,9 @@ namespace {
 {
     if (!_dispatcher) return;
     auto pos = [self pointerOffsetForEvent:event];
-    std::cerr << "[macOS mouseDown] pos=" << pos.x << "," << pos.y << "\n";
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::down, 0,
-        pos, 1.0f});
+        pos, 1.0f, Widgets::PointerDeviceKind::mouse});
 }
 
 - (void)mouseMoved:(NSEvent*)event
@@ -138,7 +136,7 @@ namespace {
     if (!_dispatcher) return;
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::move, 0,
-        [self pointerOffsetForEvent:event], 0.0f});
+        [self pointerOffsetForEvent:event], 0.0f, Widgets::PointerDeviceKind::mouse});
 }
 
 - (void)mouseDragged:(NSEvent*)event
@@ -146,17 +144,16 @@ namespace {
     if (!_dispatcher) return;
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::move, 0,
-        [self pointerOffsetForEvent:event], 1.0f});
+        [self pointerOffsetForEvent:event], 1.0f, Widgets::PointerDeviceKind::mouse});
 }
 
 - (void)mouseUp:(NSEvent*)event
 {
     if (!_dispatcher) return;
     auto pos = [self pointerOffsetForEvent:event];
-    std::cerr << "[macOS mouseUp]   pos=" << pos.x << "," << pos.y << "\n";
     _dispatcher->handlePointerEvent({
         Widgets::PointerEventKind::up, 0,
-        pos, 1.0f});
+        pos, 1.0f, Widgets::PointerDeviceKind::mouse});
 }
 
 static Widgets::KeyCode macosKeyCodeToKeyCode(unsigned short kc)
@@ -353,6 +350,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     e.pointer_id     = 0;
     e.position       = pos;
     e.pressure       = 0.0f;
+    e.device_kind    = Widgets::PointerDeviceKind::mouse;
     e.scroll_delta_x = -(float)event.scrollingDeltaX;
     e.scroll_delta_y = -(float)event.scrollingDeltaY;
     _dispatcher->handlePointerEvent(e);

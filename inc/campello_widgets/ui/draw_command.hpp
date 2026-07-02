@@ -163,6 +163,12 @@ namespace systems::leal::campello_widgets
         RRect rrect;
     };
 
+    /** @brief Clip using an oval inscribed in a bounding rectangle. */
+    struct PushClipOvalCmd
+    {
+        Rect rect;
+    };
+
     // ------------------------------------------------------------------
     // Individual command types
     // ------------------------------------------------------------------
@@ -251,6 +257,7 @@ namespace systems::leal::campello_widgets
         // Clipping
         PushClipRectCmd,
         PushClipRRectCmd,
+        PushClipOvalCmd,
         PushClipPathCmd,
         PopClipRectCmd,
 

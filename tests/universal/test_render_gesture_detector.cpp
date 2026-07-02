@@ -91,14 +91,14 @@ TEST_F(GestureDetectorFixture, PanFiresUpdateAndEndInsteadOfTap)
 
     cw::PointerEvent move;
     move.kind     = cw::PointerEventKind::move;
-    move.position = {50.0f, 80.0f}; // 30px, exceeds 18px kTapSlop
+    move.position = {50.0f, 100.0f}; // 50px, exceeds the 36px (touch) pan slop
     dispatcher->handlePointerEvent(move);
 
     EXPECT_GE(pan_update_count, 1);
 
     cw::PointerEvent up;
     up.kind     = cw::PointerEventKind::up;
-    up.position = {50.0f, 80.0f};
+    up.position = {50.0f, 100.0f};
     dispatcher->handlePointerEvent(up);
 
     EXPECT_EQ(pan_end_count, 1);
@@ -257,7 +257,7 @@ TEST_F(NestedGestureFixture, PanEnabledButtonStillFiresOwnPanUpdate)
 
     cw::PointerEvent move;
     move.kind     = cw::PointerEventKind::move;
-    move.position = {100.0f, 70.0f}; // 20px, exceeds the 18px GestureDetector slop
+    move.position = {100.0f, 110.0f}; // 60px, exceeds the 36px (touch) pan slop
     dispatcher->handlePointerEvent(move);
 
     EXPECT_GE(pan_update_count, 1);
@@ -266,6 +266,6 @@ TEST_F(NestedGestureFixture, PanEnabledButtonStillFiresOwnPanUpdate)
 
     cw::PointerEvent up;
     up.kind     = cw::PointerEventKind::up;
-    up.position = {100.0f, 70.0f};
+    up.position = {100.0f, 110.0f};
     dispatcher->handlePointerEvent(up);
 }

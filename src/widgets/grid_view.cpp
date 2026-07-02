@@ -128,9 +128,14 @@ namespace systems::leal::campello_widgets
     void GridView::updateRenderObject(RenderObject& render_object) const
     {
         auto& rv = static_cast<RenderGridView&>(render_object);
-        rv.item_count       = item_count;
-        rv.item_extent      = item_extent;
-        rv.cross_axis_count = cross_axis_count;
+        if (rv.item_count != item_count || rv.item_extent != item_extent ||
+            rv.cross_axis_count != cross_axis_count)
+        {
+            rv.item_count       = item_count;
+            rv.item_extent      = item_extent;
+            rv.cross_axis_count = cross_axis_count;
+            rv.markNeedsLayout();
+        }
         rv.setController(controller);
         rv.setPhysics(physics);
     }

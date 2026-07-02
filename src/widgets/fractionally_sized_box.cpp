@@ -15,7 +15,12 @@ namespace systems::leal::campello_widgets
 
     void FractionallySizedBox::updateRenderObject(RenderObject& ro) const
     {
-        auto& rfsb        = static_cast<RenderFractionallySizedBox&>(ro);
+        auto& rfsb = static_cast<RenderFractionallySizedBox&>(ro);
+        if (rfsb.width_factor == width_factor &&
+            rfsb.height_factor == height_factor &&
+            rfsb.alignment == alignment)
+            return;
+
         rfsb.width_factor  = width_factor;
         rfsb.height_factor = height_factor;
         rfsb.alignment     = alignment;

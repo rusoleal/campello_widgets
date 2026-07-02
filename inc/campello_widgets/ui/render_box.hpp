@@ -101,8 +101,11 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Returns true if `position` (local coords) hits this box itself.
          *
-         * Default: true whenever position falls within [0, size). Override to
-         * make a box transparent to pointer events.
+         * Default: false — a plain layout box does not claim pointer events
+         * on its own account. Override to true in any RenderBox that
+         * registers its own pointer handling (GestureDetector, TextField,
+         * Slider, Draggable, scrollables, MouseRegion, ...), so it still
+         * receives hits at points not claimed by a more specific descendant.
          */
         virtual bool hitTestSelf(const Offset& position) const;
 

@@ -132,7 +132,7 @@ TEST(RenderTreeView, DraggableRowWinsArenaOverEnclosingPan)
 
     auto row = std::make_shared<cw::RenderDraggable<int>>();
     int  drag_start_count = 0;
-    row->on_drag_start = [&](cw::Offset) { ++drag_start_count; };
+    row->on_drag_start = [&](cw::Offset, cw::Offset) { ++drag_start_count; };
     tv.setRowBox(0, row); // row 0 = the root node's row
 
     tv.layout(cw::BoxConstraints::tight(400.0f, 200.0f)); // position the row box
@@ -176,7 +176,7 @@ TEST(RenderTreeView, TreeViewStillScrollsWhenDraggableRowIsNotHit)
 
     auto row = std::make_shared<cw::RenderDraggable<int>>();
     int  drag_start_count = 0;
-    row->on_drag_start = [&](cw::Offset) { ++drag_start_count; };
+    row->on_drag_start = [&](cw::Offset, cw::Offset) { ++drag_start_count; };
     tv.setRowBox(0, row); // only row 0 is draggable
 
     tv.layout(cw::BoxConstraints::tight(400.0f, 200.0f));

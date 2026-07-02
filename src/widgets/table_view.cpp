@@ -183,6 +183,9 @@ namespace systems::leal::campello_widgets
         rv.extents = extents;
         rv.row_spans = row_spans;
         rv.column_spans = column_spans;
+        // TableSpanExtents/TableSpan have no operator== — always relayout
+        // rather than risk an incorrect equality check.
+        rv.markNeedsLayout();
         rv.setHorizontalController(horizontal_controller);
         rv.setVerticalController(vertical_controller);
         rv.setPhysics(physics);

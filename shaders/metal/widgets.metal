@@ -10,8 +10,14 @@ using namespace metal;
 //   No vertex buffers — geometry is generated from vertex_id.
 //
 // Quad pipeline (quadVertex / quadFragment):
-//   Draws a textured axis-aligned quad (text glyphs, images).
-//   Uniforms at [[buffer(0)]]: QuadUniforms (dstRect, srcRect, viewport)
+//   Draws a textured quad (text glyphs, images) — a REAL quad, not
+//   necessarily axis-aligned: each of its 4 corners carries its own
+//   independently ambient-transform-projected position, so a rotated or
+//   perspective-projected Transform renders as a genuinely tilted/
+//   trapezoidal shape instead of a resized axis-aligned box. See
+//   QuadVertexIn's doc comment below.
+//   Vertex data at buffer(0): QuadVertexIn (position+w, uv), 6 per quad.
+//   Uniforms at [[buffer(1)]]: QuadUniforms (viewport, opacity)
 //   Texture at [[texture(0)]], sampler at [[sampler(1)]]
 // ===========================================================================
 
@@ -25,8 +31,14 @@ constant float2 kQuadCorners[6] = {
 // Rect pipeline
 // ---------------------------------------------------------------------------
 
+// RectVertexIn.posw carries this corner's real (x, y, w) — see
+// QuadVertexIn's doc comment above for the full rationale (same mechanism,
+// applied to the solid-color rect pipeline).
+struct RectVertexIn {
+    float3 posw [[attribute(0)]];  // (x, y, w) in pixel space, pre-clip-space
+};
+
 struct RectUniforms {
-    float4 rect;      // x, y, width, height (pixels)
     float4 color;     // r, g, b, a
     float2 viewport;  // width, height (pixels)
 };
@@ -37,18 +49,16 @@ struct RectVertOut {
 };
 
 vertex RectVertOut rectVertex(
-    uint                  vid [[vertex_id]],
-    constant RectUniforms &u  [[buffer(0)]])
+    RectVertexIn           in [[stage_in]],
+    constant RectUniforms &u  [[buffer(1)]])
 {
-    float2 t  = kQuadCorners[vid];
-    float2 px = float2(u.rect.x + t.x * u.rect.z,
-                       u.rect.y + t.y * u.rect.w);
-    // pixel coords → NDC (Metal: y+ = up; screen: y+ = down → negate y)
-    float2 ndc = (px / u.viewport) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
+    // See quadVertex's doc comment for the full derivation — same formula,
+    // applied here to a solid-color rect instead of a textured one.
+    float clip_x =  2.0 * in.posw.x / u.viewport.x - in.posw.z;
+    float clip_y = -(2.0 * in.posw.y / u.viewport.y - in.posw.z);
 
     RectVertOut out;
-    out.pos   = float4(ndc, 0.0, 1.0);
+    out.pos   = float4(clip_x, clip_y, 0.0, in.posw.z);
     out.color = u.color;
     return out;
 }
@@ -64,9 +74,20 @@ fragment float4 rectFragment(RectVertOut in [[stage_in]])
 // Quad (textured) pipeline
 // ---------------------------------------------------------------------------
 
+// QuadVertexIn.posw is the ambient-matrix-transformed pixel position of
+// this corner, carrying its real `w` — computed on the CPU side (see
+// drawTexturedQuad() in metal_draw_backend.mm) by transforming all four
+// corners of the destination rect *independently*, instead of collapsing
+// them to an axis-aligned bounding box (dstRect) the way this shader used
+// to. This is what makes a rotated/perspective-projected quad actually
+// render as a tilted/trapezoidal shape: real per-vertex positions, not a
+// single origin + width/height reinterpolated by a hardcoded corner table.
+struct QuadVertexIn {
+    float3 posw [[attribute(0)]];  // (x, y, w) in pixel space, pre-clip-space
+    float2 uv   [[attribute(1)]];
+};
+
 struct QuadUniforms {
-    float4 dstRect;   // x, y, width, height (pixels)
-    float4 srcRect;   // u0, v0, u1, v1 (normalised UV)
     float2 viewport;  // width, height (pixels)
     float  opacity;   // [0, 1] — multiplied into every pixel
     float  _pad;
@@ -79,21 +100,33 @@ struct QuadVertOut {
 };
 
 vertex QuadVertOut quadVertex(
-    uint               vid [[vertex_id]],
-    constant QuadUniforms &u [[buffer(0)]])
+    QuadVertexIn           in [[stage_in]],
+    constant QuadUniforms &u  [[buffer(1)]])
 {
-    float2 t  = kQuadCorners[vid];
-    float2 px = float2(u.dstRect.x + t.x * u.dstRect.z,
-                       u.dstRect.y + t.y * u.dstRect.w);
-    float2 ndc = (px / u.viewport) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
-
-    float2 uv = float2(u.srcRect.x + t.x * (u.srcRect.z - u.srcRect.x),
-                       u.srcRect.y + t.y * (u.srcRect.w - u.srcRect.y));
+    // Convert the raw (x, y, w) into clip space so the GPU's hardware
+    // perspective divide (clip.xy / clip.w, done automatically during
+    // rasterization — NOT something this shader does manually) reproduces
+    // this renderer's existing pixel->NDC mapping exactly when w == 1 (the
+    // overwhelmingly common case: no perspective term set on the ambient
+    // transform), and genuinely foreshortens when w != 1.
+    //
+    // Derivation: want clip.xy/clip.w == (pos.xy/pos.w)/viewport*2-1 (with
+    // y flipped for screen-down vs Metal's y-up NDC). Setting clip.w =
+    // pos.w and solving gives clip.xy = 2*pos.xy/viewport -/+ pos.w.
+    //
+    // Letting the hardware do this divide (rather than dividing manually
+    // here and outputting w=1) matters beyond just corner placement: the
+    // rasterizer only perspective-correctly interpolates `uv` across the
+    // triangle when the *clip-space* w is non-1 going into it. A manual
+    // divide would place corners correctly but linearly (screen-space)
+    // interpolate the texture across a foreshortened quad — the classic
+    // "affine texture warp" artifact — instead of correctly.
+    float clip_x =  2.0 * in.posw.x / u.viewport.x - in.posw.z;
+    float clip_y = -(2.0 * in.posw.y / u.viewport.y - in.posw.z);
 
     QuadVertOut out;
-    out.pos     = float4(ndc, 0.0, 1.0);
-    out.uv      = uv;
+    out.pos     = float4(clip_x, clip_y, 0.0, in.posw.z);
+    out.uv      = in.uv;
     out.opacity = u.opacity;
     return out;
 }
@@ -257,8 +290,11 @@ struct BlurUniforms {
 };
 
 struct BlurVertOut {
-    float4 pos [[position]];
+    float4 pos         [[position]];
     float2 uv;
+    float  sigma       [[flat]];
+    float  horizontal  [[flat]];
+    float2 tex_size    [[flat]];
 };
 
 vertex BlurVertOut blurVertex(
@@ -275,23 +311,30 @@ vertex BlurVertOut blurVertex(
                        u.srcRect.y + t.y * (u.srcRect.w - u.srcRect.y));
 
     BlurVertOut out;
-    out.pos = float4(ndc, 0.0, 1.0);
-    out.uv  = uv;
+    out.pos        = float4(ndc, 0.0, 1.0);
+    out.uv         = uv;
+    out.sigma      = u.sigma;
+    out.horizontal = u.horizontal;
+    out.tex_size   = u.tex_size;
     return out;
 }
 
+// Reads only [[stage_in]] — no separate uniform buffer binding, mirroring
+// shapeFragment() above. runBlurPass() only binds a vertex buffer
+// (setVertexBuffer), not a fragment buffer, so a fragment-stage
+// `constant ... [[buffer(0)]]` parameter here would read unbound/garbage
+// memory instead of the uniforms actually set for this draw.
 fragment float4 blurFragment(
-    BlurVertOut            in  [[stage_in]],
-    texture2d<float>       tex [[texture(0)]],
-    sampler                smp [[sampler(1)]],
-    constant BlurUniforms &u   [[buffer(0)]])
+    BlurVertOut       in  [[stage_in]],
+    texture2d<float>  tex [[texture(0)]],
+    sampler           smp [[sampler(1)]])
 {
-    const float sigma = max(u.sigma, 0.5);
+    const float sigma = max(in.sigma, 0.5);
     const int   RADIUS = min(int(ceil(2.5 * sigma)), 12);
 
-    float2 step = (u.horizontal > 0.5)
-        ? float2(1.0 / u.tex_size.x, 0.0)
-        : float2(0.0, 1.0 / u.tex_size.y);
+    float2 step = (in.horizontal > 0.5)
+        ? float2(1.0 / in.tex_size.x, 0.0)
+        : float2(0.0, 1.0 / in.tex_size.y);
 
     float4 color = float4(0.0);
     float  wsum  = 0.0;
@@ -311,14 +354,29 @@ fragment float4 blurFragment(
 // ---------------------------------------------------------------------------
 // ShaderMask pipeline — composites child texture with a gradient mask
 //
-// Uniforms at [[buffer(0)]]: ShaderMaskUniforms
+// Real per-vertex position(+w)/uv data at buffer(0) — same QuadVertexIn
+// shape as the quad/clip-shape pipelines (see drawShaderMaskComposite() for
+// why: real corners, not an axis-aligned dstRect, so a rotated/mirrored
+// mask's destination shape and sampled child content render correctly).
+// The gradient itself (gradient_p1/p2 below) is deliberately still
+// evaluated in *screen space* via the fragment shader's `in.pos.xy`,
+// unchanged from before — making the gradient rotate/tilt *with* the
+// widget under a non-trivial ambient transform (matching a real 3D
+// texture-mapped gradient) is a separate, not-yet-addressed piece of work,
+// out of scope for this pass.
+//
+// Uniforms at [[buffer(1)]]: ShaderMaskUniforms
 // child texture  at [[texture(0)]]
 // gradient LUT   at [[texture(1)]]  (256 × 1 BGRA)
 // sampler        at [[sampler(2)]]
 // ---------------------------------------------------------------------------
 
+struct ShaderMaskVertexIn {
+    float3 posw [[attribute(0)]];
+    float2 uv   [[attribute(1)]];
+};
+
 struct ShaderMaskUniforms {
-    float4 dstRect;        // bounds in viewport pixels (x,y,w,h)
     float2 viewport;       // framebuffer width, height
     float  gradient_type;  // 0 = linear, 1 = radial
     float  _pad0;
@@ -329,32 +387,42 @@ struct ShaderMaskUniforms {
 };
 
 struct ShaderMaskVertOut {
-    float4 pos     [[position]];
+    float4 pos           [[position]];
     float2 uv;
+    float  gradient_type [[flat]];
+    float4 gradient_p1   [[flat]];
+    float4 gradient_p2   [[flat]];
+    float  blend_mode    [[flat]];
 };
 
 vertex ShaderMaskVertOut shaderMaskVertex(
-    uint                       vid [[vertex_id]],
-    constant ShaderMaskUniforms &u  [[buffer(0)]])
+    ShaderMaskVertexIn           in [[stage_in]],
+    constant ShaderMaskUniforms &u  [[buffer(1)]])
 {
-    float2 t  = kQuadCorners[vid];
-    float2 px = float2(u.dstRect.x + t.x * u.dstRect.z,
-                       u.dstRect.y + t.y * u.dstRect.w);
-    float2 ndc = (px / u.viewport) * 2.0 - 1.0;
-    ndc.y = -ndc.y;
+    // See quadVertex's doc comment for the full derivation.
+    float clip_x =  2.0 * in.posw.x / u.viewport.x - in.posw.z;
+    float clip_y = -(2.0 * in.posw.y / u.viewport.y - in.posw.z);
 
     ShaderMaskVertOut out;
-    out.pos = float4(ndc, 0.0, 1.0);
-    out.uv  = t;   // [0,1] across the child texture
+    out.pos           = float4(clip_x, clip_y, 0.0, in.posw.z);
+    out.uv             = in.uv;
+    out.gradient_type  = u.gradient_type;
+    out.gradient_p1    = u.gradient_p1;
+    out.gradient_p2    = u.gradient_p2;
+    out.blend_mode     = u.blend_mode;
     return out;
 }
 
+// Reads only [[stage_in]] — no separate uniform buffer binding, mirroring
+// shapeFragment() above. The composite draw only binds a vertex buffer
+// (encoder.setVertexBuffer), not a fragment buffer, so a fragment-stage
+// `constant ... [[buffer(0)]]` parameter here would read unbound/garbage
+// memory instead of the uniforms actually set for this draw.
 fragment float4 shaderMaskFragment(
-    ShaderMaskVertOut          in    [[stage_in]],
-    texture2d<float>           child [[texture(0)]],
-    texture2d<float>           lut   [[texture(1)]],
-    sampler                    smp   [[sampler(2)]],
-    constant ShaderMaskUniforms &u   [[buffer(0)]])
+    ShaderMaskVertOut in    [[stage_in]],
+    texture2d<float>  child [[texture(0)]],
+    texture2d<float>  lut   [[texture(1)]],
+    sampler           smp   [[sampler(2)]])
 {
     float4 child_color = child.sample(smp, in.uv);
 
@@ -363,17 +431,17 @@ fragment float4 shaderMaskFragment(
 
     // Compute gradient parameter t.
     float t;
-    if (u.gradient_type < 0.5) {
+    if (in.gradient_type < 0.5) {
         // Linear gradient
-        float2 p1  = u.gradient_p1.xy;
-        float2 p2  = u.gradient_p2.xy;
+        float2 p1  = in.gradient_p1.xy;
+        float2 p2  = in.gradient_p2.xy;
         float2 dir = p2 - p1;
         float  len2 = dot(dir, dir);
         t = (len2 > 0.0001) ? dot(pos - p1, dir) / len2 : 0.0;
     } else {
         // Radial gradient
-        float2 center = u.gradient_p1.xy;
-        float  radius = u.gradient_p2.x;
+        float2 center = in.gradient_p1.xy;
+        float  radius = in.gradient_p2.x;
         t = (radius > 0.0001) ? length(pos - center) / radius : 0.0;
     }
     t = clamp(t, 0.0, 1.0);
@@ -381,11 +449,106 @@ fragment float4 shaderMaskFragment(
     float4 mask_color = lut.sample(smp, float2(t, 0.5));
 
     // Apply blend mode.
-    if (u.blend_mode < 0.5) {
+    if (in.blend_mode < 0.5) {
         // srcIn: output = child * mask.a
         return child_color * mask_color.a;
     } else {
         // modulate: output = child * mask
         return child_color * mask_color;
     }
+}
+
+// ---------------------------------------------------------------------------
+// ClipShape pipeline — composites a child texture through a rounded-rect or
+// ellipse SDF mask (used by ClipRRect / ClipOval).
+//
+// Real per-vertex position(+w)/uv data at buffer(0) — see ClipShapeVertexIn
+// below. Uniforms at [[buffer(1)]]: ClipShapeUniforms
+// child texture  at [[texture(0)]]
+// sampler        at [[sampler(1)]]
+// ---------------------------------------------------------------------------
+
+// Same QuadVertexIn shape as the quad pipeline above — position(+w) is the
+// ambient-transform-projected destination corner, uv is this corner's
+// [0,1]² coordinate within the shape's own local space. The rounded-rect/
+// ellipse SDF below is evaluated entirely in that local space (via uv), so
+// it renders correctly regardless of how the destination quad is
+// projected — rotated, perspective-foreshortened, or mirrored, no
+// special-casing needed for any of those (unlike the axis-aligned-only
+// version of this shader, which needed a `flip` workaround for mirroring
+// and couldn't represent rotation/perspective in its destination shape at
+// all — see TODO.md's "Bug: Transform content vanishes..." and "Real
+// per-vertex quad rendering" entries).
+struct ClipShapeVertexIn {
+    float3 posw [[attribute(0)]];
+    float2 uv   [[attribute(1)]];
+};
+
+struct ClipShapeUniforms {
+    float2 rect_size; // the shape's plain LOGICAL width/height — NOT
+                       // physical pixels, NOT transform-scaled. Needed by
+                       // the SDF below, which operates in local space.
+    float2 viewport;  // framebuffer width, height — for clip-space conversion only
+    float  corner_r;  // LOGICAL corner radius (rrect); ignored when kind == 1
+    float  kind;      // 0 = rounded rect, 1 = ellipse/oval
+    float2 _pad;
+};
+
+struct ClipShapeVertOut {
+    float4 pos       [[position]];
+    float2 uv;
+    float2 rect_size [[flat]];
+    float  corner_r  [[flat]];
+    float  kind      [[flat]];
+};
+
+vertex ClipShapeVertOut clipShapeVertex(
+    ClipShapeVertexIn           in [[stage_in]],
+    constant ClipShapeUniforms &u  [[buffer(1)]])
+{
+    // See quadVertex's doc comment for the full derivation of this
+    // pixel-space-(x,y,w) -> clip-space conversion.
+    float clip_x =  2.0 * in.posw.x / u.viewport.x - in.posw.z;
+    float clip_y = -(2.0 * in.posw.y / u.viewport.y - in.posw.z);
+
+    ClipShapeVertOut out;
+    out.pos       = float4(clip_x, clip_y, 0.0, in.posw.z);
+    out.uv        = in.uv;
+    out.rect_size = u.rect_size;
+    out.corner_r  = u.corner_r;
+    out.kind      = u.kind;
+    return out;
+}
+
+// Reads only [[stage_in]] — no separate uniform buffer binding, mirroring
+// shapeFragment() above. The composite draw only binds a vertex buffer
+// (encoder.setVertexBuffer), not a fragment buffer, so a fragment-stage
+// `constant ... [[buffer(0)]]` parameter here would read unbound/garbage
+// memory instead of the uniforms actually set for this draw.
+fragment float4 clipShapeFragment(
+    ClipShapeVertOut in    [[stage_in]],
+    texture2d<float> child [[texture(0)]],
+    sampler          smp   [[sampler(1)]])
+{
+    float4 child_color = child.sample(smp, in.uv);
+
+    // SDF is evaluated in pixel space centered on the shape's bounds.
+    float2 hs = in.rect_size * 0.5;
+    float2 p  = (in.uv - float2(0.5, 0.5)) * in.rect_size;
+
+    float d;
+    if (in.kind < 0.5) {
+        // Rounded-rect SDF
+        float r  = min(in.corner_r, min(hs.x, hs.y));
+        float2 q = abs(p) - hs + r;
+        d = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0) - r;
+    } else {
+        // Ellipse SDF (circle when hs.x == hs.y)
+        float2 s = p / hs;
+        d = (length(s) - 1.0) * min(hs.x, hs.y);
+    }
+
+    const float aa    = 0.5;
+    const float alpha = 1.0 - smoothstep(-aa, aa, d);
+    return child_color * alpha;
 }

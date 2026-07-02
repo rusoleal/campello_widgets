@@ -14,7 +14,8 @@ namespace systems::leal::campello_widgets
 
     void Padding::updateRenderObject(RenderObject& ro) const
     {
-        auto& rp   = static_cast<RenderPadding&>(ro);
+        auto& rp = static_cast<RenderPadding&>(ro);
+        if (rp.padding == padding) return;
         rp.padding = padding;
         rp.markNeedsLayout();
     }

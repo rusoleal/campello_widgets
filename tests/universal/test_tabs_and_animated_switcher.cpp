@@ -161,6 +161,27 @@ protected:
         return nullptr;
     }
 
+    // Find the first RenderStack by walking the render tree directly.
+    // Unlike findRenderStack() above (which inspects a hit-test path), this
+    // works even when the subtree has no interactive descendant to actually
+    // register a hit — RenderBox::hitTestSelf() defaults to false (plain
+    // layout boxes like Stack/SizedBox/Opacity don't claim pointer events on
+    // their own), so a hit-test-based search can't find a purely structural
+    // Stack with no interactive children inside it.
+    static cw::RenderStack* findRenderStackInTree(cw::RenderBox* box)
+    {
+        if (!box) return nullptr;
+        if (auto* stack = dynamic_cast<cw::RenderStack*>(box))
+            return stack;
+
+        cw::RenderStack* found = nullptr;
+        box->visitRenderChildren([&](cw::RenderBox* child)
+        {
+            if (!found) found = findRenderStackInTree(child);
+        });
+        return found;
+    }
+
 private:
     std::shared_ptr<cw::Element> root_element_;
 };
@@ -336,9 +357,12 @@ TEST_F(TabWidgetsTest, AnimatedSwitcher_TransitionCreatesStack)
     root = std::dynamic_pointer_cast<cw::RenderBox>(roe->sharedRenderObject());
     root->layout(cw::BoxConstraints::tight(400.0f, 400.0f));
 
-    // During transition the render tree should contain a RenderStack.
-    auto result = hitTest(root, {50.0f, 50.0f});
-    EXPECT_NE(findRenderStack(result), nullptr);
+    // During transition the render tree should contain a RenderStack. Walk
+    // the tree directly rather than hit-testing — neither transition child
+    // (a plain SizedBox wrapped in Opacity) is interactive, so nothing
+    // would claim a hit-test path through them regardless of the Stack's
+    // presence (see findRenderStackInTree()'s doc comment).
+    EXPECT_NE(findRenderStackInTree(root.get()), nullptr);
 }
 
 TEST_F(TabWidgetsTest, AnimatedSwitcher_TransitionCompletes)

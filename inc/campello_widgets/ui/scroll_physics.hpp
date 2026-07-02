@@ -83,13 +83,27 @@ namespace systems::leal::campello_widgets
     /**
      * @brief Bouncing physics — allows overscroll that springs back.
      *
-     * When the raw position exceeds a boundary, 50 % resistance is applied so
-     * overshoot is limited. The tick handler in the render object is responsible
-     * for applying a spring-back force once velocity falls low enough.
+     * When the raw position exceeds a boundary, iOS-style rubber-banding
+     * resistance is applied: `f(x) = x·d·c / (d + c·x)`, where `x` is the
+     * raw distance past the boundary, `c` is a damping constant, and `d`
+     * is the displayed overscroll's asymptotic cap. Unlike a flat
+     * percentage (e.g. "50% resistance"), which lets the displayed
+     * overscroll keep growing *linearly*, without bound, the harder/
+     * further you drag, this curve approaches `d` and no further — a
+     * fast or long drag stretches the content by an amount bounded by
+     * `kMaxOverscroll` (used as `d`), not by how far you dragged, so the
+     * spring-back that follows never has to travel an excessive
+     * distance. The tick handler in the render object is responsible for
+     * applying that spring-back force once velocity falls low enough.
      */
     class BouncingScrollPhysics final : public ScrollPhysics
     {
     public:
+        /// Asymptotic cap (px) on displayed overscroll, regardless of raw drag distance.
+        static constexpr float kMaxOverscroll = 100.0f;
+        /// iOS's rubber-band damping constant.
+        static constexpr float kRubberBandCoefficient = 0.55f;
+
         float applyBoundaryConditions(
             float position,
             float min_scroll_extent,
@@ -101,14 +115,21 @@ namespace systems::leal::campello_widgets
             if (position < min_scroll_extent)
             {
                 const float over = min_scroll_extent - position;
-                return min_scroll_extent - over * 0.5f;
+                return min_scroll_extent - rubberBand(over);
             }
             if (position > max_scroll_extent)
             {
                 const float over = position - max_scroll_extent;
-                return max_scroll_extent + over * 0.5f;
+                return max_scroll_extent + rubberBand(over);
             }
             return position;
+        }
+
+    private:
+        static float rubberBand(float over) noexcept
+        {
+            return (over * kMaxOverscroll * kRubberBandCoefficient) /
+                   (kMaxOverscroll + kRubberBandCoefficient * over);
         }
 
         float applyFriction(float velocity, float dt_seconds) const noexcept override

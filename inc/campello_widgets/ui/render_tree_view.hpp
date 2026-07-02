@@ -12,6 +12,7 @@
 #include <campello_widgets/ui/scroll_physics.hpp>
 #include <campello_widgets/ui/tree_node.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
+#include <campello_widgets/ui/gesture_constants.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -118,6 +119,11 @@ namespace systems::leal::campello_widgets
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
+        // Must claim hits within its own viewport (e.g. empty space below
+        // the last row) to receive pan-to-scroll gestures there — see
+        // RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
+
         // ------------------------------------------------------------------
         // GestureArenaMember
         // ------------------------------------------------------------------
@@ -179,14 +185,22 @@ namespace systems::leal::campello_widgets
         bool lost_arena_ = false;
         std::optional<GestureArenaEntry> arena_entry_;
         Offset pan_last_pos_{0.0f, 0.0f};
+        PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
         std::chrono::steady_clock::time_point last_pan_time_;
         float pan_velocity_x_ = 0.0f, pan_velocity_y_ = 0.0f;
         float velocity_x_ = 0.0f, velocity_y_ = 0.0f;
         uint64_t last_tick_ms_ = 0;
 
-        static constexpr float kTapSlop = 8.0f;
-        static constexpr float kMinVelocity = 1.0f;
-        static constexpr float kSpringCoeff = 12.0f;
+        // See RenderSingleChildScrollView::last_scroll_event_ms_'s doc —
+        // lets onTick() defer spring-back while the OS is still actively
+        // delivering scroll events (including its own momentum tail) for
+        // this gesture, instead of fighting them every tick.
+        uint64_t last_scroll_event_ms_ = 0;
+
+        static constexpr float    kMinVelocity = 1.0f;
+        // See RenderListView::kSpringCoeff's doc.
+        static constexpr float    kSpringCoeff = 20.0f;
+        static constexpr uint64_t kScrollActiveWindowMs = 120;
     };
 
 } // namespace systems::leal::campello_widgets

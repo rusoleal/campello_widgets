@@ -19,6 +19,8 @@
 #import <campello_gpu/descriptors/bind_group_layout_descriptor.hpp>
 #import <campello_gpu/descriptors/bind_group_descriptor.hpp>
 #import <campello_gpu/descriptors/sampler_descriptor.hpp>
+#import <campello_gpu/descriptors/vertex_descriptor.hpp>
+#import <campello_gpu/constants/index_format.hpp>
 
 #import <CoreText/CoreText.h>
 #import <CoreGraphics/CoreGraphics.h>
@@ -39,22 +41,67 @@ namespace vm  = systems::leal::vector_math;
 using namespace systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
+// Font resolution
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // CTFontCreateWithName always returns the family's regular face — bold
+    // and italic must be requested explicitly via symbolic traits, or every
+    // TextStyle renders identically regardless of font_weight/italic.
+    CTFontRef CreateStyledCTFont(NSString* family, CGFloat size, FontWeight weight, bool italic)
+    {
+        CTFontRef base = CTFontCreateWithName((__bridge CFStringRef)family, size, nullptr);
+        if (!base) return nullptr;
+
+        CTFontSymbolicTraits traits = 0;
+        if (weight == FontWeight::bold) traits |= kCTFontBoldTrait;
+        if (italic)                     traits |= kCTFontItalicTrait;
+
+        if (traits == 0)
+            return base;
+
+        CTFontRef styled = CTFontCreateCopyWithSymbolicTraits(base, size, nullptr, traits, traits);
+        if (styled)
+        {
+            CFRelease(base);
+            return styled;
+        }
+        // Family has no matching bold/italic face — fall back to the
+        // regular font rather than returning null.
+        return base;
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Uniform buffer layouts (must match the Metal structs in widgets.metal)
 // ---------------------------------------------------------------------------
 
 struct alignas(16) RectUniforms {
-    float rect[4];      // x, y, width, height
     float color[4];     // r, g, b, a
     float viewport[2];  // width, height
     float _pad[2];
 };
 
+// Real per-vertex data for the rect pipeline — see drawFilledQuad(). Not
+// `alignas(16)`: tightly-packed vertex-attribute element, not a uniform.
+struct RectVertex {
+    float x, y, w;
+};
+
 struct alignas(16) QuadUniforms {
-    float dstRect[4];   // x, y, width, height (pixels)
-    float srcRect[4];   // u0, v0, u1, v1 (normalised UV)
     float viewport[2];  // width, height (pixels)
     float opacity;      // [0, 1] — scales all pixel channels
     float _pad;
+};
+
+// Real per-vertex data for the quad pipeline — see QuadVertexIn's doc
+// comment in widgets.metal. Not `alignas(16)`: this is a tightly-packed
+// vertex-attribute element (arrayStride must match sizeof(QuadVertex)
+// exactly), not a uniform buffer.
+struct QuadVertex {
+    float x, y, w;   // ambient-transform-projected pixel position + w
+    float u, v;       // texture UV for this corner
 };
 
 struct alignas(16) ShapeUniforms {
@@ -108,7 +155,23 @@ MetalDrawBackend::MetalDrawBackend(
         GPU::RenderPipelineDescriptor desc{};
         desc.vertex.module     = shader;
         desc.vertex.entryPoint = "rectVertex";
-        // No vertex buffers — procedural geometry from vertex_id
+
+        // Real per-vertex position(+w) data — see RectVertex's doc comment
+        // above and RectVertexIn's in widgets.metal. Bound to slot 0 via
+        // setVertexBuffer(0, ...); RectUniforms (color/viewport) moves to
+        // slot 1 (see drawFilledQuad()).
+        GPU::VertexAttribute rectPosAttr{};
+        rectPosAttr.componentType  = GPU::ComponentType::ctFloat;
+        rectPosAttr.accessorType   = GPU::AccessorType::acVec3;
+        rectPosAttr.offset         = 0;
+        rectPosAttr.shaderLocation = 0;
+
+        GPU::VertexLayout rectLayout{};
+        rectLayout.arrayStride = sizeof(RectVertex);
+        rectLayout.attributes  = {rectPosAttr};
+        rectLayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {rectLayout};
 
         GPU::FragmentDescriptor frag{};
         frag.module     = shader;
@@ -128,6 +191,30 @@ MetalDrawBackend::MetalDrawBackend(
         GPU::RenderPipelineDescriptor desc{};
         desc.vertex.module     = shader;
         desc.vertex.entryPoint = "quadVertex";
+
+        // Real per-vertex position(+w)/uv data — see QuadVertex's doc
+        // comment above and QuadVertexIn's in widgets.metal. Bound to
+        // slot 0 via setVertexBuffer(0, ...); the pipeline's own uniforms
+        // (viewport/opacity) move to slot 1 accordingly (see
+        // drawTexturedQuad()).
+        GPU::VertexAttribute posAttr{};
+        posAttr.componentType = GPU::ComponentType::ctFloat;
+        posAttr.accessorType  = GPU::AccessorType::acVec3;
+        posAttr.offset        = offsetof(QuadVertex, x);
+        posAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute uvAttr{};
+        uvAttr.componentType = GPU::ComponentType::ctFloat;
+        uvAttr.accessorType  = GPU::AccessorType::acVec2;
+        uvAttr.offset         = offsetof(QuadVertex, u);
+        uvAttr.shaderLocation = 1;
+
+        GPU::VertexLayout quadLayout{};
+        quadLayout.arrayStride = sizeof(QuadVertex);
+        quadLayout.attributes  = {posAttr, uvAttr};
+        quadLayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {quadLayout};
 
         GPU::ColorState quadCs{};
         quadCs.format    = pixel_format;
@@ -307,6 +394,28 @@ MetalDrawBackend::MetalDrawBackend(
         desc.vertex.module     = shader;
         desc.vertex.entryPoint = "shaderMaskVertex";
 
+        // Same QuadVertex layout as the quad/clip-shape pipelines — see
+        // drawTexturedQuad()/drawClipShapeComposite(). Bound to slot 0;
+        // ShaderMaskUniforms moves to slot 1.
+        GPU::VertexAttribute maskPosAttr{};
+        maskPosAttr.componentType  = GPU::ComponentType::ctFloat;
+        maskPosAttr.accessorType   = GPU::AccessorType::acVec3;
+        maskPosAttr.offset         = offsetof(QuadVertex, x);
+        maskPosAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute maskUvAttr{};
+        maskUvAttr.componentType  = GPU::ComponentType::ctFloat;
+        maskUvAttr.accessorType   = GPU::AccessorType::acVec2;
+        maskUvAttr.offset         = offsetof(QuadVertex, u);
+        maskUvAttr.shaderLocation = 1;
+
+        GPU::VertexLayout maskLayout{};
+        maskLayout.arrayStride = sizeof(QuadVertex);
+        maskLayout.attributes  = {maskPosAttr, maskUvAttr};
+        maskLayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {maskLayout};
+
         GPU::FragmentDescriptor frag{};
         frag.module     = shader;
         frag.entryPoint = "shaderMaskFragment";
@@ -318,6 +427,57 @@ MetalDrawBackend::MetalDrawBackend(
         desc.frontFace = GPU::FrontFace::ccw;
 
         shader_mask_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- ClipRRect/ClipOval pipeline (reuses quad_bgl_: texture@0, sampler@1) ---
+    {
+        GPU::ColorState cs{};
+        cs.format    = pixel_format;
+        cs.writeMask = GPU::ColorWrite::all;
+        cs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "clipShapeVertex";
+
+        // Real per-vertex position(+w)/uv data — same QuadVertex layout as
+        // the quad pipeline (see drawTexturedQuad()); reused directly since
+        // drawClipShapeComposite() draws QuadVertex data through
+        // quad_vertex_pool_ too. Bound to slot 0; ClipShapeUniforms
+        // (rect_size/viewport/corner_r/kind) moves to slot 1.
+        GPU::VertexAttribute clipPosAttr{};
+        clipPosAttr.componentType  = GPU::ComponentType::ctFloat;
+        clipPosAttr.accessorType   = GPU::AccessorType::acVec3;
+        clipPosAttr.offset         = offsetof(QuadVertex, x);
+        clipPosAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute clipUvAttr{};
+        clipUvAttr.componentType  = GPU::ComponentType::ctFloat;
+        clipUvAttr.accessorType   = GPU::AccessorType::acVec2;
+        clipUvAttr.offset         = offsetof(QuadVertex, u);
+        clipUvAttr.shaderLocation = 1;
+
+        GPU::VertexLayout clipLayout{};
+        clipLayout.arrayStride = sizeof(QuadVertex);
+        clipLayout.attributes  = {clipPosAttr, clipUvAttr};
+        clipLayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {clipLayout};
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "clipShapeFragment";
+        frag.targets.push_back(cs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        clip_shape_pipeline_ = device_->createRenderPipeline(desc);
     }
 }
 
@@ -390,16 +550,21 @@ void MetalDrawBackend::UniformBufferPool::beginFrame() noexcept
 // drawRect
 // ---------------------------------------------------------------------------
 
-void MetalDrawBackend::drawFilledRect(
-    float x, float y, float w, float h,
+void MetalDrawBackend::drawFilledQuad(
+    const ProjectedCorner& c00, const ProjectedCorner& c10,
+    const ProjectedCorner& c01, const ProjectedCorner& c11,
     const Color& color,
     GPU::RenderPassEncoder& encoder)
 {
+    // Two triangles matching kQuadCorners' historical winding order.
+    const RectVertex verts[6] = {
+        {c00.x, c00.y, c00.w}, {c10.x, c10.y, c10.w}, {c01.x, c01.y, c01.w},
+        {c01.x, c01.y, c01.w}, {c10.x, c10.y, c10.w}, {c11.x, c11.y, c11.w},
+    };
+    auto vbuf = rect_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
     RectUniforms u{};
-    u.rect[0]     = x;
-    u.rect[1]     = y;
-    u.rect[2]     = w;
-    u.rect[3]     = h;
     u.color[0]    = color.r;
     u.color[1]    = color.g;
     u.color[2]    = color.b;
@@ -411,8 +576,23 @@ void MetalDrawBackend::drawFilledRect(
     if (!ubuf) return;
 
     encoder.setPipeline(rect_pipeline_);
-    encoder.setVertexBuffer(0, ubuf);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
     encoder.draw(6);
+}
+
+void MetalDrawBackend::drawFilledRect(
+    float x, float y, float w, float h,
+    const Color& color,
+    GPU::RenderPassEncoder& encoder)
+{
+    // Axis-aligned (w always 1 — see this function's doc comment in the
+    // header for why: used for the stroke path's already-untransformed
+    // edge rects, not for ambient-transform-projected content).
+    drawFilledQuad(
+        ProjectedCorner{x,     y,     1.0f, 0.0f, 0.0f}, ProjectedCorner{x + w, y,     1.0f, 0.0f, 0.0f},
+        ProjectedCorner{x,     y + h, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x + w, y + h, 1.0f, 0.0f, 0.0f},
+        color, encoder);
 }
 
 void MetalDrawBackend::drawRect(
@@ -424,28 +604,36 @@ void MetalDrawBackend::drawRect(
     if (!rect_pipeline_) return;
     if (!applyScissor(clip, encoder)) return;
 
-    // Transform the four corners and use their axis-aligned bounding box.
-    // This is exact for translate and scale transforms. For rotation the AABB
-    // will be larger than the actual rotated quad, but rotation of plain rects
-    // is intentionally avoided in those tests (use circles/lines instead).
+    // Transform all four corners independently — not collapsed to an
+    // axis-aligned bounding box — so a rotated or perspective-projected
+    // Transform renders as a genuinely tilted/trapezoidal quad. See
+    // ProjectedCorner's doc comment.
     auto c00 = transform * vm::Vector4<float>(cmd.rect.left(),  cmd.rect.top(),    0.0f, 1.0f);
     auto c10 = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.top(),    0.0f, 1.0f);
     auto c01 = transform * vm::Vector4<float>(cmd.rect.left(),  cmd.rect.bottom(), 0.0f, 1.0f);
     auto c11 = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.bottom(), 0.0f, 1.0f);
 
-    const float min_x = std::min({c00.x(), c10.x(), c01.x(), c11.x()});
-    const float min_y = std::min({c00.y(), c10.y(), c01.y(), c11.y()});
-    const float max_x = std::max({c00.x(), c10.x(), c01.x(), c11.x()});
-    const float max_y = std::max({c00.y(), c10.y(), c01.y(), c11.y()});
-
     if (cmd.paint.style == PaintStyle::fill)
     {
-        drawFilledRect(min_x, min_y, max_x - min_x, max_y - min_y,
-                       cmd.paint.color, encoder);
+        drawFilledQuad(
+            ProjectedCorner{c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+            ProjectedCorner{c10.x(), c10.y(), c10.w(), 0.0f, 0.0f},
+            ProjectedCorner{c01.x(), c01.y(), c01.w(), 0.0f, 0.0f},
+            ProjectedCorner{c11.x(), c11.y(), c11.w(), 0.0f, 0.0f},
+            cmd.paint.color, encoder);
     }
     else
     {
-        // Stroke: four thin filled rects along each edge of the transformed AABB.
+        // Stroke: four thin filled rects along each edge of the AABB —
+        // still axis-aligned even under rotation (see drawFilledRect()'s
+        // doc comment in the header; genuine rotated-stroke rendering is
+        // out of scope for this pass — see TODO.md's "Real per-vertex
+        // quad rendering" entry).
+        const float min_x = std::min({c00.x(), c10.x(), c01.x(), c11.x()});
+        const float min_y = std::min({c00.y(), c10.y(), c01.y(), c11.y()});
+        const float max_x = std::max({c00.x(), c10.x(), c01.x(), c11.x()});
+        const float max_y = std::max({c00.y(), c10.y(), c01.y(), c11.y()});
+
         const float sw = cmd.paint.stroke_width;
         const float w  = max_x - min_x;
         const float h  = max_y - min_y;
@@ -622,8 +810,8 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
                            ? @"Helvetica Neue"
                            : [NSString stringWithUTF8String:span.style.font_family.c_str()];
 
-        CTFontRef ctFont = CTFontCreateWithName(
-            (__bridge CFStringRef)family, (CGFloat)fontSize, nullptr);
+        CTFontRef ctFont = CreateStyledCTFont(
+            family, (CGFloat)fontSize, span.style.font_weight, span.style.italic);
         if (!ctFont)
             return Size::zero();
 
@@ -705,8 +893,8 @@ MetalDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
                            ? @"Helvetica Neue"
                            : [NSString stringWithUTF8String:span.style.font_family.c_str()];
 
-        CTFontRef ctFont = CTFontCreateWithName(
-            (__bridge CFStringRef)family, (CGFloat)physicalFontSize, nullptr);
+        CTFontRef ctFont = CreateStyledCTFont(
+            family, (CGFloat)physicalFontSize, span.style.font_weight, span.style.italic);
         if (!ctFont) return nullptr;
 
         // Text color
@@ -832,11 +1020,21 @@ void MetalDrawBackend::drawText(
     // Place the quad at the physical-pixel origin. The texture is already
     // in physical pixels, so its pixel dimensions are the correct quad size.
     // Subtract the 1-physical-pixel padding baked into the cached texture.
+    // Note: unlike drawImage()/drawBackdropFilter() below, this only
+    // transforms the origin — width/height are added post-transform in
+    // physical pixels, unaffected by any rotation/scale/perspective in
+    // `transform`, matching this function's behavior before the quad
+    // pipeline gained real per-vertex corners. Text rotation/perspective
+    // is out of scope for this pass; w is always 1 here (no projection).
+    const float x0 = t_origin.x() - 1.0f;
+    const float y0 = t_origin.y() - 1.0f;
+    const float x1 = x0 + static_cast<float>(entry->width);
+    const float y1 = y0 + static_cast<float>(entry->height);
+
     drawTexturedQuad(
         entry->texture,
-        t_origin.x() - 1.0f, t_origin.y() - 1.0f,
-        (float)entry->width, (float)entry->height,
-        0.0f, 0.0f, 1.0f, 1.0f,
+        ProjectedCorner{x0, y0, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x1, y0, 1.0f, 1.0f, 0.0f},
+        ProjectedCorner{x0, y1, 1.0f, 0.0f, 1.0f}, ProjectedCorner{x1, y1, 1.0f, 1.0f, 1.0f},
         1.0f,  // text colour alpha is already baked into the glyph texture
         encoder,
         entry->bind_group);
@@ -857,15 +1055,24 @@ void MetalDrawBackend::drawImage(
     if (!applyScissor(clip, encoder)) return;
 
     // Apply the current transform (which includes the DPR scale) to the
-    // destination rect so the quad lands in physical pixels.
-    auto tl = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
-    auto br = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    // destination rect's four corners *independently* — not collapsed to
+    // an axis-aligned bounding box — so a rotated or perspective-projected
+    // Transform renders as a genuinely tilted/trapezoidal quad instead of
+    // a resized axis-aligned box. See ProjectedCorner's doc comment.
+    auto c00 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+
+    const float su0 = cmd.src_rect.x,      sv0 = cmd.src_rect.y;
+    const float su1 = cmd.src_rect.right(), sv1 = cmd.src_rect.bottom();
 
     drawTexturedQuad(
         cmd.texture,
-        tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
-        cmd.src_rect.x, cmd.src_rect.y,
-        cmd.src_rect.right(), cmd.src_rect.bottom(),
+        ProjectedCorner{c00.x(), c00.y(), c00.w(), su0, sv0},
+        ProjectedCorner{c10.x(), c10.y(), c10.w(), su1, sv0},
+        ProjectedCorner{c01.x(), c01.y(), c01.w(), su0, sv1},
+        ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.opacity,
         encoder);
 }
@@ -876,8 +1083,8 @@ void MetalDrawBackend::drawImage(
 
 void MetalDrawBackend::drawTexturedQuad(
     std::shared_ptr<GPU::Texture>  texture,
-    float dst_x, float dst_y, float dst_w, float dst_h,
-    float src_u0, float src_v0, float src_u1, float src_v1,
+    const ProjectedCorner& c00, const ProjectedCorner& c10,
+    const ProjectedCorner& c01, const ProjectedCorner& c11,
     float opacity,
     GPU::RenderPassEncoder&        encoder,
     std::shared_ptr<GPU::BindGroup> cached_bind_group)
@@ -903,16 +1110,20 @@ void MetalDrawBackend::drawTexturedQuad(
         if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return; }
     }
 
-    // Fill uniform buffer
+    // Real per-vertex position(+w)/uv data — two triangles matching
+    // kQuadCorners' historical winding order: (00,10,01), (01,10,11).
+    const QuadVertex verts[6] = {
+        {c00.x, c00.y, c00.w, c00.u, c00.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c11.x, c11.y, c11.w, c11.u, c11.v},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
     QuadUniforms u{};
-    u.dstRect[0]  = dst_x;
-    u.dstRect[1]  = dst_y;
-    u.dstRect[2]  = dst_w;
-    u.dstRect[3]  = dst_h;
-    u.srcRect[0]  = src_u0;
-    u.srcRect[1]  = src_v0;
-    u.srcRect[2]  = src_u1;
-    u.srcRect[3]  = src_v1;
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
     u.opacity     = opacity;
@@ -922,7 +1133,8 @@ void MetalDrawBackend::drawTexturedQuad(
 
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bindGroup);
-    encoder.setVertexBuffer(0, ubuf);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
     encoder.draw(6);
 }
 
@@ -941,7 +1153,6 @@ struct alignas(16) BlurUniforms {
 };
 
 struct alignas(16) ShaderMaskUniforms {
-    float dstRect[4];        // bounds in viewport pixels
     float viewport[2];
     float gradient_type;     // 0 = linear, 1 = radial
     float _pad0;
@@ -951,16 +1162,72 @@ struct alignas(16) ShaderMaskUniforms {
     float _pad1[3];
 };
 
+struct alignas(16) ClipShapeUniforms {
+    float rect_size[2]; // bounds' plain LOGICAL width/height (not physical
+                         // pixels, not transform-scaled) — the rounded-rect/
+                         // ellipse SDF is evaluated in the shape's own local
+                         // space via perspective-correctly-interpolated UV
+                         // (see ClipShapeVertexIn's doc comment in
+                         // widgets.metal), so it needs the shape's true
+                         // logical size, independent of how the destination
+                         // quad ends up projected on screen.
+    float viewport[2];  // framebuffer width, height — for the vertex
+                         // shader's clip-space conversion only
+    float corner_r;      // LOGICAL corner radius (rrect); ignored when kind==1
+    float kind;          // 0 = rounded rect, 1 = ellipse/oval
+    float _pad[2];
+};
+
 std::shared_ptr<GPU::Texture> MetalDrawBackend::createOffscreenTexture(
     uint32_t width, uint32_t height)
 {
-    return device_->createTexture(
-        GPU::TextureType::tt2d, pixel_format_,
-        width, height, 1, 1, 1,
+    return offscreen_texture_pool_.acquire(*device_, width, height, pixel_format_,
         static_cast<GPU::TextureUsage>(
             static_cast<int>(GPU::TextureUsage::renderTarget) |
             static_cast<int>(GPU::TextureUsage::textureBinding) |
-            static_cast<int>(GPU::TextureUsage::copySrc)));
+            static_cast<int>(GPU::TextureUsage::copySrc)),
+        frame_counter_);
+}
+
+std::shared_ptr<GPU::Texture> MetalDrawBackend::OffscreenTexturePool::acquire(
+    GPU::Device& device, uint32_t width, uint32_t height,
+    GPU::PixelFormat format, GPU::TextureUsage usage, uint64_t current_frame)
+{
+    const SizeKey key{width, height};
+    last_used_frame_[key] = current_frame;
+
+    auto&   textures = generations_[current_generation_][key];
+    size_t& idx       = next_index_[current_generation_][key];
+
+    if (idx >= textures.size())
+        textures.push_back(device.createTexture(
+            GPU::TextureType::tt2d, format, width, height, 1, 1, 1, usage));
+
+    return textures[idx++];
+}
+
+void MetalDrawBackend::OffscreenTexturePool::beginFrame() noexcept
+{
+    current_generation_ = (current_generation_ + 1) % kGenerations;
+    next_index_[current_generation_].clear();
+}
+
+void MetalDrawBackend::OffscreenTexturePool::evictStale(uint64_t current_frame)
+{
+    for (auto it = last_used_frame_.begin(); it != last_used_frame_.end(); )
+    {
+        if (current_frame - it->second > kMaxAgeFrames)
+        {
+            const SizeKey key = it->first;
+            for (auto& gen : generations_)       gen.erase(key);
+            for (auto& idx : next_index_)         idx.erase(key);
+            it = last_used_frame_.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
 }
 
 std::shared_ptr<GPU::RenderPassEncoder> MetalDrawBackend::beginOffscreenPass(
@@ -971,7 +1238,8 @@ std::shared_ptr<GPU::RenderPassEncoder> MetalDrawBackend::beginOffscreenPass(
     last_scissor_x_ = last_scissor_y_ = last_scissor_w_ = last_scissor_h_ = -1.0f;
     if (!tex) return nullptr;
 
-    auto view = tex->createView(pixel_format_);
+    // arrayLayerCount = 1 (non-array 2D texture) — see runBlurPass() below.
+    auto view = tex->createView(pixel_format_, 1);
     if (!view) return nullptr;
 
     GPU::ColorAttachment ca{};
@@ -1001,7 +1269,8 @@ void MetalDrawBackend::runBlurPass(
     const uint32_t tw = static_cast<uint32_t>(dst->getWidth());
     const uint32_t th = static_cast<uint32_t>(dst->getHeight());
 
-    auto dst_view = dst->createView(pixel_format_);
+    // arrayLayerCount = 1 (non-array 2D texture) — see beginOffscreenPass() above.
+    auto dst_view = dst->createView(pixel_format_, 1);
     if (!dst_view) return;
 
     GPU::ColorAttachment ca{};
@@ -1094,23 +1363,46 @@ void MetalDrawBackend::drawBackdropFilter(
     if (!blurred_source) return;
     if (!applyScissor(clip, encoder)) return;
 
-    // Transform the logical bounds to physical pixels.
-    auto tl = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
-    auto br = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+    // Transform all four corners independently — not collapsed to an
+    // axis-aligned bounding box — so a rotated/perspective-projected
+    // BackdropFilter renders as a genuinely tilted shape. Unlike
+    // drawImage() (which samples a plain rectangular image texture), each
+    // corner here must get its *own* UV: blurred_source is a full-viewport
+    // screen-space capture, so "what's behind" a rotated corner is
+    // whatever that corner's own on-screen position lands on, not a
+    // bilinear interpolation between two shared corner UVs (that
+    // shared-rect assumption is exactly the axis-aligned limitation being
+    // fixed here — a rotated widget's four corners sample four genuinely
+    // different, non-rectangularly-related regions of the backdrop).
+    auto c00 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
 
-    // UV maps the physical-pixel bounds region of the blurred texture.
     const float src_w = static_cast<float>(blurred_source->getWidth());
     const float src_h = static_cast<float>(blurred_source->getHeight());
 
-    const float u0 = tl.x() / src_w;
-    const float v0 = tl.y() / src_h;
-    const float u1 = br.x() / src_w;
-    const float v1 = br.y() / src_h;
+    // Divide by each corner's own w *before* normalizing by texture size:
+    // the UV assigned to a vertex must be the true value for that vertex's
+    // final (post-perspective-divide) screen position — the rasterizer's
+    // perspective-correct interpolation reconstructs the correct value for
+    // fragments *between* vertices, but only if the corner values
+    // themselves are already correct. A no-op when w==1 (every existing,
+    // non-perspective use of BackdropFilter), matching prior behavior.
+    auto uv = [&](const vm::Vector4<float>& c) -> vm::Vector4<float> {
+        return vm::Vector4<float>(c.x() / c.w() / src_w, c.y() / c.w() / src_h, 0.0f, 1.0f);
+    };
+    const auto uv00 = uv(c00);
+    const auto uv10 = uv(c10);
+    const auto uv01 = uv(c01);
+    const auto uv11 = uv(c11);
 
     drawTexturedQuad(
         blurred_source,
-        tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
-        u0, v0, u1, v1,
+        ProjectedCorner{c00.x(), c00.y(), c00.w(), uv00.x(), uv00.y()},
+        ProjectedCorner{c10.x(), c10.y(), c10.w(), uv10.x(), uv10.y()},
+        ProjectedCorner{c01.x(), c01.y(), c01.w(), uv01.x(), uv01.y()},
+        ProjectedCorner{c11.x(), c11.y(), c11.w(), uv11.x(), uv11.y()},
         1.0f,
         encoder);
 }
@@ -1181,14 +1473,27 @@ void MetalDrawBackend::drawShaderMaskComposite(
     std::shared_ptr<GPU::Texture>   child_tex,
     const DrawShaderMaskBeginCmd&   cmd,
     const Matrix4&                  transform,
+    const Rect&                     clip,
     GPU::RenderPassEncoder&         encoder)
 {
     if (!shader_mask_pipeline_ || !shader_mask_bgl_ || !quad_sampler_ || !child_tex)
         return;
+    if (!applyScissor(clip, encoder)) return;
 
-    // Transform the logical bounds to physical pixels.
+    // Transform all four corners independently — real per-vertex quad, not
+    // an axis-aligned bounding box — so a rotated or mirrored ShaderMask's
+    // *destination shape and sampled child content* render correctly. `tl`/
+    // `br` are kept for the gradient's own parameters below, which are
+    // deliberately left evaluated in screen space (via the fragment
+    // shader's `in.pos.xy`), unchanged from before this pass — see the
+    // comment on ShaderMaskVertOut in widgets.metal for why that's a
+    // separate, pre-existing scope boundary, not an oversight.
     auto tl = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
     auto br = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c00 = tl;
+    auto c10 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = br;
 
     // Build gradient LUT from shader variant.
     std::shared_ptr<GPU::Texture> lut_tex;
@@ -1225,11 +1530,18 @@ void MetalDrawBackend::drawShaderMaskComposite(
 
     if (!lut_tex) return;
 
+    const QuadVertex verts[6] = {
+        {c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
     ShaderMaskUniforms u{};
-    u.dstRect[0]      = tl.x();
-    u.dstRect[1]      = tl.y();
-    u.dstRect[2]      = br.x() - tl.x();
-    u.dstRect[3]      = br.y() - tl.y();
     u.viewport[0]     = vp_w_;
     u.viewport[1]     = vp_h_;
     u.gradient_type   = gradient_type;
@@ -1243,7 +1555,7 @@ void MetalDrawBackend::drawShaderMaskComposite(
     u.gradient_p2[3]  = 0.0f;
     u.blend_mode      = (cmd.blend_mode == BlendMode::modulate) ? 1.0f : 0.0f;
 
-    auto ubuf = device_->createBuffer(sizeof(ShaderMaskUniforms), GPU::BufferUsage::vertex, &u);
+    auto ubuf = shader_mask_uniform_pool_.acquire(*device_, sizeof(ShaderMaskUniforms), &u);
     if (!ubuf) return;
 
     GPU::BindGroupDescriptor bgDesc{};
@@ -1258,6 +1570,78 @@ void MetalDrawBackend::drawShaderMaskComposite(
 
     encoder.setPipeline(shader_mask_pipeline_);
     encoder.setBindGroup(0, bg);
-    encoder.setVertexBuffer(0, ubuf);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
+    encoder.draw(6);
+}
+
+void MetalDrawBackend::drawClipShapeComposite(
+    std::shared_ptr<GPU::Texture> child_tex,
+    const Rect&                   bounds,
+    float                         corner_radius,
+    bool                          is_oval,
+    const Matrix4&                transform,
+    const Rect&                   clip,
+    GPU::RenderPassEncoder&       encoder)
+{
+    if (!clip_shape_pipeline_ || !quad_bgl_ || !quad_sampler_ || !child_tex)
+        return;
+    if (!applyScissor(clip, encoder)) return;
+
+    // Transform all four corners independently — real per-vertex quad, not
+    // an axis-aligned bounding box (which is what silently made the clip
+    // shape's content vanish under a mirrored/negative-scale ambient
+    // transform — see TODO.md's "Bug: Transform content vanishes..."
+    // entry for the full root-cause trace — and what would have made
+    // genuine rotation/perspective render as a resized box instead of a
+    // tilted shape). See ProjectedCorner's doc comment.
+    auto c00 = transform * vm::Vector4<float>(bounds.left(),  bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(bounds.right(), bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(bounds.left(),  bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(bounds.right(), bounds.bottom(), 0.0f, 1.0f);
+
+    // The rounded-rect/ellipse SDF is evaluated in the shape's own local
+    // (pre-transform) space, via UV — perspective-correctly interpolated
+    // by the hardware regardless of how the destination quad is projected
+    // — so it needs bounds' plain logical size and corner radius, not a
+    // transform-scaled physical-pixel equivalent. This also means no
+    // per-axis "flip" workaround is needed anymore (unlike the fix
+    // shipped earlier today for the AABB-based version of this function):
+    // real corners naturally handle mirroring; nothing to work around.
+    const QuadVertex verts[6] = {
+        {c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
+    ClipShapeUniforms u{};
+    u.rect_size[0] = bounds.width;
+    u.rect_size[1] = bounds.height;
+    u.viewport[0]  = vp_w_;
+    u.viewport[1]  = vp_h_;
+    u.corner_r     = corner_radius;
+    u.kind         = is_oval ? 1.0f : 0.0f;
+
+    auto ubuf = clip_shape_uniform_pool_.acquire(*device_, sizeof(ClipShapeUniforms), &u);
+    if (!ubuf) return;
+
+    GPU::BindGroupDescriptor bgDesc{};
+    bgDesc.layout  = quad_bgl_;
+    bgDesc.entries = {
+        GPU::BindGroupEntryDescriptor{0, child_tex},
+        GPU::BindGroupEntryDescriptor{1, quad_sampler_},
+    };
+    auto bg = device_->createBindGroup(bgDesc);
+    if (!bg) return;
+
+    encoder.setPipeline(clip_shape_pipeline_);
+    encoder.setBindGroup(0, bg);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
     encoder.draw(6);
 }

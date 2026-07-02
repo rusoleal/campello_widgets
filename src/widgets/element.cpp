@@ -7,6 +7,9 @@
 #include <campello_widgets/ui/debug_flags.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include <chrono>
+#include <cstdio>
+#include <typeinfo>
 
 namespace systems::leal::campello_widgets
 {
@@ -122,7 +125,19 @@ namespace systems::leal::campello_widgets
         }
         WidgetInspector::instance().recordRebuild(this);
 
-        performBuild();
+        if (DebugFlags::printDirtyRegionTrace)
+        {
+            const auto start = std::chrono::steady_clock::now();
+            performBuild();
+            const auto ms = std::chrono::duration<float, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            std::fprintf(stderr, "[dirty] rebuild() %6.3f ms on %s\n",
+                         ms, typeid(*this).name());
+        }
+        else
+        {
+            performBuild();
+        }
         building_ = false;
     }
 

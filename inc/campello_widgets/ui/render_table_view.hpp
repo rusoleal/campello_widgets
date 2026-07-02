@@ -89,6 +89,10 @@ namespace systems::leal::campello_widgets
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
+        // Must claim hits within its own viewport to receive scroll-wheel
+        // events over empty space — see RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
+
     private:
         void onPointerEvent(const PointerEvent& event);
         void onTick(uint64_t now_ms);
@@ -145,9 +149,16 @@ namespace systems::leal::campello_widgets
         float velocity_x_ = 0.0f, velocity_y_ = 0.0f;
         uint64_t last_tick_ms_ = 0;
 
-        static constexpr float kTapSlop = 8.0f;
-        static constexpr float kMinVelocity = 1.0f;
-        static constexpr float kSpringCoeff = 12.0f;
+        // See RenderSingleChildScrollView::last_scroll_event_ms_'s doc —
+        // lets onTick() defer spring-back while the OS is still actively
+        // delivering scroll events (including its own momentum tail) for
+        // this gesture, instead of fighting them every tick.
+        uint64_t last_scroll_event_ms_ = 0;
+
+        static constexpr float    kMinVelocity = 1.0f;
+        // See RenderListView::kSpringCoeff's doc.
+        static constexpr float    kSpringCoeff = 20.0f;
+        static constexpr uint64_t kScrollActiveWindowMs = 120;
     };
 
 } // namespace systems::leal::campello_widgets

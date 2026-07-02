@@ -22,6 +22,8 @@ namespace systems::leal::campello_widgets
         Offset offset        = {0.0f, 0.0f};
         float  blur_radius   = 0.0f;
         float  spread_radius = 0.0f;
+
+        bool operator==(const BoxShadow&) const noexcept = default;
     };
 
 } // namespace systems::leal::campello_widgets

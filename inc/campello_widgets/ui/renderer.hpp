@@ -12,6 +12,9 @@
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <campello_widgets/ui/image_filter.hpp>
 #include <campello_widgets/ui/frame_package.hpp>
+#include <campello_widgets/ui/rect.hpp>
+#include <campello_widgets/ui/dirty_region.hpp>
+#include <vector>
 
 // campello_gpu forward declarations
 namespace systems::leal::campello_gpu
@@ -167,6 +170,24 @@ namespace systems::leal::campello_widgets
             pending_drawable_ = nativeDrawable;
         }
 
+        /**
+         * @brief Reports that some node in the tree became paint-dirty.
+         *
+         * Called from `RenderObject::markNeedsPaint()` on every dirty
+         * transition, regardless of how far it bubbles up the tree — since
+         * `markNeedsPaint()` now stops at the nearest repaint boundary
+         * (see `RenderObject::isRepaintBoundary()`) rather than always
+         * reaching the root, `root_->needsPaint()` can no longer be used as
+         * "does anything need painting" — a dirty leaf under a boundary
+         * would leave the root's own flag false. This latch is the
+         * decoupled replacement: `buildFrame()` consumes (checks and
+         * clears) it instead. Mirrors Flutter's `PipelineOwner.
+         * requestVisualUpdate()`, which is likewise decoupled from any
+         * single RenderObject's own dirty flag. Idempotent — safe to call
+         * every time, whether or not a frame is already pending.
+         */
+        void notePaintRequested() noexcept { paint_requested_ = true; }
+
         // ------------------------------------------------------------------
         // Configuration
         // ------------------------------------------------------------------
@@ -214,17 +235,49 @@ namespace systems::leal::campello_widgets
         // ------------------------------------------------------------------
 
         /**
-         * @brief Called by RenderBackdropFilter during the layout pass.
+         * @brief Called by RenderBackdropFilter during paint.
          *
          * Tells the Renderer that at least one BackdropFilter exists in the
-         * scene this frame, and records the maximum blur sigma so the
-         * pre-computed backdrop texture uses the correct blur level.
+         * scene this frame, records the maximum blur sigma so the
+         * pre-computed backdrop texture uses the correct blur level, and
+         * records `bounds` (this filter's own on-screen rect) so
+         * `buildFrame()` can later decide, once the whole frame's paint
+         * walk is done, whether the capture pass can actually be skipped —
+         * see `noteDirtyRegion()`.
          */
-        void noteBackdropFilter(const ImageFilter& filter) noexcept
+        void noteBackdropFilter(const Rect& bounds, const ImageFilter& filter) noexcept
         {
             has_backdrop_filter_ = true;
+            backdrop_regions_.push_back(bounds);
             if (filter.sigma_x > max_sigma_x_) max_sigma_x_ = filter.sigma_x;
             if (filter.sigma_y > max_sigma_y_) max_sigma_y_ = filter.sigma_y;
+        }
+
+        // ------------------------------------------------------------------
+        // Dirty-region tracking (per-frame; reset in layoutPass())
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Reports that `bounds` (a node's on-screen rect) actually
+         *        changed or moved this frame.
+         *
+         * Called from `RenderObject::paint()` (for nodes whose
+         * `needs_paint_` was set) and from `OffsetLayer::maybeReplay()`'s
+         * cheap-reposition path (for content that moved without
+         * repainting). Used by `buildFrame()` to decide whether any
+         * `BackdropFilter` region actually needs a fresh capture this
+         * frame — not a general damage-tracking system, only enough to
+         * make that one decision.
+         */
+        void noteDirtyRegion(const Rect& bounds) noexcept
+        {
+            if (dirty_region_overflowed_) return;
+            if (dirty_rects_.size() >= kMaxDirtyRects) {
+                dirty_region_overflowed_ = true;
+                dirty_rects_.clear();
+                return;
+            }
+            dirty_rects_.push_back(bounds);
         }
 
         // ------------------------------------------------------------------
@@ -277,13 +330,21 @@ namespace systems::leal::campello_widgets
         // replayed to multiple render passes in one frame.
         DrawList generateDrawList(float viewport_width, float viewport_height);
 
-        // Flushes draw commands to `rpe`.
+        // Flushes draw commands to `rpe`, which currently targets `target_view`.
         // backdrop_pass = true  → skips backdrop-filter child commands (capture mode).
         // backdrop_pass = false → handles backdrop-filter commands normally.
-        // `rpe` may be replaced when a ShaderMask region is encountered.
+        // `rpe` may be replaced (and re-target `target_view`) when a
+        // ShaderMask/ClipRRect/ClipOval region is encountered — target_view
+        // must be the actual color attachment `rpe` was opened against
+        // (the swapchain during the main pass, backdrop_tex_ during backdrop
+        // capture, or a child texture during a nested offscreen composite),
+        // NOT always the swapchain, or content drawn after the first such
+        // region within this call gets silently redirected to the wrong
+        // render target.
         void flushDrawList(
             const DrawList&                                    commands,
             std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
             float viewport_width,
             float viewport_height,
             float dpr,
@@ -291,19 +352,41 @@ namespace systems::leal::campello_widgets
 
         // Applies a ShaderMask region: renders child commands to an offscreen
         // texture, then composites with the gradient mask into the main pass.
+        // `target_view` is re-bound via restartRenderPass() after the
+        // offscreen composite — see flushDrawList() for why it must match
+        // whatever `rpe` currently targets.
         void applyShaderMask(
             const DrawShaderMaskBeginCmd&                      cmd,
             const DrawList&                                    child_cmds,
             std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
             float viewport_width,
             float viewport_height,
             float dpr,
             const Matrix4& transform,
             const Rect&    clip);
 
-        // Restarts a render pass on frame_target_ with LoadOp::load (preserves
+        // Applies a ClipRRect/ClipOval region: renders child commands to an
+        // offscreen texture, then composites through a rounded-rect/ellipse
+        // SDF mask into the main pass. `corner_radius` is ignored when
+        // `is_oval` is true. See flushDrawList() for `target_view`.
+        void applyClipShape(
+            const Rect&                                        bounds,
+            float                                               corner_radius,
+            bool                                                is_oval,
+            const DrawList&                                    child_cmds,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
+            float viewport_width,
+            float viewport_height,
+            float dpr,
+            const Matrix4& transform,
+            const Rect&    clip);
+
+        // Restarts a render pass on `target_view` with LoadOp::load (preserves
         // existing content).  Used after an offscreen composite operation.
-        std::shared_ptr<campello_gpu::RenderPassEncoder> restartMainRenderPass();
+        std::shared_ptr<campello_gpu::RenderPassEncoder> restartRenderPass(
+            std::shared_ptr<campello_gpu::TextureView> target_view);
 
         /**
          * @brief Draws the performance overlay: a single unified frame
@@ -365,6 +448,16 @@ namespace systems::leal::campello_widgets
         campello_gpu::FrameTimeSampler build_sampler_;  // build + layout + paint recording
         campello_gpu::FrameTimeSampler raster_sampler_; // GPU encode + submit
 
+        // --- paint-requested latch (see notePaintRequested()'s doc) ---
+        // Not per-frame state (unlike dirty_rects_/backdrop_regions_ below,
+        // which are reset every layoutPass()) — persists across buildFrame()
+        // calls until consumed, since a markNeedsPaint() can happen at any
+        // time, not just during an active frame build. Defaults true so the
+        // first buildFrame() after construction renders even though nothing
+        // has explicitly called markNeedsPaint() yet (mirrors every
+        // RenderObject's own needs_paint_ defaulting true on construction).
+        bool paint_requested_ = true;
+
         // --- view insets (safe area) ---
         EdgeInsets view_insets_;
 
@@ -375,6 +468,15 @@ namespace systems::leal::campello_widgets
         bool  has_backdrop_filter_ = false;
         float max_sigma_x_         = 0.0f;
         float max_sigma_y_         = 0.0f;
+        std::vector<Rect> backdrop_regions_; // one entry per BackdropFilter painted this frame
+
+        // --- dirty-region tracking (per-frame, reset in layoutPass) ---
+        // See noteDirtyRegion()/dirtyRegionIntersects(). Capped so a very
+        // "busy" frame degrades to the conservative "assume dirty"
+        // fallback instead of growing unbounded.
+        static constexpr size_t kMaxDirtyRects = 32;
+        std::vector<Rect> dirty_rects_;
+        bool              dirty_region_overflowed_ = false;
 
         // Offscreen textures for backdrop capture + blur (persistent, resized lazily).
         std::shared_ptr<campello_gpu::Texture> backdrop_tex_;

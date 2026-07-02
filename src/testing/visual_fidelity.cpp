@@ -296,6 +296,10 @@ struct DrawCommandVisitor {
         clips->push(c.rrect.rect);
     }
 
+    void operator()(const cw::PushClipOvalCmd& c) {
+        clips->push(c.rect);
+    }
+
     // Unhandled command types
     void operator()(const cw::DrawOvalCmd&) {}
     void operator()(const cw::DrawArcCmd&) {}

@@ -2,6 +2,7 @@
 #include <chrono>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -63,9 +64,25 @@ namespace systems::leal::campello_widgets
 
     bool RenderGestureDetector::exceedsSlop() const noexcept
     {
+        // Mirrors Flutter's GestureDetector picking a PanGestureRecognizer
+        // (device-aware pan slop, for a responsive drag-start) when pan
+        // callbacks are set, vs judging "is the pointer still basically
+        // stationary" for a pure tap/long-press detector — which always uses
+        // a fixed, generous tolerance regardless of device precision (see
+        // kStationaryTolerance's doc comment for why).
+        const float slop = (on_pan_update || on_pan_end)
+            ? computePanSlop(device_kind_)
+            : kStationaryTolerance;
         const float dx = last_pos_.x - down_pos_.x;
         const float dy = last_pos_.y - down_pos_.y;
-        return std::sqrt(dx * dx + dy * dy) > kTapSlop;
+        return std::sqrt(dx * dx + dy * dy) > slop;
+    }
+
+    bool RenderGestureDetector::exceedsStationaryTolerance() const noexcept
+    {
+        const float dx = last_pos_.x - down_pos_.x;
+        const float dy = last_pos_.y - down_pos_.y;
+        return std::sqrt(dx * dx + dy * dy) > kStationaryTolerance;
     }
 
     void RenderGestureDetector::resolveTapOutcome()
@@ -77,7 +94,7 @@ namespace systems::leal::campello_widgets
             const float dtx   = down_pos_.x - last_tap_pos_.x;
             const float dty   = down_pos_.y - last_tap_pos_.y;
             const float ddist = std::sqrt(dtx * dtx + dty * dty);
-            if (ddist < kTapSlop)
+            if (ddist < kStationaryTolerance)
             {
                 if (on_double_tap) on_double_tap();
                 last_tap_valid_ = false;
@@ -108,6 +125,7 @@ namespace systems::leal::campello_widgets
             pending_tap_      = false;
             down_pos_         = event.position;
             last_pos_         = event.position;
+            device_kind_      = event.device_kind;
             {
                 auto now = std::chrono::steady_clock::now();
                 down_time_ms_ = static_cast<uint64_t>(
@@ -118,6 +136,14 @@ namespace systems::leal::campello_widgets
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             if (on_pan_down) on_pan_down(event.local_position);
+
+            // Frames are only produced on demand (see FrameScheduler) — a
+            // stationary press doesn't itself invalidate anything, so
+            // nothing would otherwise ask for another frame until the
+            // pointer moves or lifts. Without this, onTick() (which the
+            // long-press deadline check below depends on) would never run
+            // again after this one, and long-press could never fire.
+            if (on_long_press) FrameScheduler::scheduleFrame();
             break;
 
         case PointerEventKind::move:
@@ -170,7 +196,7 @@ namespace systems::leal::campello_widgets
                     const float dy   = event.position.y - down_pos_.y;
                     const float dist = std::sqrt(dx * dx + dy * dy);
 
-                    if (dist < kTapSlop)
+                    if (dist < kStationaryTolerance)
                     {
                         if (won_arena_)
                             resolveTapOutcome();
@@ -215,12 +241,23 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void RenderGestureDetector::performPaint(PaintContext& ctx, const Offset& offset)
+    {
+        global_offset_ = offset;
+        if (child_) paintChild(ctx, offset);
+    }
+
     void RenderGestureDetector::onTick(uint64_t now_ms)
     {
         if (!has_down_ || lost_arena_) return;
 
-        // Long press: fire once after kLongPressMs without moving past slop.
-        if (!panning_ && !long_press_fired_ &&
+        // Long press: fire once after kLongPressMs without moving past the
+        // stationary tolerance. Deliberately independent of `panning_` — a
+        // widget with pan handlers (e.g. a "press and drag" zone) can flip
+        // panning_ almost immediately for a mouse (see computePanSlop), but
+        // that must not defeat a co-located long-press the way an
+        // independent Flutter LongPressGestureRecognizer wouldn't be.
+        if (!long_press_fired_ && !exceedsStationaryTolerance() &&
             (now_ms - down_time_ms_) >= kLongPressMs)
         {
             // Claim explicitly — mirrors Flutter's LongPressGestureRecognizer
@@ -231,6 +268,15 @@ namespace systems::leal::campello_widgets
 
             long_press_fired_ = true;
             if (on_long_press) on_long_press();
+        }
+        else if (on_long_press && !long_press_fired_ && !exceedsStationaryTolerance())
+        {
+            // Deadline not reached yet and still a live candidate — request
+            // another frame so this tick keeps running, mirroring Ticker's
+            // self-rescheduling (see ticker.cpp). Frames are otherwise only
+            // produced on demand, and a stationary hold doesn't invalidate
+            // anything on its own.
+            FrameScheduler::scheduleFrame();
         }
     }
 

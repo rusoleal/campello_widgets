@@ -15,6 +15,7 @@ namespace systems::leal::campello_widgets
     void ColoredBox::updateRenderObject(RenderObject& ro) const
     {
         auto& rcb = static_cast<RenderColoredBox&>(ro);
+        if (rcb.color == color) return;
         rcb.color = color;
         rcb.markNeedsPaint();
     }

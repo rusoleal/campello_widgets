@@ -20,35 +20,20 @@ namespace systems::leal::campello_widgets
 
     void RenderRepaintBoundary::paint(PaintContext& context, const Offset& offset)
     {
-        const bool offset_changed = has_cache_ && !(offset == cached_offset_);
+        // Recording into the *live* context (rather than a separate local/
+        // headless one) matters: PushClipRectCmd bakes an absolute rect at
+        // record time (unlike draw-command geometry, which is
+        // transform-deferred to flush time — see flushDrawList()'s
+        // `current_clip = c.rect;`), so a clip recorded against a
+        // fabricated local origin would replay at the wrong position once
+        // translated. Recording at the real `offset` keeps every command —
+        // including clips — correct for *this* offset. See OffsetLayer's
+        // doc for the mechanism (identity replay, cheap delta-translate
+        // reposition when safe, full re-record fallback otherwise).
+        if (!offset_layer_.maybeReplay(context, offset, size_, needsPaint()))
+            offset_layer_.record(context, offset, [&] { paintChild(context, offset); });
 
-        if (needsPaint() || !has_cache_ || offset_changed)
-        {
-            // Dirty, first paint ever, or repositioned since the cache was
-            // recorded — paint the child normally, directly into the live
-            // context, then remember which slice of the resulting DrawList
-            // it produced. Recording into the *live* context (rather than a
-            // separate local/headless one) matters: PushClipRectCmd bakes an
-            // absolute rect at record time (unlike draw-command geometry,
-            // which is transform-deferred to flush time — see
-            // flushDrawList()'s `current_clip = c.rect;`), so a clip
-            // recorded against a fabricated local origin would replay at the
-            // wrong position once translated. Recording at the real
-            // `offset` keeps every command — including clips — correct for
-            // *this* offset, with nothing to re-derive on replay.
-            const size_t start = context.canvas().commands().size();
-            paintChild(context, offset);
-            const DrawList& all = context.canvas().commands();
-            cached_commands_.assign(all.begin() + static_cast<std::ptrdiff_t>(start), all.end());
-            has_cache_     = true;
-            cached_offset_ = offset;
-            needs_paint_   = false;
-            return;
-        }
-
-        // Clean and at the same offset as last recorded — replay the cached
-        // slice instead of walking the child.
-        context.canvas().appendRecorded(cached_commands_);
+        needs_paint_ = false;
     }
 
 } // namespace systems::leal::campello_widgets

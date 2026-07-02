@@ -127,9 +127,14 @@ namespace systems::leal::campello_widgets
     void ListView::updateRenderObject(RenderObject& render_object) const
     {
         auto& rv = static_cast<RenderListView&>(render_object);
-        rv.scroll_axis = scroll_axis;
-        rv.item_count  = item_count;
-        rv.item_extent = item_extent;
+        if (rv.scroll_axis != scroll_axis || rv.item_count != item_count ||
+            rv.item_extent != item_extent)
+        {
+            rv.scroll_axis = scroll_axis;
+            rv.item_count  = item_count;
+            rv.item_extent = item_extent;
+            rv.markNeedsLayout();
+        }
         rv.setController(controller);
         rv.setPhysics(physics);
     }

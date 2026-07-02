@@ -10,6 +10,8 @@
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
+#include <campello_widgets/ui/gesture_constants.hpp>
+#include <campello_widgets/ui/offset_layer.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -18,6 +20,10 @@ namespace systems::leal::campello_widgets
 
     /**
      * @brief RenderBox for a virtualised, fixed-extent 2D grid.
+     *
+     * Self-boundaries its own paint output via `OffsetLayer` — see
+     * `RenderSingleChildScrollView`'s class doc for the rationale, which
+     * applies identically here.
      *
      * Items are laid out in a row-major grid scrolling vertically.
      *   - crossAxisCount items per row.
@@ -78,8 +84,15 @@ namespace systems::leal::campello_widgets
 
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
+        void paint(PaintContext& context, const Offset& offset) override;
+        bool isRepaintBoundary() const noexcept override { return true; }
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
+
+        // Must claim hits within its own viewport (e.g. empty space below
+        // the last row) to receive pan-to-scroll gestures there — see
+        // RenderBox::hitTestSelf().
+        bool hitTestSelf(const Offset&) const override { return true; }
 
         // ------------------------------------------------------------------
         // GestureArenaMember
@@ -93,13 +106,18 @@ namespace systems::leal::campello_widgets
         void onTick(uint64_t now_ms);
 
         float scrollOffset() const noexcept;
-        void  applyScrollDelta(float delta);
+        void  applyScrollDelta(float delta, const char* source = "drag");
         void  checkVisibleRangeChanged();
 
         std::shared_ptr<ScrollController> controller_;
         std::shared_ptr<ScrollPhysics>    physics_;
+        OffsetLayer                       offset_layer_;
 
         float internal_offset_ = 0.0f;
+        // See RenderListView::raw_offset_'s doc — same reasoning: the true,
+        // unresisted cumulative scroll position, kept separate from the
+        // displayed (possibly boundary-resisted) offset above.
+        float raw_offset_      = 0.0f;
         float min_extent_      = 0.0f;
         float max_extent_      = 0.0f;
         float viewport_height_ = 0.0f;
@@ -122,14 +140,26 @@ namespace systems::leal::campello_widgets
         bool   lost_arena_    = false;
         std::optional<GestureArenaEntry> arena_entry_;
         Offset pan_last_pos_;
+        PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
         std::chrono::steady_clock::time_point last_pan_time_;
         float  pan_velocity_  = 0.0f;
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
 
-        static constexpr float kTapSlop     = 8.0f;
-        static constexpr float kMinVelocity = 1.0f;
-        static constexpr float kSpringCoeff = 12.0f;
+        // See RenderSingleChildScrollView::last_scroll_event_ms_'s doc —
+        // lets onTick() defer spring-back while the OS is still actively
+        // delivering scroll events (including its own momentum tail) for
+        // this gesture, instead of fighting them every tick.
+        uint64_t last_scroll_event_ms_ = 0;
+
+        static constexpr float    kMinVelocity = 1.0f;
+        // See RenderListView::kSpringCoeff's doc.
+        static constexpr float    kSpringCoeff = 20.0f;
+        // See RenderListView::kSignificantScrollDelta's doc.
+        static constexpr float    kSignificantScrollDelta = 8.0f;
+        // See RenderListView::kSpringSettleThreshold's doc.
+        static constexpr float    kSpringSettleThreshold = 0.05f;
+        static constexpr uint64_t kScrollActiveWindowMs = 80;
     };
 
 } // namespace systems::leal::campello_widgets

@@ -2,9 +2,12 @@
 #include <campello_widgets/ui/debug_flags.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
 
 #include <iostream>
+#include <cstdio>
+#include <typeinfo>
 
 namespace systems::leal::campello_widgets
 {
@@ -45,14 +48,32 @@ namespace systems::leal::campello_widgets
         return kColors[idx++ % 6];
     }
 
+    namespace
+    {
+        // Zero only for the externally-triggered call that starts a given
+        // markNeedsLayout() bubble-up chain — nonzero for every recursive
+        // parent_->markNeedsLayout() call within that same chain. Lets the
+        // trace below distinguish "this node is the true origin" from
+        // "this node is just being told a descendant changed."
+        int s_layout_propagation_depth = 0;
+    }
+
     void RenderObject::markNeedsLayout() noexcept
     {
         ThreadChecker::instance().assertOnBoundThread("RenderObject::markNeedsLayout");
         if (!needs_layout_)
         {
+            if (DebugFlags::printDirtyRegionTrace)
+                std::fprintf(stderr, "[dirty] markNeedsLayout() %s on %s\n",
+                             s_layout_propagation_depth == 0 ? "TRUE_ORIGIN" : "propagated",
+                             typeid(*this).name());
             needs_layout_ = true;
             if (parent_)
+            {
+                ++s_layout_propagation_depth;
                 parent_->markNeedsLayout();
+                --s_layout_propagation_depth;
+            }
         }
         markNeedsPaint();
     }
@@ -62,13 +83,22 @@ namespace systems::leal::campello_widgets
         ThreadChecker::instance().assertOnBoundThread("RenderObject::markNeedsPaint");
         if (needs_paint_) return;
         needs_paint_ = true;
-        if (parent_)
+
+        // A frame is needed regardless of where propagation below stops —
+        // mirrors Flutter's PipelineOwner.requestVisualUpdate(), called at
+        // every point markNeedsPaint() would otherwise stop bubbling, not
+        // just when reaching the true root. Both calls are idempotent/cheap
+        // to call repeatedly (see FrameScheduler's and Renderer::
+        // notePaintRequested()'s doc comments).
+        FrameScheduler::scheduleFrame();
+        if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+            r->notePaintRequested();
+
+        // Stop bubbling once we reach a node that owns its own paint cache
+        // (OffsetLayer) — its paint() will independently decide replay-vs-
+        // record next paint without needing ancestors above it to know.
+        if (parent_ && !isRepaintBoundary())
             parent_->markNeedsPaint();
-        else
-            // This is the root render object — the whole tree needs a frame.
-            // Mirrors Flutter's PipelineOwner requesting a frame when the root
-            // becomes dirty.  The call is idempotent at the platform level.
-            FrameScheduler::scheduleFrame();
     }
 
     void RenderObject::layout(const BoxConstraints& constraints)
@@ -89,6 +119,32 @@ namespace systems::leal::campello_widgets
     void RenderObject::paint(PaintContext& context, const Offset& offset)
     {
         const bool was_dirty = needs_paint_;
+
+        // Report this node's on-screen bounds as dirty this frame — see
+        // Renderer::noteDirtyRegion(). Only nodes that were actually
+        // marked dirty contribute, so a sibling redundantly repainted
+        // because its container had to fully re-record does not spuriously
+        // widen the dirty region.
+        if (was_dirty)
+        {
+            // offset-based positioning and any ambient canvas transform
+            // (Transform widgets, or a scroll's canvas.translate()) are
+            // independent and additive — project through the current
+            // transform to get this node's true on-screen bounds, not
+            // just its logical offset. See projectedBounds()'s doc.
+            const Rect local_bounds = Rect::fromLTWH(offset.x, offset.y,
+                                                       size_.width, size_.height);
+            const Rect dirty_bounds = projectedBounds(context.canvas().currentTransform(),
+                                                        local_bounds);
+            if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+                r->noteDirtyRegion(dirty_bounds);
+
+            if (DebugFlags::printDirtyRegionTrace)
+                std::fprintf(stderr,
+                    "[dirty] paint()  %-28s (%.0f,%.0f %.0fx%.0f)\n",
+                    typeid(*this).name(), dirty_bounds.x, dirty_bounds.y,
+                    dirty_bounds.width, dirty_bounds.height);
+        }
 
         // ------------------------------------------------------------------
         // Debug overlays — zero cost when all flags are false

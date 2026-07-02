@@ -127,6 +127,35 @@ namespace systems::leal::campello_widgets
          * that total down to find where the cost actually goes.
          */
         inline static bool printRasterSubPhaseTimings = false;
+
+        /**
+         * @brief Print a trace of dirty-region reporting and the resulting
+         * BackdropFilter capture-skip decision to stderr every frame.
+         *
+         * Diagnostic-only, for verifying/debugging Renderer's dirty-region
+         * tracking (see Renderer::noteDirtyRegion()'s doc): which nodes
+         * reported bounds as dirty this frame, what BackdropFilter regions
+         * exist, and whether the capture pass ran or was skipped.
+         */
+        inline static bool printDirtyRegionTrace = false;
+
+        /**
+         * @brief Print every scroll-offset update from virtualized
+         * scrollables (RenderListView, RenderGridView) to stderr, flagging
+         * any update whose applied movement doesn't plausibly follow from
+         * its input delta as a JUMP.
+         *
+         * Each line reports the call site ("drag", "wheel", "spring",
+         * "momentum"), the offset before/after, the requested delta, and
+         * the actually-applied movement (post boundary-condition
+         * resistance). A JUMP is flagged when the applied movement's
+         * magnitude or sign doesn't plausibly follow from the requested
+         * delta — e.g. boundary resistance should only ever shrink the
+         * applied movement relative to the request, never grow or invert
+         * it. Diagnostic-only, for tracking down overscroll/spring-back
+         * discontinuities.
+         */
+        inline static bool printScrollTrace = false;
     };
 
 } // namespace systems::leal::campello_widgets
