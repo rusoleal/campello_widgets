@@ -1373,6 +1373,19 @@ static const std::vector<std::string> kSectionNames = {
     "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images",
 };
 
+// One glyph per section, shown alone when the sidebar collapses to
+// icon-only width. Plain Unicode symbols rather than a real icon font —
+// this framework has no Icon widget yet.
+static const std::vector<std::string> kSectionIcons = {
+    "▦", "⚙", "Aa", "☰",
+    "▶", "✋", "✂", "⌨", "\U0001F5BC",
+};
+
+// Below this total window width the sidebar collapses to icon-only.
+static constexpr float kSidebarCollapseBreakpoint = 640.0f;
+static constexpr float kSidebarExpandedWidth      = 200.0f;
+static constexpr float kSidebarCollapsedWidth     = 64.0f;
+
 static cw::WidgetRef buildSection(int idx)
 {
     switch (idx) {
@@ -1398,55 +1411,120 @@ public:
 
     cw::WidgetRef build(cw::BuildContext&) override
     {
-        // Left sidebar
-        std::vector<cw::WidgetRef> nav_items;
-        for (int i = 0; i < (int)kSectionNames.size(); ++i) {
-            const bool active = (i == selected_);
-            auto label = cw::mw<cw::Text>(kSectionNames[i],
-                ts(14.0f, active ? kBlue : cw::Color::fromRGB(0.25f, 0.25f, 0.30f)));
-            auto item_container = std::make_shared<cw::Container>();
-            item_container->padding = cw::EdgeInsets::symmetric(16.0f, 11.0f);
-            item_container->color   = active
-                ? cw::Color::fromRGB(0.88f, 0.94f, 1.0f)
-                : cw::Color::white();
-            item_container->child   = label;
+        // Right content stays identical regardless of sidebar mode.
+        auto content = cw::mw<cw::Expanded>(buildSection(selected_));
 
-            cw::WidgetRef item_bg = item_container;
-            if (active) {
-                // Left accent bar as a Row sibling. Use CrossAxisAlignment::center
-                // (not stretch) so the Row sizes to content height instead of
-                // consuming all remaining column space.
-                auto accent = std::make_shared<cw::Container>();
-                accent->width = 3.0f; accent->height = 36.0f; accent->color = kBlue;
-                item_container->padding = cw::EdgeInsets::only(13.0f, 11.0f, 16.0f, 11.0f);
-                auto row = cw::mw<cw::Row>(
-                    cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
-                    cw::WidgetList{ accent, cw::mw<cw::Expanded>(item_container) });
-                item_bg = row;
-            }
+        // Vertical divider
+        auto divider = std::make_shared<cw::Container>();
+        divider->width = 1.0f;
+        divider->color = cw::Color::fromRGB(0.87f, 0.87f, 0.90f);
 
-            auto g   = std::make_shared<cw::GestureDetector>();
-            g->on_tap = [this, i] { setState([this, i] { selected_ = i; }); };
-            g->child  = item_bg;
-            nav_items.push_back(ptr(g));
+        // The sidebar's own width is fixed (200 or 64), so it can't see the
+        // window shrinking on its own — a LayoutBuilder around the whole
+        // row is what actually observes the available width and decides
+        // which sidebar mode to build.
+        auto lb = std::make_shared<cw::LayoutBuilder>(
+            [this, divider, content](cw::BuildContext&, cw::BoxConstraints c) -> cw::WidgetRef {
+                const bool collapsed = c.max_width < kSidebarCollapseBreakpoint;
+                auto root = cw::mw<cw::Row>(
+                    cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+                    cw::WidgetList{ buildSidebar(collapsed), divider, content });
+                auto bg = std::make_shared<cw::Container>();
+                bg->color = cw::Color::fromRGB(0.97f, 0.97f, 0.99f);
+                bg->child = root;
+                return bg;
+            });
+        return lb;
+    }
+
+private:
+    // One tab: icon always shown; label shown alongside it only when not
+    // collapsed. Active tab keeps its left accent bar in both modes.
+    cw::WidgetRef buildNavItem(int i, bool collapsed)
+    {
+        const bool active = (i == selected_);
+        const cw::Color fg = active ? kBlue : cw::Color::fromRGB(0.25f, 0.25f, 0.30f);
+        auto icon = cw::mw<cw::Text>(kSectionIcons[i], ts(16.0f, fg));
+
+        cw::WidgetRef content;
+        if (collapsed) {
+            // Not Center: it expands to fill unbounded main-axis space
+            // inside the nav Column instead of shrink-wrapping the icon,
+            // which swallowed the whole sidebar height for this one item.
+            // A Row with centered content sizes to its own content like
+            // the expanded branch below already does correctly.
+            content = cw::mw<cw::Row>(
+                cw::MainAxisAlignment::center, cw::CrossAxisAlignment::center,
+                cw::WidgetList{ icon });
+        } else {
+            auto label = cw::mw<cw::Text>(kSectionNames[i], ts(14.0f, fg));
+            content = cw::mw<cw::Row>(
+                cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+                cw::WidgetList{ icon, hspace(12.0f), label });
         }
 
-        auto sidebar_title = std::make_shared<cw::Container>();
-        sidebar_title->padding = cw::EdgeInsets::symmetric(16.0f, 18.0f);
-        sidebar_title->color   = cw::Color::white();
-        sidebar_title->child   = cw::mw<cw::Column>(
-            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start, cw::MainAxisSize::min,
-            cw::WidgetList{
-                cw::mw<cw::Text>("Gallery", ts(18.0f, cw::Color::fromRGB(0.08f, 0.08f, 0.12f))),
-                vspace(2.0f),
-                cw::mw<cw::Text>("campello_widgets", ts(10.0f, cw::Color::fromRGB(0.55f, 0.55f, 0.60f))),
-            });
+        auto item_container = std::make_shared<cw::Container>();
+        item_container->padding = collapsed
+            ? cw::EdgeInsets::symmetric(8.0f, 13.0f)
+            : cw::EdgeInsets::symmetric(16.0f, 11.0f);
+        item_container->color = active
+            ? cw::Color::fromRGB(0.88f, 0.94f, 1.0f)
+            : cw::Color::white();
+        item_container->child = content;
 
-        auto title_divider = std::make_shared<cw::Container>();
-        title_divider->height = 1.0f;
-        title_divider->color  = cw::Color::fromRGB(0.90f, 0.90f, 0.93f);
+        cw::WidgetRef item_bg = item_container;
+        if (active) {
+            // Left accent bar as a Row sibling. Use CrossAxisAlignment::center
+            // (not stretch) so the Row sizes to content height instead of
+            // consuming all remaining column space.
+            auto accent = std::make_shared<cw::Container>();
+            accent->width = 3.0f; accent->height = 36.0f; accent->color = kBlue;
+            item_container->padding = collapsed
+                ? cw::EdgeInsets::only(5.0f, 13.0f, 8.0f, 13.0f)
+                : cw::EdgeInsets::only(13.0f, 11.0f, 16.0f, 11.0f);
+            auto row = cw::mw<cw::Row>(
+                cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+                cw::WidgetList{ accent, cw::mw<cw::Expanded>(item_container) });
+            item_bg = row;
+        }
 
-        std::vector<cw::WidgetRef> nav_col_children = { sidebar_title, title_divider };
+        auto g   = std::make_shared<cw::GestureDetector>();
+        g->on_tap = [this, i] { setState([this, i] { selected_ = i; }); };
+        g->child  = item_bg;
+        return ptr(g);
+    }
+
+    cw::WidgetRef buildSidebar(bool collapsed)
+    {
+        std::vector<cw::WidgetRef> nav_items;
+        for (int i = 0; i < (int)kSectionNames.size(); ++i)
+            nav_items.push_back(buildNavItem(i, collapsed));
+
+        // The "Gallery / campello_widgets" title has nowhere sensible to
+        // go at icon-only width (a lone big letter just reads as noise),
+        // so collapsed mode drops it entirely in favor of a small top
+        // spacer instead.
+        std::vector<cw::WidgetRef> nav_col_children;
+        if (collapsed) {
+            nav_col_children.push_back(vspace(12.0f));
+        } else {
+            auto sidebar_title = std::make_shared<cw::Container>();
+            sidebar_title->padding = cw::EdgeInsets::symmetric(16.0f, 18.0f);
+            sidebar_title->color   = cw::Color::white();
+            sidebar_title->child   = cw::mw<cw::Column>(
+                cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start, cw::MainAxisSize::min,
+                cw::WidgetList{
+                    cw::mw<cw::Text>("Gallery", ts(18.0f, cw::Color::fromRGB(0.08f, 0.08f, 0.12f))),
+                    vspace(2.0f),
+                    cw::mw<cw::Text>("campello_widgets", ts(10.0f, cw::Color::fromRGB(0.55f, 0.55f, 0.60f))),
+                });
+
+            auto title_divider = std::make_shared<cw::Container>();
+            title_divider->height = 1.0f;
+            title_divider->color  = cw::Color::fromRGB(0.90f, 0.90f, 0.93f);
+
+            nav_col_children = { sidebar_title, title_divider };
+        }
         nav_col_children.insert(nav_col_children.end(), nav_items.begin(), nav_items.end());
 
         auto nav_col = cw::mw<cw::Column>(
@@ -1460,27 +1538,11 @@ public:
         auto sidebar_box = std::make_shared<cw::DecoratedBox>(sidebar_deco);
         sidebar_box->child = nav_col;
 
-        auto sidebar = std::make_shared<cw::SizedBox>(200.0f, std::nullopt, sidebar_box);
-
-        // Vertical divider
-        auto divider = std::make_shared<cw::Container>();
-        divider->width = 1.0f;
-        divider->color = cw::Color::fromRGB(0.87f, 0.87f, 0.90f);
-
-        // Right content
-        auto content = cw::mw<cw::Expanded>(buildSection(selected_));
-
-        auto root = cw::mw<cw::Row>(
-            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
-            cw::WidgetList{ sidebar, divider, content });
-
-        auto bg = std::make_shared<cw::Container>();
-        bg->color = cw::Color::fromRGB(0.97f, 0.97f, 0.99f);
-        bg->child = root;
-        return bg;
+        return std::make_shared<cw::SizedBox>(
+            collapsed ? kSidebarCollapsedWidth : kSidebarExpandedWidth,
+            std::nullopt, sidebar_box);
     }
 
-private:
     int selected_ = 0;
 };
 
@@ -1498,6 +1560,40 @@ namespace systems::leal::campello_widgets
     std::shared_ptr<Widget> buildGalleryApp()
     {
         ImageLoader::instance().initialize(4);
+
+        // Dev shortcuts: Cmd+D / Ctrl+D toggles the performance overlay,
+        // Cmd+R / Ctrl+R toggles the repaint-rainbow overlay. Registered as
+        // a global key handler (checked before focus-based routing) rather
+        // than a KeyboardListener, so the shortcut still fires even while
+        // e.g. a TextField elsewhere has keyboard focus — FocusManager
+        // only ever routes to the single currently-focused node otherwise.
+        // Accepting both ctrl and meta (rather than branching per platform)
+        // gets "Cmd on macOS, Ctrl on Windows/Linux" for free, since meta
+        // is Cmd on macOS and ctrl is native Ctrl everywhere.
+        FocusManager::setGlobalKeyHandler([](const KeyEvent& e) {
+            if (e.kind != KeyEventKind::down) return false;
+            if (!(e.modifiers & (KeyModifiers::ctrl | KeyModifiers::meta))) return false;
+
+            // Toggling a DebugFlags bool doesn't itself mark anything
+            // dirty, so a plain FrameScheduler::scheduleFrame() request
+            // can still get skipped — buildFrame() bails out early when
+            // root_->needsPaint() is false. forceRefresh() marks the root
+            // dirty for layout+paint too, guaranteeing the toggle is
+            // actually visible on the very next frame.
+            if (e.key_code == KeyCode::d) {
+                DebugFlags::showPerformanceOverlay = !DebugFlags::showPerformanceOverlay;
+                if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+                    r->forceRefresh();
+                return true;
+            }
+            if (e.key_code == KeyCode::r) {
+                DebugFlags::repaintRainbowEnabled = !DebugFlags::repaintRainbowEnabled;
+                if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+                    r->forceRefresh();
+                return true;
+            }
+            return false;
+        });
 
         auto shell = std::make_shared<GalleryShell>();
         auto entry = std::make_shared<OverlayEntry>(shell);

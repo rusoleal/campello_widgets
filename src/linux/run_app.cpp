@@ -524,10 +524,18 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
                 break;
             }
 
-            // Try IBus first if we have an active text input target
+            // Try IBus first if we have an active text input target. A
+            // Ctrl-held keystroke is never text composition input — it's
+            // always an app/system command by convention — so it must
+            // still reach FocusManager::handleKeyEvent() below even while
+            // a text field has IBus's input target, or app-wide
+            // Ctrl+<key> shortcuts (see FocusManager::setGlobalKeyHandler())
+            // would silently stop firing the moment any TextField gains
+            // focus.
             bool consumed_by_ime = false;
             if (state->ibus_ime && state->ibus_ime->isActive() &&
-                state->text_input_manager && state->text_input_manager->hasInputTarget())
+                state->text_input_manager && state->text_input_manager->hasInputTarget() &&
+                !(mods & Widgets::KeyModifiers::ctrl))
             {
                 consumed_by_ime = state->ibus_ime->processKeyEvent(
                     static_cast<uint32_t>(keysym),

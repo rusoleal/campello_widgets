@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
+#include <mutex>
 #include <vector>
 #include <campello_widgets/ui/key_event.hpp>
 
@@ -57,9 +59,11 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Routes a keyboard event to the focused node.
          *
-         * Tab / Shift+Tab are intercepted for focus traversal before the event
-         * reaches the focused node. All other events are passed to the focused
-         * node's `on_key` handler.
+         * The global key handler (see setGlobalKeyHandler()), if any, is
+         * checked first and may consume the event outright. Otherwise,
+         * Tab / Shift+Tab are intercepted for focus traversal before the
+         * event reaches the focused node. All other events are passed to
+         * the focused node's `on_key` handler.
          */
         void handleKeyEvent(const KeyEvent& event);
 
@@ -80,11 +84,36 @@ namespace systems::leal::campello_widgets
         static void setActiveManager(FocusManager* manager) noexcept;
         static FocusManager* activeManager() noexcept;
 
+        // ------------------------------------------------------------------
+        // App-level shortcuts
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Registers a handler checked before any focus-based
+         * routing, for shortcuts that must fire regardless of what
+         * currently has keyboard focus (e.g. an app-wide Cmd/Ctrl+<key>
+         * dev toggle that shouldn't stop working just because a text
+         * field elsewhere is focused).
+         *
+         * Every platform adapter's key event ultimately reaches
+         * handleKeyEvent() (macOS, Windows, Linux/X11, Linux/Wayland,
+         * Android all call it directly), so this one hook applies
+         * uniformly across platforms with no per-platform wiring needed.
+         *
+         * The handler returns true to consume the event (skips Tab
+         * traversal and focus routing for that event) or false to let it
+         * fall through to normal handling.
+         */
+        static void setGlobalKeyHandler(std::function<bool(const KeyEvent&)> handler);
+
     private:
         FocusNode*              current_focus_ = nullptr;
         std::vector<FocusNode*> focus_order_;
 
         static std::atomic<FocusManager*> s_active_manager_;
+
+        static std::mutex                            s_global_handler_mutex_;
+        static std::function<bool(const KeyEvent&)>  s_global_key_handler_;
     };
 
 } // namespace systems::leal::campello_widgets

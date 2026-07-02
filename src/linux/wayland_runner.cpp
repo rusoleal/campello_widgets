@@ -451,9 +451,16 @@ static void keyboard_key(void* data, struct wl_keyboard* keyboard,
             return;
         }
 
+        // A Ctrl-held keystroke is never text composition input — it's
+        // always an app/system command by convention — so it must still
+        // reach FocusManager::handleKeyEvent() below even while a text
+        // field has IBus's input target, or app-wide Ctrl+<key> shortcuts
+        // (see FocusManager::setGlobalKeyHandler()) would silently stop
+        // firing the moment any TextField gains focus.
         bool consumed_by_ime = false;
         if (ws->ibus_ime && ws->ibus_ime->isActive() &&
-            ws->text_input_manager && ws->text_input_manager->hasInputTarget())
+            ws->text_input_manager && ws->text_input_manager->hasInputTarget() &&
+            !(mods & Widgets::KeyModifiers::ctrl))
         {
             consumed_by_ime = ws->ibus_ime->processKeyEvent(
                 static_cast<uint32_t>(keysym),

@@ -7,6 +7,8 @@ namespace systems::leal::campello_widgets
 {
 
     std::atomic<FocusManager*> FocusManager::s_active_manager_{nullptr};
+    std::mutex                           FocusManager::s_global_handler_mutex_;
+    std::function<bool(const KeyEvent&)> FocusManager::s_global_key_handler_;
 
     void FocusManager::setActiveManager(FocusManager* manager) noexcept
     {
@@ -16,6 +18,12 @@ namespace systems::leal::campello_widgets
     FocusManager* FocusManager::activeManager() noexcept
     {
         return s_active_manager_.load(std::memory_order_acquire);
+    }
+
+    void FocusManager::setGlobalKeyHandler(std::function<bool(const KeyEvent&)> handler)
+    {
+        std::lock_guard<std::mutex> lock(s_global_handler_mutex_);
+        s_global_key_handler_ = std::move(handler);
     }
 
     // -------------------------------------------------------------------------
@@ -73,6 +81,19 @@ namespace systems::leal::campello_widgets
     void FocusManager::handleKeyEvent(const KeyEvent& event)
     {
         ThreadChecker::instance().assertOnBoundThread("FocusManager::handleKeyEvent");
+
+        // App-level shortcuts run first and may consume the event outright
+        // regardless of what currently has focus. Copy the handler out
+        // under the lock rather than holding it while invoking — the
+        // handler itself may synchronously do widget-tree work
+        // (setState, etc.) that shouldn't run under this mutex.
+        std::function<bool(const KeyEvent&)> global_handler;
+        {
+            std::lock_guard<std::mutex> lock(s_global_handler_mutex_);
+            global_handler = s_global_key_handler_;
+        }
+        if (global_handler && global_handler(event)) return;
+
         // Intercept Tab / Shift+Tab for traversal on key-down only.
         if (event.kind != KeyEventKind::up && event.key_code == KeyCode::tab)
         {

@@ -6,6 +6,7 @@ namespace cw = systems::leal::campello_widgets;
 
 int main()
 {
-    cw::DebugFlags::showPerformanceOverlay = true;
+    // Hidden by default — toggle at runtime with Ctrl+D, wired in
+    // buildGalleryApp().
     return cw::runApp("campello_widgets — Gallery", 1024, 720, cw::buildGalleryApp());
 }

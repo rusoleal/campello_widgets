@@ -255,8 +255,16 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // For IME (Input Method Editor) support, we route text input through
     // the NSTextInputClient protocol by calling interpretKeyEvents:.
     // This allows proper handling of dead keys, accented characters, and CJK input.
-    
-    if (_textInputManager && _textInputManager->hasInputTarget())
+    //
+    // A Command-held keystroke is never text composition input — it's
+    // always an app/system command by macOS convention — so it must reach
+    // FocusManager::handleKeyEvent() (below) even while a text field has
+    // IME's input target, or app-wide Cmd+<key> shortcuts (see
+    // FocusManager::setGlobalKeyHandler()) would silently stop firing
+    // the moment any TextField gains focus.
+    const BOOL hasCommandModifier = (event.modifierFlags & NSEventModifierFlagCommand) != 0;
+
+    if (_textInputManager && _textInputManager->hasInputTarget() && !hasCommandModifier)
     {
         // Check if this is a special key that should NOT go through IME
         // Arrow keys, Escape, Enter, Tab, Function keys, etc. should be handled directly

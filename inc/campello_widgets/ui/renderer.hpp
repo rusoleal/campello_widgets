@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -312,15 +313,33 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Forces a full refresh of the widget tree.
          *
-         * Marks the root render object as needing both layout and paint.
-         * Call this when global rendering flags change (e.g., debug overlays).
+         * Marks the root render object as needing layout, and *every* node
+         * in the tree (not just root) as needing paint. Call this when
+         * global rendering flags change (e.g., debug overlays).
+         *
+         * Marking only the root dirty is enough to guarantee a frame
+         * actually renders (paint() unconditionally cascades into
+         * children, and a clean repaint boundary would otherwise
+         * clean-replay its subtree instead of re-visiting it) — sufficient
+         * for something like the performance overlay, which is an
+         * unconditional post-process draw step with no per-node dirty
+         * check. It is *not* sufficient for a flag like
+         * `repaintRainbowEnabled`, whose effect is gated on each
+         * individual node's own `needs_paint_` (`was_dirty` at
+         * `RenderObject::paint()`'s entry) — with only root marked, every
+         * descendant's own flag reads false and nothing visibly flashes,
+         * even though they did technically repaint.
          */
         void forceRefresh()
         {
-            if (root_) {
-                root_->markNeedsLayout();
-                root_->markNeedsPaint();
-            }
+            if (!root_) return;
+            root_->markNeedsLayout();
+            std::function<void(RenderBox*)> markAll = [&markAll](RenderBox* node) {
+                if (!node) return;
+                node->markNeedsPaint();
+                node->visitRenderChildren(markAll);
+            };
+            markAll(root_.get());
         }
 
     private:
