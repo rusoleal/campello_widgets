@@ -24,4 +24,6 @@ fi
 
 cmake --build "${BUILD_DIR}" --config "${BUILD_TYPE}" --target campello_widgets_gallery
 
-"${BUILD_DIR}/campello_widgets_gallery"
+LOG="${ROOT}/gallery.log"
+echo "[run.sh] Logging to ${LOG}"
+"${BUILD_DIR}/campello_widgets_gallery" 2>&1 | tee "${LOG}"

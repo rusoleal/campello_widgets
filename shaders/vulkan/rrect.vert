@@ -5,7 +5,7 @@ layout(std140, set = 0, binding = 0) uniform RRectUniforms {
     vec4  color;     // r, g, b, a (premultiplied in frag)
     vec2  viewport;  // screen width, height
     float radius;    // corner radius in pixels
-    float _pad;
+    float stroke_w;  // 0 = fill, >0 = stroke width in pixels
 } u;
 
 layout(location = 0) out vec2 v_pos;  // pixel-space position for SDF in frag

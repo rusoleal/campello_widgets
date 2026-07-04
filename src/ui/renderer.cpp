@@ -24,6 +24,7 @@
 #include <campello_gpu/constants/texture_usage.hpp>
 #include <campello_gpu/descriptors/begin_render_pass_descriptor.hpp>
 
+#include <atomic>
 #include <variant>
 
 namespace GPU = systems::leal::campello_gpu;
@@ -114,8 +115,10 @@ namespace systems::leal::campello_widgets
         // isRepaintBoundary()'s doc), so a dirty leaf under a boundary
         // never reaches root — root's own flag can no longer answer "does
         // anything need painting." See notePaintRequested()'s doc.
-        if (!root_ || !std::exchange(paint_requested_, false))
+        if (!root_ || !std::exchange(paint_requested_, false)) {
+            std::fprintf(stderr, "[buildFrame] skip: paint_not_requested\n");
             return std::nullopt;
+        }
 
         // Generate the draw list once (headless — no encoder). This also
         // paints the performance overlay, which reads raster_sampler_ —
@@ -135,8 +138,11 @@ namespace systems::leal::campello_widgets
                 std::chrono::duration<float, std::milli>(build_end - build_start).count());
         }
 
-        if (draw_list.empty())
+        if (draw_list.empty()) {
+            std::fprintf(stderr, "[buildFrame] skip: draw_list empty\n");
             return std::nullopt;
+        }
+        std::fprintf(stderr, "[buildFrame] submitting draw_list size=%zu\n", draw_list.size());
 
         // Snapshot everything the raster phase needs into an immutable
         // package — the raster phase must never read these Renderer
@@ -197,11 +203,6 @@ namespace systems::leal::campello_widgets
 
     bool Renderer::rasterFrame(const FramePackage& package)
     {
-        // Only asserted when a RasterThread has actually bound this checker
-        // (RasterThread::workerLoop()) — platforms that still call
-        // rasterFrame() synchronously from the UI thread via the
-        // renderFrame() back-compat wrapper have no binding here, so this
-        // is a no-op for them.
         if (ThreadChecker::rasterInstance().hasBinding())
             ThreadChecker::rasterInstance().assertOnBoundThread("Renderer::rasterFrame");
 
@@ -234,6 +235,7 @@ namespace systems::leal::campello_widgets
 
         auto encoder = device_->createCommandEncoder();
         markSubPhase("create encoder");
+        if (!encoder) { std::fprintf(stderr, "[raster] createCommandEncoder returned null\n"); return false; }
 
         // Store frame-scoped context so flushDrawList can restart render passes.
         frame_encoder_ = encoder.get();
@@ -244,6 +246,11 @@ namespace systems::leal::campello_widgets
         // Render the full scene to `backdrop_tex_` with backdrop-filter
         // children skipped.  The result is then blurred for use in Pass 2.
         // ------------------------------------------------------------------
+        // bd_view is declared here (outside the if block) so it stays alive
+        // past device_->submit() on line ~348.  vkCmdBeginRenderingKHR records
+        // the raw VkImageView; destroying the TextureView before vkQueueSubmit
+        // is a Vulkan spec violation that crashes the validation layer.
+        std::shared_ptr<GPU::TextureView> bd_view;
         if (package.has_backdrop_filter && draw_backend_)
         {
             const uint32_t tw = static_cast<uint32_t>(package.viewport_width);
@@ -267,7 +274,7 @@ namespace systems::leal::campello_widgets
             // arrayLayerCount = 1 (non-array 2D texture) — the default (-1,
             // an unsigned sentinel) produces an out-of-bounds slice range
             // that Metal's argument validation rejects.
-            auto bd_view = backdrop_tex_->createView(draw_backend_->offscreenPixelFormat(), 1);
+            bd_view = backdrop_tex_->createView(draw_backend_->offscreenPixelFormat(), 1);
             GPU::ColorAttachment bd_ca{};
             bd_ca.view          = bd_view;
             bd_ca.loadOp        = GPU::LoadOp::clear;
@@ -313,6 +320,15 @@ namespace systems::leal::campello_widgets
 
         auto main_rpe = encoder->beginRenderPass(main_desc);
         markSubPhase("main begin");
+
+        if (!main_rpe) {
+            std::fprintf(stderr, "[raster] beginRenderPass returned null\n");
+            frame_encoder_ = nullptr;
+            frame_target_.reset();
+            encoder->finish();
+            return false;
+        }
+
         flushDrawList(package.draw_list, main_rpe, target,
                       package.viewport_width, package.viewport_height, dpr,
                       /*backdrop_pass=*/false);
@@ -467,6 +483,12 @@ namespace systems::leal::campello_widgets
     {
         if (!draw_backend_) return;
 
+        // Notify the backend that a new render pass is starting so it can
+        // reset any GPU state caches (e.g. scissor) that beginRenderPass()
+        // invalidated. Called once per flushDrawList() invocation, which
+        // corresponds to one beginRenderPass() call at the enclosing level.
+        draw_backend_->onBeginFlush();
+
         // Seed the transform with the DPR scale so all logical draw-command
         // coordinates are converted to physical pixels before the Metal
         // shaders divide by the physical viewport to produce NDC. `dpr` is
@@ -476,7 +498,7 @@ namespace systems::leal::campello_widgets
         Matrix4 current_transform = Matrix4::identity();
         current_transform.data[0] = dpr;
         current_transform.data[5] = dpr;
-        Rect                 current_clip      = Rect::fromLTWH(0, 0, 1e9f, 1e9f);
+        Rect                 current_clip      = Rect::fromLTWH(0, 0, viewport_width, viewport_height);
         std::vector<Matrix4> transform_stack;
         std::vector<Rect>    clip_stack;
 
@@ -819,8 +841,6 @@ namespace systems::leal::campello_widgets
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
 
-        // Offscreen texture must be in physical pixels so that the DPR-scaled
-        // draw commands (from flushDrawList's initial DPR transform) fill it correctly.
         const uint32_t tw = static_cast<uint32_t>(std::ceil(bounds.width  * dpr));
         const uint32_t th = static_cast<uint32_t>(std::ceil(bounds.height * dpr));
         if (tw == 0 || th == 0) return;
@@ -828,16 +848,11 @@ namespace systems::leal::campello_widgets
         auto child_tex = draw_backend_->createOffscreenTexture(tw, th);
         if (!child_tex) return;
 
-        // End the current main render pass.
         rpe->end();
 
-        // Render the clip scope's children into child_tex.
         auto child_rpe = draw_backend_->beginOffscreenPass(child_tex, *frame_encoder_);
         if (child_rpe)
         {
-            // Translate child commands so they paint at (0,0) in the offscreen tex.
-            // See applyShaderMask() above for why translate() must be used
-            // instead of poking data[12]/data[13] directly.
             Matrix4 offset_mat = Matrix4::translate(
                 vector_math::Vector3<float>(-bounds.x, -bounds.y, 0.0f));
 
@@ -846,22 +861,8 @@ namespace systems::leal::campello_widgets
             for (const auto& cc : child_cmds) translated.push_back(cc);
             translated.push_back(PopTransformCmd{});
 
-            // The offscreen pass renders at child_tex's own resolution, not
-            // the main framebuffer's — draw commands convert pixel coords to
-            // NDC using the backend's viewport uniform, so it must match the
-            // texture being rendered into or the content lands squeezed into
-            // a sliver of NDC space (and samples as transparent everywhere
-            // else once composited). Restore the outer viewport size
-            // afterward. Must be setViewportSize(), not setViewport() —
-            // the latter also cycles the per-frame uniform-buffer pool
-            // generation, which corrupts other draws already recorded (but
-            // not yet submitted/executed) earlier in this same frame if
-            // called more than once per real frame. See applyShaderMask().
             draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
 
-            // A view of child_tex itself, in case a nested ShaderMask/
-            // ClipRRect/ClipOval inside this one needs to restart against
-            // it (see flushDrawList()'s target_view contract).
             auto child_view = child_tex->createView(draw_backend_->offscreenPixelFormat(), 1);
             flushDrawList(translated, child_rpe, child_view,
                           static_cast<float>(tw), static_cast<float>(th), dpr,
@@ -871,10 +872,8 @@ namespace systems::leal::campello_widgets
             draw_backend_->setViewportSize(viewport_width, viewport_height);
         }
 
-        // Restart whatever render pass was active before this composite.
         rpe = restartRenderPass(target_view);
 
-        // Composite child_tex × rounded-rect/ellipse SDF mask → main pass.
         if (child_rpe)
         {
             draw_backend_->drawClipShapeComposite(

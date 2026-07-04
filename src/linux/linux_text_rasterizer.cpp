@@ -41,7 +41,8 @@ static bool shapeAndLayout(
     float       size,
     std::vector<GlyphLayout>& out_glyphs,
     float& out_width,
-    float& out_height)
+    float& out_height,
+    float* out_advance = nullptr)
 {
     out_glyphs.clear();
     if (!face || !hb_font || !text || text[0] == '\0') return false;
@@ -127,8 +128,9 @@ static bool shapeAndLayout(
         return false;
     }
 
-    out_width  = max_x - min_x;
+    out_width  = max_x - min_x;   // visual bounding box (used for bitmap sizing)
     out_height = max_y - min_y;
+    if (out_advance) *out_advance = cursor_x;  // total HarfBuzz advance (includes trailing spaces)
 
     // Adjust glyph origins so the top-left of the bbox is at (0,0)
     for (auto& gl : out_glyphs) {
@@ -150,23 +152,16 @@ LinuxTextRasterizer::LinuxTextRasterizer()
 
 LinuxTextRasterizer::~LinuxTextRasterizer()
 {
-    if (hb_font_) {
-        hb_font_destroy(hb_font_);
-        hb_font_ = nullptr;
+    for (auto& v : variants_) {
+        if (v.hb_font) { hb_font_destroy(v.hb_font); v.hb_font = nullptr; }
+        if (v.face)    { FT_Done_Face(v.face);        v.face    = nullptr; }
     }
-    if (face_) {
-        FT_Done_Face(face_);
-        face_ = nullptr;
-    }
-    if (ft_lib_) {
-        FT_Done_FreeType(ft_lib_);
-        ft_lib_ = nullptr;
-    }
+    if (ft_lib_) { FT_Done_FreeType(ft_lib_); ft_lib_ = nullptr; }
 }
 
 bool LinuxTextRasterizer::initialize()
 {
-    if (initialized_) return face_ != nullptr;
+    if (initialized_) return variants_[0].face != nullptr;
     initialized_ = true;
 
     if (FT_Init_FreeType(&ft_lib_) != 0) {
@@ -174,50 +169,62 @@ bool LinuxTextRasterizer::initialize()
         return false;
     }
 
-    std::string font_path;
-    if (!findSystemFont(font_path)) {
-        std::cerr << "[LinuxTextRasterizer] No system font found\n";
-        return false;
+    FcInit();
+
+    // Load all 4 variants. Index = (bold<<1 | italic).
+    const struct { bool bold; bool italic; } kVariants[4] = {
+        {false, false}, {false, true}, {true, false}, {true, true}
+    };
+    for (int i = 0; i < 4; ++i) {
+        std::string path;
+        if (!findSystemFont(kVariants[i].bold, kVariants[i].italic, path)) continue;
+        FT_Face face = nullptr;
+        if (FT_New_Face(ft_lib_, path.c_str(), 0, &face) != 0) continue;
+        hb_font_t* hb = hb_ft_font_create_referenced(face);
+        if (!hb) { FT_Done_Face(face); continue; }
+        variants_[i].face    = face;
+        variants_[i].hb_font = hb;
     }
 
-    if (FT_New_Face(ft_lib_, font_path.c_str(), 0, &face_) != 0) {
-        std::cerr << "[LinuxTextRasterizer] Failed to load font: " << font_path << "\n";
-        return false;
-    }
+    if (!variants_[0].face)
+        std::cerr << "[LinuxTextRasterizer] No regular system font found\n";
 
-    hb_font_ = hb_ft_font_create_referenced(face_);
-    if (!hb_font_) {
-        std::cerr << "[LinuxTextRasterizer] Failed to create HarfBuzz font\n";
-        return false;
-    }
-
-    return true;
+    return variants_[0].face != nullptr;
 }
 
-bool LinuxTextRasterizer::findSystemFont(std::string& out_path)
+bool LinuxTextRasterizer::findSystemFont(bool bold, bool italic, std::string& out_path)
 {
-    if (!FcInit()) return false;
-
     FcPattern* pattern = FcPatternCreate();
     if (!pattern) return false;
 
     FcPatternAddString(pattern, FC_FAMILY, reinterpret_cast<const FcChar8*>("sans"));
+    FcPatternAddInteger(pattern, FC_WEIGHT, bold   ? FC_WEIGHT_BOLD    : FC_WEIGHT_REGULAR);
+    FcPatternAddInteger(pattern, FC_SLANT,  italic ? FC_SLANT_ITALIC   : FC_SLANT_ROMAN);
     FcConfigSubstitute(nullptr, pattern, FcMatchPattern);
     FcDefaultSubstitute(pattern);
 
     FcResult result;
     FcPattern* font = FcFontMatch(nullptr, pattern, &result);
     FcPatternDestroy(pattern);
-
     if (!font) return false;
 
     FcChar8* file = nullptr;
-    if (FcPatternGetString(font, FC_FILE, 0, &file) == FcResultMatch && file) {
+    if (FcPatternGetString(font, FC_FILE, 0, &file) == FcResultMatch && file)
         out_path = reinterpret_cast<const char*>(file);
-    }
 
     FcPatternDestroy(font);
     return !out_path.empty();
+}
+
+LinuxTextRasterizer::FontVariant& LinuxTextRasterizer::variantFor(const TextSpan& span)
+{
+    const bool bold   = span.style.font_weight == FontWeight::bold;
+    const bool italic = span.style.italic;
+    const int  idx    = (bold ? 2 : 0) | (italic ? 1 : 0);
+    // Fall back to regular if the requested variant failed to load.
+    if (variants_[idx].face) return variants_[idx];
+    if (variants_[0].face)   return variants_[0];
+    return variants_[0];
 }
 
 // ---------------------------------------------------------------------------
@@ -226,22 +233,26 @@ bool LinuxTextRasterizer::findSystemFont(std::string& out_path)
 
 Size LinuxTextRasterizer::measure(const TextSpan& span)
 {
+    std::lock_guard<std::mutex> lock(ft_mutex_);
     if (!isAvailable() || span.text.empty()) {
         const float char_width  = span.style.font_size * 0.6f;
         const float line_height = span.style.font_size * 1.2f;
         return Size{ char_width * static_cast<float>(span.text.size()), line_height };
     }
 
+    auto& v = variantFor(span);
     std::vector<GlyphLayout> glyphs;
-    float width, height;
-    if (!shapeAndLayout(face_, hb_font_, span.text.c_str(),
-                        span.style.font_size, glyphs, width, height)) {
+    float width, height, advance = 0.0f;
+    if (!shapeAndLayout(v.face, v.hb_font, span.text.c_str(),
+                        span.style.font_size, glyphs, width, height, &advance)) {
         const float char_width  = span.style.font_size * 0.6f;
         const float line_height = span.style.font_size * 1.2f;
         return Size{ char_width * static_cast<float>(span.text.size()), line_height };
     }
 
-    return Size{ width, height };
+    // Use the total HarfBuzz advance as the layout width so that trailing
+    // spaces in one span correctly separate it from the next span.
+    return Size{ advance, height };
 }
 
 // ---------------------------------------------------------------------------
@@ -250,12 +261,14 @@ Size LinuxTextRasterizer::measure(const TextSpan& span)
 
 LinuxTextRasterizer::Bitmap LinuxTextRasterizer::rasterize(const TextSpan& span)
 {
+    std::lock_guard<std::mutex> lock(ft_mutex_);
     Bitmap bmp;
     if (!isAvailable() || span.text.empty()) return bmp;
 
+    auto& v = variantFor(span);
     std::vector<GlyphLayout> glyphs;
     float width_f, height_f;
-    if (!shapeAndLayout(face_, hb_font_, span.text.c_str(),
+    if (!shapeAndLayout(v.face, v.hb_font, span.text.c_str(),
                         span.style.font_size, glyphs, width_f, height_f)) {
         return bmp;
     }
@@ -274,9 +287,9 @@ LinuxTextRasterizer::Bitmap LinuxTextRasterizer::rasterize(const TextSpan& span)
     for (const auto& gl : glyphs) {
         if (gl.bmp_width <= 0 || gl.bmp_height <= 0) continue;
 
-        if (FT_Load_Glyph(face_, gl.glyph_id, FT_LOAD_RENDER) != 0) continue;
+        if (FT_Load_Glyph(v.face, gl.glyph_id, FT_LOAD_RENDER) != 0) continue;
 
-        FT_GlyphSlot slot = face_->glyph;
+        FT_GlyphSlot slot = v.face->glyph;
         FT_Bitmap* ftbmp = &slot->bitmap;
 
         if (ftbmp->pixel_mode != FT_PIXEL_MODE_GRAY) continue;

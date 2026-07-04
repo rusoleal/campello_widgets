@@ -39,6 +39,8 @@
 #include <sys/mman.h>
 #include <poll.h>
 #include <unistd.h>
+#include <signal.h>
+#include <execinfo.h>
 
 #include <chrono>
 #include <memory>
@@ -48,6 +50,22 @@
 #include <climits>
 #include <cstdlib>
 #include <libdecor.h>
+
+// ---------------------------------------------------------------------------
+// Crash handler: prints a backtrace to stderr on SIGSEGV/SIGABRT
+// ---------------------------------------------------------------------------
+static void crashHandler(int sig)
+{
+    void* frames[64];
+    int   n = backtrace(frames, 64);
+    const char* signame = (sig == SIGSEGV) ? "SIGSEGV" : "SIGABRT";
+    // write() is async-signal-safe; fprintf is not, but backtrace_symbols_fd is.
+    dprintf(STDERR_FILENO, "\n[CRASH] %s — backtrace (%d frames):\n", signame, n);
+    backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    dprintf(STDERR_FILENO, "[CRASH] Tip: addr2line -e ./build/linux-debug/campello_widgets_gallery <addr>\n");
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
 
 namespace GPU     = ::systems::leal::campello_gpu;
 namespace Widgets = ::systems::leal::campello_widgets;
@@ -304,6 +322,11 @@ static void frame_close(struct libdecor_frame*, void* user_data)
 static void frame_commit(struct libdecor_frame*, void* user_data)
 {
     auto* state = static_cast<WaylandWindowState*>(user_data);
+    // Commit the surface so libdecor can complete its configure sequence.
+    // Also force a repaint so the raster thread submits a fresh buffer —
+    // some compositors blank the surface when a commit arrives without one.
+    if (state->renderer)
+        state->renderer->notePaintRequested();
     wl_surface_commit(state->surface);
 }
 
@@ -369,8 +392,27 @@ static void pointer_button(void* data, struct wl_pointer* pointer,
     state->dispatcher->handlePointerEvent(e);
 }
 
-static void pointer_axis(void* data, struct wl_pointer* pointer,
-                         uint32_t time, uint32_t axis, wl_fixed_t value) {}
+static void pointer_axis(void* data, struct wl_pointer* /*pointer*/,
+                         uint32_t /*time*/, uint32_t axis, wl_fixed_t value)
+{
+    auto* state = static_cast<WaylandWindowState*>(data);
+    if (!state->dispatcher) return;
+
+    const float delta = static_cast<float>(wl_fixed_to_double(value));
+
+    Widgets::PointerEvent e;
+    e.kind       = Widgets::PointerEventKind::scroll;
+    e.pointer_id = 0;
+    e.position   = { state->last_pointer_x, state->last_pointer_y };
+    e.pressure   = 0.0f;
+
+    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+        e.scroll_delta_y = delta;
+    else
+        e.scroll_delta_x = delta;
+
+    state->dispatcher->handlePointerEvent(e);
+}
 
 // wl_pointer version 5+ events — not used, required for listener completeness.
 static void pointer_frame(void*, struct wl_pointer*) {}
@@ -532,21 +574,22 @@ static const struct wl_callback_listener frame_listener = {
 // Render frame helper
 // ============================================================================
 
-static void renderFrame(WaylandWindowState* state)
+static bool renderFrame(WaylandWindowState* state)
 {
-    if (!state || !state->renderer || !state->device) return;
+    if (!state || !state->renderer || !state->device) return false;
 
     auto package = state->renderer->buildFrame(
         static_cast<float>(state->width),
         static_cast<float>(state->height));
 
-    if (!package) return;
+    if (!package) return false;
 
     // On Vulkan, getSwapchainTextureView() returns nullptr — campello_gpu's
     // beginRenderPass acquires the swapchain image automatically when target is null.
     package->target = state->device->getSwapchainTextureView();
 
     state->raster_thread->submit(std::move(*package));
+    return true;
 }
 
 // ============================================================================
@@ -583,6 +626,9 @@ int runAppWayland(const std::string& title, int width, int height,
                   WidgetRef root_widget, bool resizable)
 {
     (void)resizable; // Wayland compositor handles resizing
+
+    signal(SIGSEGV, crashHandler);
+    signal(SIGABRT, crashHandler);
 
     // -------------------------------------------------------------------------
     // Connect to Wayland display
@@ -755,8 +801,10 @@ int runAppWayland(const std::string& title, int width, int height,
     // Bind the UI thread before any widget tree mutation.
     Widgets::ThreadChecker::instance().bindToCurrentThread();
 
+    std::cerr << "[Linux/Wayland] Mounting widget tree\n";
     state.root_element = wrappedRoot->createElement();
     state.root_element->mount(nullptr);
+    std::cerr << "[Linux/Wayland] Widget tree mounted\n";
 
     auto* roe = state.root_element->findDescendantRenderObjectElement();
     if (!roe) {
@@ -770,6 +818,7 @@ int runAppWayland(const std::string& title, int width, int height,
         std::cerr << "[Linux/Wayland] Root render object is not a RenderBox\n";
         return 1;
     }
+    std::cerr << "[Linux/Wayland] RenderBox found\n";
 
     state.dispatcher->setRoot(render_box);
 
@@ -779,18 +828,22 @@ int runAppWayland(const std::string& title, int width, int height,
     const Widgets::Color bgColor = Widgets::Color::white();
     const GPU::PixelFormat pixelFmt = GPU::PixelFormat::bgra8unorm;
 
+    std::cerr << "[Linux/Wayland] Creating VulkanDrawBackend\n";
     auto backendOwned = std::make_unique<Widgets::VulkanDrawBackend>(
         device, bgColor, pixelFmt);
+    std::cerr << "[Linux/Wayland] VulkanDrawBackend created\n";
 
     state.renderer = std::make_shared<Widgets::Renderer>(
         device, render_box, bgColor);
     state.renderer->setDrawBackend(std::move(backendOwned));
+    std::cerr << "[Linux/Wayland] Renderer ready\n";
 
     state.raster_thread = std::make_unique<Widgets::RasterThread>(
         [renderer = state.renderer](const Widgets::FramePackage& pkg) {
             renderer->rasterFrame(pkg);
         });
     state.raster_thread->start();
+    std::cerr << "[Linux/Wayland] Raster thread started, entering event loop\n";
 
     state.needs_redraw = true;
 
@@ -833,14 +886,18 @@ int runAppWayland(const std::string& title, int width, int height,
         // Render if needed
         if (state.needs_redraw && state.renderer) {
             state.needs_redraw = false;
-            renderFrame(&state);
+            bool submitted = renderFrame(&state);
 
-            // Request next frame callback for vsync
-            struct wl_callback* callback = wl_surface_frame(state.surface);
-            wl_callback_add_listener(callback, &frame_listener, &state);
-            wl_surface_damage(state.surface, 0, 0, INT32_MAX, INT32_MAX);
-            wl_surface_commit(state.surface);
-            wl_display_flush(display);
+            // Only register the vsync frame callback and commit the surface when
+            // we actually submitted a frame to the GPU. On Vulkan, vkQueuePresentKHR
+            // (called from the raster thread) manages wl_surface_attach + commit
+            // internally. Committing the surface here without a new buffer when no
+            // frame was submitted just confuses the compositor.
+            if (submitted) {
+                struct wl_callback* callback = wl_surface_frame(state.surface);
+                wl_callback_add_listener(callback, &frame_listener, &state);
+                wl_display_flush(display);
+            }
         }
 
         // Prepare to read/display events

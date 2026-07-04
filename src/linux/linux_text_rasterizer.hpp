@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <memory>
+#include <mutex>
 
 // Forward declarations for FreeType / HarfBuzz
 typedef struct FT_LibraryRec_  *FT_Library;
@@ -32,9 +33,6 @@ public:
     LinuxTextRasterizer();
     ~LinuxTextRasterizer();
 
-    /** @brief Returns true if a system font was successfully loaded. */
-    bool isAvailable() const noexcept { return face_ != nullptr; }
-
     /** @brief Measures the bounding box of @p span. */
     Size measure(const TextSpan& span);
 
@@ -48,14 +46,30 @@ public:
     /** @brief Rasterises @p span into a CPU bitmap. */
     Bitmap rasterize(const TextSpan& span);
 
+    /** @brief Returns true if a system font was successfully loaded. */
+    bool isAvailable() const noexcept { return variants_[0].face != nullptr; }
+
 private:
     bool initialize();
-    bool findSystemFont(std::string& out_path);
+    bool findSystemFont(bool bold, bool italic, std::string& out_path);
 
-    FT_Library ft_lib_  = nullptr;
-    FT_Face    face_    = nullptr;
-    hb_font_t* hb_font_ = nullptr;
-    bool       initialized_ = false;
+    struct FontVariant {
+        FT_Face    face     = nullptr;
+        hb_font_t* hb_font  = nullptr;
+    };
+
+    FontVariant& variantFor(const TextSpan& span);
+
+    // FreeType and HarfBuzz are not thread-safe.  The UI thread calls
+    // measure() during layout; the raster thread calls rasterize() during
+    // paint.  This mutex serialises both to prevent concurrent FT_Load_Glyph
+    // calls on the same FT_Face from crashing inside TT_RunIns.
+    mutable std::mutex ft_mutex_;
+
+    FT_Library   ft_lib_      = nullptr;
+    // Indexed as: [bold<<1 | italic] → 0=regular, 1=italic, 2=bold, 3=bold+italic
+    FontVariant  variants_[4];
+    bool         initialized_ = false;
 };
 
 } // namespace systems::leal::campello_widgets

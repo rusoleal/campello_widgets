@@ -5,7 +5,7 @@ layout(std140, set = 0, binding = 0) uniform RRectUniforms {
     vec4  color;
     vec2  viewport;
     float radius;
-    float _pad;
+    float stroke_w;  // 0 = fill, >0 = stroke width in pixels
 } u;
 
 layout(location = 0) in  vec2 v_pos;
@@ -26,8 +26,17 @@ void main()
     vec2  half_size = vec2(u.rect.z, u.rect.w) * 0.5;
     float r         = clamp(u.radius, 0.0, min(half_size.x, half_size.y));
 
-    float d     = roundedBox(v_pos - center, half_size, r);
-    float alpha = 1.0 - smoothstep(-0.5, 0.5, d);
+    float d = roundedBox(v_pos - center, half_size, r);
+
+    float alpha;
+    if (u.stroke_w > 0.0) {
+        // Stroke: ring between the outer edge (d=0) and inner edge (d=-stroke_w).
+        float outer = 1.0 - smoothstep(-0.5, 0.5, d);
+        float inner = 1.0 - smoothstep(-0.5, 0.5, d + u.stroke_w);
+        alpha = outer - inner;
+    } else {
+        alpha = 1.0 - smoothstep(-0.5, 0.5, d);
+    }
 
     // Premultiplied-alpha output, matching rect.frag convention.
     vec4 c    = u.color;

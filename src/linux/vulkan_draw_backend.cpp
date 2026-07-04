@@ -6,18 +6,21 @@
 #include <campello_widgets/ui/rect.hpp>
 
 #include <campello_gpu/device.hpp>
+#include <campello_gpu/command_encoder.hpp>
 #include <campello_gpu/render_pipeline.hpp>
 #include <campello_gpu/bind_group_layout.hpp>
 #include <campello_gpu/pipeline_layout.hpp>
 #include <campello_gpu/sampler.hpp>
 #include <campello_gpu/texture.hpp>
+#include <campello_gpu/texture_view.hpp>
 #include <campello_gpu/render_pass_encoder.hpp>
 #include <campello_gpu/buffer.hpp>
 #include <campello_gpu/constants/buffer_usage.hpp>
-#include <campello_gpu/constants/texture_usage.hpp>
+#include <campello_gpu/constants/texture_type.hpp>
 #include <campello_gpu/constants/texture_usage.hpp>
 #include <campello_gpu/constants/shader_stage.hpp>
 #include <campello_gpu/constants/primitive_topology.hpp>
+#include <campello_gpu/descriptors/begin_render_pass_descriptor.hpp>
 
 #include <shaders/vulkan_widgets.h>
 
@@ -47,16 +50,43 @@ struct alignas(16) RRectUniforms
     float color[4];     // r, g, b, a
     float viewport[2];  // w, h
     float radius;
-    float _pad;
+    float stroke_w;     // 0 = fill, >0 = stroke width in pixels
 };
 
 struct alignas(16) QuadUniforms
 {
-    float dstRect[4];   // x, y, w, h
-    float srcRect[4];   // u0, v0, u1, v1
-    float viewport[2];  // w, h
+    float viewport[2];  // w, h (physical pixels)
     float opacity;
     float _pad;
+};
+
+// Per-vertex data uploaded in a vertex buffer — (x,y,w) projected pixel
+// position with perspective-correct w, plus (u,v) texture coordinate.
+// Matches layout(location=0) in vec3 in_posw / layout(location=1) in vec2 in_uv.
+struct QuadVertex
+{
+    float x, y, w;  // projected pixel pos + w
+    float u, v;     // UV
+};
+
+struct alignas(16) ClipShapeUniforms
+{
+    float rect_size[2];  // logical w, h (for SDF)
+    float viewport[2];   // physical w, h
+    float corner_r;      // logical corner radius
+    float kind;          // 0 = rrect, 1 = oval
+    float _pad[2];
+};
+
+struct alignas(16) BlurUniforms
+{
+    float dstRect[4];    // x, y, w, h  (pixels, destination quad)
+    float srcRect[4];    // u0, v0, u1, v1 (normalised UV of source region)
+    float viewport[2];   // framebuffer w, h
+    float sigma;         // Gaussian sigma (pixels)
+    float horizontal;    // 1.0 = H pass, 0.0 = V pass
+    float tex_size[2];   // source texture w, h (pixels)
+    float _pad[2];
 };
 
 // ---------------------------------------------------------------------------
@@ -98,15 +128,17 @@ VulkanDrawBackend::VulkanDrawBackend(
     , pixel_format_(pixel_format)
 {
     // Load SPIR-V shader modules
-    auto rect_vert  = loadSpv(device_, shaders::krect_vert_spv,  shaders::krect_vert_spvSize);
-    auto rect_frag  = loadSpv(device_, shaders::krect_frag_spv,  shaders::krect_frag_spvSize);
-    auto rrect_vert = loadSpv(device_, shaders::krrect_vert_spv, shaders::krrect_vert_spvSize);
-    auto rrect_frag = loadSpv(device_, shaders::krrect_frag_spv, shaders::krrect_frag_spvSize);
-    auto quad_vert  = loadSpv(device_, shaders::kquad_vert_spv,  shaders::kquad_vert_spvSize);
-    auto quad_frag  = loadSpv(device_, shaders::kquad_frag_spv,  shaders::kquad_frag_spvSize);
+    auto rect_vert         = loadSpv(device_, shaders::krect_vert_spv,         shaders::krect_vert_spvSize);
+    auto rect_frag         = loadSpv(device_, shaders::krect_frag_spv,         shaders::krect_frag_spvSize);
+    auto colored_quad_vert = loadSpv(device_, shaders::kcolored_quad_vert_spv, shaders::kcolored_quad_vert_spvSize);
+    auto rrect_vert        = loadSpv(device_, shaders::krrect_vert_spv,        shaders::krrect_vert_spvSize);
+    auto rrect_frag        = loadSpv(device_, shaders::krrect_frag_spv,        shaders::krrect_frag_spvSize);
+    auto quad_vert         = loadSpv(device_, shaders::kquad_vert_spv,         shaders::kquad_vert_spvSize);
+    auto quad_frag         = loadSpv(device_, shaders::kquad_frag_spv,         shaders::kquad_frag_spvSize);
 
-    if (!rect_vert || !rect_frag || !rrect_vert || !rrect_frag || !quad_vert || !quad_frag) {
-        // Shader loading failed — pipelines remain null, backend is effectively no-op
+    if (!rect_vert || !rect_frag || !colored_quad_vert || !rrect_vert || !rrect_frag || !quad_vert || !quad_frag) {
+        std::fprintf(stderr, "[VulkanDrawBackend] shader load failed: rect_v=%d rect_f=%d cq_v=%d rr_v=%d rr_f=%d q_v=%d q_f=%d\n",
+            !!rect_vert, !!rect_frag, !!colored_quad_vert, !!rrect_vert, !!rrect_frag, !!quad_vert, !!quad_frag);
         return;
     }
 
@@ -138,7 +170,7 @@ VulkanDrawBackend::VulkanDrawBackend(
         uni_entry.type       = GPU::EntryObjectType::buffer;
         uni_entry.data.buffer.type             = GPU::EntryObjectBufferType::uniform;
         uni_entry.data.buffer.hasDinamicOffaset = false;
-        uni_entry.data.buffer.minBindingSize   = sizeof(QuadUniforms);
+        uni_entry.data.buffer.minBindingSize   = sizeof(QuadUniforms);  // viewport+opacity+pad = 16
 
         GPU::EntryObject tex_entry{};
         tex_entry.binding    = 1;
@@ -221,6 +253,44 @@ VulkanDrawBackend::VulkanDrawBackend(
         desc.fragment   = frag;
 
         rect_pipeline_ = device_->createRenderPipeline(desc);
+        if (!rect_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] rect_pipeline_ creation FAILED\n");
+    }
+
+    // Colored-quad pipeline — per-vertex (x,y,w) positions, uniform color.
+    // Used by drawRect(fill) to render genuinely rotated/transformed quads
+    // without collapsing to an AABB. Reuses rect_layout_ (same BGL) and rect_frag.
+    {
+        // Vertex layout: location 0 = vec3 (x,y,w), stride 12 bytes.
+        GPU::VertexLayout cq_vtx_layout{};
+        cq_vtx_layout.arrayStride = 3 * sizeof(float);
+        cq_vtx_layout.stepMode    = GPU::StepMode::vertex;
+        {
+            GPU::VertexAttribute posAttr{};
+            posAttr.componentType  = GPU::ComponentType::ctFloat;
+            posAttr.accessorType   = GPU::AccessorType::acVec3;
+            posAttr.offset         = 0;
+            posAttr.shaderLocation = 0;
+            cq_vtx_layout.attributes = { posAttr };
+        }
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.layout      = rect_layout_;
+        desc.topology    = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode    = GPU::CullMode::none;
+        desc.frontFace   = GPU::FrontFace::ccw;
+
+        desc.vertex.module     = colored_quad_vert;
+        desc.vertex.entryPoint = "main";
+        desc.vertex.buffers    = { cq_vtx_layout };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = rect_frag;
+        frag.entryPoint = "main";
+        frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+        desc.fragment   = frag;
+
+        colored_quad_pipeline_ = device_->createRenderPipeline(desc);
+        if (!colored_quad_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] colored_quad_pipeline_ creation FAILED\n");
     }
 
     // RRect pipeline (SDF rounded rectangle)
@@ -241,6 +311,28 @@ VulkanDrawBackend::VulkanDrawBackend(
         desc.fragment   = frag;
 
         rrect_pipeline_ = device_->createRenderPipeline(desc);
+        if (!rrect_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] rrect_pipeline_ creation FAILED\n");
+    }
+
+    // Vertex layout shared by the quad and clip_shape pipelines:
+    // binding 0, stride = sizeof(QuadVertex) = 20 bytes, per-vertex.
+    //   location 0: vec3 (x, y, w) at offset 0
+    //   location 1: vec2 (u, v)    at offset 12
+    GPU::VertexLayout quad_vtx_layout{};
+    quad_vtx_layout.arrayStride = sizeof(QuadVertex);
+    quad_vtx_layout.stepMode    = GPU::StepMode::vertex;
+    {
+        GPU::VertexAttribute posAttr{};
+        posAttr.componentType  = GPU::ComponentType::ctFloat;
+        posAttr.accessorType   = GPU::AccessorType::acVec3;
+        posAttr.offset         = offsetof(QuadVertex, x);
+        posAttr.shaderLocation = 0;
+        GPU::VertexAttribute uvAttr{};
+        uvAttr.componentType   = GPU::ComponentType::ctFloat;
+        uvAttr.accessorType    = GPU::AccessorType::acVec2;
+        uvAttr.offset          = offsetof(QuadVertex, u);
+        uvAttr.shaderLocation  = 1;
+        quad_vtx_layout.attributes = { posAttr, uvAttr };
     }
 
     // Quad pipeline
@@ -253,6 +345,7 @@ VulkanDrawBackend::VulkanDrawBackend(
 
         desc.vertex.module     = quad_vert;
         desc.vertex.entryPoint = "main";
+        desc.vertex.buffers    = { quad_vtx_layout };
 
         GPU::FragmentDescriptor frag{};
         frag.module     = quad_frag;
@@ -261,7 +354,66 @@ VulkanDrawBackend::VulkanDrawBackend(
         desc.fragment   = frag;
 
         quad_pipeline_ = device_->createRenderPipeline(desc);
+        if (!quad_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] quad_pipeline_ creation FAILED\n");
     }
+
+    // ClipShape pipeline — composites ClipRRect/ClipOval offscreen child
+    // texture back to the main pass through an SDF rounded-rect/oval mask.
+    // Reuses quad_layout_ (same BGL: uniform@0, texture@1, sampler@2).
+    {
+        auto cs_vert = loadSpv(device_, shaders::kclip_shape_vert_spv,  shaders::kclip_shape_vert_spvSize);
+        auto cs_frag = loadSpv(device_, shaders::kclip_shape_frag_spv,  shaders::kclip_shape_frag_spvSize);
+        if (cs_vert && cs_frag)
+        {
+            GPU::RenderPipelineDescriptor desc{};
+            desc.layout      = quad_layout_;
+            desc.topology    = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode    = GPU::CullMode::none;
+            desc.frontFace   = GPU::FrontFace::ccw;
+
+            desc.vertex.module     = cs_vert;
+            desc.vertex.entryPoint = "main";
+            desc.vertex.buffers    = { quad_vtx_layout };
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = cs_frag;
+            frag.entryPoint = "main";
+            frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+            desc.fragment   = frag;
+
+            clip_shape_pipeline_ = device_->createRenderPipeline(desc);
+        }
+    }
+
+    // Blur pipeline — separable Gaussian blur (H pass then V pass).
+    // Uses gl_VertexIndex to generate corners (no vertex buffer needed).
+    // Reuses quad_layout_ (same BGL: uniform@0, texture@1, sampler@2).
+    {
+        auto bv = loadSpv(device_, shaders::kblur_vert_spv, shaders::kblur_vert_spvSize);
+        auto bf = loadSpv(device_, shaders::kblur_frag_spv, shaders::kblur_frag_spvSize);
+        if (bv && bf)
+        {
+            GPU::RenderPipelineDescriptor desc{};
+            desc.layout      = quad_layout_;
+            desc.topology    = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode    = GPU::CullMode::none;
+            desc.frontFace   = GPU::FrontFace::ccw;
+            desc.vertex.module     = bv;
+            desc.vertex.entryPoint = "main";
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = bf;
+            frag.entryPoint = "main";
+            frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+            desc.fragment   = frag;
+
+            blur_pipeline_ = device_->createRenderPipeline(desc);
+        }
+    }
+
+    std::fprintf(stderr, "[VulkanDrawBackend] pipelines: rect=%d cq=%d rrect=%d quad=%d clip=%d blur=%d\n",
+        !!rect_pipeline_, !!colored_quad_pipeline_, !!rrect_pipeline_,
+        !!quad_pipeline_, !!clip_shape_pipeline_, !!blur_pipeline_);
 }
 
 // ---------------------------------------------------------------------------
@@ -272,10 +424,18 @@ void VulkanDrawBackend::applyScissor(
     const Rect& clip,
     GPU::RenderPassEncoder& encoder)
 {
-    float x = std::max(0.0f, clip.left());
-    float y = std::max(0.0f, clip.top());
-    float w = std::max(0.0f, clip.width);
-    float h = std::max(0.0f, clip.height);
+    // Clamp to [0, vp_w_] × [0, vp_h_] — mirrors Metal's applyScissor.
+    // Prevents vkCmdSetScissor with extents exceeding maxViewportDimensions.
+    float x  = std::max(0.0f, clip.left());
+    float y  = std::max(0.0f, clip.top());
+    float rx = std::min(clip.right(),  vp_w_);
+    float by = std::min(clip.bottom(), vp_h_);
+    float w  = std::max(0.0f, rx - x);
+    float h  = std::max(0.0f, by - y);
+
+    // Vulkan requires extent.width >= 1 and extent.height >= 1.
+    // A degenerate clip (empty intersection) maps to a 1×1 box at the origin.
+    if (w < 1.0f || h < 1.0f) { x = 0.0f; y = 0.0f; w = 1.0f; h = 1.0f; }
 
     if (x == last_scissor_x_ && y == last_scissor_y_ &&
         w == last_scissor_w_ && h == last_scissor_h_)
@@ -354,11 +514,29 @@ void VulkanDrawBackend::drawRect(
         return;
     }
 
+    // Fill: use the colored_quad_pipeline_ with actual per-vertex corner positions
+    // so that rotation/perspective transforms render as genuine quads, not AABBs.
+    if (!colored_quad_pipeline_) return;
+
+    // 6 vertices: two triangles covering the transformed quad (CCW winding)
+    struct ColoredQuadVertex { float x, y, w; };
+    ColoredQuadVertex verts[6] = {
+        { c00.x(), c00.y(), c00.w() },  // TL
+        { c10.x(), c10.y(), c10.w() },  // TR
+        { c01.x(), c01.y(), c01.w() },  // BL
+        { c01.x(), c01.y(), c01.w() },  // BL
+        { c10.x(), c10.y(), c10.w() },  // TR
+        { c11.x(), c11.y(), c11.w() },  // BR
+    };
+    auto vbuf = device_->createBuffer(sizeof(verts),
+        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::vertex) |
+                                      static_cast<int>(GPU::BufferUsage::copyDst)),
+        verts);
+    if (!vbuf) return;
+    frame_buffers_.push_back(vbuf);
+
+    // Uniform: RectUniforms layout — only color and viewport are read by the shader.
     RectUniforms u{};
-    u.rect[0] = min_x;
-    u.rect[1] = min_y;
-    u.rect[2] = w;
-    u.rect[3] = h;
     u.color[0] = cmd.paint.color.r;
     u.color[1] = cmd.paint.color.g;
     u.color[2] = cmd.paint.color.b;
@@ -367,24 +545,22 @@ void VulkanDrawBackend::drawRect(
     u.viewport[1] = vp_h_;
 
     auto ubuf = device_->createBuffer(sizeof(RectUniforms),
-                                       static_cast<GPU::BufferUsage>(
-                                           static_cast<int>(GPU::BufferUsage::uniform) |
-                                           static_cast<int>(GPU::BufferUsage::copyDst)),
-                                       &u);
+        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
+                                      static_cast<int>(GPU::BufferUsage::copyDst)),
+        &u);
     if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);  // keep alive until next frame (GPU may still reference it)
+    frame_buffers_.push_back(ubuf);
 
     GPU::BindGroupDescriptor bg_desc{};
     bg_desc.layout = uniforms_bgl_;
-    bg_desc.entries = {
-        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RectUniforms) } }
-    };
+    bg_desc.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RectUniforms) } } };
     auto bind_group = device_->createBindGroup(bg_desc);
     if (!bind_group) return;
 
     applyScissor(clip, encoder);
-    encoder.setPipeline(rect_pipeline_);
+    encoder.setPipeline(colored_quad_pipeline_);
     encoder.setBindGroup(0, bind_group);
+    encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
 }
 
@@ -428,7 +604,12 @@ void VulkanDrawBackend::drawRRect(
     u.color[3] = cmd.paint.color.a;
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
-    u.radius = std::min(cmd.rrect.radius_x, cmd.rrect.radius_y);
+    // Scale factor for radius (magnitude of x-axis under transform)
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+
+    u.radius   = std::min(cmd.rrect.radius_x, cmd.rrect.radius_y) * scale;
+    u.stroke_w = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
 
     auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
                                        static_cast<GPU::BufferUsage>(
@@ -453,43 +634,159 @@ void VulkanDrawBackend::drawRRect(
 }
 
 // ---------------------------------------------------------------------------
+// drawCircle
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::drawCircle(
+    const DrawCircleCmd&             cmd,
+    const Matrix4&                   transform,
+    const Rect&                      clip,
+    GPU::RenderPassEncoder&          encoder)
+{
+    if (!rrect_pipeline_ || !uniforms_bgl_) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    auto tc    = transform * vm::Vector4<float>(cmd.center.x, cmd.center.y, 0.0f, 1.0f);
+    auto tv    = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r     = cmd.radius * scale;
+    float sw    = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
+
+    RRectUniforms u{};
+    u.rect[0]    = tc.x() - r;
+    u.rect[1]    = tc.y() - r;
+    u.rect[2]    = r * 2.0f;
+    u.rect[3]    = r * 2.0f;
+    u.color[0]   = cmd.paint.color.r;
+    u.color[1]   = cmd.paint.color.g;
+    u.color[2]   = cmd.paint.color.b;
+    u.color[3]   = cmd.paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.radius     = r;    // corner radius = r → perfect circle via roundedBox SDF
+    u.stroke_w   = sw;
+
+    auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
+        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
+                                      static_cast<int>(GPU::BufferUsage::copyDst)), &u);
+    if (!ubuf) return;
+    frame_buffers_.push_back(ubuf);
+
+    GPU::BindGroupDescriptor bg{};
+    bg.layout  = uniforms_bgl_;
+    bg.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RRectUniforms) } } };
+    auto bind_group = device_->createBindGroup(bg);
+    if (!bind_group) return;
+
+    applyScissor(clip, encoder);
+    encoder.setPipeline(rrect_pipeline_);
+    encoder.setBindGroup(0, bind_group);
+    encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// drawOval
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::drawOval(
+    const DrawOvalCmd&               cmd,
+    const Matrix4&                   transform,
+    const Rect&                      clip,
+    GPU::RenderPassEncoder&          encoder)
+{
+    if (!rrect_pipeline_ || !uniforms_bgl_) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    auto tl = transform * vm::Vector4<float>(cmd.rect.left(),  cmd.rect.top(),    0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.bottom(), 0.0f, 1.0f);
+    float w  = br.x() - tl.x();
+    float h  = br.y() - tl.y();
+    if (w <= 0.0f || h <= 0.0f) return;
+
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width : 0.0f;
+
+    RRectUniforms u{};
+    u.rect[0]    = tl.x();
+    u.rect[1]    = tl.y();
+    u.rect[2]    = w;
+    u.rect[3]    = h;
+    u.color[0]   = cmd.paint.color.r;
+    u.color[1]   = cmd.paint.color.g;
+    u.color[2]   = cmd.paint.color.b;
+    u.color[3]   = cmd.paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.radius     = std::min(w, h) * 0.5f;  // max corner radius = ellipse approximation
+    u.stroke_w   = sw;
+
+    auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
+        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
+                                      static_cast<int>(GPU::BufferUsage::copyDst)), &u);
+    if (!ubuf) return;
+    frame_buffers_.push_back(ubuf);
+
+    GPU::BindGroupDescriptor bg{};
+    bg.layout  = uniforms_bgl_;
+    bg.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RRectUniforms) } } };
+    auto bind_group = device_->createBindGroup(bg);
+    if (!bind_group) return;
+
+    applyScissor(clip, encoder);
+    encoder.setPipeline(rrect_pipeline_);
+    encoder.setBindGroup(0, bind_group);
+    encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
 // Internal textured-quad helper
 // ---------------------------------------------------------------------------
 
 void VulkanDrawBackend::drawTexturedQuad(
-    std::shared_ptr<GPU::Texture>    texture,
-    const Rect&                      dst_rect,
-    const Rect&                      src_rect,
-    float                            opacity,
-    const Rect&                      clip,
-    GPU::RenderPassEncoder&          encoder)
+    std::shared_ptr<GPU::Texture>   texture,
+    const QuadCorner&               c00,
+    const QuadCorner&               c10,
+    const QuadCorner&               c01,
+    const QuadCorner&               c11,
+    float                           opacity,
+    const Rect&                     clip,
+    GPU::RenderPassEncoder&         encoder)
 {
-    if (!quad_pipeline_ || !uniforms_bgl_ || !quad_bgl_ || !linear_sampler_) return;
+    if (!quad_pipeline_ || !quad_bgl_ || !linear_sampler_) return;
     if (!texture) return;
 
+    // Two CCW triangles: (00,10,01), (01,10,11)
+    QuadVertex verts[6] = {
+        {c00.x, c00.y, c00.w, c00.u, c00.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c11.x, c11.y, c11.w, c11.u, c11.v},
+    };
+    auto vbuf = device_->createBuffer(sizeof(verts),
+        static_cast<GPU::BufferUsage>(
+            static_cast<int>(GPU::BufferUsage::vertex) |
+            static_cast<int>(GPU::BufferUsage::copyDst)),
+        verts);
+    if (!vbuf) return;
+    frame_buffers_.push_back(vbuf);
+
     QuadUniforms u{};
-    u.dstRect[0] = dst_rect.left();
-    u.dstRect[1] = dst_rect.top();
-    u.dstRect[2] = dst_rect.width;
-    u.dstRect[3] = dst_rect.height;
-    u.srcRect[0] = src_rect.left();
-    u.srcRect[1] = src_rect.top();
-    u.srcRect[2] = src_rect.right();
-    u.srcRect[3] = src_rect.bottom();
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
-    u.opacity = opacity;
-
+    u.opacity     = opacity;
     auto ubuf = device_->createBuffer(sizeof(QuadUniforms),
-                                       static_cast<GPU::BufferUsage>(
-                                           static_cast<int>(GPU::BufferUsage::uniform) |
-                                           static_cast<int>(GPU::BufferUsage::copyDst)),
-                                       &u);
+        static_cast<GPU::BufferUsage>(
+            static_cast<int>(GPU::BufferUsage::uniform) |
+            static_cast<int>(GPU::BufferUsage::copyDst)),
+        &u);
     if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);  // keep alive until next frame
+    frame_buffers_.push_back(ubuf);
 
     GPU::BindGroupDescriptor bg_desc{};
-    bg_desc.layout = quad_bgl_;
+    bg_desc.layout  = quad_bgl_;
     bg_desc.entries = {
         { 0, GPU::BufferBinding{ ubuf, 0, sizeof(QuadUniforms) } },
         { 1, texture },
@@ -501,6 +798,7 @@ void VulkanDrawBackend::drawTexturedQuad(
     applyScissor(clip, encoder);
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bind_group);
+    encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
 }
 
@@ -516,25 +814,22 @@ void VulkanDrawBackend::drawImage(
 {
     namespace vm = systems::leal::vector_math;
 
-    // Transform destination rectangle corners to get the AABB.
-    auto tl = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
-    auto tr = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.top(),    0.0f, 1.0f);
-    auto bl = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.bottom(), 0.0f, 1.0f);
-    auto br = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    // Transform destination corners independently — real per-vertex quad,
+    // not an AABB — so rotation and perspective render correctly.
+    auto c00 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
 
-    const float min_x = std::min({tl.x(), tr.x(), bl.x(), br.x()});
-    const float min_y = std::min({tl.y(), tr.y(), bl.y(), br.y()});
-    const float max_x = std::max({tl.x(), tr.x(), bl.x(), br.x()});
-    const float max_y = std::max({tl.y(), tr.y(), bl.y(), br.y()});
-
-    const float w = max_x - min_x;
-    const float h = max_y - min_y;
-    if (w <= 0.0f || h <= 0.0f) return;
+    const float su0 = cmd.src_rect.left(),  sv0 = cmd.src_rect.top();
+    const float su1 = cmd.src_rect.right(), sv1 = cmd.src_rect.bottom();
 
     drawTexturedQuad(
         cmd.texture,
-        Rect::fromLTWH(min_x, min_y, w, h),
-        cmd.src_rect,
+        {c00.x(), c00.y(), c00.w(), su0, sv0},
+        {c10.x(), c10.y(), c10.w(), su1, sv0},
+        {c01.x(), c01.y(), c01.w(), su0, sv1},
+        {c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.opacity,
         clip,
         encoder);
@@ -584,19 +879,273 @@ void VulkanDrawBackend::drawText(
 
     texture->upload(0, bitmap.pixels.size(), bitmap.pixels.data());
 
-    // Transform origin to physical pixels
+    // Transform origin to physical pixels. Text quads always use w=1 (no
+    // perspective foreshortening on rasterized glyphs), matching Metal.
     namespace vm = systems::leal::vector_math;
     auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+    const float x0 = t_origin.x(), y0 = t_origin.y();
+    const float x1 = x0 + static_cast<float>(bitmap.width);
+    const float y1 = y0 + static_cast<float>(bitmap.height);
 
     drawTexturedQuad(
         texture,
-        Rect::fromLTWH(t_origin.x(), t_origin.y(),
-                       static_cast<float>(bitmap.width),
-                       static_cast<float>(bitmap.height)),
-        Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
+        {x0, y0, 1.0f, 0.0f, 0.0f},
+        {x1, y0, 1.0f, 1.0f, 0.0f},
+        {x0, y1, 1.0f, 0.0f, 1.0f},
+        {x1, y1, 1.0f, 1.0f, 1.0f},
         1.0f,   // opacity baked into texture
         clip,
         encoder);
+}
+
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Blur support
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::runBlurPass(
+    std::shared_ptr<GPU::Texture> src,
+    std::shared_ptr<GPU::Texture> dst,
+    float sigma, bool horizontal,
+    GPU::CommandEncoder& encoder)
+{
+    if (!blur_pipeline_ || !quad_bgl_ || !linear_sampler_ || !src || !dst) return;
+
+    const uint32_t tw = static_cast<uint32_t>(dst->getWidth());
+    const uint32_t th = static_cast<uint32_t>(dst->getHeight());
+
+    auto dst_view = dst->createView(pixel_format_, 1);
+    if (!dst_view) return;
+    frame_views_.push_back(dst_view);
+
+    GPU::ColorAttachment ca{};
+    ca.view          = dst_view;
+    ca.loadOp        = GPU::LoadOp::clear;
+    ca.storeOp       = GPU::StoreOp::store;
+    ca.clearValue[0] = 0.0f; ca.clearValue[1] = 0.0f;
+    ca.clearValue[2] = 0.0f; ca.clearValue[3] = 0.0f;
+
+    GPU::BeginRenderPassDescriptor desc{};
+    desc.colorAttachments = {ca};
+    auto rpe = encoder.beginRenderPass(desc);
+    if (!rpe) return;
+
+    BlurUniforms u{};
+    u.dstRect[0]  = 0.0f; u.dstRect[1] = 0.0f;
+    u.dstRect[2]  = static_cast<float>(tw);
+    u.dstRect[3]  = static_cast<float>(th);
+    u.srcRect[0]  = 0.0f; u.srcRect[1] = 0.0f;
+    u.srcRect[2]  = 1.0f; u.srcRect[3] = 1.0f;
+    u.viewport[0] = static_cast<float>(tw);
+    u.viewport[1] = static_cast<float>(th);
+    u.sigma       = sigma;
+    u.horizontal  = horizontal ? 1.0f : 0.0f;
+    u.tex_size[0] = static_cast<float>(src->getWidth());
+    u.tex_size[1] = static_cast<float>(src->getHeight());
+
+    auto ubuf = device_->createBuffer(sizeof(BlurUniforms),
+        static_cast<GPU::BufferUsage>(
+            static_cast<int>(GPU::BufferUsage::uniform) |
+            static_cast<int>(GPU::BufferUsage::copyDst)),
+        &u);
+    if (!ubuf) { rpe->end(); return; }
+    frame_buffers_.push_back(ubuf);
+
+    GPU::BindGroupDescriptor bg{};
+    bg.layout  = quad_bgl_;
+    bg.entries = {
+        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(BlurUniforms) } },
+        { 1, src },
+        { 2, linear_sampler_ }
+    };
+    auto bind_group = device_->createBindGroup(bg);
+    if (!bind_group) { rpe->end(); return; }
+
+    rpe->setViewport(0.0f, 0.0f, static_cast<float>(tw), static_cast<float>(th), 0.0f, 1.0f);
+    rpe->setPipeline(blur_pipeline_);
+    rpe->setBindGroup(0, bind_group);
+    rpe->draw(6);
+    rpe->end();
+}
+
+std::shared_ptr<GPU::Texture> VulkanDrawBackend::blurTexture(
+    std::shared_ptr<GPU::Texture> source,
+    float sigma_x, float sigma_y,
+    GPU::CommandEncoder& encoder)
+{
+    if (!source || !blur_pipeline_) return nullptr;
+
+    const uint32_t tw = static_cast<uint32_t>(source->getWidth());
+    const uint32_t th = static_cast<uint32_t>(source->getHeight());
+
+    auto blurUsage = static_cast<GPU::TextureUsage>(
+        static_cast<int>(GPU::TextureUsage::renderTarget) |
+        static_cast<int>(GPU::TextureUsage::textureBinding));
+
+    if (!blur_h_tex_ || blur_tex_w_ != tw || blur_tex_h_ != th)
+    {
+        blur_h_tex_ = device_->createTexture(GPU::TextureType::tt2d, pixel_format_,
+                                              tw, th, 1, 1, 1, blurUsage);
+        blur_v_tex_ = device_->createTexture(GPU::TextureType::tt2d, pixel_format_,
+                                              tw, th, 1, 1, 1, blurUsage);
+        blur_tex_w_ = tw;
+        blur_tex_h_ = th;
+    }
+
+    runBlurPass(source,      blur_h_tex_, sigma_x, /*horizontal=*/true,  encoder);
+    runBlurPass(blur_h_tex_, blur_v_tex_, sigma_y, /*horizontal=*/false, encoder);
+
+    return blur_v_tex_;
+}
+
+void VulkanDrawBackend::drawBackdropFilter(
+    const DrawBackdropFilterBeginCmd&      cmd,
+    std::shared_ptr<GPU::Texture>          blurred_source,
+    const Matrix4&                         transform,
+    const Rect&                            clip,
+    GPU::RenderPassEncoder&                encoder)
+{
+    if (!blurred_source) return;
+    namespace vm = systems::leal::vector_math;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+
+    const float src_w = static_cast<float>(blurred_source->getWidth());
+    const float src_h = static_cast<float>(blurred_source->getHeight());
+
+    // UV for each corner: the blurred source is a full-viewport capture, so
+    // the UV is the corner's screen position normalised by the source texture.
+    auto uv = [&](const vm::Vector4<float>& c) {
+        return std::make_pair(c.x() / c.w() / src_w, c.y() / c.w() / src_h);
+    };
+    auto [u00x, u00y] = uv(c00);
+    auto [u10x, u10y] = uv(c10);
+    auto [u01x, u01y] = uv(c01);
+    auto [u11x, u11y] = uv(c11);
+
+    drawTexturedQuad(
+        blurred_source,
+        {c00.x(), c00.y(), c00.w(), u00x, u00y},
+        {c10.x(), c10.y(), c10.w(), u10x, u10y},
+        {c01.x(), c01.y(), c01.w(), u01x, u01y},
+        {c11.x(), c11.y(), c11.w(), u11x, u11y},
+        1.0f, clip, encoder);
+}
+
+// Offscreen compositing support
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<GPU::Texture> VulkanDrawBackend::createOffscreenTexture(
+    uint32_t width, uint32_t height)
+{
+    auto tex = device_->createTexture(
+        GPU::TextureType::tt2d,
+        pixel_format_,
+        width, height, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding)));
+    if (tex)
+        frame_textures_.push_back(tex);
+    return tex;
+}
+
+std::shared_ptr<GPU::RenderPassEncoder> VulkanDrawBackend::beginOffscreenPass(
+    std::shared_ptr<GPU::Texture> tex,
+    GPU::CommandEncoder&          encoder)
+{
+    if (!tex) return nullptr;
+    auto view = tex->createView(pixel_format_, 1);
+    // Keep the view alive until the frame is submitted: vkCmdBeginRenderingKHR
+    // records the raw VkImageView and it must not be destroyed before
+    // vkQueueSubmit.  frame_views_ is cleared in setViewport() which runs at
+    // the start of the next frame, after Device::submit()'s vkQueueWaitIdle.
+    frame_views_.push_back(view);
+
+    GPU::ColorAttachment ca{};
+    ca.view          = view;
+    ca.loadOp        = GPU::LoadOp::clear;
+    ca.storeOp       = GPU::StoreOp::store;
+    ca.clearValue[0] = 0.0f;
+    ca.clearValue[1] = 0.0f;
+    ca.clearValue[2] = 0.0f;
+    ca.clearValue[3] = 0.0f;
+
+    GPU::BeginRenderPassDescriptor desc{};
+    desc.colorAttachments = {ca};
+    return encoder.beginRenderPass(desc);
+}
+
+void VulkanDrawBackend::drawClipShapeComposite(
+    std::shared_ptr<GPU::Texture> child_tex,
+    const Rect&                   bounds,
+    float                         corner_radius,
+    bool                          is_oval,
+    const Matrix4&                transform,
+    const Rect&                   clip,
+    GPU::RenderPassEncoder&       encoder)
+{
+    if (!clip_shape_pipeline_ || !quad_bgl_ || !linear_sampler_) return;
+    if (!child_tex) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    // Transform all four corners independently — real per-vertex quad, not AABB.
+    auto c00 = transform * vm::Vector4<float>(bounds.left(),  bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(bounds.right(), bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(bounds.left(),  bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(bounds.right(), bounds.bottom(), 0.0f, 1.0f);
+
+    QuadVertex verts[6] = {
+        {c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
+    };
+    auto vbuf = device_->createBuffer(sizeof(verts),
+        static_cast<GPU::BufferUsage>(
+            static_cast<int>(GPU::BufferUsage::vertex) |
+            static_cast<int>(GPU::BufferUsage::copyDst)),
+        verts);
+    if (!vbuf) return;
+    frame_buffers_.push_back(vbuf);
+
+    ClipShapeUniforms u{};
+    u.rect_size[0] = bounds.width;
+    u.rect_size[1] = bounds.height;
+    u.viewport[0]  = vp_w_;
+    u.viewport[1]  = vp_h_;
+    u.corner_r     = corner_radius;
+    u.kind         = is_oval ? 1.0f : 0.0f;
+
+    auto ubuf = device_->createBuffer(sizeof(ClipShapeUniforms),
+        static_cast<GPU::BufferUsage>(
+            static_cast<int>(GPU::BufferUsage::uniform) |
+            static_cast<int>(GPU::BufferUsage::copyDst)),
+        &u);
+    if (!ubuf) return;
+    frame_buffers_.push_back(ubuf);
+
+    GPU::BindGroupDescriptor bg_desc{};
+    bg_desc.layout = quad_bgl_;
+    bg_desc.entries = {
+        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(ClipShapeUniforms) } },
+        { 1, child_tex },
+        { 2, linear_sampler_ }
+    };
+    auto bind_group = device_->createBindGroup(bg_desc);
+    if (!bind_group) return;
+
+    applyScissor(clip, encoder);
+    encoder.setPipeline(clip_shape_pipeline_);
+    encoder.setBindGroup(0, bind_group);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.draw(6);
 }
 
 } // namespace systems::leal::campello_widgets
