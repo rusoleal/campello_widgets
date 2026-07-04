@@ -57,11 +57,12 @@ jobs:
             libvulkan-dev \
             libx11-dev \
             libdbus-1-dev \
-            libfreetype6-dev \
+            libfreetype-dev \
             libharfbuzz-dev \
             libfontconfig1-dev \
             libwayland-dev \
             libxkbcommon-dev \
+            libdecor-0-dev \
             libcurl4-openssl-dev
 
       # Cache FetchContent dependency sources across runs.

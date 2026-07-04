@@ -44,7 +44,7 @@ namespace Widgets = ::systems::leal::campello_widgets;
 // ---------------------------------------------------------------------------
 // Forward declaration for Wayland runner (defined in wayland_runner.cpp)
 // ---------------------------------------------------------------------------
-#ifdef CAMPHELLO_WIDGETS_HAS_WAYLAND
+#ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
 namespace systems::leal::campello_widgets {
     int runAppWayland(const std::string& title, int width, int height,
                       WidgetRef root_widget, bool resizable);
@@ -649,7 +649,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // -----------------------------------------------------------------------
     const char* wayland_display = std::getenv("WAYLAND_DISPLAY");
     if (wayland_display && wayland_display[0] != '\0') {
-#ifdef CAMPHELLO_WIDGETS_HAS_WAYLAND
+#ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
         std::cerr << "[Linux] Wayland detected (" << wayland_display << "), trying Wayland backend.\n";
         int result = runAppWayland(title, width, height, gRootWidget, resizable);
         if (result != 2) return result; // 2 = GPU init failed, fall back to X11

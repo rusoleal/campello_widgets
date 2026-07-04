@@ -7,22 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.1] - 2026-07-04
-
-### Changed
-
-- **`campello_gpu` upgraded from v0.17.0 → v0.18.0** — picks up thread-safety and correctness fixes for the Vulkan/Linux backend:
-  - `DeviceData::gpu_mutex` serializes all `VkCommandPool` and `VkQueue` access; concurrent calls from the raster thread and the main thread were previously undefined behaviour.
-  - `swapchainImageAcquired` guard prevents double `vkAcquireNextImageKHR` when a frame encodes more than one render pass against the swapchain image.
-  - `offscreenViewRef` in `RenderPassEncoderHandle` keeps offscreen `TextureView` objects alive for the duration of the pass, preventing a validation-layer use-after-free.
-  - Offscreen image layout after `RenderPassEncoder::end()` is now `VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL` (was `VK_IMAGE_LAYOUT_GENERAL`), matching the layout expected by `createBindGroup()` for texture sampling.
-  - Dynamic rendering is disabled for Intel hasvk GPUs (Gen8 BSW/HSW/BYT/BDW/CHV), which advertise Vulkan 1.3 but have an unreliable dynamic-rendering implementation; the traditional `vkCmdBeginRenderPass` path is used instead.
-  - Swapchain format selection now prefers `VK_FORMAT_B8G8R8A8_UNORM` / `VK_FORMAT_R8G8B8A8_UNORM` over sRGB, consistent with the Metal backend and campello_widgets' offscreen texture formats.
-  - `VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT` no longer added to color render-target images (caused `vkCreateImage` failures on strict drivers).
-  - `Device::createRenderPipeline()` now wires vertex input bindings and attributes from `RenderPipelineDescriptor::vertex.buffers`; previously always passed zero bindings, making vertex buffer data invisible to shaders.
-- `dependencies/campello_gpu.cmake` switched from a local `SOURCE_DIR` path back to `GIT_REPOSITORY`/`GIT_TAG v0.18.0` so the build works on any machine.
-
-## [0.4.0] - 2026-07-02
+## [0.4.0] - 2026-07-04
 
 ### Added
 
@@ -47,13 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Virtualized list/grid items mass-unmounted (visible blink) during overscroll** — the mounted-item range was computed from the raw, unclamped overscrolled offset, letting it keep changing throughout an entire bounce even though nothing new was actually being revealed at the edge; now pinned to the range visible exactly at the boundary for the whole overscroll.
 - **Overscroll position could snap backward mid-drag** — `applyScrollDelta()` fed its own previous (already-resisted) output back into the boundary-resistance formula, compounding the resistance further on every call instead of reflecting the true drag distance from the boundary; a shrinking per-event delta could retract the displayed overscroll even while still dragging in the same direction. Now tracks a separate, unresisted raw offset as the single source of truth the resistance formula is always applied to fresh.
 - **Trailing OS momentum-tail scroll events held spring-back's start delay to several seconds** — every incoming event, however small, refreshed the "still actively scrolling" gate; raised the significance threshold so only deltas ≥8px count, and sub-threshold trailing deltas are dropped entirely while overscrolled instead of applied (previously they still nudged the position while the spring was simultaneously easing it back, so it never quite settled exactly at the limit).
-- Dependency: `campello_gpu` FetchContent wrapper reverted from a hardcoded local `SOURCE_DIR` back to `GIT_REPOSITORY`/`GIT_TAG v0.17.0` (the local-path form only builds on the machine that path exists on).
+- `dependencies/campello_gpu.cmake` switched from a hardcoded local `SOURCE_DIR` back to `GIT_REPOSITORY`/`GIT_TAG v0.18.0` so the build works on any machine.
+- **Linux CI: `libdecor-0-dev` missing from apt-get install** — `wayland_runner.cpp` unconditionally includes `<libdecor.h>` (the whole file is inside `#ifdef CAMPELLO_WIDGETS_HAS_WAYLAND`), so the package is required whenever Wayland support is compiled in. Also corrected `libfreetype6-dev` → `libfreetype-dev` (Ubuntu 24.04 package name).
+- **`CAMPHELLO_WIDGETS_HAS_WAYLAND` typo** — `linux.cmake`, `src/linux/run_app.cpp`, and `src/linux/wayland_runner.cpp` all used `CAMPHELLO_` (missing 'L') instead of `CAMPELLO_`. The define and its guards are now consistent.
 
 ### Changed
 
 - Overscroll spring-back is noticeably snappier (`kSpringCoeff` 12→20), closer to iOS `UIScrollView` bounce timing.
 - Offscreen textures for clip-shape/shader-mask compositing are now pooled and reused across frames instead of freshly allocated on every draw call (Metal backend, mirrors the existing `UniformBufferPool` pattern) — GPU utilization for continuously-animating clipped content dropped ~50%→15-20%.
-- **`campello_gpu` upgraded from v0.16.0 → v0.17.0.**
+- **`campello_gpu` upgraded from v0.16.0 → v0.18.0** — picks up two releases of Vulkan/Linux backend fixes:
+  - **v0.17.0** — Wayland swapchain extent resolved from caller-supplied dimensions (compositor always reports `UINT32_MAX`); `campello_gpu_wayland_resize()` helper for between-frame resize; Android build fix for `LinuxSurfaceInfo` guard.
+  - **v0.18.0** — `DeviceData::gpu_mutex` serializes all `VkCommandPool`/`VkQueue` access across threads; `swapchainImageAcquired` guard prevents double `vkAcquireNextImageKHR` per frame; `offscreenViewRef` prevents offscreen `TextureView` use-after-free; offscreen layout corrected to `SHADER_READ_ONLY_OPTIMAL`; dynamic rendering disabled for Intel hasvk GPUs (BSW/HSW/BYT/BDW/CHV); swapchain format prefers UNORM over sRGB; `VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT` removed from color render targets; vertex input bindings and attributes now correctly wired in `createRenderPipeline()`.
 
 Full universal test suite: 442/442 passing.
 

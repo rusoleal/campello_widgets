@@ -1,4 +1,4 @@
-#ifdef CAMPHELLO_WIDGETS_HAS_WAYLAND
+#ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
 
 // -----------------------------------------------------------------------------
 // Wayland platform runner
@@ -986,4 +986,4 @@ int runAppWayland(const std::string& title, int width, int height,
 
 } // namespace systems::leal::campello_widgets
 
-#endif // CAMPHELLO_WIDGETS_HAS_WAYLAND
+#endif // CAMPELLO_WIDGETS_HAS_WAYLAND
