@@ -124,6 +124,20 @@ namespace systems::leal::campello_widgets
             ? size_.width / static_cast<float>(cross_axis_count)
             : size_.width;
 
+        // Guard against an unbounded/degenerate width reaching here — e.g. an
+        // ancestor that hands GridView an infinite max_width (a horizontally-
+        // unbounded container) divides through to an infinite item_width_,
+        // which then poisons every mounted cell's tight layout constraint
+        // below. If that cell is wrapped in a ClipRRect/ClipOval (as this
+        // gallery's GridView cells are), the infinite bounds reaches
+        // Renderer::applyClipShape() and corrupts GPU offscreen-texture
+        // creation instead of failing gracefully. Clamping to 0 here means
+        // cells simply don't lay out this pass rather than crashing.
+        if (!std::isfinite(item_width_) || item_width_ < 0.0f)
+            item_width_ = 0.0f;
+        if (!std::isfinite(viewport_height_) || viewport_height_ < 0.0f)
+            viewport_height_ = 0.0f;
+
         const int   total_rows     = (item_count > 0 && cross_axis_count > 0)
             ? (item_count + cross_axis_count - 1) / cross_axis_count
             : 0;

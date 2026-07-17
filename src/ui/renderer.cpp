@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <utility>
 
@@ -840,6 +841,17 @@ namespace systems::leal::campello_widgets
         const Rect&    clip)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
+
+        // A NaN/Infinite bounds (seen in practice from a degenerate layout
+        // upstream — e.g. a GridView row computed against a transient
+        // zero/negative viewport extent) must not reach createOffscreenTexture():
+        // casting an infinite or NaN float to uint32_t is undefined behavior,
+        // and the resulting garbage width/height corrupts the D3D12 debug
+        // layer's descriptor tracking (CreateRenderTargetView raising
+        // D3D12SDKLayers!ReportCorruption) rather than failing gracefully.
+        if (!std::isfinite(bounds.width) || !std::isfinite(bounds.height) ||
+            bounds.width <= 0.0f || bounds.height <= 0.0f)
+            return;
 
         const uint32_t tw = static_cast<uint32_t>(std::ceil(bounds.width  * dpr));
         const uint32_t th = static_cast<uint32_t>(std::ceil(bounds.height * dpr));

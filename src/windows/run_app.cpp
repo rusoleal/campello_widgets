@@ -15,6 +15,7 @@
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
+#include <campello_gpu/constants/pixel_format.hpp>
 
 #include "d3d_draw_backend.hpp"
 
@@ -22,8 +23,11 @@
 #include <windowsx.h>
 #include <dwmapi.h>
 #include <imm.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
 
 #include <chrono>
+#include <cstdio>
 #include <memory>
 #include <atomic>
 #include <string>
@@ -650,6 +654,68 @@ namespace systems::leal::campello_widgets
     namespace GPU     = ::systems::leal::campello_gpu;
     namespace Widgets = ::systems::leal::campello_widgets;
 
+// Best-effort crash diagnostic: prints the exception code/address to stderr
+// (visible in redirected logs, unlike the crash dialog / Event Viewer entry
+// alone) and writes a full minidump — via dbghelp.dll's MiniDumpWriteDump,
+// which ships with Windows, no external debugger needed — before the
+// default handler runs. Does NOT catch STATUS_FATAL_APP_EXIT (0xC000041D) —
+// fail-fast exceptions are deliberately unfilterable — but this handler DOES
+// fire for the recurring crash under investigation, confirming it's a real
+// dispatched exception, not fail-fast.
+static LONG WINAPI crashDiagnosticFilter(EXCEPTION_POINTERS* info)
+{
+    // Multiple threads can fault around the same time (e.g. a shared-state
+    // race). Only the first one through writes the dump/log; the rest just
+    // block here so they don't stomp the same dump file (CreateFileA with
+    // no sharing -> ERROR_SHARING_VIOLATION) or interleave stderr output.
+    // MiniDumpWriteDump below still captures every thread's context, not
+    // just this one's, so nothing is lost by making the others wait.
+    static std::atomic<bool> dumping{false};
+    bool expected = false;
+    if (!dumping.compare_exchange_strong(expected, true))
+    {
+        Sleep(INFINITE);
+    }
+
+    std::fprintf(stderr, "[CRASH] exception code=0x%08lX address=%p thread=%lu\n",
+        info->ExceptionRecord->ExceptionCode,
+        info->ExceptionRecord->ExceptionAddress,
+        GetCurrentThreadId());
+    if (info->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION &&
+        info->ExceptionRecord->NumberParameters >= 2)
+    {
+        std::fprintf(stderr, "[CRASH] access violation %s address 0x%p\n",
+            info->ExceptionRecord->ExceptionInformation[0] ? "writing to" : "reading from",
+            reinterpret_cast<void*>(info->ExceptionRecord->ExceptionInformation[1]));
+    }
+    std::fflush(stderr);
+
+    HANDLE file = CreateFileA("C:\\Users\\rusol\\source\\repos\\campello_widgets\\crash_dumps\\manual_crash.dmp",
+        GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file != INVALID_HANDLE_VALUE)
+    {
+        MINIDUMP_EXCEPTION_INFORMATION mei{};
+        mei.ThreadId          = GetCurrentThreadId();
+        mei.ExceptionPointers = info;
+        mei.ClientPointers    = FALSE;
+
+        BOOL ok = MiniDumpWriteDump(
+            GetCurrentProcess(), GetCurrentProcessId(), file,
+            static_cast<MINIDUMP_TYPE>(MiniDumpWithFullMemory | MiniDumpWithHandleData | MiniDumpWithThreadInfo),
+            &mei, nullptr, nullptr);
+        std::fprintf(stderr, "[CRASH] MiniDumpWriteDump %s\n", ok ? "succeeded" : "FAILED");
+        std::fflush(stderr);
+        CloseHandle(file);
+    }
+    else
+    {
+        std::fprintf(stderr, "[CRASH] could not open dump file for writing, GetLastError=%lu\n", GetLastError());
+        std::fflush(stderr);
+    }
+
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget)
 {
     return runApp(title, width, height, std::move(root_widget), true);
@@ -657,6 +723,8 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget, bool resizable)
 {
+    SetUnhandledExceptionFilter(crashDiagnosticFilter);
+
     gRootWidget = std::move(root_widget);
     gTitle = title;
     gWidth = width;
@@ -753,9 +821,12 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.renderer = std::make_shared<Widgets::Renderer>(
         state.device, render_box, bgColor);
 
-    // Create D3D draw backend
+    // Create D3D draw backend. The DirectX 12 swapchain always presents in
+    // DXGI_FORMAT_R8G8B8A8_UNORM (campello_gpu's directx Device hardcodes
+    // this — see createDeviceData()'s swap chain descriptor), so pass the
+    // matching campello_gpu pixel format rather than querying it.
     state.draw_backend = std::make_unique<Widgets::D3DDrawBackend>(
-        state.device, bgColor, state.hwnd);
+        state.device, bgColor, GPU::PixelFormat::rgba8unorm);
     state.renderer->setDrawBackend(std::move(state.draw_backend));
 
     // Initial safe area setup

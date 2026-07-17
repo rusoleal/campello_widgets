@@ -15,6 +15,7 @@
 #include <campello_widgets/ui/frame_package.hpp>
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/dirty_region.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 #include <vector>
 
 // campello_gpu forward declarations
@@ -329,6 +330,16 @@ namespace systems::leal::campello_widgets
          * `RenderObject::paint()`'s entry) — with only root marked, every
          * descendant's own flag reads false and nothing visibly flashes,
          * even though they did technically repaint.
+         *
+         * Explicitly requests a frame and latches paint_requested_ itself,
+         * rather than relying entirely on markNeedsPaint()'s internal calls
+         * to do so: markNeedsPaint() only calls FrameScheduler::
+         * scheduleFrame()/notePaintRequested() when a node's own
+         * needs_paint_ transitions false -> true, and returns immediately
+         * (skipping both) if that node was already dirty for an unrelated
+         * reason (e.g. a widget mid-animation) — which would otherwise make
+         * a debug-flag toggle's visibility depend on incidental tree state
+         * instead of being guaranteed on the very next frame.
          */
         void forceRefresh()
         {
@@ -340,6 +351,8 @@ namespace systems::leal::campello_widgets
                 node->visitRenderChildren(markAll);
             };
             markAll(root_.get());
+            notePaintRequested();
+            FrameScheduler::scheduleFrame();
         }
 
     private:
