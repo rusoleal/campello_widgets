@@ -54,7 +54,21 @@ namespace systems::leal::campello_widgets
 
         if (offset == recorded_offset_)
         {
+            // Bracket the replay with CacheReplayBeginCmd/EndCmd, carrying
+            // this OffsetLayer's own address as an opaque identity —
+            // Renderer::flushDrawList() uses it to recognize that any
+            // ClipRRect/ClipOval/ShaderMask inside is guaranteed unchanged
+            // (this whole slice is a byte-for-byte copy of what was
+            // recorded last time), and can safely reuse its cached GPU
+            // composite instead of recapturing it. See
+            // CacheReplayBeginCmd's doc comment. Only the identity-replay
+            // path is bracketed — the delta-translate path below can never
+            // carry clip-shape content in the first place, since
+            // hasUnsafeGeometry() (which every clip/backdrop/shader-mask
+            // sets) always forces a full re-record on reposition instead.
+            canvas.appendRecorded(DrawList{CacheReplayBeginCmd{this}});
             canvas.appendRecorded(picture_.commands());
+            canvas.appendRecorded(DrawList{CacheReplayEndCmd{}});
             return true;
         }
 

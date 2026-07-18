@@ -227,6 +227,33 @@ namespace systems::leal::campello_widgets
     struct PopTransformCmd {};
 
     // ------------------------------------------------------------------
+    // Cache-replay markers
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief Marks the start of a replayed (cache-hit) OffsetLayer region.
+     *
+     * Emitted by `OffsetLayer::maybeReplay()`'s identity-replay path,
+     * wrapped around a byte-for-byte copy of a previously-recorded
+     * `DrawList` slice. Every command between this and the matching
+     * `CacheReplayEndCmd` is guaranteed identical to what was recorded the
+     * last time this exact region was captured — nothing in it changed,
+     * or `OffsetLayer` would have forced a full re-record instead of
+     * replaying. `Renderer::flushDrawList()` uses this guarantee to reuse
+     * a previous frame's GPU composite for any `ClipRRect`/`ClipOval`/
+     * `ShaderMask` bracket found inside, instead of recapturing it.
+     *
+     * `region_id` is `this` from the emitting `OffsetLayer`, used purely
+     * as an opaque, never-dereferenced map key — see
+     * `Renderer::clip_shape_gpu_cache_`'s doc comment for why reusing a
+     * stale address after the owning RenderObject unmounts is harmless.
+     */
+    struct CacheReplayBeginCmd { const void* region_id; };
+
+    /** @brief Marks the end of a `CacheReplayBeginCmd` region. */
+    struct CacheReplayEndCmd {};
+
+    // ------------------------------------------------------------------
     // Variant
     // ------------------------------------------------------------------
 
@@ -272,7 +299,11 @@ namespace systems::leal::campello_widgets
 
         // ShaderMask (begin/end pair wrapping child commands)
         DrawShaderMaskBeginCmd,
-        DrawShaderMaskEndCmd
+        DrawShaderMaskEndCmd,
+
+        // Cache-replay markers (begin/end pair wrapping a verbatim replay)
+        CacheReplayBeginCmd,
+        CacheReplayEndCmd
     >;
 
     using DrawList = std::vector<DrawCommand>;

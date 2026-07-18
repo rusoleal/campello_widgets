@@ -16,6 +16,9 @@
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/dirty_region.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
+#include <cstdint>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // campello_gpu forward declarations
@@ -387,6 +390,15 @@ namespace systems::leal::campello_widgets
         // `target_view` is re-bound via restartRenderPass() after the
         // offscreen composite — see flushDrawList() for why it must match
         // whatever `rpe` currently targets.
+        //
+        // `replay_region_id`/`replay_bracket_index` identify this bracket's
+        // slot in `shader_mask_gpu_cache_` — see the cache members' doc
+        // comment below. Default (`nullptr`, 0) means "not inside a
+        // CacheReplayBeginCmd/EndCmd region", which disables the cache
+        // entirely for this call (no lookup, no store): only brackets
+        // encountered while replaying a previously-recorded, byte-for-byte-
+        // unchanged region are safe to key by (region_id, bracket index)
+        // alone, per CacheReplayBeginCmd's doc comment.
         void applyShaderMask(
             const DrawShaderMaskBeginCmd&                      cmd,
             const DrawList&                                    child_cmds,
@@ -396,12 +408,15 @@ namespace systems::leal::campello_widgets
             float viewport_height,
             float dpr,
             const Matrix4& transform,
-            const Rect&    clip);
+            const Rect&    clip,
+            const void*    replay_region_id     = nullptr,
+            size_t         replay_bracket_index  = 0);
 
         // Applies a ClipRRect/ClipOval region: renders child commands to an
         // offscreen texture, then composites through a rounded-rect/ellipse
         // SDF mask into the main pass. `corner_radius` is ignored when
-        // `is_oval` is true. See flushDrawList() for `target_view`.
+        // `is_oval` is true. See flushDrawList() for `target_view`, and
+        // applyShaderMask() above for `replay_region_id`/`replay_bracket_index`.
         void applyClipShape(
             const Rect&                                        bounds,
             float                                               corner_radius,
@@ -413,7 +428,9 @@ namespace systems::leal::campello_widgets
             float viewport_height,
             float dpr,
             const Matrix4& transform,
-            const Rect&    clip);
+            const Rect&    clip,
+            const void*    replay_region_id     = nullptr,
+            size_t         replay_bracket_index  = 0);
 
         // Restarts a render pass on `target_view` with LoadOp::load (preserves
         // existing content).  Used after an offscreen composite operation.
@@ -515,6 +532,69 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::Texture> blurred_backdrop_tex_;
         uint32_t backdrop_tex_w_ = 0;
         uint32_t backdrop_tex_h_ = 0;
+
+        // --- clip-shape / shader-mask GPU composite cache ---
+        //
+        // Skips the offscreen capture-and-composite GPU work for a
+        // ClipRRect/ClipOval/ShaderMask bracket that flushDrawList()
+        // encounters inside a CacheReplayBeginCmd/EndCmd region — i.e. one
+        // that OffsetLayer::maybeReplay() has already determined is a
+        // byte-for-byte-unchanged replay of a previous frame's content (see
+        // CacheReplayBeginCmd's doc comment). A RepaintBoundary correctly
+        // skips re-walking the widget tree for such content, but without
+        // this cache the *GPU* side of clip-shape/shader-mask compositing
+        // still reran every frame regardless — this is what actually fixes
+        // that gap.
+        //
+        // Keyed by (region_id, Nth clip-shape/shader-mask bracket since the
+        // region began) — safe as a non-fragile key with no content
+        // hashing needed, because "replay" only ever happens when nothing
+        // in the region changed, so the same region_id always produces the
+        // same sequence of brackets in the same order. `region_id` is an
+        // OffsetLayer's own address, used purely as an opaque, never-
+        // dereferenced map key: if the owning RenderObject unmounts, later
+        // reuse of that address by an unrelated OffsetLayer is harmless,
+        // because a fresh OffsetLayer's first paint is always a full
+        // record (never identity-replay), and the eviction sweep below
+        // drops any entry that goes unused for kClipShapeCacheMaxAgeFrames
+        // frames regardless.
+        struct ReplayKeyHash
+        {
+            size_t operator()(const std::pair<const void*, size_t>& k) const noexcept
+            {
+                return std::hash<const void*>{}(k.first) ^ (k.second * 0x9E3779B97F4A7C15ull);
+            }
+        };
+
+        struct ClipShapeGpuCacheEntry
+        {
+            std::shared_ptr<campello_gpu::Texture> texture;
+            Rect     bounds;
+            float    corner_radius = 0.0f;
+            bool     is_oval       = false;
+            uint64_t last_used_frame = 0;
+        };
+
+        struct ShaderMaskGpuCacheEntry
+        {
+            std::shared_ptr<campello_gpu::Texture> texture;
+            DrawShaderMaskBeginCmd cmd{Rect{}, LinearGradient{}};
+            uint64_t last_used_frame = 0;
+        };
+
+        static constexpr uint64_t kClipShapeCacheMaxAgeFrames = 120;
+
+        std::unordered_map<std::pair<const void*, size_t>, ClipShapeGpuCacheEntry, ReplayKeyHash>
+            clip_shape_gpu_cache_;
+        std::unordered_map<std::pair<const void*, size_t>, ShaderMaskGpuCacheEntry, ReplayKeyHash>
+            shader_mask_gpu_cache_;
+
+        // Incremented once per rasterFrame() call; drives the eviction
+        // sweeps above (mirrors D3DDrawBackend::OffscreenTexturePool's
+        // last_used_frame_/kMaxAgeFrames pattern).
+        uint64_t frame_counter_ = 0;
+
+        void evictStaleGpuCaches();
 
         // --- frame-scoped pointers (valid only during renderFrame) ---
         campello_gpu::CommandEncoder*              frame_encoder_ = nullptr;

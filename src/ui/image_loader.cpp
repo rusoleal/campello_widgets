@@ -81,11 +81,8 @@ namespace systems::leal::campello_widgets
         ImageProviderRef provider,
         const ImageConfiguration& config)
     {
-        std::cerr << "[ImageLoader] loadAsync called\n";
-        
         // Ensure initialized
         if (threads_.empty()) {
-            std::cerr << "[ImageLoader] Initializing thread pool\n";
             initialize();
         }
 
@@ -96,7 +93,6 @@ namespace systems::leal::campello_widgets
 
         // Check cache first
         if (auto cached = ImageCache::instance().get(task->cache_key)) {
-            std::cerr << "[ImageLoader] Cache hit, returning immediately\n";
             ImageLoadResult result;
             result.status = ImageLoadStatus::completed;
             result.image = cached;
@@ -104,7 +100,6 @@ namespace systems::leal::campello_widgets
             return task->promise.get_future();
         }
 
-        std::cerr << "[ImageLoader] Queueing task for " << task->cache_key << "\n";
         std::future<ImageLoadResult> future = task->promise.get_future();
 
         {
@@ -114,7 +109,6 @@ namespace systems::leal::campello_widgets
         }
 
         condition_.notify_one();
-        std::cerr << "[ImageLoader] Task queued, notifying worker\n";
         return future;
     }
 
@@ -184,19 +178,16 @@ namespace systems::leal::campello_widgets
 
     void ImageLoader::workerLoop()
     {
-        std::cerr << "[ImageLoader] Worker thread started\n";
         while (true) {
             std::shared_ptr<Task> task;
 
             {
                 std::unique_lock<std::mutex> lock(queue_mutex_);
-                std::cerr << "[ImageLoader] Worker waiting for task...\n";
                 condition_.wait(lock, [this]() {
                     return shutdown_ || !task_queue_.empty();
                 });
 
                 if (shutdown_ && task_queue_.empty()) {
-                    std::cerr << "[ImageLoader] Worker shutting down\n";
                     return;
                 }
 
@@ -207,7 +198,6 @@ namespace systems::leal::campello_widgets
                 task = task_queue_.front();
                 task_queue_.pop();
                 pending_count_--;
-                std::cerr << "[ImageLoader] Worker got task: " << task->cache_key << "\n";
             }
 
             if (task->cancelled.load()) {
@@ -218,21 +208,15 @@ namespace systems::leal::campello_widgets
                 continue;
             }
 
-            // Execute the load
-            std::cerr << "[ImageLoader] Executing task...\n";
             auto result = executeTask(*task);
-            std::cerr << "[ImageLoader] Task complete, status=" << (int)result.status << "\n";
             task->promise.set_value(std::move(result));
         }
     }
 
     ImageLoadResult ImageLoader::executeTask(const Task& task)
     {
-        std::cerr << "[ImageLoader] executeTask: " << task.cache_key << "\n";
-        
         // Double-check cache (might have been loaded by another thread)
         if (auto cached = ImageCache::instance().get(task.cache_key)) {
-            std::cerr << "[ImageLoader] Cache hit in executeTask\n";
             ImageLoadResult result;
             result.status = ImageLoadStatus::completed;
             result.image = cached;
@@ -240,14 +224,14 @@ namespace systems::leal::campello_widgets
         }
 
         try {
-            std::cerr << "[ImageLoader] Calling provider->load()...\n";
             auto image = task.provider->load(task.config);
-            std::cerr << "[ImageLoader] Provider load complete, image=" << (image ? "yes" : "no") 
-                      << " size=" << image->width << "x" << image->height << "\n";
-            
-            // Add to cache
-            ImageCache::instance().put(task.cache_key, image);
-            
+
+            // Deliberately NOT cached here: this runs on a worker thread, before
+            // any GPU texture exists (texture creation must happen on the main
+            // thread — see ImageWidgetState::checkFuture()), and ImageCache::put()
+            // requires image->texture to be set. The caller caches the fully-ready
+            // image (decoded pixels consumed, texture attached) once it's actually
+            // usable.
             ImageLoadResult result;
             result.status = ImageLoadStatus::completed;
             result.image = std::move(image);

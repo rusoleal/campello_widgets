@@ -50,28 +50,15 @@ namespace systems::leal::campello_widgets
         size_t data_size = img->getDataSize();
         decoded->pixels.resize(data_size);
         std::memcpy(decoded->pixels.data(), img->getData(), data_size);
-        
-        // Debug: print first pixel
-        if (!decoded->pixels.empty()) {
-            std::cerr << "[ImageProvider] First pixel: R=" << (int)decoded->pixels[0] 
-                      << " G=" << (int)decoded->pixels[1] 
-                      << " B=" << (int)decoded->pixels[2] 
-                      << " A=" << (int)decoded->pixels[3] << "\n";
-        }
-        
+
         return decoded;
     }
 
     bool LoadedImage::createTexture(campello_gpu::Device* device)
     {
         if (texture || !decoded || !device) {
-            std::cerr << "[ImageProvider] createTexture early exit: has_texture=" << (texture ? "yes" : "no")
-                      << " has_decoded=" << (decoded ? "yes" : "no") << " has_device=" << (device ? "yes" : "no") << "\n";
             return false;
         }
-
-        std::cerr << "[ImageProvider] Creating texture " << decoded->width << "x" << decoded->height 
-                  << " pixels_size=" << decoded->pixels.size() << "\n";
 
         auto new_texture = device->createTexture(
             campello_gpu::TextureType::tt2d,
@@ -83,17 +70,13 @@ namespace systems::leal::campello_widgets
         );
 
         if (!new_texture) {
-            std::cerr << "[ImageProvider] createTexture failed\n";
             return false;
         }
 
         size_t data_size = decoded->pixels.size();
-        std::cerr << "[ImageProvider] Uploading " << data_size << " bytes...\n";
         if (!new_texture->upload(0, data_size, decoded->pixels.data())) {
-            std::cerr << "[ImageProvider] upload failed\n";
             return false;
         }
-        std::cerr << "[ImageProvider] Upload successful, tex_size=" << new_texture->getWidth() << "x" << new_texture->getHeight() << "\n";
 
         texture = std::move(new_texture);
         width = decoded->width;

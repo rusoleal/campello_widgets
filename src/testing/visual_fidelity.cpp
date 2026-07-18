@@ -314,6 +314,8 @@ struct DrawCommandVisitor {
     void operator()(const cw::DrawBackdropFilterEndCmd&) {}
     void operator()(const cw::DrawShaderMaskBeginCmd&) {}
     void operator()(const cw::DrawShaderMaskEndCmd&) {}
+    void operator()(const cw::CacheReplayBeginCmd&) {}
+    void operator()(const cw::CacheReplayEndCmd&) {}
 };
 
 void cwt::VisualRenderer::renderDrawList(const cw::DrawList& commands)

@@ -24,6 +24,11 @@ namespace systems::leal::campello_gpu
     class RenderPassEncoder;
 }
 
+// Windows forward declaration — avoids pulling <windows.h> into this header
+// just for the font cache below.
+struct HFONT__;
+typedef HFONT__* HFONT;
+
 namespace systems::leal::campello_widgets
 {
 
@@ -333,22 +338,27 @@ private:
             }
         };
 
-        // 1, not 4: unlike a typical pipelined renderer, D3DDrawBackend's
-        // Device::submit() calls waitForGpu() SYNCHRONOUSLY after every
-        // single frame — by the time frame N+1 starts, the GPU is
-        // guaranteed done reading every resource frame N touched. There is
-        // no in-flight frame that could still be reading an "old"
-        // generation's texture, so the whole point of multiple generations
-        // (avoiding the CPU overwriting a slot the GPU hasn't finished
-        // with) doesn't apply here. Each of these is a real GPU-memory
-        // render-target texture (unlike the small CPU-side uniform/vertex
-        // buffer pools elsewhere, which keep kGenerations=4) — on this
-        // Intel iGPU's limited dedicated VRAM, 4 generations × many
-        // differently-sized ClipRRect/ClipOval widgets (see
-        // kMaxSizeBuckets below) was enough to exhaust graphics memory and
-        // crash deep inside the driver during CreateCommittedResource,
-        // confirmed via a real minidump stack trace.
-        static constexpr size_t   kGenerations   = 1;
+        // 2, not 4: campello_gpu's DirectX backend now pipelines exactly
+        // DeviceData::kFramesInFlight (= 2) frames — Device::
+        // createCommandEncoder() fence-gates reuse of a ring slot until that
+        // specific slot's own frame is confirmed GPU-idle (see
+        // DeviceData::beginFrameRing()'s doc comment in campello_gpu), so a
+        // texture from generation g is guaranteed safe to hand out again
+        // once this pool has rotated back to g — no need to track more
+        // generations than the GPU pipeline itself is deep. (This used to be
+        // 1, back when Device::submit() blocked synchronously and every
+        // resource was unconditionally GPU-idle by the next frame — see
+        // campello_gpu's CHANGELOG for the frame-pacing fix that changed
+        // this.) Each of these is a real GPU-memory render-target texture
+        // (unlike the small CPU-side uniform/vertex buffer pools elsewhere,
+        // which keep kGenerations=4) — on this Intel iGPU's limited
+        // dedicated VRAM, 4 generations × many differently-sized
+        // ClipRRect/ClipOval widgets (see kMaxSizeBuckets below) was enough
+        // to exhaust graphics memory and crash deep inside the driver during
+        // CreateCommittedResource, confirmed via a real minidump stack
+        // trace — 2 generations only doubles (not quadruples) this pool's
+        // footprint relative to the crash-causing configuration.
+        static constexpr size_t   kGenerations   = 2;
         static constexpr uint64_t kMaxAgeFrames  = 120;
         // Hard cap on distinct (width, height) buckets tracked at once, on
         // top of the time-based eviction above. Renderer::applyClipShape()
@@ -402,6 +412,35 @@ private:
     std::unordered_map<TextSpan, TextTextureCacheEntry, TextSpanHash> text_texture_cache_;
     uint64_t                                                          frame_counter_ = 0;
 
+    // ------------------------------------------------------------------
+    // GDI font cache — both measureText() (layout) and
+    // lookupOrCreateTextTexture() (paint) independently need an HFONT for
+    // the same TextStyle; without this, CreateFontIndirectW() (plus a fresh
+    // CreateCompatibleDC/DeleteDC pair) ran on EVERY call from EITHER path,
+    // even though a typical UI reuses a small, fixed set of text styles
+    // across many spans. Reduced to the same fields createFontForStyle()
+    // actually uses (rounded integer height, not raw float, so e.g. 14.0f
+    // and 14.2f share one cached font).
+    // ------------------------------------------------------------------
+
+    struct FontCacheKey
+    {
+        std::wstring family;
+        int          height = 0;
+        bool         bold   = false;
+        bool         italic = false;
+        bool operator==(const FontCacheKey&) const noexcept = default;
+    };
+    struct FontCacheKeyHash
+    {
+        size_t operator()(const FontCacheKey& k) const noexcept;
+    };
+
+    // mutable: measureText() is const (it's a pure query from the caller's
+    // point of view) but still needs to populate this cache on a miss.
+    HFONT getOrCreateFont(const TextStyle& style) const;
+    mutable std::unordered_map<FontCacheKey, HFONT, FontCacheKeyHash> font_cache_;
+
     UniformBindGroupPool rect_uniform_pool_;
     UniformBindGroupPool shape_uniform_pool_;
     UniformBindGroupPool line_uniform_pool_;
@@ -442,29 +481,42 @@ private:
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;
 
     // Persistent blur scratch textures (resized on demand) — see
-    // blurTexture(). Their IDENTITY is stable across frames (unlike the
+    // blurTexture(). Double-buffered (kBlurGenerations = 2, matching
+    // campello_gpu's DeviceData::kFramesInFlight): these are written every
+    // frame the blur runs, and campello_gpu's DirectX backend now pipelines
+    // up to kFramesInFlight frames — Device::submit() no longer blocks until
+    // the GPU is done, so frame N+1 could start writing new blur content
+    // into a single shared texture while frame N's GPU work is still
+    // reading it. Indexed by frame_counter_ % kBlurGenerations (see
+    // frame_counter_'s doc comment — it increments exactly once per
+    // setViewport() call, i.e. once per raster frame). Each slot's IDENTITY
+    // is otherwise stable across the frames it's reused for (unlike the
     // rotating OffscreenTexturePool-sourced first-pass input), so the
-    // BindGroups that read them can be cached and reused every frame
-    // instead of permanently consuming a fresh heap slot each time — see
-    // runBlurPass()'s doc comment. Reset to nullptr alongside
-    // blur_h_tex_/blur_v_tex_ whenever those get recreated on resize.
-    std::shared_ptr<campello_gpu::Texture>          blur_h_tex_;
-    std::shared_ptr<campello_gpu::Texture>          blur_v_tex_;
+    // BindGroups that read a given slot can still be cached and reused
+    // across every frame that lands on that slot — see runBlurPass()'s doc
+    // comment. Reset to nullptr alongside blur_h_tex_/blur_v_tex_ whenever
+    // those get recreated on resize.
+    static constexpr size_t kBlurGenerations = 2;
+    std::array<std::shared_ptr<campello_gpu::Texture>, kBlurGenerations> blur_h_tex_;
+    std::array<std::shared_ptr<campello_gpu::Texture>, kBlurGenerations> blur_v_tex_;
     uint32_t                                        blur_tex_w_ = 0;
     uint32_t                                        blur_tex_h_ = 0;
 
     // Cache for any texture@0/sampler@1 BindGroup read by the blur/backdrop
-    // path (blur_h_tex_, blur_v_tex_, AND the rotating OffscreenTexturePool
-    // "source" capture texture) OR by drawClipShapeComposite()'s child_tex
-    // (also OffscreenTexturePool-sourced). A single cache slot only works for
-    // blur_h_tex_/blur_v_tex_ (stable identity); the rotating sources need
-    // per-texture-object caching instead, so this one map handles all of
-    // them uniformly. Without it, a fresh BindGroup every frame permanently
-    // leaks one shader-visible descriptor-heap slot (campello_gpu's DirectX
-    // backend never reclaims them) — with a 65536-slot heap and ~60fps
-    // continuous BackdropFilter animation, that's ~18 minutes to exhaustion,
-    // which is exactly the delayed crash an earlier, narrower version of
-    // this cache (single slots for only blur_h_tex_/blur_v_tex_) missed.
+    // path (each blur_h_tex_/blur_v_tex_ generation slot, AND the rotating
+    // OffscreenTexturePool "source" capture texture) OR by
+    // drawClipShapeComposite()'s child_tex (also OffscreenTexturePool-sourced).
+    // A per-Texture-object cache works uniformly for both cases: each
+    // blur_h_tex_/blur_v_tex_ slot has a stable identity across every frame
+    // it's reused for (just like the rotating sources, only with a longer
+    // reuse period), so keying by raw Texture* naturally caches all of them.
+    // Without it, a fresh BindGroup every frame permanently leaks one
+    // shader-visible descriptor-heap slot (campello_gpu's DirectX backend
+    // never reclaims them) — with a 65536-slot heap and ~60fps continuous
+    // BackdropFilter animation, that's ~18 minutes to exhaustion, which is
+    // exactly the delayed crash an earlier, narrower version of this cache
+    // (single slots for only blur_h_tex_/blur_v_tex_, before they were
+    // double-buffered) missed.
     // Keyed by raw Texture* for lookup, but the map ALSO holds a strong
     // shared_ptr<Texture> reference so a cached entry can never dangle even
     // if OffscreenTexturePool's own bookkeeping considers that texture

@@ -117,7 +117,8 @@ namespace systems::leal::campello_widgets
         // never reaches root — root's own flag can no longer answer "does
         // anything need painting." See notePaintRequested()'s doc.
         if (!root_ || !std::exchange(paint_requested_, false)) {
-            std::fprintf(stderr, "[buildFrame] skip: paint_not_requested\n");
+            if (print_sub_phases)
+                std::fprintf(stderr, "[buildFrame] skip: paint_not_requested\n");
             return std::nullopt;
         }
 
@@ -140,10 +141,12 @@ namespace systems::leal::campello_widgets
         }
 
         if (draw_list.empty()) {
-            std::fprintf(stderr, "[buildFrame] skip: draw_list empty\n");
+            if (print_sub_phases)
+                std::fprintf(stderr, "[buildFrame] skip: draw_list empty\n");
             return std::nullopt;
         }
-        std::fprintf(stderr, "[buildFrame] submitting draw_list size=%zu\n", draw_list.size());
+        if (print_sub_phases)
+            std::fprintf(stderr, "[buildFrame] submitting draw_list size=%zu\n", draw_list.size());
 
         // Snapshot everything the raster phase needs into an immutable
         // package — the raster phase must never read these Renderer
@@ -211,6 +214,9 @@ namespace systems::leal::campello_widgets
         // campello_gpu's beginRenderPass acquires the swapchain image automatically
         // when view == nullptr, so we do not guard against null here.
         std::shared_ptr<campello_gpu::TextureView> target = package.target;
+
+        ++frame_counter_;
+        evictStaleGpuCaches();
 
         const float dpr = package.device_pixel_ratio;
         if (draw_backend_) {
@@ -523,11 +529,26 @@ namespace systems::leal::campello_widgets
         // BackdropFilter child-skip counter (can nest theoretically).
         int backdrop_skip_depth = 0;
 
+        // Stack of active CacheReplayBeginCmd/EndCmd regions — see
+        // CacheReplayBeginCmd's doc comment and clip_shape_gpu_cache_'s.
+        // .first = region_id, .second = next bracket index to assign.
+        // A fresh stack local to this flushDrawList() call correctly
+        // handles nested replay regions: the recursive flushDrawList()
+        // calls inside applyClipShape()/applyShaderMask() (for the
+        // offscreen child-content pass) each get their own local stack, so
+        // a CacheReplayBeginCmd/EndCmd pair nested inside an accumulating
+        // clip-shape/shader-mask bracket's child_cmds — preserved verbatim
+        // by the accumulation branches below, which never special-case
+        // these markers — is only ever interpreted by the recursive call
+        // that actually re-walks that nested content.
+        std::vector<std::pair<const void*, size_t>> replay_region_stack;
+
         // Per-draw-command-type timing breakdown (diagnostic only — see
         // DebugFlags::printRasterSubPhaseTimings doc comment).
         const bool print_breakdown = !backdrop_pass && DebugFlags::printRasterSubPhaseTimings;
         struct TypeStats { int count = 0; float ms = 0.0f; };
         TypeStats rect_stats, text_stats, image_stats, circle_stats, oval_stats, rrect_stats, line_stats;
+        TypeStats backdrop_stats; // BackdropFilter's main-pass composite draw — previously untimed.
         auto timeDraw = [&](TypeStats& stats, auto&& fn)
         {
             if (!print_breakdown) { fn(); return; }
@@ -550,9 +571,16 @@ namespace systems::leal::campello_widgets
                     if constexpr (std::is_same_v<T, DrawShaderMaskEndCmd>)
                     {
                         in_shader_mask = false;
+                        const void* rid  = nullptr;
+                        size_t      ridx = 0;
+                        if (!replay_region_stack.empty())
+                        {
+                            rid  = replay_region_stack.back().first;
+                            ridx = replay_region_stack.back().second++;
+                        }
                         applyShaderMask(shader_mask_info, shader_mask_cmds,
                                         rpe, target_view, viewport_width, viewport_height, dpr,
-                                        current_transform, current_clip);
+                                        current_transform, current_clip, rid, ridx);
                         shader_mask_cmds.clear();
                     }
                     else
@@ -580,10 +608,17 @@ namespace systems::leal::campello_widgets
                         if (clip_shape_depth == 0)
                         {
                             in_clip_shape = false;
+                            const void* rid  = nullptr;
+                            size_t      ridx = 0;
+                            if (!replay_region_stack.empty())
+                            {
+                                rid  = replay_region_stack.back().first;
+                                ridx = replay_region_stack.back().second++;
+                            }
                             applyClipShape(clip_shape_bounds, clip_shape_corner_r,
                                            clip_shape_is_oval, clip_shape_cmds,
                                            rpe, target_view, viewport_width, viewport_height, dpr,
-                                           current_transform, current_clip);
+                                           current_transform, current_clip, rid, ridx);
                             clip_shape_cmds.clear();
                         }
                         else
@@ -703,9 +738,11 @@ namespace systems::leal::campello_widgets
                     // Main pass: draw the pre-blurred backdrop region.
                     if (!backdrop_pass && blurred_backdrop_tex_)
                     {
-                        draw_backend_->drawBackdropFilter(
-                            c, blurred_backdrop_tex_,
-                            current_transform, current_clip, *rpe);
+                        timeDraw(backdrop_stats, [&] {
+                            draw_backend_->drawBackdropFilter(
+                                c, blurred_backdrop_tex_,
+                                current_transform, current_clip, *rpe);
+                        });
                     }
                     // Children that follow will render on top of the blur.
                 }
@@ -721,6 +758,15 @@ namespace systems::leal::campello_widgets
                 else if constexpr (std::is_same_v<T, DrawShaderMaskEndCmd>)
                 {
                     // Mismatched end — ignore.
+                }
+                else if constexpr (std::is_same_v<T, CacheReplayBeginCmd>)
+                {
+                    replay_region_stack.push_back({c.region_id, size_t{0}});
+                }
+                else if constexpr (std::is_same_v<T, CacheReplayEndCmd>)
+                {
+                    if (!replay_region_stack.empty())
+                        replay_region_stack.pop_back();
                 }
                 // SaveLayerCmd, DrawPathCmd, DrawShadowCmd, etc. are planned
                 // for a later phase and silently fall through for now.
@@ -744,6 +790,7 @@ namespace systems::leal::campello_widgets
             printType("oval",   oval_stats);
             printType("rrect",  rrect_stats);
             printType("line",   line_stats);
+            printType("backdrop", backdrop_stats);
         }
     }
 
@@ -756,9 +803,30 @@ namespace systems::leal::campello_widgets
         float viewport_height,
         float dpr,
         const Matrix4& transform,
-        const Rect&    clip)
+        const Rect&    clip,
+        const void*    replay_region_id,
+        size_t         replay_bracket_index)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
+
+        // Cache-hit path: this exact bracket was already composited on a
+        // previous frame this same replay region was seen, and the region
+        // being replayed at all guarantees its content is byte-for-byte
+        // unchanged — see shader_mask_gpu_cache_'s doc comment. Reuse the
+        // cached texture directly, skipping the capture-and-composite work
+        // below entirely.
+        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        if (replay_region_id != nullptr)
+        {
+            auto it = shader_mask_gpu_cache_.find(cache_key);
+            if (it != shader_mask_gpu_cache_.end())
+            {
+                it->second.last_used_frame = frame_counter_;
+                draw_backend_->drawShaderMaskComposite(
+                    it->second.texture, it->second.cmd, transform, clip, *rpe);
+                return;
+            }
+        }
 
         // Offscreen texture must be in physical pixels so that the DPR-scaled
         // draw commands (from flushDrawList's initial DPR transform) fill it correctly.
@@ -824,6 +892,23 @@ namespace systems::leal::campello_widgets
         {
             draw_backend_->drawShaderMaskComposite(
                 child_tex, cmd, transform, clip, *rpe);
+
+            // Populate the cache so a *future* identity-replay of this same
+            // region can reuse this composite instead of recapturing it —
+            // see shader_mask_gpu_cache_'s doc comment. Only meaningful
+            // when we're actually inside a replay region: outside one,
+            // region_id is nullptr and there is no stable key to store
+            // under (a fresh, non-replayed record has no guarantee its
+            // bracket sequence will repeat next frame the way a replay's
+            // does).
+            if (replay_region_id != nullptr)
+            {
+                ShaderMaskGpuCacheEntry entry;
+                entry.texture         = child_tex;
+                entry.cmd             = cmd;
+                entry.last_used_frame = frame_counter_;
+                shader_mask_gpu_cache_[cache_key] = std::move(entry);
+            }
         }
     }
 
@@ -838,9 +923,27 @@ namespace systems::leal::campello_widgets
         float viewport_height,
         float dpr,
         const Matrix4& transform,
-        const Rect&    clip)
+        const Rect&    clip,
+        const void*    replay_region_id,
+        size_t         replay_bracket_index)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
+
+        // Cache-hit path — see applyShaderMask()'s identical comment and
+        // clip_shape_gpu_cache_'s doc comment.
+        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        if (replay_region_id != nullptr)
+        {
+            auto it = clip_shape_gpu_cache_.find(cache_key);
+            if (it != clip_shape_gpu_cache_.end())
+            {
+                it->second.last_used_frame = frame_counter_;
+                draw_backend_->drawClipShapeComposite(
+                    it->second.texture, it->second.bounds, it->second.corner_radius,
+                    it->second.is_oval, transform, clip, *rpe);
+                return;
+            }
+        }
 
         // A NaN/Infinite bounds (seen in practice from a degenerate layout
         // upstream — e.g. a GridView row computed against a transient
@@ -890,7 +993,36 @@ namespace systems::leal::campello_widgets
         {
             draw_backend_->drawClipShapeComposite(
                 child_tex, bounds, corner_radius, is_oval, transform, clip, *rpe);
+
+            // Populate the cache for a future replay — see
+            // applyShaderMask()'s identical comment.
+            if (replay_region_id != nullptr)
+            {
+                ClipShapeGpuCacheEntry entry;
+                entry.texture         = child_tex;
+                entry.bounds          = bounds;
+                entry.corner_radius   = corner_radius;
+                entry.is_oval         = is_oval;
+                entry.last_used_frame = frame_counter_;
+                clip_shape_gpu_cache_[cache_key] = std::move(entry);
+            }
         }
+    }
+
+    void Renderer::evictStaleGpuCaches()
+    {
+        auto sweep = [&](auto& cache)
+        {
+            for (auto it = cache.begin(); it != cache.end(); )
+            {
+                if (frame_counter_ - it->second.last_used_frame > kClipShapeCacheMaxAgeFrames)
+                    it = cache.erase(it);
+                else
+                    ++it;
+            }
+        };
+        sweep(clip_shape_gpu_cache_);
+        sweep(shader_mask_gpu_cache_);
     }
 
     std::shared_ptr<campello_gpu::RenderPassEncoder> Renderer::restartRenderPass(
@@ -960,11 +1092,14 @@ namespace systems::leal::campello_widgets
         const Color kRasterColor = Color::fromRGBA(0.65f, 0.40f, 0.85f, 1.0f);
         const Color kJankColor   = Color::fromRGBA(0.90f, 0.20f, 0.20f, 1.0f);
 
-        char buf[96];
-        std::snprintf(buf, sizeof(buf), "UI: %.1f ms   RASTER: %.1f ms", ui_avg, raster_avg);
-        ctx.canvas().drawText(
-            TextSpan{buf, TextStyle{Color::white(), 11.0f, {}}},
-            Offset{6.0f, chart_top + 4.0f});
+        if (DebugFlags::performanceOverlayTextEnabled)
+        {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf), "UI: %.1f ms   RASTER: %.1f ms", ui_avg, raster_avg);
+            ctx.canvas().drawText(
+                TextSpan{buf, TextStyle{Color::white(), 11.0f, {}}},
+                Offset{6.0f, chart_top + 4.0f});
+        }
 
         const float chart_bottom = chart_top + label_h + panel_h;
 

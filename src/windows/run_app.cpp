@@ -861,6 +861,16 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
 
+    // ImageLoader/ImageCache are function-local statics, so their own
+    // destructors don't run until true process exit (after main() returns) —
+    // by which point `state` below (and the D3D12 device it owns) has
+    // already been destroyed. ImageCache::~ImageCache() dropping a cached
+    // shared_ptr<Texture> at that point calls into a torn-down D3D12 device,
+    // which crashes deep inside D3D12Core.dll. Explicitly tearing both down
+    // here, while the device is still alive, avoids that ordering hazard.
+    Widgets::ImageLoader::instance().shutdown();
+    Widgets::ImageCache::instance().clear();
+
     gWindowState = nullptr;
     return 0;
 }

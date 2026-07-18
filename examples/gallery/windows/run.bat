@@ -43,6 +43,14 @@ if not exist "%BUILD_DIR%\CMakeCache.txt" (
 cmake --build "%BUILD_DIR%" --config %BUILD_TYPE% --target campello_widgets_gallery
 if errorlevel 1 exit /b 1
 
-set "LOG=%ROOT%\gallery.log"
-echo [run.bat] Logging to %LOG%
-powershell -NoProfile -Command "& '%BUILD_DIR%\campello_widgets_gallery.exe' 2>&1 | Tee-Object -FilePath '%LOG%'"
+:: Single-config generators (Ninja) place the exe directly in BUILD_DIR;
+:: multi-config generators (Visual Studio) nest it under a %BUILD_TYPE%
+:: subfolder - check both rather than assuming one generator.
+set "EXE=%BUILD_DIR%\campello_widgets_gallery.exe"
+if not exist "%EXE%" set "EXE=%BUILD_DIR%\%BUILD_TYPE%\campello_widgets_gallery.exe"
+if not exist "%EXE%" (
+    echo [run.bat] Could not find campello_widgets_gallery.exe under %BUILD_DIR%.
+    exit /b 1
+)
+
+"%EXE%"

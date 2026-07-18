@@ -60,14 +60,12 @@ namespace systems::leal::campello_widgets
         // Check cache first
         auto cache_key = w.provider->cacheKey();
         if (auto cached = ImageCache::instance().get(cache_key)) {
-            std::cerr << "[ImageWidget] Cache hit for " << cache_key << "\n";
             current_result_.status = ImageLoadStatus::completed;
             current_result_.image = cached;
             last_cache_key_ = cache_key;
             return;  // Already loaded, no need for async
         }
 
-        std::cerr << "[ImageWidget] Starting async load for " << cache_key << "\n";
         is_loading_ = true;
         done_ = false;
         last_cache_key_ = cache_key;
@@ -94,7 +92,6 @@ namespace systems::leal::campello_widgets
         ticker_id_ = ts->subscribe([this](uint64_t) {
             checkFuture();
         });
-        std::cerr << "[ImageWidget] Started polling, ticker_id=" << ticker_id_ << "\n";
     }
 
     void ImageWidgetState::stopPolling()
@@ -118,16 +115,25 @@ namespace systems::leal::campello_widgets
             stopPolling();
             current_result_ = load_future_.get();
             is_loading_ = false;
-            std::cerr << "[ImageWidget] Load complete via ticker, status=" << (int)current_result_.status
-                      << " has_image=" << (current_result_.image ? "yes" : "no") << "\n";
 
             // Create texture here on the main thread (ticker fires on main thread),
             // so build() can directly return RawImage without a second setState call.
+            //
+            // This is also the ONLY point in the pipeline where a LoadedImage has
+            // both its decoded pixels consumed AND a real texture attached, so it's
+            // the right place to populate ImageCache: ImageLoader::executeTask()
+            // used to call ImageCache::put() right after decode, before any texture
+            // existed, which ImageCache::put() silently no-ops on (it requires
+            // image->texture to avoid caching an unusable entry) -- meaning the
+            // cache was never actually populated, and every reload of the same
+            // image (e.g. the same widget rebuilding, or scrolling it back into
+            // view) re-ran the full decode-from-bytes pipeline on a worker thread
+            // instead of hitting a cache.
             if (current_result_.status == ImageLoadStatus::completed &&
                 current_result_.image && !current_result_.image->texture) {
                 if (auto* renderer = detail::currentRenderer().load(std::memory_order_acquire)) {
                     if (current_result_.image->createTexture(&renderer->device())) {
-                        std::cerr << "[ImageWidget] Texture created in checkFuture\n";
+                        ImageCache::instance().put(last_cache_key_, current_result_.image);
                     }
                 }
             }

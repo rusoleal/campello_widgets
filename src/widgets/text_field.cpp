@@ -158,7 +158,6 @@ namespace systems::leal::campello_widgets
                             ctrl_->commitComposing();
                         }
                         tim->unregisterInputTarget();
-                        printf("[TextField] Unregistered from TextInputManager\n");
                     }
                 }
                 // TextInputManager not available - IME won't work

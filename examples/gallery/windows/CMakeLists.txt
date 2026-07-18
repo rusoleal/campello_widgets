@@ -38,6 +38,14 @@ set_target_properties(campello_widgets_gallery PROPERTIES
 # timestamps directly, so it reruns whenever any of them rebuild.
 add_custom_command(
     OUTPUT  ${CMAKE_BINARY_DIR}/campello_widgets_gallery_runtime_dlls.stamp
+    # Unlike the old POST_BUILD command (which ran after the linker had
+    # already created the exe's output directory), this custom command has
+    # no guarantee that directory exists yet — e.g. a from-scratch multi-config
+    # (Visual Studio/MSBuild) Release configure, where nothing else has
+    # touched $<TARGET_FILE_DIR:...>/Release yet. copy_if_different fails if
+    # the destination directory is missing, so create it first.
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        $<TARGET_FILE_DIR:campello_widgets_gallery>
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_RUNTIME_DLLS:campello_widgets_gallery>
         $<TARGET_FILE_DIR:campello_widgets_gallery>
@@ -52,3 +60,19 @@ add_custom_target(campello_widgets_gallery_copy_runtime_dlls ALL
 # builds --target campello_widgets_gallery specifically, so without this
 # explicit edge the copy step would silently stop running again.
 add_dependencies(campello_widgets_gallery campello_widgets_gallery_copy_runtime_dlls)
+# The DEPENDS file list above (resolved from $<TARGET_RUNTIME_DLLS:...>) tells
+# CMake to rerun this command whenever those DLLs' timestamps change, but
+# doesn't by itself guarantee they're BUILT before this command first runs —
+# on a from-scratch multi-config (MSBuild) build the DLL-producing projects
+# and this custom-command project can be scheduled in parallel, and the copy
+# fails with "No such file or directory" if it runs first. Explicit target
+# dependencies force the correct build order.
+if(TARGET campello_widgets)
+    add_dependencies(campello_widgets_gallery_copy_runtime_dlls campello_widgets)
+endif()
+if(TARGET campello_gpu)
+    add_dependencies(campello_widgets_gallery_copy_runtime_dlls campello_gpu)
+endif()
+if(TARGET campello_image)
+    add_dependencies(campello_widgets_gallery_copy_runtime_dlls campello_image)
+endif()

@@ -39,6 +39,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -632,7 +633,11 @@ D3DDrawBackend::D3DDrawBackend(
     }
 }
 
-D3DDrawBackend::~D3DDrawBackend() = default;
+D3DDrawBackend::~D3DDrawBackend()
+{
+    for (auto& [key, font] : font_cache_)
+        DeleteObject(font);
+}
 
 // ---------------------------------------------------------------------------
 // applyScissor
@@ -1113,35 +1118,50 @@ std::shared_ptr<GPU::Texture> D3DDrawBackend::blurTexture(
     const uint32_t tw = static_cast<uint32_t>(source->getWidth());
     const uint32_t th = static_cast<uint32_t>(source->getHeight());
 
-    if (!blur_h_tex_ || blur_tex_w_ != tw || blur_tex_h_ != th)
-    {
-        // blur_h_tex_/blur_v_tex_ are about to become new GPU objects — drop
-        // their old cache entries (the cache's own strong reference would
-        // otherwise keep the old textures alive uselessly until the cache
-        // happens to be cleared).
-        if (blur_h_tex_) blur_source_bind_group_cache_.erase(blur_h_tex_.get());
-        if (blur_v_tex_) blur_source_bind_group_cache_.erase(blur_v_tex_.get());
+    // See kBlurGenerations' doc comment: this frame's blur writes must land
+    // in a slot the GPU is confirmed done reading from — the same
+    // generation-rotation scheme the other pools use, keyed off
+    // frame_counter_ (incremented once per setViewport() call, i.e. once
+    // per raster frame) rather than a pool-local counter, since blur
+    // textures aren't acquired from a pool.
+    const size_t gen = frame_counter_ % kBlurGenerations;
 
-        const auto usage = static_cast<GPU::TextureUsage>(
-            static_cast<int>(GPU::TextureUsage::renderTarget) |
-            static_cast<int>(GPU::TextureUsage::textureBinding));
-        blur_h_tex_ = device_->createTexture(GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1, usage);
-        blur_v_tex_ = device_->createTexture(GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1, usage);
+    if (!blur_h_tex_[gen] || blur_tex_w_ != tw || blur_tex_h_ != th)
+    {
+        // A resize invalidates every generation, not just the current one —
+        // recreate all slots together so a stale differently-sized texture
+        // never surfaces when rotation reaches an untouched slot later.
+        for (size_t i = 0; i < kBlurGenerations; ++i)
+        {
+            // About to become new GPU objects — drop their old cache
+            // entries (the cache's own strong reference would otherwise
+            // keep the old textures alive uselessly until the cache
+            // happens to be cleared).
+            if (blur_h_tex_[i]) blur_source_bind_group_cache_.erase(blur_h_tex_[i].get());
+            if (blur_v_tex_[i]) blur_source_bind_group_cache_.erase(blur_v_tex_[i].get());
+
+            const auto usage = static_cast<GPU::TextureUsage>(
+                static_cast<int>(GPU::TextureUsage::renderTarget) |
+                static_cast<int>(GPU::TextureUsage::textureBinding));
+            blur_h_tex_[i] = device_->createTexture(GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1, usage);
+            blur_v_tex_[i] = device_->createTexture(GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1, usage);
+        }
         blur_tex_w_ = tw;
         blur_tex_h_ = th;
     }
 
-    // Horizontal blur: source -> blur_h_tex_. `source` rotates through
+    // Horizontal blur: source -> blur_h_tex_[gen]. `source` rotates through
     // OffscreenTexturePool, but lookupOrCreateSourceBindGroup() caches per
     // texture object, so this stays cheap once the pool warms up.
-    runBlurPass(source, blur_h_tex_, sigma_x, /*horizontal=*/true, encoder,
+    runBlurPass(source, blur_h_tex_[gen], sigma_x, /*horizontal=*/true, encoder,
                 lookupOrCreateSourceBindGroup(source));
-    // Vertical blur: blur_h_tex_ -> blur_v_tex_. blur_h_tex_ is a stable,
-    // persistent object, so this is a cache hit every frame after the first.
-    runBlurPass(blur_h_tex_, blur_v_tex_, sigma_y, /*horizontal=*/false, encoder,
-                lookupOrCreateSourceBindGroup(blur_h_tex_));
+    // Vertical blur: blur_h_tex_[gen] -> blur_v_tex_[gen]. Each slot is a
+    // stable, persistent object across the frames it's reused for, so this
+    // is a cache hit every time after the first frame that lands on it.
+    runBlurPass(blur_h_tex_[gen], blur_v_tex_[gen], sigma_y, /*horizontal=*/false, encoder,
+                lookupOrCreateSourceBindGroup(blur_h_tex_[gen]));
 
-    return blur_v_tex_;
+    return blur_v_tex_[gen];
 }
 
 void D3DDrawBackend::drawBackdropFilter(
@@ -1243,6 +1263,45 @@ void D3DDrawBackend::drawClipShapeComposite(
 }
 
 // ---------------------------------------------------------------------------
+// Font cache
+// ---------------------------------------------------------------------------
+
+size_t D3DDrawBackend::FontCacheKeyHash::operator()(const FontCacheKey& k) const noexcept
+{
+    size_t h = std::hash<std::wstring>{}(k.family);
+    auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
+    mix(std::hash<int>{}(k.height));
+    mix(std::hash<bool>{}(k.bold));
+    mix(std::hash<bool>{}(k.italic));
+    return h;
+}
+
+// Both measureText() (layout) and lookupOrCreateTextTexture() (paint) need
+// an HFONT for the same TextStyle; caching by the exact fields
+// createFontForStyle() derives from it (not the raw TextStyle) means two
+// styles that resolve to the same LOGFONT — e.g. font_size 14.0f vs
+// 14.2f, which both round to the same integer lfHeight — correctly share
+// one cached font instead of minting a near-duplicate.
+HFONT D3DDrawBackend::getOrCreateFont(const TextStyle& style) const
+{
+    const float size = style.font_size > 0.0f ? style.font_size : 14.0f;
+    FontCacheKey key;
+    key.family = style.font_family.empty()
+        ? std::wstring(L"Segoe UI") : utf8ToUtf16(style.font_family);
+    key.height = -static_cast<int>(size + 0.5f);
+    key.bold   = style.font_weight == FontWeight::bold;
+    key.italic = style.italic;
+
+    if (auto it = font_cache_.find(key); it != font_cache_.end())
+        return it->second;
+
+    HFONT font = createFontForStyle(style);
+    if (font)
+        font_cache_.emplace(std::move(key), font);
+    return font;
+}
+
+// ---------------------------------------------------------------------------
 // measureText
 // ---------------------------------------------------------------------------
 
@@ -1259,14 +1318,13 @@ Size D3DDrawBackend::measureText(const TextSpan& span) const
     HDC hdc = CreateCompatibleDC(nullptr);
     if (!hdc) return fallback;
 
-    HFONT font = createFontForStyle(span.style);
+    HFONT font = getOrCreateFont(span.style);
     if (!font) { DeleteDC(hdc); return fallback; }
 
     HFONT oldFont = static_cast<HFONT>(SelectObject(hdc, font));
     SIZE sz{};
     BOOL ok = GetTextExtentPoint32W(hdc, wtext.c_str(), static_cast<int>(wtext.size()), &sz);
     SelectObject(hdc, oldFont);
-    DeleteObject(font);
     DeleteDC(hdc);
 
     if (!ok || sz.cx <= 0 || sz.cy <= 0) return fallback;
@@ -1319,7 +1377,7 @@ D3DDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
     HDC hdc = CreateCompatibleDC(nullptr);
     if (!hdc) return nullptr;
 
-    HFONT font = createFontForStyle(span.style);
+    HFONT font = getOrCreateFont(span.style);
     if (!font) { DeleteDC(hdc); return nullptr; }
     HFONT oldFont = static_cast<HFONT>(SelectObject(hdc, font));
 
@@ -1328,7 +1386,6 @@ D3DDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
     if (sz.cx <= 0 || sz.cy <= 0)
     {
         SelectObject(hdc, oldFont);
-        DeleteObject(font);
         DeleteDC(hdc);
         return nullptr;
     }
@@ -1350,7 +1407,6 @@ D3DDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
     if (!dib || !bits)
     {
         SelectObject(hdc, oldFont);
-        DeleteObject(font);
         DeleteDC(hdc);
         if (dib) DeleteObject(dib);
         return nullptr;
@@ -1390,7 +1446,6 @@ D3DDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
     SelectObject(hdc, oldBmp);
     SelectObject(hdc, oldFont);
     DeleteObject(dib);
-    DeleteObject(font);
     DeleteDC(hdc);
 
     auto texture = device_->createTexture(

@@ -87,6 +87,18 @@ namespace systems::leal::campello_widgets
         inline static bool showPerformanceOverlay = false;
 
         /**
+         * @brief Skip the "UI: x ms   RASTER: y ms" text label drawn atop
+         * the performance overlay's frame chart, leaving just the bars.
+         *
+         * Diagnostic-only: lets you isolate whether text rendering itself
+         * (glyph rasterization/upload or per-glyph draw cost) is
+         * contributing to a measured raster-time regression, independent
+         * of the rest of the overlay. Has no effect unless
+         * showPerformanceOverlay is also true.
+         */
+        inline static bool performanceOverlayTextEnabled = true;
+
+        /**
          * @brief Log widget rebuilds to stdout.
          *
          * Every time an Element's rebuild() method runs, prints the widget

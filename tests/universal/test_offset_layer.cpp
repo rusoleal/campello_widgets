@@ -74,6 +74,138 @@ TEST(OffsetLayer, IdentityReplaySkipsReRecording)
     EXPECT_FALSE(ctx2.commands().empty());
 }
 
+// Regression coverage for the clip-shape/shader-mask GPU compositing cache
+// (Renderer::clip_shape_gpu_cache_/shader_mask_gpu_cache_): an identity
+// replay must be bracketed with CacheReplayBeginCmd/EndCmd carrying this
+// OffsetLayer's own address, so Renderer::flushDrawList() can recognize
+// any ClipRRect/ClipOval/ShaderMask inside as guaranteed-unchanged and
+// reuse its cached GPU composite. See CacheReplayBeginCmd's doc comment.
+TEST(OffsetLayer, IdentityReplayIsBracketedWithCacheReplayMarkers)
+{
+    cw::OffsetLayer layer;
+    int invocations = 0;
+    const cw::Offset fixedOffset{5.0f, 5.0f};
+
+    cw::PaintContext ctx1(200.0f, 200.0f);
+    layer.record(ctx1, fixedOffset, [&] { paintPlainRect(ctx1, invocations); });
+    ASSERT_EQ(invocations, 1);
+    const size_t recordedCount = ctx1.commands().size();
+
+    cw::PaintContext ctx2(200.0f, 200.0f);
+    const bool replayed = layer.maybeReplay(ctx2, fixedOffset, cw::Size{60.0f, 50.0f}, /*dirty=*/false);
+    ASSERT_TRUE(replayed);
+
+    const auto& cmds = ctx2.commands();
+    ASSERT_EQ(cmds.size(), recordedCount + 2);
+
+    const auto* beginCmd = std::get_if<cw::CacheReplayBeginCmd>(&cmds.front());
+    ASSERT_NE(beginCmd, nullptr) << "identity replay must open with CacheReplayBeginCmd";
+    EXPECT_EQ(beginCmd->region_id, static_cast<const void*>(&layer))
+        << "region_id must be this OffsetLayer's own address";
+
+    EXPECT_NE(std::get_if<cw::CacheReplayEndCmd>(&cmds.back()), nullptr)
+        << "identity replay must close with CacheReplayEndCmd";
+}
+
+// The delta-translate reposition path can never carry clip-shape/shader-mask
+// content in the first place (hasUnsafeGeometry() forces a full re-record
+// on reposition instead — see RepositionWithUnsafeGeometryForcesReRecording
+// above), so it is intentionally left unbracketed.
+TEST(OffsetLayer, DeltaTranslateReplayIsNotBracketed)
+{
+    cw::OffsetLayer layer;
+    int invocations = 0;
+    const cw::Offset firstOffset{10.0f, 10.0f};
+    const cw::Offset secondOffset{30.0f, 15.0f};
+
+    cw::PaintContext ctx1(200.0f, 200.0f);
+    layer.record(ctx1, firstOffset, [&] { paintPlainRect(ctx1, invocations); });
+    ASSERT_EQ(invocations, 1);
+
+    cw::PaintContext ctx2(200.0f, 200.0f);
+    const bool replayed = layer.maybeReplay(ctx2, secondOffset, cw::Size{60.0f, 50.0f}, /*dirty=*/false);
+    ASSERT_TRUE(replayed);
+
+    for (const auto& c : ctx2.commands())
+    {
+        EXPECT_EQ(std::get_if<cw::CacheReplayBeginCmd>(&c), nullptr)
+            << "delta-translate replay must not be wrapped in cache-replay markers";
+        EXPECT_EQ(std::get_if<cw::CacheReplayEndCmd>(&c), nullptr)
+            << "delta-translate replay must not be wrapped in cache-replay markers";
+    }
+}
+
+// The riskiest piece of the cache-replay design (see the clip-shape GPU
+// cache plan's "Risk notes"): a replayed boundary whose cached content
+// itself contains another boundary that was replayed at record time.
+// Getting the region-stack tracking wrong could attribute a clip-shape to
+// the wrong region's cache entry and serve stale/wrong content — so the
+// nested markers must survive being re-wrapped by an outer replay, intact
+// and distinguishable by their own region_id.
+TEST(OffsetLayer, NestedReplayRegionsBracketCorrectly)
+{
+    cw::OffsetLayer inner;
+    cw::OffsetLayer outer;
+    int inner_invocations = 0;
+    int outer_invocations = 0;
+    const cw::Offset innerOffset{5.0f, 5.0f};
+    const cw::Offset outerOffset{0.0f, 0.0f};
+
+    // Prime inner with a first recording, independent of outer.
+    {
+        cw::PaintContext primer(200.0f, 200.0f);
+        inner.record(primer, innerOffset, [&] { paintPlainRect(primer, inner_invocations); });
+    }
+    ASSERT_EQ(inner_invocations, 1);
+
+    // Outer's first recording: its content replays inner (clean, same
+    // offset — a genuine identity replay, itself bracketed) plus one rect
+    // of its own.
+    cw::PaintContext ctx1(200.0f, 200.0f);
+    outer.record(ctx1, outerOffset, [&] {
+        ++outer_invocations;
+        const bool inner_replayed =
+            inner.maybeReplay(ctx1, innerOffset, cw::Size{60.0f, 50.0f}, /*dirty=*/false);
+        ASSERT_TRUE(inner_replayed);
+        ctx1.canvas().drawRect(cw::Rect::fromLTWH(0.0f, 0.0f, 5.0f, 5.0f),
+            cw::Paint::filled(cw::Color::white()));
+    });
+    ASSERT_EQ(outer_invocations, 1);
+    ASSERT_EQ(inner_invocations, 1) << "inner replayed, should not re-invoke its paintContent";
+
+    // Outer's second paint: identity replay at the same offset must
+    // bracket the *entire* cached content — which already contains inner's
+    // own nested bracket — in outer's own markers, without calling
+    // inner.maybeReplay() at all this time (it's baked into outer's cached
+    // picture verbatim).
+    cw::PaintContext ctx2(200.0f, 200.0f);
+    const bool outer_replayed =
+        outer.maybeReplay(ctx2, outerOffset, cw::Size{100.0f, 100.0f}, /*dirty=*/false);
+    ASSERT_TRUE(outer_replayed);
+    EXPECT_EQ(outer_invocations, 1) << "outer identity replay must not re-invoke paintContent";
+    EXPECT_EQ(inner_invocations, 1) << "outer identity replay must not re-invoke inner either";
+
+    const auto& cmds = ctx2.commands();
+    ASSERT_GE(cmds.size(), 4u);
+
+    const auto* outerBegin = std::get_if<cw::CacheReplayBeginCmd>(&cmds.front());
+    ASSERT_NE(outerBegin, nullptr);
+    EXPECT_EQ(outerBegin->region_id, static_cast<const void*>(&outer));
+    EXPECT_NE(std::get_if<cw::CacheReplayEndCmd>(&cmds.back()), nullptr);
+
+    bool found_inner_begin = false;
+    for (size_t i = 1; i + 1 < cmds.size(); ++i)
+    {
+        if (const auto* b = std::get_if<cw::CacheReplayBeginCmd>(&cmds[i]))
+        {
+            if (b->region_id == static_cast<const void*>(&inner))
+                found_inner_begin = true;
+        }
+    }
+    EXPECT_TRUE(found_inner_begin)
+        << "nested replay region markers must survive being re-wrapped by an outer replay";
+}
+
 TEST(OffsetLayer, DirtyForcesReRecording)
 {
     cw::OffsetLayer layer;

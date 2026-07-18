@@ -83,8 +83,15 @@ TEST(RenderRepaintBoundary, CleanRepaintReplaysCacheWithoutWalkingChild)
     // landed at the wrong position (draw geometry is transform-deferred and
     // followed the translate; PushClipRectCmd bakes an absolute rect at
     // record time and didn't, clipping the content out of place).
-    ASSERT_EQ(ctx2.commands().size(), firstCommandCount);
-    const auto& replayedRect = std::get<cw::DrawRectCmd>(ctx2.commands().back());
+    //
+    // An identity replay (offset unchanged) is now bracketed with
+    // CacheReplayBeginCmd/EndCmd — see OffsetLayer::maybeReplay()'s doc
+    // comment — so the replayed list is the original content plus these
+    // two markers, not a byte-for-byte size match.
+    ASSERT_EQ(ctx2.commands().size(), firstCommandCount + 2);
+    EXPECT_TRUE(std::holds_alternative<cw::CacheReplayBeginCmd>(ctx2.commands().front()));
+    EXPECT_TRUE(std::holds_alternative<cw::CacheReplayEndCmd>(ctx2.commands().back()));
+    const auto& replayedRect = std::get<cw::DrawRectCmd>(ctx2.commands()[1]);
     EXPECT_FLOAT_EQ(replayedRect.rect.x, firstRect.rect.x);
     EXPECT_FLOAT_EQ(replayedRect.rect.y, firstRect.rect.y);
 }
