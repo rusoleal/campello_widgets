@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Platform-independent text rendering cache** — `D3DDrawBackend` (Windows) and `MetalDrawBackend` (macOS/iOS) each carried their own near-duplicate `text_texture_cache_`; `VulkanDrawBackend` (Linux) had none at all and re-rasterized every `DrawTextCmd` from scratch every frame. Hoisted the cache itself up to `Renderer` (`text_texture_cache_`, `TextTextureCacheEntry`, `kTextTextureCacheMaxAgeFrames = 120`), mirroring the existing `clip_shape_gpu_cache_`/`shader_mask_gpu_cache_` pattern — same eviction sweep, same per-frame counter. `IDrawBackend::drawText()` is replaced by two smaller virtuals: `rasterizeText()` (pure rasterization, no caching) and `drawTextTexture()` (draws an already-rasterized texture as a quad, returning whichever bind group it used so the cache can store it for next time). `TextSpanHash` — previously duplicated verbatim in the Windows and Metal backends — consolidated into a single implementation (`inc/campello_widgets/ui/text_span.hpp`, `src/ui/text_span.cpp`). Gives Linux/Vulkan real text caching for the first time. Verified live on Windows: `text` raster sub-phase dropped from avg 2.04ms/max 17.4ms to avg 0.068ms/max 0.16ms, no regressions in the full universal test suite (530/530).
+  - Adapted alongside the three planned backends: `src/android/vulkan_draw_backend.{hpp,cpp}` (a separate implementation from Linux's, discovered via sanity sweep — required the same interface update to keep compiling) and `src/testing/gpu_visual_renderer.mm` (GPU visual-fidelity test renderer).
+  - **Windows only was built, tested, and run live this session.** Metal (macOS/iOS, shared backend), Linux/Vulkan, and Android/Vulkan changes are code-parity transforms mirrored from the verified Windows pattern but not compiled or run anywhere in this session — no macOS/Linux/Android toolchain available in this environment.
+
 ## [0.4.0] - 2026-07-18
 
 ### Added

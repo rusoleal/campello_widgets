@@ -656,7 +656,7 @@ namespace systems::leal::campello_widgets
                 }
                 else if constexpr (std::is_same_v<T, DrawTextCmd>)
                 {
-                    timeDraw(text_stats, [&] { draw_backend_->drawText(c, current_transform, current_clip, *rpe); });
+                    timeDraw(text_stats, [&] { drawCachedText(c, current_transform, current_clip, rpe, dpr); });
                 }
                 else if constexpr (std::is_same_v<T, DrawImageCmd>)
                 {
@@ -1011,18 +1011,55 @@ namespace systems::leal::campello_widgets
 
     void Renderer::evictStaleGpuCaches()
     {
-        auto sweep = [&](auto& cache)
+        auto sweep = [&](auto& cache, uint64_t max_age)
         {
             for (auto it = cache.begin(); it != cache.end(); )
             {
-                if (frame_counter_ - it->second.last_used_frame > kClipShapeCacheMaxAgeFrames)
+                if (frame_counter_ - it->second.last_used_frame > max_age)
                     it = cache.erase(it);
                 else
                     ++it;
             }
         };
-        sweep(clip_shape_gpu_cache_);
-        sweep(shader_mask_gpu_cache_);
+        sweep(clip_shape_gpu_cache_, kClipShapeCacheMaxAgeFrames);
+        sweep(shader_mask_gpu_cache_, kClipShapeCacheMaxAgeFrames);
+        sweep(text_texture_cache_, kTextTextureCacheMaxAgeFrames);
+    }
+
+    void Renderer::drawCachedText(
+        const DrawTextCmd&                                 cmd,
+        const Matrix4&                                     transform,
+        const Rect&                                        clip,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        float                                               dpr)
+    {
+        if (!draw_backend_) return;
+
+        auto it = text_texture_cache_.find(cmd.span);
+        if (it != text_texture_cache_.end())
+        {
+            auto& entry = it->second;
+            entry.last_used_frame = frame_counter_;
+            entry.bind_group = draw_backend_->drawTextTexture(
+                entry.texture, entry.bind_group, entry.width, entry.height,
+                cmd.origin, transform, clip, *rpe);
+            return;
+        }
+
+        uint32_t w = 0, h = 0;
+        auto texture = draw_backend_->rasterizeText(cmd.span, dpr, w, h);
+        if (!texture) return;
+
+        auto bind_group = draw_backend_->drawTextTexture(
+            texture, nullptr, w, h, cmd.origin, transform, clip, *rpe);
+
+        TextTextureCacheEntry entry;
+        entry.texture         = std::move(texture);
+        entry.bind_group      = std::move(bind_group);
+        entry.width           = w;
+        entry.height          = h;
+        entry.last_used_frame = frame_counter_;
+        text_texture_cache_[cmd.span] = std::move(entry);
     }
 
     std::shared_ptr<campello_gpu::RenderPassEncoder> Renderer::restartRenderPass(

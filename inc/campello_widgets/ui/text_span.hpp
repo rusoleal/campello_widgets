@@ -21,4 +21,14 @@ namespace systems::leal::campello_widgets
         bool operator==(const TextSpan&) const noexcept = default;
     };
 
+    /**
+     * @brief Hashes a TextSpan's full visual identity (text + every
+     * TextStyle field), for use as an unordered_map key — see
+     * Renderer::text_texture_cache_'s doc comment.
+     */
+    struct TextSpanHash
+    {
+        size_t operator()(const TextSpan& s) const noexcept;
+    };
+
 } // namespace systems::leal::campello_widgets

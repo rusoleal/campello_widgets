@@ -187,7 +187,17 @@ bool cwt::GpuVisualRenderer::renderDrawList(const DrawList& commands)
             else if constexpr (std::is_same_v<T, cw::DrawLineCmd>)
                 backend.drawLine(c, current_transform, current_clip, *rpe);
             else if constexpr (std::is_same_v<T, cw::DrawTextCmd>)
-                backend.drawText(c, current_transform, current_clip, *rpe);
+            {
+                // No caching here — this is a one-shot test render (see
+                // Renderer::text_texture_cache_'s doc comment for where
+                // real caching lives), so just rasterize and draw
+                // immediately every time.
+                uint32_t w = 0, h = 0;
+                auto tex = backend.rasterizeText(c.span, 1.0f, w, h);
+                if (tex)
+                    backend.drawTextTexture(tex, nullptr, w, h, c.origin,
+                        current_transform, current_clip, *rpe);
+            }
             else if constexpr (std::is_same_v<T, cw::DrawImageCmd>)
                 backend.drawImage(c, current_transform, current_clip, *rpe);
             else if constexpr (std::is_same_v<T, cw::PushTransformCmd>)

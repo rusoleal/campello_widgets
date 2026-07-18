@@ -96,11 +96,18 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
-    void drawText(
-        const DrawTextCmd&               cmd,
-        const Matrix4&                   transform,
-        const Rect&                      clip,
-        campello_gpu::RenderPassEncoder& encoder) override;
+    std::shared_ptr<campello_gpu::Texture> rasterizeText(
+        const TextSpan& span, float dpr,
+        uint32_t& out_width, uint32_t& out_height) override;
+
+    std::shared_ptr<campello_gpu::BindGroup> drawTextTexture(
+        std::shared_ptr<campello_gpu::Texture>   texture,
+        std::shared_ptr<campello_gpu::BindGroup> cached_bind_group,
+        uint32_t width, uint32_t height,
+        const Offset&                     origin,
+        const Matrix4&                    transform,
+        const Rect&                       clip,
+        campello_gpu::RenderPassEncoder&  encoder) override;
 
     void drawImage(
         const DrawImageCmd&              cmd,
@@ -151,7 +158,6 @@ public:
     {
         setViewportSize(w, h);
         ++frame_counter_;
-        evictStaleTextTextures();
         rect_uniform_pool_.beginFrame();
         shape_uniform_pool_.beginFrame();
         line_uniform_pool_.beginFrame();
@@ -215,7 +221,11 @@ private:
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
-    void drawTexturedQuad(
+    // Returns the BindGroup actually used — either `cached_bind_group`
+    // passed straight through, or a freshly built one (nullptr if drawing
+    // was aborted, e.g. missing pipeline). Callers that want to skip
+    // rebuilding it next time should keep it and pass it back in.
+    std::shared_ptr<campello_gpu::BindGroup> drawTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>  texture,
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
@@ -384,37 +394,11 @@ private:
         void evictLeastRecentlyUsed(const SizeKey& keep);
     };
 
-    // ------------------------------------------------------------------
-    // Text texture cache — see MetalDrawBackend's identical rationale.
-    // GDI glyph rasterization + GPU texture upload is expensive; caching by
-    // (text, style) lets unchanged text reuse last frame's texture.
-    // ------------------------------------------------------------------
-
-    struct TextTextureCacheEntry
-    {
-        std::shared_ptr<campello_gpu::Texture>   texture;
-        std::shared_ptr<campello_gpu::BindGroup> bind_group;
-        uint32_t                                 width  = 0;
-        uint32_t                                 height = 0;
-        uint64_t                                 last_used_frame = 0;
-    };
-
-    struct TextSpanHash
-    {
-        size_t operator()(const TextSpan& s) const noexcept;
-    };
-
-    const TextTextureCacheEntry* lookupOrCreateTextTexture(const TextSpan& span);
-    void evictStaleTextTextures();
-
-    static constexpr uint64_t kTextTextureMaxAgeFrames = 120;
-
-    std::unordered_map<TextSpan, TextTextureCacheEntry, TextSpanHash> text_texture_cache_;
-    uint64_t                                                          frame_counter_ = 0;
+    uint64_t frame_counter_ = 0;
 
     // ------------------------------------------------------------------
     // GDI font cache — both measureText() (layout) and
-    // lookupOrCreateTextTexture() (paint) independently need an HFONT for
+    // rasterizeText() (paint) independently need an HFONT for
     // the same TextStyle; without this, CreateFontIndirectW() (plus a fresh
     // CreateCompatibleDC/DeleteDC pair) ran on EVERY call from EITHER path,
     // even though a typical UI reuses a small, fixed set of text styles

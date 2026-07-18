@@ -288,7 +288,7 @@ namespace
         lf.lfClipPrecision  = CLIP_DEFAULT_PRECIS;
         // Antialiased (grayscale), not ClearType — ClearType's per-channel
         // color fringing would corrupt the white-on-black luminance mask
-        // used to derive per-pixel alpha in lookupOrCreateTextTexture().
+        // used to derive per-pixel alpha in rasterizeText().
         lf.lfQuality        = ANTIALIASED_QUALITY;
         lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
 
@@ -901,7 +901,7 @@ void D3DDrawBackend::drawLine(
 // drawTexturedQuad / drawImage
 // ---------------------------------------------------------------------------
 
-void D3DDrawBackend::drawTexturedQuad(
+std::shared_ptr<GPU::BindGroup> D3DDrawBackend::drawTexturedQuad(
     std::shared_ptr<GPU::Texture>  texture,
     const ProjectedCorner& c00, const ProjectedCorner& c10,
     const ProjectedCorner& c01, const ProjectedCorner& c11,
@@ -909,13 +909,13 @@ void D3DDrawBackend::drawTexturedQuad(
     GPU::RenderPassEncoder&        encoder,
     std::shared_ptr<GPU::BindGroup> cached_bind_group)
 {
-    if (!quad_pipeline_ || !quad_uniform_bgl_ || !quad_tex_bgl_ || !quad_sampler_) return;
+    if (!quad_pipeline_ || !quad_uniform_bgl_ || !quad_tex_bgl_ || !quad_sampler_) return nullptr;
 
     // Bind group 1: texture@0/sampler@1 — reuse the caller-supplied cached
-    // bind group if there is one (glyph textures — see "Text texture cache"
-    // in the header), otherwise build one. This is intentionally SEPARATE
-    // from the uniform bind group below (see quad_tex_bgl_'s doc comment in
-    // the constructor for why).
+    // bind group if there is one (e.g. Renderer's text_texture_cache_),
+    // otherwise build one. This is intentionally SEPARATE from the uniform
+    // bind group below (see quad_tex_bgl_'s doc comment in the constructor
+    // for why).
     auto texBindGroup = cached_bind_group;
     if (!texBindGroup)
     {
@@ -926,7 +926,7 @@ void D3DDrawBackend::drawTexturedQuad(
             GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
         };
         texBindGroup = device_->createBindGroup(bgDesc);
-        if (!texBindGroup) return;
+        if (!texBindGroup) return nullptr;
     }
 
     const QuadVertex verts[6] = {
@@ -938,7 +938,7 @@ void D3DDrawBackend::drawTexturedQuad(
         {c11.x, c11.y, c11.w, c11.u, c11.v},
     };
     auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
-    if (!vbuf) return;
+    if (!vbuf) return texBindGroup;
 
     QuadUniforms u{};
     u.viewport[0] = vp_w_;
@@ -948,13 +948,14 @@ void D3DDrawBackend::drawTexturedQuad(
     // Bind group 0: QuadUniforms CBV — pooled/reused ring buffer, distinct
     // per draw's contents but not a fresh heap allocation every time.
     auto uniformSlot = quad_uniform_pool_.acquire(*device_, quad_uniform_bgl_, sizeof(QuadUniforms), &u);
-    if (!uniformSlot.bind_group) return;
+    if (!uniformSlot.bind_group) return texBindGroup;
 
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, uniformSlot.bind_group);
     encoder.setBindGroup(1, texBindGroup);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
+    return texBindGroup;
 }
 
 void D3DDrawBackend::drawImage(
@@ -1276,7 +1277,7 @@ size_t D3DDrawBackend::FontCacheKeyHash::operator()(const FontCacheKey& k) const
     return h;
 }
 
-// Both measureText() (layout) and lookupOrCreateTextTexture() (paint) need
+// Both measureText() (layout) and rasterizeText() (paint) need
 // an HFONT for the same TextStyle; caching by the exact fields
 // createFontForStyle() derives from it (not the raw TextStyle) means two
 // styles that resolve to the same LOGFONT — e.g. font_size 14.0f vs
@@ -1332,44 +1333,14 @@ Size D3DDrawBackend::measureText(const TextSpan& span) const
 }
 
 // ---------------------------------------------------------------------------
-// Text texture cache
+// rasterizeText — GDI glyph rasterization only, no caching (Renderer's
+// text_texture_cache_ owns that — see its doc comment).
 // ---------------------------------------------------------------------------
 
-size_t D3DDrawBackend::TextSpanHash::operator()(const TextSpan& s) const noexcept
+std::shared_ptr<GPU::Texture> D3DDrawBackend::rasterizeText(
+    const TextSpan& span, float /*dpr*/,
+    uint32_t& out_width, uint32_t& out_height)
 {
-    size_t h = std::hash<std::string>{}(s.text);
-    auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
-    mix(std::hash<std::string>{}(s.style.font_family));
-    mix(std::hash<float>{}(s.style.font_size));
-    mix(std::hash<float>{}(s.style.color.r));
-    mix(std::hash<float>{}(s.style.color.g));
-    mix(std::hash<float>{}(s.style.color.b));
-    mix(std::hash<float>{}(s.style.color.a));
-    mix(std::hash<int>{}(static_cast<int>(s.style.font_weight)));
-    mix(std::hash<bool>{}(s.style.italic));
-    return h;
-}
-
-void D3DDrawBackend::evictStaleTextTextures()
-{
-    for (auto it = text_texture_cache_.begin(); it != text_texture_cache_.end(); )
-    {
-        if (frame_counter_ - it->second.last_used_frame > kTextTextureMaxAgeFrames)
-            it = text_texture_cache_.erase(it);
-        else
-            ++it;
-    }
-}
-
-const D3DDrawBackend::TextTextureCacheEntry*
-D3DDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
-{
-    if (auto it = text_texture_cache_.find(span); it != text_texture_cache_.end())
-    {
-        it->second.last_used_frame = frame_counter_;
-        return &it->second;
-    }
-
     if (span.text.empty()) return nullptr;
     std::wstring wtext = utf8ToUtf16(span.text);
     if (wtext.empty()) return nullptr;
@@ -1454,65 +1425,47 @@ D3DDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
     if (!texture) return nullptr;
     texture->upload(0, static_cast<uint64_t>(pixels.size()), pixels.data());
 
-    // Build the BindGroup once here too, so a cache hit in drawText() skips
-    // Device::createBindGroup() entirely, not just the rasterization.
-    std::shared_ptr<GPU::BindGroup> bindGroup;
-    if (quad_tex_bgl_ && quad_sampler_)
-    {
-        GPU::BindGroupDescriptor bgDesc{};
-        bgDesc.layout  = quad_tex_bgl_;
-        bgDesc.entries = {
-            GPU::BindGroupEntryDescriptor{ 0, texture },
-            GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
-        };
-        bindGroup = device_->createBindGroup(bgDesc);
-    }
-
-    TextTextureCacheEntry entry;
-    entry.texture         = std::move(texture);
-    entry.bind_group      = std::move(bindGroup);
-    entry.width           = texW;
-    entry.height          = texH;
-    entry.last_used_frame = frame_counter_;
-    auto [it, inserted] = text_texture_cache_.emplace(span, std::move(entry));
-    return &it->second;
+    out_width  = texW;
+    out_height = texH;
+    return texture;
 }
 
 // ---------------------------------------------------------------------------
-// drawText — looks up (or rasterizes via GDI into) a cached RGBA8 texture,
-// then draws a quad. See "Text texture cache" above.
+// drawTextTexture — draws an already-rasterized text texture (from
+// rasterizeText(), cached or fresh) as a quad.
 // ---------------------------------------------------------------------------
 
-void D3DDrawBackend::drawText(
-    const DrawTextCmd&      cmd,
-    const Matrix4&          transform,
-    const Rect&             clip,
-    GPU::RenderPassEncoder& encoder)
+std::shared_ptr<GPU::BindGroup> D3DDrawBackend::drawTextTexture(
+    std::shared_ptr<GPU::Texture>   texture,
+    std::shared_ptr<GPU::BindGroup> cached_bind_group,
+    uint32_t width, uint32_t height,
+    const Offset&            origin,
+    const Matrix4&           transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder&  encoder)
 {
-    if (!quad_pipeline_ || !quad_tex_bgl_ || !quad_sampler_) return;
-    if (cmd.span.text.empty()) return;
-    if (!applyScissor(clip, encoder)) return;
+    if (!quad_pipeline_ || !quad_tex_bgl_ || !quad_sampler_) return nullptr;
+    if (!texture) return nullptr;
+    if (!applyScissor(clip, encoder)) return nullptr;
 
-    const TextTextureCacheEntry* entry = lookupOrCreateTextTexture(cmd.span);
-    if (!entry || !entry->texture) return;
+    auto t_origin = transform * vm::Vector4<float>(origin.x, origin.y, 0.0f, 1.0f);
 
-    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
-
-    // Subtract the 1-physical-pixel padding baked into the cached texture.
-    // Width/height are added post-transform in physical pixels — text
-    // rotation/perspective is out of scope for this pass, matching Metal.
+    // Subtract the 1-physical-pixel padding baked into the rasterized
+    // texture. Width/height are added post-transform in physical pixels —
+    // text rotation/perspective is out of scope for this pass, matching
+    // Metal.
     const float x0 = t_origin.x() - 1.0f;
     const float y0 = t_origin.y() - 1.0f;
-    const float x1 = x0 + static_cast<float>(entry->width);
-    const float y1 = y0 + static_cast<float>(entry->height);
+    const float x1 = x0 + static_cast<float>(width);
+    const float y1 = y0 + static_cast<float>(height);
 
-    drawTexturedQuad(
-        entry->texture,
+    return drawTexturedQuad(
+        texture,
         ProjectedCorner{x0, y0, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x1, y0, 1.0f, 1.0f, 0.0f},
         ProjectedCorner{x0, y1, 1.0f, 0.0f, 1.0f}, ProjectedCorner{x1, y1, 1.0f, 1.0f, 1.0f},
         1.0f,  // text colour alpha is already baked into the glyph texture
         encoder,
-        entry->bind_group);
+        cached_bind_group);
 }
 
 } // namespace systems::leal::campello_widgets

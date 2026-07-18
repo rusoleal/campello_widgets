@@ -287,16 +287,17 @@ void VulkanDrawBackend::drawRect(
 // Internal textured-quad helper
 // ---------------------------------------------------------------------------
 
-void VulkanDrawBackend::drawTexturedQuad(
+std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     std::shared_ptr<GPU::Texture>    texture,
     const Rect&                      dst_rect,
     const Rect&                      src_rect,
     float                            opacity,
     const Rect&                      clip,
-    GPU::RenderPassEncoder&          encoder)
+    GPU::RenderPassEncoder&          encoder,
+    std::shared_ptr<GPU::BindGroup>  cached_bind_group)
 {
-    if (!quad_pipeline_ || !uniforms_bgl_ || !quad_bgl_ || !linear_sampler_) return;
-    if (!texture) return;
+    if (!quad_pipeline_ || !uniforms_bgl_ || !quad_bgl_ || !linear_sampler_) return nullptr;
+    if (!texture) return nullptr;
 
     QuadUniforms u{};
     u.dstRect[0] = dst_rect.left();
@@ -316,7 +317,7 @@ void VulkanDrawBackend::drawTexturedQuad(
                                            static_cast<int>(GPU::BufferUsage::uniform) |
                                            static_cast<int>(GPU::BufferUsage::copyDst)),
                                        &u);
-    if (!ubuf) return;
+    if (!ubuf) return cached_bind_group;
 
     GPU::BindGroupDescriptor ubg_desc{};
     ubg_desc.layout = uniforms_bgl_;
@@ -324,22 +325,29 @@ void VulkanDrawBackend::drawTexturedQuad(
         { 0, GPU::BufferBinding{ ubuf, 0, sizeof(QuadUniforms) } }
     };
     auto u_bind_group = device_->createBindGroup(ubg_desc);
-    if (!u_bind_group) return;
+    if (!u_bind_group) return cached_bind_group;
 
-    GPU::BindGroupDescriptor tbg_desc{};
-    tbg_desc.layout = quad_bgl_;
-    tbg_desc.entries = {
-        { 1, texture },
-        { 2, linear_sampler_ }
-    };
-    auto t_bind_group = device_->createBindGroup(tbg_desc);
-    if (!t_bind_group) return;
+    // Texture/sampler bind group — reuse the caller-supplied one if given
+    // (see this method's doc comment in the header), otherwise build one.
+    auto t_bind_group = cached_bind_group;
+    if (!t_bind_group)
+    {
+        GPU::BindGroupDescriptor tbg_desc{};
+        tbg_desc.layout = quad_bgl_;
+        tbg_desc.entries = {
+            { 1, texture },
+            { 2, linear_sampler_ }
+        };
+        t_bind_group = device_->createBindGroup(tbg_desc);
+        if (!t_bind_group) return cached_bind_group;
+    }
 
     applyScissor(clip, encoder);
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, u_bind_group);
     encoder.setBindGroup(1, t_bind_group);
     encoder.draw(6);
+    return t_bind_group;
 }
 
 // ---------------------------------------------------------------------------
@@ -390,20 +398,20 @@ Size VulkanDrawBackend::measureText(const TextSpan& span) const
 }
 
 // ---------------------------------------------------------------------------
-// drawText
+// rasterizeText — Android Canvas/Paint (via JNI) glyph rasterization only,
+// no caching (Renderer's text_texture_cache_ owns that — see its doc
+// comment).
 // ---------------------------------------------------------------------------
 
-void VulkanDrawBackend::drawText(
-    const DrawTextCmd&               cmd,
-    const Matrix4&                   transform,
-    const Rect&                      clip,
-    GPU::RenderPassEncoder&          encoder)
+std::shared_ptr<GPU::Texture> VulkanDrawBackend::rasterizeText(
+    const TextSpan& span, float /*dpr*/,
+    uint32_t& out_width, uint32_t& out_height)
 {
-    if (!text_rasterizer_ || !text_rasterizer_->isAvailable()) return;
-    if (cmd.span.text.empty()) return;
+    if (!text_rasterizer_ || !text_rasterizer_->isAvailable()) return nullptr;
+    if (span.text.empty()) return nullptr;
 
-    auto bitmap = text_rasterizer_->rasterize(cmd.span);
-    if (bitmap.width <= 0 || bitmap.height <= 0) return;
+    auto bitmap = text_rasterizer_->rasterize(span);
+    if (bitmap.width <= 0 || bitmap.height <= 0) return nullptr;
 
     auto texture = device_->createTexture(
         GPU::TextureType::tt2d,
@@ -412,22 +420,44 @@ void VulkanDrawBackend::drawText(
         static_cast<uint32_t>(bitmap.height),
         1, 1, 1,
         GPU::TextureUsage::textureBinding);
-    if (!texture) return;
+    if (!texture) return nullptr;
 
     texture->upload(0, bitmap.pixels.size(), bitmap.pixels.data());
 
-    namespace vm = systems::leal::vector_math;
-    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+    out_width  = static_cast<uint32_t>(bitmap.width);
+    out_height = static_cast<uint32_t>(bitmap.height);
+    return texture;
+}
 
-    drawTexturedQuad(
+// ---------------------------------------------------------------------------
+// drawTextTexture — draws an already-rasterized text texture (from
+// rasterizeText(), cached or fresh) as a quad.
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTextTexture(
+    std::shared_ptr<GPU::Texture>   texture,
+    std::shared_ptr<GPU::BindGroup> cached_bind_group,
+    uint32_t width, uint32_t height,
+    const Offset&            origin,
+    const Matrix4&           transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder&  encoder)
+{
+    if (!texture) return nullptr;
+
+    namespace vm = systems::leal::vector_math;
+    auto t_origin = transform * vm::Vector4<float>(origin.x, origin.y, 0.0f, 1.0f);
+
+    return drawTexturedQuad(
         texture,
         Rect::fromLTWH(t_origin.x(), t_origin.y(),
-                       static_cast<float>(bitmap.width),
-                       static_cast<float>(bitmap.height)),
+                       static_cast<float>(width),
+                       static_cast<float>(height)),
         Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
         1.0f,
         clip,
-        encoder);
+        encoder,
+        cached_bind_group);
 }
 
 } // namespace systems::leal::campello_widgets

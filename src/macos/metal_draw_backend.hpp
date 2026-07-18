@@ -82,11 +82,18 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
-    void drawText(
-        const DrawTextCmd&               cmd,
-        const Matrix4&                   transform,
-        const Rect&                      clip,
-        campello_gpu::RenderPassEncoder& encoder) override;
+    std::shared_ptr<campello_gpu::Texture> rasterizeText(
+        const TextSpan& span, float dpr,
+        uint32_t& out_width, uint32_t& out_height) override;
+
+    std::shared_ptr<campello_gpu::BindGroup> drawTextTexture(
+        std::shared_ptr<campello_gpu::Texture>   texture,
+        std::shared_ptr<campello_gpu::BindGroup> cached_bind_group,
+        uint32_t width, uint32_t height,
+        const Offset&                     origin,
+        const Matrix4&                    transform,
+        const Rect&                       clip,
+        campello_gpu::RenderPassEncoder&  encoder) override;
 
     void drawImage(
         const DrawImageCmd&              cmd,
@@ -146,7 +153,6 @@ public:
     {
         setViewportSize(w, h);
         ++frame_counter_;
-        evictStaleTextTextures();
         rect_uniform_pool_.beginFrame();
         shape_uniform_pool_.beginFrame();
         line_uniform_pool_.beginFrame();
@@ -223,13 +229,18 @@ private:
         campello_gpu::RenderPassEncoder& encoder);
 
     // `cached_bind_group`, if non-null, is reused as-is instead of building a
-    // fresh BindGroup for `texture` (see "Text texture cache" below — the
-    // bind group is created once alongside the texture and stays valid for
-    // as long as the cache entry does).
+    // fresh BindGroup for `texture` (see Renderer::text_texture_cache_'s doc
+    // comment — the bind group is cached alongside the texture there and
+    // stays valid for as long as that cache entry does).
     //
     // c00/c10/c01/c11 are this quad's four corners (top-left, top-right,
     // bottom-left, bottom-right) — see ProjectedCorner's doc comment above.
-    void drawTexturedQuad(
+    //
+    // Returns the BindGroup actually used — either `cached_bind_group`
+    // passed straight through, or a freshly built one (nullptr if drawing
+    // was aborted, e.g. missing pipeline). Callers that want to skip
+    // rebuilding it next time should keep it and pass it back in.
+    std::shared_ptr<campello_gpu::BindGroup> drawTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>  texture,
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
@@ -305,8 +316,10 @@ private:
     //
     // A distinct (width, height) key stops being requested whenever a
     // widget resizes or leaves the tree, so unused size buckets are evicted
-    // after kMaxAgeFrames unused, mirroring evictStaleTextTextures() below,
-    // to avoid growing unboundedly across window resizes.
+    // after kMaxAgeFrames unused, mirroring Renderer::evictStaleGpuCaches()'s
+    // age-based sweep (which now also covers text texture caching, moved
+    // there from this backend), to avoid growing unboundedly across window
+    // resizes.
     // ------------------------------------------------------------------
 
     class OffscreenTexturePool
@@ -347,47 +360,7 @@ private:
         size_t current_generation_ = 0;
     };
 
-    // ------------------------------------------------------------------
-    // Text texture cache
-    //
-    // CoreText rasterization + GPU texture allocation/upload in drawText()
-    // is expensive (CPU layout pass + bitmap render + texture creation).
-    // Caching the resulting texture per (text, style) lets unchanged text
-    // reuse the same GPU texture across frames instead of redoing all of
-    // that work every frame, even for text that never visually changes.
-    // The BindGroup is cached alongside the texture (same lifetime, same
-    // eviction) so a cache hit also skips Device::createBindGroup().
-    // ------------------------------------------------------------------
-
-    struct TextTextureCacheEntry
-    {
-        std::shared_ptr<campello_gpu::Texture>  texture;
-        std::shared_ptr<campello_gpu::BindGroup> bind_group;
-        uint32_t                                width  = 0;
-        uint32_t                                height = 0;
-        uint64_t                                last_used_frame = 0;
-    };
-
-    struct TextSpanHash
-    {
-        size_t operator()(const TextSpan& s) const noexcept;
-    };
-
-    // Looks up (or rasterizes and inserts) the texture for `span`, marking
-    // it as used on the current frame. Returns nullptr if rasterization
-    // produced an empty/invalid result.
-    const TextTextureCacheEntry* lookupOrCreateTextTexture(const TextSpan& span);
-
-    // Drops cache entries that weren't drawn in the last kTextTextureMaxAgeFrames
-    // frames, so text that's no longer on screen (removed widgets, dynamic
-    // text whose value keeps changing) doesn't grow the cache unboundedly.
-    // Called once per frame from setViewport().
-    void evictStaleTextTextures();
-
-    static constexpr uint64_t kTextTextureMaxAgeFrames = 120;
-
-    std::unordered_map<TextSpan, TextTextureCacheEntry, TextSpanHash> text_texture_cache_;
-    uint64_t                                                          frame_counter_ = 0;
+    uint64_t frame_counter_ = 0;
 
     UniformBufferPool rect_uniform_pool_;
     UniformBufferPool shape_uniform_pool_;

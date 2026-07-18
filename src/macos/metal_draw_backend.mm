@@ -839,44 +839,14 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
 }
 
 // ---------------------------------------------------------------------------
-// Text texture cache
+// rasterizeText — CoreText glyph rasterization only, no caching (Renderer's
+// text_texture_cache_ owns that — see its doc comment).
 // ---------------------------------------------------------------------------
 
-size_t MetalDrawBackend::TextSpanHash::operator()(const TextSpan& s) const noexcept
+std::shared_ptr<GPU::Texture> MetalDrawBackend::rasterizeText(
+    const TextSpan& span, float /*dpr*/,
+    uint32_t& out_width, uint32_t& out_height)
 {
-    size_t h = std::hash<std::string>{}(s.text);
-    auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
-    mix(std::hash<std::string>{}(s.style.font_family));
-    mix(std::hash<float>{}(s.style.font_size));
-    mix(std::hash<float>{}(s.style.color.r));
-    mix(std::hash<float>{}(s.style.color.g));
-    mix(std::hash<float>{}(s.style.color.b));
-    mix(std::hash<float>{}(s.style.color.a));
-    mix(std::hash<int>{}(static_cast<int>(s.style.font_weight)));
-    mix(std::hash<bool>{}(s.style.italic));
-    return h;
-}
-
-void MetalDrawBackend::evictStaleTextTextures()
-{
-    for (auto it = text_texture_cache_.begin(); it != text_texture_cache_.end(); )
-    {
-        if (frame_counter_ - it->second.last_used_frame > kTextTextureMaxAgeFrames)
-            it = text_texture_cache_.erase(it);
-        else
-            ++it;
-    }
-}
-
-const MetalDrawBackend::TextTextureCacheEntry*
-MetalDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
-{
-    if (auto it = text_texture_cache_.find(span); it != text_texture_cache_.end())
-    {
-        it->second.last_used_frame = frame_counter_;
-        return &it->second;
-    }
-
     @autoreleasepool {
         NSString *nsText = [NSString stringWithUTF8String:span.text.c_str()];
         if (!nsText || nsText.length == 0) return nullptr;
@@ -967,77 +937,54 @@ MetalDrawBackend::lookupOrCreateTextTexture(const TextSpan& span)
         if (!texture) return nullptr;
         texture->upload(0, (uint64_t)pixels.size(), pixels.data());
 
-        // Build the BindGroup once here too, so a cache hit in drawText()
-        // skips Device::createBindGroup() entirely, not just the texture
-        // rasterization.
-        std::shared_ptr<GPU::BindGroup> bindGroup;
-        if (quad_bgl_ && quad_sampler_)
-        {
-            GPU::BindGroupDescriptor bgDesc{};
-            bgDesc.layout  = quad_bgl_;
-            bgDesc.entries = {
-                GPU::BindGroupEntryDescriptor{ 0, texture },
-                GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
-            };
-            bindGroup = device_->createBindGroup(bgDesc);
-        }
-
-        TextTextureCacheEntry entry;
-        entry.texture          = std::move(texture);
-        entry.bind_group       = std::move(bindGroup);
-        entry.width            = texW;
-        entry.height           = texH;
-        entry.last_used_frame  = frame_counter_;
-        auto [it, inserted] = text_texture_cache_.emplace(span, std::move(entry));
-        return &it->second;
+        out_width  = texW;
+        out_height = texH;
+        return texture;
     }
 }
 
 // ---------------------------------------------------------------------------
-// drawText — looks up (or rasterises via CoreText into) a cached BGRA8
-// texture, then draws a quad. See "Text texture cache" above: the expensive
-// CoreText layout/rasterization and GPU texture allocation only happens
-// once per distinct (text, style); unchanged text reuses last frame's
-// texture instead of redoing all of that work every frame.
+// drawTextTexture — draws an already-rasterized text texture (from
+// rasterizeText(), cached or fresh) as a quad.
 // ---------------------------------------------------------------------------
 
-void MetalDrawBackend::drawText(
-    const DrawTextCmd&    cmd,
-    const Matrix4&        transform,
-    const Rect&           clip,
-    GPU::RenderPassEncoder& encoder)
+std::shared_ptr<GPU::BindGroup> MetalDrawBackend::drawTextTexture(
+    std::shared_ptr<GPU::Texture>   texture,
+    std::shared_ptr<GPU::BindGroup> cached_bind_group,
+    uint32_t width, uint32_t height,
+    const Offset&            origin,
+    const Matrix4&           transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder&  encoder)
 {
-    if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
-    if (cmd.span.text.empty()) return;
-    if (!applyScissor(clip, encoder)) return;
-
-    const TextTextureCacheEntry* entry = lookupOrCreateTextTexture(cmd.span);
-    if (!entry || !entry->texture) return;
+    if (!quad_pipeline_ || !quad_bgl_ || !quad_sampler_) return nullptr;
+    if (!texture) return nullptr;
+    if (!applyScissor(clip, encoder)) return nullptr;
 
     // Transform the logical origin to physical pixels.
-    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+    auto t_origin = transform * vm::Vector4<float>(origin.x, origin.y, 0.0f, 1.0f);
 
     // Place the quad at the physical-pixel origin. The texture is already
     // in physical pixels, so its pixel dimensions are the correct quad size.
-    // Subtract the 1-physical-pixel padding baked into the cached texture.
-    // Note: unlike drawImage()/drawBackdropFilter() below, this only
-    // transforms the origin — width/height are added post-transform in
+    // Subtract the 1-physical-pixel padding baked into the rasterized
+    // texture. Note: unlike drawImage()/drawBackdropFilter() below, this
+    // only transforms the origin — width/height are added post-transform in
     // physical pixels, unaffected by any rotation/scale/perspective in
     // `transform`, matching this function's behavior before the quad
     // pipeline gained real per-vertex corners. Text rotation/perspective
     // is out of scope for this pass; w is always 1 here (no projection).
     const float x0 = t_origin.x() - 1.0f;
     const float y0 = t_origin.y() - 1.0f;
-    const float x1 = x0 + static_cast<float>(entry->width);
-    const float y1 = y0 + static_cast<float>(entry->height);
+    const float x1 = x0 + static_cast<float>(width);
+    const float y1 = y0 + static_cast<float>(height);
 
-    drawTexturedQuad(
-        entry->texture,
+    return drawTexturedQuad(
+        texture,
         ProjectedCorner{x0, y0, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x1, y0, 1.0f, 1.0f, 0.0f},
         ProjectedCorner{x0, y1, 1.0f, 0.0f, 1.0f}, ProjectedCorner{x1, y1, 1.0f, 1.0f, 1.0f},
         1.0f,  // text colour alpha is already baked into the glyph texture
         encoder,
-        entry->bind_group);
+        cached_bind_group);
 }
 
 // ---------------------------------------------------------------------------
@@ -1081,7 +1028,7 @@ void MetalDrawBackend::drawImage(
 // drawTexturedQuad — shared helper
 // ---------------------------------------------------------------------------
 
-void MetalDrawBackend::drawTexturedQuad(
+std::shared_ptr<GPU::BindGroup> MetalDrawBackend::drawTexturedQuad(
     std::shared_ptr<GPU::Texture>  texture,
     const ProjectedCorner& c00, const ProjectedCorner& c10,
     const ProjectedCorner& c01, const ProjectedCorner& c11,
@@ -1089,14 +1036,14 @@ void MetalDrawBackend::drawTexturedQuad(
     GPU::RenderPassEncoder&        encoder,
     std::shared_ptr<GPU::BindGroup> cached_bind_group)
 {
-    if (!quad_pipeline_) { std::cerr << "[MetalDrawBackend] No pipeline!\n"; return; }
-    if (!quad_bgl_) { std::cerr << "[MetalDrawBackend] No bind group layout!\n"; return; }
-    if (!quad_sampler_) { std::cerr << "[MetalDrawBackend] No sampler!\n"; return; }
+    if (!quad_pipeline_) { std::cerr << "[MetalDrawBackend] No pipeline!\n"; return nullptr; }
+    if (!quad_bgl_) { std::cerr << "[MetalDrawBackend] No bind group layout!\n"; return nullptr; }
+    if (!quad_sampler_) { std::cerr << "[MetalDrawBackend] No sampler!\n"; return nullptr; }
 
-    // Reuse the caller-supplied bind group if there is one (see "Text
-    // texture cache" in the header — cached alongside the texture, same
-    // lifetime), otherwise build one (drawImage / drawBackdropFilter, whose
-    // source textures aren't cached here).
+    // Reuse the caller-supplied bind group if there is one (see
+    // Renderer::text_texture_cache_'s doc comment — cached alongside the
+    // texture there, same lifetime), otherwise build one (drawImage /
+    // drawBackdropFilter, whose source textures aren't cached here).
     auto bindGroup = cached_bind_group;
     if (!bindGroup)
     {
@@ -1107,7 +1054,7 @@ void MetalDrawBackend::drawTexturedQuad(
             GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
         };
         bindGroup = device_->createBindGroup(bgDesc);
-        if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return; }
+        if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return nullptr; }
     }
 
     // Real per-vertex position(+w)/uv data — two triangles matching
@@ -1121,7 +1068,7 @@ void MetalDrawBackend::drawTexturedQuad(
         {c11.x, c11.y, c11.w, c11.u, c11.v},
     };
     auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
-    if (!vbuf) return;
+    if (!vbuf) return bindGroup;
 
     QuadUniforms u{};
     u.viewport[0] = vp_w_;
@@ -1129,13 +1076,14 @@ void MetalDrawBackend::drawTexturedQuad(
     u.opacity     = opacity;
 
     auto ubuf = quad_uniform_pool_.acquire(*device_, sizeof(QuadUniforms), &u);
-    if (!ubuf) return;
+    if (!ubuf) return bindGroup;
 
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bindGroup);
     encoder.setVertexBuffer(0, vbuf);
     encoder.setVertexBuffer(1, ubuf);
     encoder.draw(6);
+    return bindGroup;
 }
 
 // ---------------------------------------------------------------------------

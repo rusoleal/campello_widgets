@@ -14,6 +14,7 @@ namespace systems::leal::campello_gpu
     class RenderPassEncoder;
     class CommandEncoder;
     class Texture;
+    class BindGroup;
 }
 
 namespace systems::leal::campello_widgets
@@ -103,18 +104,57 @@ namespace systems::leal::campello_widgets
             campello_gpu::RenderPassEncoder& encoder) = 0;
 
         /**
-         * @brief Draw a text span.
+         * @brief Rasterizes `span` to a new GPU texture using the platform's
+         * native text system (GDI/CoreText/FreeType+HarfBuzz).
          *
-         * @param cmd       The draw text command (span + origin).
-         * @param transform Effective transform matrix.
-         * @param clip      Effective clip rectangle.
-         * @param encoder   Active render pass encoder.
+         * No caching — callers that want caching do it themselves (see
+         * Renderer::text_texture_cache_, the sole caller of this method).
+         * Returns nullptr on failure (`out_width`/`out_height` are then
+         * unspecified).
+         *
+         * @param span      Text content + style to rasterize.
+         * @param dpr       Device pixel ratio — rasterize at physical
+         *                  resolution, matching what drawTextTexture()'s
+         *                  `transform` will project the quad through.
+         * @param out_width  Rasterized texture width, in pixels.
+         * @param out_height Rasterized texture height, in pixels.
          */
-        virtual void drawText(
-            const DrawTextCmd&               cmd,
-            const Matrix4&                   transform,
-            const Rect&                      clip,
-            campello_gpu::RenderPassEncoder& encoder) = 0;
+        virtual std::shared_ptr<campello_gpu::Texture> rasterizeText(
+            const TextSpan& /*span*/, float /*dpr*/,
+            uint32_t& /*out_width*/, uint32_t& /*out_height*/) { return nullptr; }
+
+        /**
+         * @brief Draws a previously-rasterized text texture (from
+         * rasterizeText()) as a quad at `origin`.
+         *
+         * @param texture           The rasterized glyph-bitmap texture.
+         * @param cached_bind_group A bind group this same `texture` was
+         *                          already drawn with, if any (nullptr on a
+         *                          cache miss — the implementation builds
+         *                          one). Passing the previous call's return
+         *                          value back in on every subsequent draw
+         *                          of the same texture skips rebuilding it.
+         * @param width             Texture width, in pixels (from
+         *                          rasterizeText()'s `out_width`).
+         * @param height            Texture height, in pixels.
+         * @param origin            Top-left of the text quad, in the
+         *                          current transform's coordinate space.
+         * @param transform         Effective transform matrix.
+         * @param clip              Effective clip rectangle.
+         * @param encoder           Active render pass encoder.
+         * @return The bind group actually used — either `cached_bind_group`
+         *         passed straight through, or a freshly built one. Callers
+         *         that want to skip rebuilding next time should store this
+         *         and pass it back in as `cached_bind_group`.
+         */
+        virtual std::shared_ptr<campello_gpu::BindGroup> drawTextTexture(
+            std::shared_ptr<campello_gpu::Texture>   /*texture*/,
+            std::shared_ptr<campello_gpu::BindGroup> /*cached_bind_group*/,
+            uint32_t /*width*/, uint32_t /*height*/,
+            const Offset&                     /*origin*/,
+            const Matrix4&                    /*transform*/,
+            const Rect&                       /*clip*/,
+            campello_gpu::RenderPassEncoder&  /*encoder*/) { return nullptr; }
 
         /**
          * @brief Draw a GPU texture into a destination rectangle.

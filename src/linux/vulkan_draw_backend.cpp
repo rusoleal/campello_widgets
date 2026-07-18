@@ -743,7 +743,7 @@ void VulkanDrawBackend::drawOval(
 // Internal textured-quad helper
 // ---------------------------------------------------------------------------
 
-void VulkanDrawBackend::drawTexturedQuad(
+std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     std::shared_ptr<GPU::Texture>   texture,
     const QuadCorner&               c00,
     const QuadCorner&               c10,
@@ -751,10 +751,11 @@ void VulkanDrawBackend::drawTexturedQuad(
     const QuadCorner&               c11,
     float                           opacity,
     const Rect&                     clip,
-    GPU::RenderPassEncoder&         encoder)
+    GPU::RenderPassEncoder&         encoder,
+    std::shared_ptr<GPU::BindGroup> cached_bind_group)
 {
-    if (!quad_pipeline_ || !quad_bgl_ || !linear_sampler_) return;
-    if (!texture) return;
+    if (!quad_pipeline_ || !quad_bgl_ || !linear_sampler_) return nullptr;
+    if (!texture) return nullptr;
 
     // Two CCW triangles: (00,10,01), (01,10,11)
     QuadVertex verts[6] = {
@@ -770,7 +771,7 @@ void VulkanDrawBackend::drawTexturedQuad(
             static_cast<int>(GPU::BufferUsage::vertex) |
             static_cast<int>(GPU::BufferUsage::copyDst)),
         verts);
-    if (!vbuf) return;
+    if (!vbuf) return cached_bind_group;
     frame_buffers_.push_back(vbuf);
 
     QuadUniforms u{};
@@ -782,9 +783,25 @@ void VulkanDrawBackend::drawTexturedQuad(
             static_cast<int>(GPU::BufferUsage::uniform) |
             static_cast<int>(GPU::BufferUsage::copyDst)),
         &u);
-    if (!ubuf) return;
+    if (!ubuf) return cached_bind_group;
     frame_buffers_.push_back(ubuf);
 
+    // Unlike Windows/Metal, this bind group also carries the per-draw
+    // uniform buffer (bind group 0 here mixes uniform@0/texture@1/sampler@2
+    // — Vulkan doesn't split them the way D3D12's root-signature layout
+    // requires). That means a "cached" bind group is only reusable across
+    // draws that also want the SAME opacity/viewport values baked into
+    // `ubuf` — true for the text-texture cache's use (opacity is always
+    // 1.0 for text, viewport only changes once per frame), but NOT a
+    // general-purpose "reuse regardless of uniforms" cache. Rebuild
+    // whenever a uniform buffer had to be rebuilt (i.e. always, since ubuf
+    // above is always fresh) — reuse is therefore only actually possible
+    // when the caller passes a `cached_bind_group` AND doesn't need this
+    // draw's own fresh uniforms, which is not the case for any current
+    // caller. `cached_bind_group` is accepted for interface parity with
+    // Windows/Metal (see IDrawBackend::drawTextTexture()) but is currently
+    // always rebuilt here — a real reuse would additionally need a pooled
+    // uniform buffer, out of scope for this change.
     GPU::BindGroupDescriptor bg_desc{};
     bg_desc.layout  = quad_bgl_;
     bg_desc.entries = {
@@ -793,13 +810,14 @@ void VulkanDrawBackend::drawTexturedQuad(
         { 2, linear_sampler_ }
     };
     auto bind_group = device_->createBindGroup(bg_desc);
-    if (!bind_group) return;
+    if (!bind_group) return cached_bind_group;
 
     applyScissor(clip, encoder);
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bind_group);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
+    return bind_group;
 }
 
 // ---------------------------------------------------------------------------
@@ -848,21 +866,22 @@ Size VulkanDrawBackend::measureText(const TextSpan& span) const
 }
 
 // ---------------------------------------------------------------------------
-// drawText
+// rasterizeText — FreeType+HarfBuzz glyph rasterization only, no caching
+// (Renderer's text_texture_cache_ owns that — see its doc comment). Unlike
+// the old drawText(), does NOT push the texture into frame_textures_ — its
+// lifetime is now owned by Renderer's cache entry, not this per-frame list.
 // ---------------------------------------------------------------------------
 
-void VulkanDrawBackend::drawText(
-    const DrawTextCmd&               cmd,
-    const Matrix4&                   transform,
-    const Rect&                      clip,
-    GPU::RenderPassEncoder&          encoder)
+std::shared_ptr<GPU::Texture> VulkanDrawBackend::rasterizeText(
+    const TextSpan& span, float /*dpr*/,
+    uint32_t& out_width, uint32_t& out_height)
 {
-    if (!text_rasterizer_ || !text_rasterizer_->isAvailable()) return;
-    if (cmd.span.text.empty()) return;
+    if (!text_rasterizer_ || !text_rasterizer_->isAvailable()) return nullptr;
+    if (span.text.empty()) return nullptr;
 
     // Rasterise text to CPU bitmap
-    auto bitmap = text_rasterizer_->rasterize(cmd.span);
-    if (bitmap.width <= 0 || bitmap.height <= 0) return;
+    auto bitmap = text_rasterizer_->rasterize(span);
+    if (bitmap.width <= 0 || bitmap.height <= 0) return nullptr;
 
     // Upload to GPU texture (BGRA8)
     auto texture = device_->createTexture(
@@ -874,20 +893,40 @@ void VulkanDrawBackend::drawText(
         static_cast<GPU::TextureUsage>(
             static_cast<int>(GPU::TextureUsage::textureBinding) |
             static_cast<int>(GPU::TextureUsage::copyDst)));
-    if (!texture) return;
-    frame_textures_.push_back(texture);  // keep alive until next frame
+    if (!texture) return nullptr;
 
     texture->upload(0, bitmap.pixels.size(), bitmap.pixels.data());
+
+    out_width  = static_cast<uint32_t>(bitmap.width);
+    out_height = static_cast<uint32_t>(bitmap.height);
+    return texture;
+}
+
+// ---------------------------------------------------------------------------
+// drawTextTexture — draws an already-rasterized text texture (from
+// rasterizeText(), cached or fresh) as a quad.
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTextTexture(
+    std::shared_ptr<GPU::Texture>   texture,
+    std::shared_ptr<GPU::BindGroup> cached_bind_group,
+    uint32_t width, uint32_t height,
+    const Offset&            origin,
+    const Matrix4&           transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder&  encoder)
+{
+    if (!texture) return nullptr;
 
     // Transform origin to physical pixels. Text quads always use w=1 (no
     // perspective foreshortening on rasterized glyphs), matching Metal.
     namespace vm = systems::leal::vector_math;
-    auto t_origin = transform * vm::Vector4<float>(cmd.origin.x, cmd.origin.y, 0.0f, 1.0f);
+    auto t_origin = transform * vm::Vector4<float>(origin.x, origin.y, 0.0f, 1.0f);
     const float x0 = t_origin.x(), y0 = t_origin.y();
-    const float x1 = x0 + static_cast<float>(bitmap.width);
-    const float y1 = y0 + static_cast<float>(bitmap.height);
+    const float x1 = x0 + static_cast<float>(width);
+    const float y1 = y0 + static_cast<float>(height);
 
-    drawTexturedQuad(
+    return drawTexturedQuad(
         texture,
         {x0, y0, 1.0f, 0.0f, 0.0f},
         {x1, y0, 1.0f, 1.0f, 0.0f},
@@ -895,7 +934,8 @@ void VulkanDrawBackend::drawText(
         {x1, y1, 1.0f, 1.0f, 1.0f},
         1.0f,   // opacity baked into texture
         clip,
-        encoder);
+        encoder,
+        cached_bind_group);
 }
 
 // ---------------------------------------------------------------------------

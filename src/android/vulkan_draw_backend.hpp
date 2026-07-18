@@ -10,6 +10,7 @@ namespace systems::leal::campello_gpu
     class Device;
     class RenderPipeline;
     class BindGroupLayout;
+    class BindGroup;
     class PipelineLayout;
     class Sampler;
     class Texture;
@@ -26,7 +27,8 @@ class AndroidTextRasterizer;
 // IDrawBackend implementation for Android/Vulkan.
 // Uses campello_gpu's public API with pre-compiled SPIR-V shaders.
 //
-// Supported:  drawRect, drawImage, drawText (Android Canvas/Paint via JNI)
+// Supported:  drawRect, drawImage, text (Android Canvas/Paint via JNI,
+//             rasterizeText/drawTextTexture — cached by Renderer)
 // No-op:      drawCircle, drawOval, drawRRect, drawLine,
 //             blurTexture, drawBackdropFilter, drawShaderMaskComposite
 //
@@ -54,11 +56,18 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
-    void drawText(
-        const DrawTextCmd&               cmd,
-        const Matrix4&                   transform,
-        const Rect&                      clip,
-        campello_gpu::RenderPassEncoder& encoder) override;
+    std::shared_ptr<campello_gpu::Texture> rasterizeText(
+        const TextSpan& span, float dpr,
+        uint32_t& out_width, uint32_t& out_height) override;
+
+    std::shared_ptr<campello_gpu::BindGroup> drawTextTexture(
+        std::shared_ptr<campello_gpu::Texture>   texture,
+        std::shared_ptr<campello_gpu::BindGroup> cached_bind_group,
+        uint32_t width, uint32_t height,
+        const Offset&                     origin,
+        const Matrix4&                    transform,
+        const Rect&                       clip,
+        campello_gpu::RenderPassEncoder&  encoder) override;
 
     Size measureText(const TextSpan& span) const override;
 
@@ -82,13 +91,22 @@ private:
         const Rect& clip,
         campello_gpu::RenderPassEncoder& encoder);
 
-    void drawTexturedQuad(
+    // `cached_bind_group`, if non-null, is reused as-is for the texture+
+    // sampler bind group instead of building a fresh one (see
+    // Renderer::text_texture_cache_'s doc comment) — safe here because,
+    // unlike the Linux/Vulkan backend, this bind group only ever holds
+    // texture@1/sampler@2, with per-draw uniforms in a separate bind group
+    // (u_bind_group below) that's always rebuilt fresh. Returns the
+    // BindGroup actually used — either `cached_bind_group` passed straight
+    // through, or a freshly built one (nullptr if drawing was aborted).
+    std::shared_ptr<campello_gpu::BindGroup> drawTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>    texture,
         const Rect&                               dst_rect,
         const Rect&                               src_rect,
         float                                     opacity,
         const Rect&                               clip,
-        campello_gpu::RenderPassEncoder&          encoder);
+        campello_gpu::RenderPassEncoder&          encoder,
+        std::shared_ptr<campello_gpu::BindGroup>  cached_bind_group = nullptr);
 
     std::shared_ptr<campello_gpu::Device>         device_;
     Color                                          bg_color_;

@@ -29,6 +29,7 @@ namespace systems::leal::campello_gpu
     class CommandEncoder;
     class RenderPassEncoder;
     class Texture;
+    class BindGroup;
 }
 
 namespace systems::leal::campello_widgets
@@ -588,6 +589,63 @@ namespace systems::leal::campello_widgets
             clip_shape_gpu_cache_;
         std::unordered_map<std::pair<const void*, size_t>, ShaderMaskGpuCacheEntry, ReplayKeyHash>
             shader_mask_gpu_cache_;
+
+        // Platform-independent text-rasterization cache. GDI/CoreText/
+        // FreeType+HarfBuzz rasterization plus GPU texture allocation/
+        // upload is expensive; caching the result by (text, style) lets
+        // unchanged text reuse the same GPU texture and bind group across
+        // frames instead of redoing all of that work every frame — moved
+        // here (out of each IDrawBackend implementation, which used to
+        // carry this same cache three times over, once per platform) since
+        // the caching *policy* is entirely platform-neutral: only
+        // rasterizeText() itself differs per backend. Unlike
+        // clip_shape_gpu_cache_/shader_mask_gpu_cache_ above, this cache is
+        // keyed directly by content (TextSpan == text + style), so it's
+        // inherently safe to check unconditionally for every DrawTextCmd —
+        // no CacheReplayBeginCmd/EndCmd region gating needed, since equal
+        // keys are always genuinely equal content, whether the command came
+        // from a fresh paint or an OffsetLayer replay.
+        //
+        // The BindGroup is cached alongside the texture (same lifetime,
+        // same eviction) so a cache hit also skips
+        // IDrawBackend::drawTextTexture() having to rebuild it — dropping
+        // it would not just cost CPU time back but, per
+        // D3DDrawBackend::createBindGroup()'s doc comment, slowly exhaust
+        // the shader-visible descriptor heap over a long session, since
+        // that heap never reclaims slots. Safe to cache at this level
+        // (unlike a clip-shape/shader-mask composite's bind group, which
+        // deliberately is NOT cached here) because a text quad's bind group
+        // is only ever {texture@0, sampler@1} with a fixed, never-varying
+        // sampler — no other per-draw uniform is mixed in.
+        //
+        // DPR is intentionally not part of the key: neither this cache nor
+        // the per-backend ones it replaces invalidate on a mid-session DPR
+        // change (e.g. dragging the window to a different-DPI monitor) —
+        // preserving that existing (rare-in-practice) gap rather than
+        // introducing new key-matching complexity to close it.
+        struct TextTextureCacheEntry
+        {
+            std::shared_ptr<campello_gpu::Texture>   texture;
+            std::shared_ptr<campello_gpu::BindGroup> bind_group;
+            uint32_t width  = 0;
+            uint32_t height = 0;
+            uint64_t last_used_frame = 0;
+        };
+
+        static constexpr uint64_t kTextTextureCacheMaxAgeFrames = 120;
+
+        std::unordered_map<TextSpan, TextTextureCacheEntry, TextSpanHash> text_texture_cache_;
+
+        // Looks up (or rasterizes via IDrawBackend::rasterizeText() and
+        // inserts) cmd.span's texture, draws it via
+        // IDrawBackend::drawTextTexture(), and marks the entry used on the
+        // current frame.
+        void drawCachedText(
+            const DrawTextCmd&                                 cmd,
+            const Matrix4&                                     transform,
+            const Rect&                                        clip,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            float                                              dpr);
 
         // Incremented once per rasterFrame() call; drives the eviction
         // sweeps above (mirrors D3DDrawBackend::OffscreenTexturePool's
