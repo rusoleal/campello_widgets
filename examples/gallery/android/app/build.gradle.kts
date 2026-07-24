@@ -17,6 +17,16 @@ android {
             cmake {
                 cppFlags += "-std=c++20"
                 arguments += listOf("-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON")
+                // Without this, AGP builds every top-level CMake target it
+                // discovers — including host-only tool executables pulled
+                // in transitively (e.g. campello_image -> basis_universal's
+                // `basisu` CLI encoder), which fails to link on Android
+                // (no standalone -lpthread; it's part of libc there).
+                // Restricting to the one target we actually need still
+                // pulls in its real link dependencies (campello_widgets,
+                // campello_gpu, campello_image, ...) — just not unrelated
+                // executables alongside them.
+                targets += "campello_gallery"
             }
         }
     }

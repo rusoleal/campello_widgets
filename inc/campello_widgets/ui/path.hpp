@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/rrect.hpp>
 #include <vector_math/matrix4.hpp>
+#include <optional>
 #include <vector>
 #include <cmath>
 
@@ -146,12 +147,28 @@ namespace systems::leal::campello_widgets
         /** @brief Returns the current point (last point added). */
         Offset currentPoint() const { return current_point_; }
 
+        /**
+         * @brief If this path is exactly one addRect()/addRRect() call (the
+         * common case for e.g. box-shadow shapes), returns the equivalent
+         * RRect (radius 0 for a plain rect). Empty otherwise.
+         *
+         * Path's general segment list (lines/curves/arcs) has no reliable
+         * way to recover "this was built from a rounded rect" after the
+         * fact, so this is tracked directly as shapes are added rather than
+         * inferred — cleared by any other mutation. Lets callers that only
+         * care about the box-shadow case (currently the only consumer) skip
+         * a fragile geometric round-trip while still using the general Path
+         * type for the public Canvas::drawShadow() API.
+         */
+        std::optional<RRect> simpleRRectShape() const { return simple_rrect_shape_; }
+
     private:
         std::vector<PathCommand> commands_;
         FillType fill_type_ = FillType::winding;
         Offset current_point_;
         Offset start_point_;  // For close()
         bool has_current_point_ = false;
+        std::optional<RRect> simple_rrect_shape_;
     };
 
 } // namespace systems::leal::campello_widgets

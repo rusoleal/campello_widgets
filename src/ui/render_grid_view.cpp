@@ -198,10 +198,16 @@ namespace systems::leal::campello_widgets
 
     void RenderGridView::paint(PaintContext& context, const Offset& offset)
     {
-        if (!offset_layer_.maybeReplay(context, offset, size_, needsPaint()))
+        // OR needsDescendantPaint() in: a replay skips performPaint()
+        // entirely, so a nested boundary further down (e.g. a ClipRRect
+        // thumbnail in a grid item) must not be silently stranded — see
+        // that flag's doc comment.
+        if (!offset_layer_.maybeReplay(context, offset, size_,
+                                        needsPaint() || needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
 
         needs_paint_ = false;
+        needs_descendant_paint_ = false;
     }
 
     // -------------------------------------------------------------------------
@@ -317,6 +323,7 @@ namespace systems::leal::campello_widgets
             won_arena_     = false;
             lost_arena_    = false;
             pan_last_pos_  = event.position;
+            pan_down_pos_  = event.position;
             device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
             pan_velocity_  = 0.0f;
@@ -333,13 +340,22 @@ namespace systems::leal::campello_widgets
 
             const float dy = event.position.y - pan_last_pos_.y;
 
+            // The slop check measures cumulative distance from pointer-down
+            // (pan_down_pos_, fixed for the whole gesture), NOT the
+            // frame-to-frame delta (dy above) — touch delivery arrives in
+            // many small increments, so checking each one individually
+            // against the slop threshold means a slow-building drag whose
+            // per-frame steps never individually exceed it would never start
+            // panning at all, no matter how far the finger travels in total.
             // GridView always scrolls vertically — only that axis counts
             // toward the pan-slop threshold, not total Euclidean movement,
             // so a horizontally-scrolling sibling (e.g. a nested ListView)
             // can still claim horizontal drags. Mirrors Flutter's
             // VerticalDragGestureRecognizer, which likewise measures only
             // vertical displacement, not the diagonal distance.
-            if (!panning_ && std::abs(dy) > computePanSlop(device_kind_))
+            const float total_dy = event.position.y - pan_down_pos_.y;
+
+            if (!panning_ && std::abs(total_dy) > computePanSlop(device_kind_))
             {
                 if (won_arena_)
                 {

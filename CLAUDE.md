@@ -126,11 +126,11 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 - Headers use `#pragma once`.
 - Implementations `#include` their own header first, then dependencies.
 
-## Phase Status (as of 2026-03-22)
+## Phase Status (as of 2026-07-24)
 
 | Phase | Status |
 |---|---|
-| 1 — Project Scaffolding | Mostly done (CI + platform macros pending) |
+| 1 — Project Scaffolding | Complete |
 | 2 — Core Widget Infrastructure | Complete |
 | 3 — Layout System | Complete |
 | 4 — Rendering Pipeline | Complete |
@@ -139,5 +139,5 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 | 7 — Input Handling | Complete |
 | 8 — Animation System | Complete |
 | 9 — Scrolling | Complete |
-| 10 — Platform Integration | Partial (macOS + Android done; iOS/Windows/Linux pending) |
-| 11 — Developer Experience | Partial (unit tests + examples done; debug overlay + headless tests pending) |
+| 10 — Platform Integration | Partial (macOS, iOS, Android, Windows, Linux all done; platform channel/FFI abstraction pending) |
+| 11 — Developer Experience | Complete (headless GPU visual tests via `GpuVisualRenderer` now landed) |

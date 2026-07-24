@@ -394,6 +394,7 @@ namespace systems::leal::campello_widgets
             won_arena_ = false;
             lost_arena_ = false;
             pan_last_pos_ = event.position;
+            pan_down_pos_ = event.position;
             device_kind_ = event.device_kind;
             velocity_x_ = 0.0f;
             velocity_y_ = 0.0f;
@@ -413,7 +414,17 @@ namespace systems::leal::campello_widgets
 
             float dx = event.position.x - pan_last_pos_.x;
             float dy = event.position.y - pan_last_pos_.y;
-            float distance = std::sqrt(dx * dx + dy * dy);
+
+            // The slop check measures cumulative distance from pointer-down
+            // (pan_down_pos_, fixed for the whole gesture), NOT the
+            // frame-to-frame delta (dx/dy above) — touch delivery arrives in
+            // many small increments, so checking each one individually
+            // against the slop threshold means a slow-building drag whose
+            // per-frame steps never individually exceed it would never start
+            // panning at all, no matter how far the finger travels in total.
+            float total_dx = event.position.x - pan_down_pos_.x;
+            float total_dy = event.position.y - pan_down_pos_.y;
+            float distance = std::sqrt(total_dx * total_dx + total_dy * total_dy);
 
             if (!panning_ && distance > computePanSlop(device_kind_))
             {

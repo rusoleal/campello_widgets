@@ -1,6 +1,6 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform ClipShapeUniforms {
+layout(push_constant) uniform ClipShapeUniforms {
     vec2  rect_size;  // logical w, h — used for SDF evaluation
     vec2  viewport;   // physical w, h
     float corner_r;   // logical corner radius (ignored when kind == 1)

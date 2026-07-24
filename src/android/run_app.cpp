@@ -12,6 +12,7 @@
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/key_event.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include <campello_widgets/ui/raster_thread.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -23,12 +24,14 @@
 #include <android/log.h>
 #include <android/input.h>
 
-#include "vulkan_draw_backend.hpp"
+#include "../gpu/vulkan/vulkan_draw_backend.hpp"
 #include "android_text_rasterizer.hpp"
 
 #include <memory>
 #include <atomic>
 #include <string>
+#include <thread>
+#include <unistd.h>
 
 #define LOG_TAG "campello_widgets"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -54,6 +57,12 @@ struct WidgetSession
     android_app*                               app = nullptr;  // For accessing contentRect
     Widgets::WidgetRef                         user_root_widget;
     Widgets::MediaQueryData                    media_data;
+
+    // Declared last so its destructor (stop()+join) runs before renderer/
+    // device are torn down — mirrors macOS's CampelloMTKDelegate ivar
+    // ordering (see run_app.mm's doc comment on _rasterThread). Ensures no
+    // in-flight raster call can ever observe a half-destroyed Renderer/Device.
+    std::unique_ptr<Widgets::RasterThread>     raster_thread;
 };
 
 // Forward declaration — defined after createSession.
@@ -373,14 +382,21 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         const int32_t pointer_index = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
             >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
 
+        // AMotionEvent_getX/Y report raw physical pixels, but the render tree
+        // is laid out in logical points (unlike macOS/iOS, where the OS
+        // already hands touches to us in points). Convert here so hit-testing
+        // lines up with layout.
+        float dpr = session->media_data.device_pixel_ratio;
+        if (dpr <= 0.0f) dpr = 1.0f;
+
         switch (action_code)
         {
         case AMOTION_EVENT_ACTION_DOWN:
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
         {
             const int32_t id = AMotionEvent_getPointerId(event, static_cast<size_t>(pointer_index));
-            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index));
-            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index));
+            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index)) / dpr;
+            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index)) / dpr;
             session->dispatcher->handlePointerEvent({
                 Widgets::PointerEventKind::down,
                 id,
@@ -395,8 +411,8 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             for (size_t j = 0; j < pointer_count; ++j)
             {
                 const int32_t id = AMotionEvent_getPointerId(event, j);
-                const float x = AMotionEvent_getX(event, j);
-                const float y = AMotionEvent_getY(event, j);
+                const float x = AMotionEvent_getX(event, j) / dpr;
+                const float y = AMotionEvent_getY(event, j) / dpr;
                 session->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::move,
                     id,
@@ -410,8 +426,8 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         case AMOTION_EVENT_ACTION_POINTER_UP:
         {
             const int32_t id = AMotionEvent_getPointerId(event, static_cast<size_t>(pointer_index));
-            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index));
-            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index));
+            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index)) / dpr;
+            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index)) / dpr;
             session->dispatcher->handlePointerEvent({
                 Widgets::PointerEventKind::up,
                 id,
@@ -426,8 +442,8 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             for (size_t j = 0; j < pointer_count; ++j)
             {
                 const int32_t id = AMotionEvent_getPointerId(event, j);
-                const float x = AMotionEvent_getX(event, j);
-                const float y = AMotionEvent_getY(event, j);
+                const float x = AMotionEvent_getX(event, j) / dpr;
+                const float y = AMotionEvent_getY(event, j) / dpr;
                 session->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::cancel,
                     id,
@@ -597,14 +613,52 @@ static std::unique_ptr<WidgetSession> createSession(
     // Populate logical size, view insets, and push to MediaQuery
     updateWindowMetrics(session.get());
 
-    // Create Vulkan draw backend and attach to renderer
+    // Create Vulkan draw backend and attach to renderer. Must match
+    // whatever pixel format the device's swapchain was actually created
+    // with — not every Vulkan surface offers BGRA8 (some report only
+    // RGBA8), and pipelines are always built render-pass-compatible with
+    // the swapchain's real format. An offscreen texture created with a
+    // different (hardcoded) format — used for shadow/clip-shape/shader-mask
+    // composites — would then be incompatible with those pipelines,
+    // corrupting exactly that content while direct-to-swapchain draws stay
+    // fine (VUID-vkCmdDraw-renderPass-02684, found via validation layers).
+    GPU::PixelFormat swapchain_format = session->device->getSwapchainPixelFormat();
+    if (swapchain_format == GPU::PixelFormat::invalid)
+        swapchain_format = GPU::PixelFormat::bgra8unorm;
     auto backend = std::make_unique<Widgets::VulkanDrawBackend>(
-        session->device, Widgets::Color::black(), GPU::PixelFormat::bgra8unorm);
+        session->device, Widgets::Color::black(), swapchain_format);
     session->renderer->setDrawBackend(std::move(backend));
+
+    // Rasterize (including the blocking GPU submit — campello_gpu's Vulkan
+    // Device::submit() ends with vkQueueWaitIdle) on a dedicated thread,
+    // mirroring macOS/Linux's RasterThread usage. Without this, the same
+    // thread that pumps android_native_app_glue's input queue and services
+    // AChoreographer vsync callbacks would block on every frame's GPU
+    // submit — any transient GPU/driver/compositor stall (seen under
+    // sustained scroll-fling load on this device) freezes input handling
+    // itself, not just rendering, since there is no other thread left to
+    // service the ALooper. onVsyncCallback() below now only builds the
+    // frame (fast, pure CPU) and hands it off via submit().
+    session->raster_thread = std::make_unique<Widgets::RasterThread>(
+        [renderer = session->renderer](const Widgets::FramePackage& pkg) {
+            renderer->rasterFrame(pkg);
+        });
+    session->raster_thread->start();
 
     LOGI("campello_widgets session created (DPR=%.2f, size=%.0fx%.0f)",
          dpr, session->media_data.logical_size.width,
          session->media_data.logical_size.height);
+
+    // Rendering here is purely on-demand (vsync-gated via AChoreographer,
+    // unlike macOS/iOS's continuously-driven MTKView) — nothing renders at
+    // all until something calls FrameScheduler::scheduleFrame(). The
+    // widget tree's initial mount above doesn't go through the normal
+    // markNeedsBuild()/setState() dirty-tracking path that would trigger
+    // that call on its own, so without this the very first frame — and
+    // every frame after it, since nothing else ever primes the loop —
+    // never gets scheduled: a permanently blank screen with no error.
+    Widgets::FrameScheduler::scheduleFrame();
+
     return session;
 }
 
@@ -642,20 +696,41 @@ static void onVsyncCallback(long frameTimeNanos, void* data)
     if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(ms);
     if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(ms);
 
-    // Render frame. Read gActiveSession atomically instead of trusting the
-    // stale |data| pointer, because APP_CMD_TERM_WINDOW may have destroyed
-    // the session after this callback was posted.
+    // Build (fast, pure CPU) here on the input/vsync thread; hand off to
+    // raster_thread for the actual GPU submit, which blocks on
+    // vkQueueWaitIdle — see raster_thread's construction in createSession()
+    // for why that must never run on this thread. Read gActiveSession
+    // atomically instead of trusting the stale |data| pointer, because
+    // APP_CMD_TERM_WINDOW may have destroyed the session after this
+    // callback was posted.
     auto* session = gActiveSession.load(std::memory_order_acquire);
-    if (session && session->renderer && session->device && session->app && session->app->window)
+    if (session && session->renderer && session->raster_thread &&
+        session->device && session->app && session->app->window)
     {
-        auto color_view = session->device->getSwapchainTextureView();
-        if (color_view)
+        int32_t w = ANativeWindow_getWidth(session->app->window);
+        int32_t h = ANativeWindow_getHeight(session->app->window);
+        // Deliberately not calling backend->setViewport() here: it clears
+        // the draw backend's frame-scoped GPU resources (frame_textures_ etc.
+        // in VulkanDrawBackend), which is only safe once the *previous*
+        // frame's GPU work has actually finished — true when everything ran
+        // synchronously on one thread, no longer true now that raster runs
+        // on raster_thread. Renderer::rasterFrame() (see renderer.cpp) calls
+        // setViewport() itself, at the point in the pipeline where that's
+        // actually safe: on the raster thread, right before it touches any
+        // of those resources. Doing it here too raced setViewport()'s clear
+        // against the raster thread still encoding the prior frame's command
+        // buffer — VUID-vkCmdWriteTimestamp-commandBuffer-recording /
+        // VUID-vkEndCommandBuffer-commandBuffer-00059 ("VkImageView was
+        // destroyed") the first time this was tried.
+        auto package = session->renderer->buildFrame(static_cast<float>(w), static_cast<float>(h));
+        if (package)
         {
-            int32_t w = ANativeWindow_getWidth(session->app->window);
-            int32_t h = ANativeWindow_getHeight(session->app->window);
-            if (auto* backend = session->renderer->drawBackend())
-                backend->setViewport(static_cast<float>(w), static_cast<float>(h));
-            session->renderer->renderFrame(color_view, static_cast<float>(w), static_cast<float>(h));
+            // Leave package->target null — on Vulkan that's the signal to
+            // render straight to the swapchain (campello_gpu's
+            // beginRenderPass() acquires the swapchain image internally
+            // when given a null target; see Renderer::rasterFrame()'s own
+            // comment on this).
+            session->raster_thread->submit(std::move(*package));
         }
     }
 }
@@ -670,8 +745,32 @@ namespace systems::leal::campello_widgets
     namespace GPU     = ::systems::leal::campello_gpu;
     namespace Widgets = ::systems::leal::campello_widgets;
 
+// NativeActivity does not route stdout/stderr to logcat, unlike Java's
+// System.out/System.err. Anything written via std::cout/std::cerr/printf
+// (e.g. ImageLoader/ImageWidget's error diagnostics) is otherwise silently
+// dropped on Android. Pipe both through a reader thread into __android_log_write.
+static void redirectStdioToLogcat()
+{
+    static int pipe_fds[2];
+    if (pipe(pipe_fds) != 0) return;
+
+    dup2(pipe_fds[1], STDOUT_FILENO);
+    dup2(pipe_fds[1], STDERR_FILENO);
+
+    std::thread([]() {
+        char buf[1024];
+        ssize_t n;
+        while ((n = read(pipe_fds[0], buf, sizeof(buf) - 1)) > 0) {
+            buf[n] = '\0';
+            __android_log_write(ANDROID_LOG_INFO, "campello_widgets.stdio", buf);
+        }
+    }).detach();
+}
+
 void runApp(android_app* app, WidgetRef root_widget)
 {
+    redirectStdioToLogcat();
+
     // Supply the JVM pointer to AndroidTextRasterizer (JNI_GetCreatedJavaVMs
     // is not linkable on API < 31, so we pass the VM from android_app directly).
     if (app && app->activity && app->activity->vm)
@@ -685,7 +784,8 @@ void runApp(android_app* app, WidgetRef root_widget)
     AChoreographer* choreographer = AChoreographer_getInstance();
     FrameScheduler::setCallback([choreographer] {
         // Post at most one pending callback per vsync interval.
-        if (!gFramePending.exchange(true, std::memory_order_relaxed))
+        const bool was_pending = gFramePending.exchange(true, std::memory_order_relaxed);
+        if (!was_pending)
             AChoreographer_postFrameCallback(choreographer, onVsyncCallback, gActiveSession.load(std::memory_order_acquire));
     });
 

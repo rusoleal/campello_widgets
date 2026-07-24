@@ -1,6 +1,6 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform RRectUniforms {
+layout(push_constant) uniform RRectUniforms {
     vec4  rect;      // x, y, w, h (screen pixels)
     vec4  color;     // r, g, b, a (premultiplied in frag)
     vec2  viewport;  // screen width, height

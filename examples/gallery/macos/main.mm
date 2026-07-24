@@ -7,6 +7,8 @@ namespace cw = systems::leal::campello_widgets;
 
 int main()
 {
+    cw::DebugFlags::showPerformanceOverlay = true;
+
     // Hidden by default — toggle at runtime with Cmd+D (Ctrl+D on
     // Windows/Linux), wired in buildGalleryApp().
     if (std::getenv("CW_TRACE_DIRTY"))

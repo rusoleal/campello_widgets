@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace systems::leal::campello_gpu
@@ -21,19 +22,23 @@ namespace systems::leal::campello_gpu
 namespace systems::leal::campello_widgets
 {
 
-class LinuxTextRasterizer;
+class ITextRasterizer;
 
 // ---------------------------------------------------------------------------
 // VulkanDrawBackend
 //
-// IDrawBackend implementation for Linux/Vulkan.
-// Uses campello_gpu's public API with pre-compiled SPIR-V shaders.
+// IDrawBackend implementation for Vulkan — shared by Android and Linux (the
+// two platforms that target campello_gpu's Vulkan backend). Uses
+// campello_gpu's public API with pre-compiled SPIR-V shaders. Platform-native
+// text rasterization (JNI Canvas/Paint on Android, FreeType+HarfBuzz on
+// Linux) is injected via ITextRasterizer / createPlatformTextRasterizer(),
+// the one genuinely OS-specific seam.
 //
-// Supported:  drawRect, drawRRect, drawImage, text (FreeType + HarfBuzz,
-//             rasterizeText/drawTextTexture — cached by Renderer),
-//             createOffscreenTexture, beginOffscreenPass, drawClipShapeComposite
-// No-op:      drawCircle, drawOval, drawLine,
-//             blurTexture, drawBackdropFilter, drawShaderMaskComposite
+// Supported:  drawRect, drawRRect, drawImage, drawCircle, drawOval, text
+//             (rasterizeText/drawTextTexture — cached by Renderer),
+//             createOffscreenTexture, beginOffscreenPass, blurTexture,
+//             drawBackdropFilter, drawClipShapeComposite
+// No-op:      drawLine, drawShaderMaskComposite
 //
 // Call setViewport(w, h) once per frame before Renderer::renderFrame().
 // ---------------------------------------------------------------------------
@@ -94,12 +99,30 @@ public:
 
     void setViewport(float w, float h) noexcept override
     {
-        // Safe to clear previous frame's buffers here: the renderer calls
-        // vkQueueWaitIdle inside submit() before returning, so the GPU is
-        // done with the prior frame by the time this is called again.
-        frame_buffers_.clear();
-        frame_textures_.clear();
-        frame_views_.clear();
+        // campello_gpu's Vulkan Device::submit() no longer blocks until the
+        // GPU is done (kFramesInFlight-deep pipelining instead — see its
+        // doc comment in campello_gpu/src/vulkan/device.cpp), so the
+        // immediately-preceding frame's GPU work may still be executing
+        // when this runs. This call itself runs *before* this frame's own
+        // Device::createCommandEncoder()/beginFrameRing() wait — the most
+        // recently confirmed-done generation at this point is only as
+        // fresh as the *previous* frame's beginFrameRing() call, which
+        // waited for kFramesInFlight=2 generations back. So it takes two
+        // deferred generations here (prev_/prev2_), not one, before it's
+        // provably safe to actually free anything:
+        //   frame G's setViewport() only just-confirmed generation G-3 done
+        //   (via generation G-1's own beginFrameRing() wait, which already
+        //   ran before this call) — see the reasoning traced out in this
+        //   fix's PR description if this ever needs re-deriving.
+        prev2_frame_buffers_.clear();
+        prev2_frame_textures_.clear();
+        prev2_frame_views_.clear();
+        std::swap(prev2_frame_buffers_,  prev_frame_buffers_);
+        std::swap(prev2_frame_textures_, prev_frame_textures_);
+        std::swap(prev2_frame_views_,    prev_frame_views_);
+        std::swap(prev_frame_buffers_,   frame_buffers_);
+        std::swap(prev_frame_textures_,  frame_textures_);
+        std::swap(prev_frame_views_,     frame_views_);
         setViewportSize(w, h);
     }
 
@@ -129,6 +152,8 @@ public:
     {
         return pixel_format_;
     }
+
+    void setDevicePixelRatio(float dpr) noexcept override { dpr_ = dpr; }
 
     std::shared_ptr<campello_gpu::Texture> createOffscreenTexture(
         uint32_t width, uint32_t height) override;
@@ -205,25 +230,31 @@ private:
     std::shared_ptr<campello_gpu::Texture>         blur_v_tex_;
     uint32_t                                        blur_tex_w_ = 0;
     uint32_t                                        blur_tex_h_ = 0;
-    std::shared_ptr<campello_gpu::BindGroupLayout> uniforms_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout> quad_bgl_;
     std::shared_ptr<campello_gpu::PipelineLayout>  rect_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  rrect_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  quad_layout_;
     std::shared_ptr<campello_gpu::Sampler>          linear_sampler_;
-    // Per-frame resources kept alive until the start of the next frame.
-    // vkQueueWaitIdle in Device::submit() ensures the GPU is done with the
-    // current frame before setViewport() clears these on the next frame.
+    // Per-frame resources for the frame currently being recorded.
     std::vector<std::shared_ptr<campello_gpu::Buffer>>      frame_buffers_;
     std::vector<std::shared_ptr<campello_gpu::Texture>>     frame_textures_;
     // TextureViews used as offscreen render targets: vkCmdBeginRenderingKHR
     // records the raw VkImageView — it must remain valid until vkQueueSubmit.
     std::vector<std::shared_ptr<campello_gpu::TextureView>> frame_views_;
+    // setViewport()'s doc comment explains why these two extra generations
+    // exist (campello_gpu's Vulkan Device::submit() is no longer blocking).
+    std::vector<std::shared_ptr<campello_gpu::Buffer>>      prev_frame_buffers_;
+    std::vector<std::shared_ptr<campello_gpu::Texture>>     prev_frame_textures_;
+    std::vector<std::shared_ptr<campello_gpu::TextureView>> prev_frame_views_;
+    std::vector<std::shared_ptr<campello_gpu::Buffer>>      prev2_frame_buffers_;
+    std::vector<std::shared_ptr<campello_gpu::Texture>>     prev2_frame_textures_;
+    std::vector<std::shared_ptr<campello_gpu::TextureView>> prev2_frame_views_;
 
-    std::unique_ptr<LinuxTextRasterizer>           text_rasterizer_;
+    std::unique_ptr<ITextRasterizer>               text_rasterizer_;
 
     float vp_w_ = 800.0f;
     float vp_h_ = 600.0f;
+    float dpr_  = 1.0f;
 
     // Scissor caching
     float last_scissor_x_ = -1.0f;

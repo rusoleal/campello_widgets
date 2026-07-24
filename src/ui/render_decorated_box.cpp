@@ -38,6 +38,30 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void RenderDecoratedBox::paint(PaintContext& context, const Offset& offset)
+    {
+        // Only decorations with a box shadow pay for the OffsetLayer cache
+        // — see this class's doc comment. Everything else takes the
+        // default (uncached, but cheap) path.
+        if (decoration.box_shadow.empty())
+        {
+            RenderObject::paint(context, offset);
+            return;
+        }
+
+        // OR needsDescendantPaint() in: a replay skips performPaint()
+        // entirely, so a nested boundary further down must not be
+        // silently stranded — see that flag's doc comment (this is the
+        // exact bug that previously froze the app: a nested RenderClipRRect's
+        // dirty state got stranded under this boundary's replay).
+        if (!offset_layer_.maybeReplay(context, offset, size_,
+                                        needsPaint() || needsDescendantPaint()))
+            offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
+
+        needs_paint_ = false;
+        needs_descendant_paint_ = false;
+    }
+
     void RenderDecoratedBox::paintDecoration(Canvas& canvas, const Offset& offset) const
     {
         const bool  has_radius = decoration.border_radius > 0.0f;

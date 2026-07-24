@@ -14,7 +14,7 @@
 #import <campello_gpu/constants/buffer_usage.hpp>
 
 // Metal draw backend (private header — same library)
-#import "../../src/macos/metal_draw_backend.hpp"
+#import "../gpu/metal/metal_draw_backend.hpp"
 
 #import <vector_math/vector4.hpp>
 

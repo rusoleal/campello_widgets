@@ -433,6 +433,31 @@ namespace systems::leal::campello_widgets
             const void*    replay_region_id     = nullptr,
             size_t         replay_bracket_index  = 0);
 
+        // Applies a box shadow (DrawShadowCmd): fills the shadow's shape
+        // (recovered from the path via Path::simpleRRectShape(), falling
+        // back to its bounding box) into a padded offscreen texture, runs
+        // it through the existing two-pass Gaussian blur, and composites
+        // the result into the main pass — mirrors applyClipShape()'s
+        // offscreen-then-composite structure, but with a plain shape fill
+        // + blur instead of a mask. `cmd.elevation` carries the shadow's
+        // blur_radius (see RenderDecoratedBox::paintDecoration's call
+        // site); converted to a Gaussian sigma via the same formula
+        // Flutter's BoxShadow.blurSigma uses. See flushDrawList() for
+        // `target_view`, and applyShaderMask() above for
+        // `replay_region_id`/`replay_bracket_index` — same cache-gating
+        // mechanism, backed by shadow_gpu_cache_ below.
+        void applyBoxShadow(
+            const DrawShadowCmd&                               cmd,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
+            float viewport_width,
+            float viewport_height,
+            float dpr,
+            const Matrix4& transform,
+            const Rect&    clip,
+            const void*    replay_region_id     = nullptr,
+            size_t         replay_bracket_index  = 0);
+
         // Restarts a render pass on `target_view` with LoadOp::load (preserves
         // existing content).  Used after an offscreen composite operation.
         std::shared_ptr<campello_gpu::RenderPassEncoder> restartRenderPass(
@@ -533,6 +558,16 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::Texture> blurred_backdrop_tex_;
         uint32_t backdrop_tex_w_ = 0;
         uint32_t backdrop_tex_h_ = 0;
+        // The backdrop-capture pass's TextureView (bd_view in rasterFrame())
+        // used to be a local, safe only because Device::submit() blocked
+        // until the GPU was done before rasterFrame() returned and it went
+        // out of scope. Now that submit() is async (see its doc comment in
+        // campello_gpu's Vulkan device.cpp), it needs the same two-generation
+        // defer as VulkanDrawBackend's frame_views_/frame_textures_ — see
+        // rasterFrame()'s use of these for the rotation.
+        std::shared_ptr<campello_gpu::TextureView> frame_bd_view_;
+        std::shared_ptr<campello_gpu::TextureView> prev_frame_bd_view_;
+        std::shared_ptr<campello_gpu::TextureView> prev2_frame_bd_view_;
 
         // --- clip-shape / shader-mask GPU composite cache ---
         //
@@ -583,12 +618,29 @@ namespace systems::leal::campello_widgets
             uint64_t last_used_frame = 0;
         };
 
+        // Same rationale as ClipShapeGpuCacheEntry above, for
+        // Renderer::applyBoxShadow() — without this, a RenderDecoratedBox
+        // boundary correctly skipping its own re-walk on replay still left
+        // the DrawShadowCmd's expensive offscreen blur composite (texture
+        // alloc + two render-pass restarts) rerunning every frame
+        // regardless, since that command is still present — just replayed,
+        // not freshly recorded — in the frame's draw list either way.
+        struct ShadowGpuCacheEntry
+        {
+            std::shared_ptr<campello_gpu::Texture> texture;
+            Rect     bounds;         ///< Padded bounds the texture covers (unblurred shape's bounds + margin).
+            float    margin = 0.0f;
+            uint64_t last_used_frame = 0;
+        };
+
         static constexpr uint64_t kClipShapeCacheMaxAgeFrames = 120;
 
         std::unordered_map<std::pair<const void*, size_t>, ClipShapeGpuCacheEntry, ReplayKeyHash>
             clip_shape_gpu_cache_;
         std::unordered_map<std::pair<const void*, size_t>, ShaderMaskGpuCacheEntry, ReplayKeyHash>
             shader_mask_gpu_cache_;
+        std::unordered_map<std::pair<const void*, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
+            shadow_gpu_cache_;
 
         // Platform-independent text-rasterization cache. GDI/CoreText/
         // FreeType+HarfBuzz rasterization plus GPU texture allocation/

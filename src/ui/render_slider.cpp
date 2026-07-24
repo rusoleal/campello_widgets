@@ -43,7 +43,13 @@ namespace systems::leal::campello_widgets
 
     void RenderSlider::performPaint(PaintContext& ctx, const Offset& offset)
     {
-        global_offset_ = offset; // latch for pointer handling
+        // Convert to tree-local space (subtract the safe-area inset baked
+        // into `offset` — see RenderObject::setActivePaintOriginOffset's doc
+        // comment) so this matches the space pointer positions (from
+        // PointerDispatcher) are already in — otherwise thumb hit math is
+        // off by the inset whenever it's non-zero (any iPhone).
+        const Offset paint_origin = RenderObject::activePaintOriginOffset();
+        global_offset_ = { offset.x - paint_origin.x, offset.y - paint_origin.y }; // latch for pointer handling
 
         Canvas& canvas = ctx.canvas();
         const float w  = size_.width;

@@ -1,5 +1,5 @@
 #include "vulkan_draw_backend.hpp"
-#include "linux_text_rasterizer.hpp"
+#include "text_rasterizer.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
@@ -142,36 +142,28 @@ VulkanDrawBackend::VulkanDrawBackend(
         return;
     }
 
-    // Bind group layout: uniform buffer @ binding 0 (vertex + fragment)
+    // rect/colored_quad/rrect no longer need a bind group layout at all —
+    // their uniform data (RectUniforms/RRectUniforms, both 48 bytes) now
+    // rides Vulkan push constants instead of a descriptor set (see
+    // rect_layout_/rrect_layout_ below and drawRect()/drawRRect()/
+    // drawCircle()). This eliminates a fresh vkAllocateDescriptorSets +
+    // vkUpdateDescriptorSets on every single rect/rrect/circle draw call —
+    // the dominant cost identified via Renderer::printRasterSubPhaseTimings
+    // (rect alone was ~57 draws/frame). Metal already avoided this
+    // (MetalDrawBackend::drawTexturedQuad binds equivalent per-draw data
+    // through a plain vertex buffer slot, not a bind group), which is why
+    // it measurably outperformed Vulkan on the same content.
+
+    // Bind group layout for quad/clip_shape/blur: texture @ 1, sampler @ 2
+    // (frag). Their uniform data (QuadUniforms/ClipShapeUniforms/
+    // BlurUniforms — 16/32/64 bytes) now rides a push constant instead of
+    // binding 0 here (see quad_layout_ below) — this bind group is now
+    // texture+sampler only, and therefore genuinely reusable across draws
+    // and frames for the same texture (unlike before, when it also carried
+    // per-draw-varying uniform data, forcing a fresh vkAllocateDescriptorSets
+    // on every draw regardless of caller intent — see drawTexturedQuad()'s
+    // cached_bind_group handling, now able to actually honor it).
     {
-        GPU::EntryObject entry{};
-        entry.binding    = 0;
-        entry.visibility = static_cast<GPU::ShaderStage>(
-            static_cast<int>(GPU::ShaderStage::vertex) |
-            static_cast<int>(GPU::ShaderStage::fragment));
-        entry.type       = GPU::EntryObjectType::buffer;
-        entry.data.buffer.type             = GPU::EntryObjectBufferType::uniform;
-        entry.data.buffer.hasDinamicOffaset = false;
-        entry.data.buffer.minBindingSize   = sizeof(RectUniforms);
-
-        GPU::BindGroupLayoutDescriptor desc{};
-        desc.entries = { entry };
-        uniforms_bgl_ = device_->createBindGroupLayout(desc);
-    }
-
-    // Bind group layout for quad: uniform @ 0 (vert+frag), texture @ 1, sampler @ 2 (frag)
-    // All three are in Set 0 as declared in quad.vert / quad.frag.
-    {
-        GPU::EntryObject uni_entry{};
-        uni_entry.binding    = 0;
-        uni_entry.visibility = static_cast<GPU::ShaderStage>(
-            static_cast<int>(GPU::ShaderStage::vertex) |
-            static_cast<int>(GPU::ShaderStage::fragment));
-        uni_entry.type       = GPU::EntryObjectType::buffer;
-        uni_entry.data.buffer.type             = GPU::EntryObjectBufferType::uniform;
-        uni_entry.data.buffer.hasDinamicOffaset = false;
-        uni_entry.data.buffer.minBindingSize   = sizeof(QuadUniforms);  // viewport+opacity+pad = 16
-
         GPU::EntryObject tex_entry{};
         tex_entry.binding    = 1;
         tex_entry.visibility = GPU::ShaderStage::fragment;
@@ -187,7 +179,7 @@ VulkanDrawBackend::VulkanDrawBackend(
         smp_entry.data.sampler.type = GPU::EntryObjectSamplerType::filtering;
 
         GPU::BindGroupLayoutDescriptor desc{};
-        desc.entries = { uni_entry, tex_entry, smp_entry };
+        desc.entries = { tex_entry, smp_entry };
         quad_bgl_ = device_->createBindGroupLayout(desc);
     }
 
@@ -206,32 +198,49 @@ VulkanDrawBackend::VulkanDrawBackend(
         linear_sampler_ = device_->createSampler(desc);
     }
 
-    // Text rasterizer
-    text_rasterizer_ = std::make_unique<LinuxTextRasterizer>();
+    // Text rasterizer (platform-specific: JNI on Android, FreeType+HarfBuzz on Linux)
+    text_rasterizer_ = createPlatformTextRasterizer();
 
     // Shared blend state
     auto blend = premultipliedAlphaBlend();
 
-    // Pipeline layout: Set 0 = uniforms (rect pipeline)
+    // Pipeline layout: no bind groups — RectUniforms rides a push constant
+    // instead (rect + colored_quad pipelines, both use rect_layout_. See
+    // the removed uniforms_bgl_'s replacement comment above for why).
     // Stored as a member so the VkPipelineLayout stays valid for the
-    // lifetime of the backend (vkCmdBindDescriptorSets requires it).
+    // lifetime of the backend (vkCmdPushConstants requires it).
     {
         GPU::PipelineLayoutDescriptor desc{};
-        desc.bindGroupLayouts = { uniforms_bgl_ };
+        desc.pushConstantRanges = { {
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(RectUniforms) } };
         rect_layout_ = device_->createPipelineLayout(desc);
     }
 
-    // Pipeline layout: Set 0 = uniforms (rrect pipeline — same BGL as rect)
+    // Pipeline layout: no bind groups — RRectUniforms (same 48-byte size
+    // as RectUniforms) rides a push constant instead (rrect pipeline).
     {
         GPU::PipelineLayoutDescriptor desc{};
-        desc.bindGroupLayouts = { uniforms_bgl_ };
+        desc.pushConstantRanges = { {
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(RRectUniforms) } };
         rrect_layout_ = device_->createPipelineLayout(desc);
     }
 
-    // Pipeline layout: Set 0 = uniform+texture+sampler (quad pipeline)
+    // Pipeline layout: Set 0 = texture+sampler (quad/clip_shape/blur
+    // pipelines, all share this layout). Push-constant range sized to the
+    // largest of the three vertex-stage-only uniform structs sharing it
+    // (QuadUniforms=16, ClipShapeUniforms=32, BlurUniforms=64 bytes) — a
+    // smaller struct simply uses a prefix of the same range; each shader
+    // only reads the fields it declares.
     {
         GPU::PipelineLayoutDescriptor desc{};
-        desc.bindGroupLayouts = { quad_bgl_ };
+        desc.bindGroupLayouts   = { quad_bgl_ };
+        desc.pushConstantRanges = { { GPU::ShaderStage::vertex, 0, sizeof(BlurUniforms) } };
         quad_layout_ = device_->createPipelineLayout(desc);
     }
 
@@ -359,7 +368,7 @@ VulkanDrawBackend::VulkanDrawBackend(
 
     // ClipShape pipeline — composites ClipRRect/ClipOval offscreen child
     // texture back to the main pass through an SDF rounded-rect/oval mask.
-    // Reuses quad_layout_ (same BGL: uniform@0, texture@1, sampler@2).
+    // Reuses quad_layout_ (same BGL: texture@1, sampler@2; uniform data rides a push constant).
     {
         auto cs_vert = loadSpv(device_, shaders::kclip_shape_vert_spv,  shaders::kclip_shape_vert_spvSize);
         auto cs_frag = loadSpv(device_, shaders::kclip_shape_frag_spv,  shaders::kclip_shape_frag_spvSize);
@@ -387,7 +396,7 @@ VulkanDrawBackend::VulkanDrawBackend(
 
     // Blur pipeline — separable Gaussian blur (H pass then V pass).
     // Uses gl_VertexIndex to generate corners (no vertex buffer needed).
-    // Reuses quad_layout_ (same BGL: uniform@0, texture@1, sampler@2).
+    // Reuses quad_layout_ (same BGL: texture@1, sampler@2; uniform data rides a push constant).
     {
         auto bv = loadSpv(device_, shaders::kblur_vert_spv, shaders::kblur_vert_spvSize);
         auto bf = loadSpv(device_, shaders::kblur_frag_spv, shaders::kblur_frag_spvSize);
@@ -424,12 +433,14 @@ void VulkanDrawBackend::applyScissor(
     const Rect& clip,
     GPU::RenderPassEncoder& encoder)
 {
-    // Clamp to [0, vp_w_] × [0, vp_h_] — mirrors Metal's applyScissor.
+    // `clip` is in logical points (render-tree coordinates); vp_w_/vp_h_ and
+    // the Vulkan scissor rect are physical pixels — convert before clamping,
+    // mirroring Metal's applyScissor.
     // Prevents vkCmdSetScissor with extents exceeding maxViewportDimensions.
-    float x  = std::max(0.0f, clip.left());
-    float y  = std::max(0.0f, clip.top());
-    float rx = std::min(clip.right(),  vp_w_);
-    float by = std::min(clip.bottom(), vp_h_);
+    float x  = std::max(0.0f, clip.left()   * dpr_);
+    float y  = std::max(0.0f, clip.top()    * dpr_);
+    float rx = std::min(clip.right()  * dpr_,  vp_w_);
+    float by = std::min(clip.bottom() * dpr_, vp_h_);
     float w  = std::max(0.0f, rx - x);
     float h  = std::max(0.0f, by - y);
 
@@ -461,7 +472,7 @@ void VulkanDrawBackend::drawRect(
     const Rect&                      clip,
     GPU::RenderPassEncoder&          encoder)
 {
-    if (!rect_pipeline_ || !uniforms_bgl_) return;
+    if (!rect_pipeline_) return;
 
     namespace vm = systems::leal::vector_math;
 
@@ -496,19 +507,13 @@ void VulkanDrawBackend::drawRect(
             u.color[0] = cmd.paint.color.r; u.color[1] = cmd.paint.color.g;
             u.color[2] = cmd.paint.color.b; u.color[3] = cmd.paint.color.a;
             u.viewport[0] = vp_w_; u.viewport[1] = vp_h_;
-            auto ubuf = device_->createBuffer(sizeof(RectUniforms),
-                static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
-                                              static_cast<int>(GPU::BufferUsage::copyDst)), &u);
-            if (!ubuf) continue;
-            frame_buffers_.push_back(ubuf);
-            GPU::BindGroupDescriptor bg{};
-            bg.layout  = uniforms_bgl_;
-            bg.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RectUniforms) } } };
-            auto bind_group = device_->createBindGroup(bg);
-            if (!bind_group) continue;
             applyScissor(clip, encoder);
             encoder.setPipeline(rect_pipeline_);
-            encoder.setBindGroup(0, bind_group);
+            encoder.setPushConstants(
+                static_cast<GPU::ShaderStage>(
+                    static_cast<int>(GPU::ShaderStage::vertex) |
+                    static_cast<int>(GPU::ShaderStage::fragment)),
+                0, sizeof(RectUniforms), &u);
             encoder.draw(6);
         }
         return;
@@ -544,22 +549,13 @@ void VulkanDrawBackend::drawRect(
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
 
-    auto ubuf = device_->createBuffer(sizeof(RectUniforms),
-        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
-                                      static_cast<int>(GPU::BufferUsage::copyDst)),
-        &u);
-    if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);
-
-    GPU::BindGroupDescriptor bg_desc{};
-    bg_desc.layout = uniforms_bgl_;
-    bg_desc.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RectUniforms) } } };
-    auto bind_group = device_->createBindGroup(bg_desc);
-    if (!bind_group) return;
-
     applyScissor(clip, encoder);
     encoder.setPipeline(colored_quad_pipeline_);
-    encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(RectUniforms), &u);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
 }
@@ -574,7 +570,7 @@ void VulkanDrawBackend::drawRRect(
     const Rect&                      clip,
     GPU::RenderPassEncoder&          encoder)
 {
-    if (!rrect_pipeline_ || !uniforms_bgl_) return;
+    if (!rrect_pipeline_) return;
 
     namespace vm = systems::leal::vector_math;
 
@@ -611,25 +607,13 @@ void VulkanDrawBackend::drawRRect(
     u.radius   = std::min(cmd.rrect.radius_x, cmd.rrect.radius_y) * scale;
     u.stroke_w = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
 
-    auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
-                                       static_cast<GPU::BufferUsage>(
-                                           static_cast<int>(GPU::BufferUsage::uniform) |
-                                           static_cast<int>(GPU::BufferUsage::copyDst)),
-                                       &u);
-    if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);
-
-    GPU::BindGroupDescriptor bg_desc{};
-    bg_desc.layout = uniforms_bgl_;
-    bg_desc.entries = {
-        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RRectUniforms) } }
-    };
-    auto bind_group = device_->createBindGroup(bg_desc);
-    if (!bind_group) return;
-
     applyScissor(clip, encoder);
     encoder.setPipeline(rrect_pipeline_);
-    encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(RRectUniforms), &u);
     encoder.draw(6);
 }
 
@@ -643,7 +627,7 @@ void VulkanDrawBackend::drawCircle(
     const Rect&                      clip,
     GPU::RenderPassEncoder&          encoder)
 {
-    if (!rrect_pipeline_ || !uniforms_bgl_) return;
+    if (!rrect_pipeline_) return;
 
     namespace vm = systems::leal::vector_math;
 
@@ -667,21 +651,13 @@ void VulkanDrawBackend::drawCircle(
     u.radius     = r;    // corner radius = r → perfect circle via roundedBox SDF
     u.stroke_w   = sw;
 
-    auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
-        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
-                                      static_cast<int>(GPU::BufferUsage::copyDst)), &u);
-    if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);
-
-    GPU::BindGroupDescriptor bg{};
-    bg.layout  = uniforms_bgl_;
-    bg.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RRectUniforms) } } };
-    auto bind_group = device_->createBindGroup(bg);
-    if (!bind_group) return;
-
     applyScissor(clip, encoder);
     encoder.setPipeline(rrect_pipeline_);
-    encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(RRectUniforms), &u);
     encoder.draw(6);
 }
 
@@ -695,7 +671,7 @@ void VulkanDrawBackend::drawOval(
     const Rect&                      clip,
     GPU::RenderPassEncoder&          encoder)
 {
-    if (!rrect_pipeline_ || !uniforms_bgl_) return;
+    if (!rrect_pipeline_) return;
 
     namespace vm = systems::leal::vector_math;
 
@@ -721,21 +697,13 @@ void VulkanDrawBackend::drawOval(
     u.radius     = std::min(w, h) * 0.5f;  // max corner radius = ellipse approximation
     u.stroke_w   = sw;
 
-    auto ubuf = device_->createBuffer(sizeof(RRectUniforms),
-        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::uniform) |
-                                      static_cast<int>(GPU::BufferUsage::copyDst)), &u);
-    if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);
-
-    GPU::BindGroupDescriptor bg{};
-    bg.layout  = uniforms_bgl_;
-    bg.entries = { { 0, GPU::BufferBinding{ ubuf, 0, sizeof(RRectUniforms) } } };
-    auto bind_group = device_->createBindGroup(bg);
-    if (!bind_group) return;
-
     applyScissor(clip, encoder);
     encoder.setPipeline(rrect_pipeline_);
-    encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(RRectUniforms), &u);
     encoder.draw(6);
 }
 
@@ -774,47 +742,40 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     if (!vbuf) return cached_bind_group;
     frame_buffers_.push_back(vbuf);
 
-    QuadUniforms u{};
-    u.viewport[0] = vp_w_;
-    u.viewport[1] = vp_h_;
-    u.opacity     = opacity;
-    auto ubuf = device_->createBuffer(sizeof(QuadUniforms),
-        static_cast<GPU::BufferUsage>(
-            static_cast<int>(GPU::BufferUsage::uniform) |
-            static_cast<int>(GPU::BufferUsage::copyDst)),
-        &u);
-    if (!ubuf) return cached_bind_group;
-    frame_buffers_.push_back(ubuf);
-
-    // Unlike Windows/Metal, this bind group also carries the per-draw
-    // uniform buffer (bind group 0 here mixes uniform@0/texture@1/sampler@2
-    // — Vulkan doesn't split them the way D3D12's root-signature layout
-    // requires). That means a "cached" bind group is only reusable across
-    // draws that also want the SAME opacity/viewport values baked into
-    // `ubuf` — true for the text-texture cache's use (opacity is always
-    // 1.0 for text, viewport only changes once per frame), but NOT a
-    // general-purpose "reuse regardless of uniforms" cache. Rebuild
-    // whenever a uniform buffer had to be rebuilt (i.e. always, since ubuf
-    // above is always fresh) — reuse is therefore only actually possible
-    // when the caller passes a `cached_bind_group` AND doesn't need this
-    // draw's own fresh uniforms, which is not the case for any current
-    // caller. `cached_bind_group` is accepted for interface parity with
-    // Windows/Metal (see IDrawBackend::drawTextTexture()) but is currently
-    // always rebuilt here — a real reuse would additionally need a pooled
-    // uniform buffer, out of scope for this change.
+    // NOT safe to honor `cached_bind_group` across frames here, even
+    // though the bind group is now texture+sampler only (uniforms moved to
+    // a push constant — see quad_layout_'s doc comment): every
+    // createBindGroup() call allocates from the CURRENT frame-ring
+    // generation's descriptor pool (descriptorPools[currentFrameGen], see
+    // DeviceData::beginFrameRing() in campello_gpu), which gets wholesale
+    // vkResetDescriptorPool'd roughly every 2 frames. A bind group cached
+    // by Renderer::text_texture_cache_ and reused several frames later
+    // ends up pointing at a descriptor slot that's since been reset and
+    // reallocated to some unrelated draw — the exact cause of a real bug
+    // seen here (glyph quads rendering other textures' content). A correct
+    // fix needs bind groups meant for cross-frame caching to come from a
+    // separate, never-reset descriptor pool; until that exists, always
+    // rebuild. `cached_bind_group` is accepted for interface parity with
+    // Windows/Metal (see IDrawBackend::drawTextTexture()) but intentionally
+    // unused here.
     GPU::BindGroupDescriptor bg_desc{};
     bg_desc.layout  = quad_bgl_;
     bg_desc.entries = {
-        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(QuadUniforms) } },
         { 1, texture },
         { 2, linear_sampler_ }
     };
     auto bind_group = device_->createBindGroup(bg_desc);
-    if (!bind_group) return cached_bind_group;
+    if (!bind_group) return nullptr;
+
+    QuadUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.opacity     = opacity;
 
     applyScissor(clip, encoder);
     encoder.setPipeline(quad_pipeline_);
     encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(QuadUniforms), &u);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
     return bind_group;
@@ -983,18 +944,9 @@ void VulkanDrawBackend::runBlurPass(
     u.tex_size[0] = static_cast<float>(src->getWidth());
     u.tex_size[1] = static_cast<float>(src->getHeight());
 
-    auto ubuf = device_->createBuffer(sizeof(BlurUniforms),
-        static_cast<GPU::BufferUsage>(
-            static_cast<int>(GPU::BufferUsage::uniform) |
-            static_cast<int>(GPU::BufferUsage::copyDst)),
-        &u);
-    if (!ubuf) { rpe->end(); return; }
-    frame_buffers_.push_back(ubuf);
-
     GPU::BindGroupDescriptor bg{};
     bg.layout  = quad_bgl_;
     bg.entries = {
-        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(BlurUniforms) } },
         { 1, src },
         { 2, linear_sampler_ }
     };
@@ -1004,6 +956,7 @@ void VulkanDrawBackend::runBlurPass(
     rpe->setViewport(0.0f, 0.0f, static_cast<float>(tw), static_cast<float>(th), 0.0f, 1.0f);
     rpe->setPipeline(blur_pipeline_);
     rpe->setBindGroup(0, bind_group);
+    rpe->setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(BlurUniforms), &u);
     rpe->draw(6);
     rpe->end();
 }
@@ -1024,6 +977,23 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::blurTexture(
 
     if (!blur_h_tex_ || blur_tex_w_ != tw || blur_tex_h_ != th)
     {
+        // blur_h_tex_/blur_v_tex_ are reused across calls within a frame
+        // purely as a size-match fast path (skip reallocating when
+        // consecutive shadows/blurs happen to be the same size) — but nothing
+        // about that reuse is safe to treat as "this texture is done with"
+        // the moment a *different*-sized call comes along. Every draw this
+        // frame shares one command buffer submitted once at frame end, so
+        // an earlier call's composite draw (referencing the texture we're
+        // about to overwrite here) is still unsubmitted, not just "still
+        // rendering" — reassigning shared_ptr members straight to fresh
+        // textures would drop the last reference and run ~Texture()
+        // (vkDestroyImage, synchronous, no GPU-fence wait) on a resource an
+        // already-recorded-but-not-yet-submitted draw still points to.
+        // Moving the old ones into frame_textures_ first keeps them alive
+        // exactly as long as any other per-frame offscreen resource.
+        if (blur_h_tex_) frame_textures_.push_back(std::move(blur_h_tex_));
+        if (blur_v_tex_) frame_textures_.push_back(std::move(blur_v_tex_));
+
         blur_h_tex_ = device_->createTexture(GPU::TextureType::tt2d, pixel_format_,
                                               tw, th, 1, 1, 1, blurUsage);
         blur_v_tex_ = device_->createTexture(GPU::TextureType::tt2d, pixel_format_,
@@ -1101,8 +1071,10 @@ std::shared_ptr<GPU::RenderPassEncoder> VulkanDrawBackend::beginOffscreenPass(
     auto view = tex->createView(pixel_format_, 1);
     // Keep the view alive until the frame is submitted: vkCmdBeginRenderingKHR
     // records the raw VkImageView and it must not be destroyed before
-    // vkQueueSubmit.  frame_views_ is cleared in setViewport() which runs at
-    // the start of the next frame, after Device::submit()'s vkQueueWaitIdle.
+    // vkQueueSubmit — and, since Device::submit() no longer blocks until the
+    // GPU is done, not until it's actually finished executing either.
+    // setViewport()'s doc comment covers the two-generation defer that
+    // keeps this (and frame_buffers_/frame_textures_) alive long enough.
     frame_views_.push_back(view);
 
     GPU::ColorAttachment ca{};
@@ -1163,18 +1135,9 @@ void VulkanDrawBackend::drawClipShapeComposite(
     u.corner_r     = corner_radius;
     u.kind         = is_oval ? 1.0f : 0.0f;
 
-    auto ubuf = device_->createBuffer(sizeof(ClipShapeUniforms),
-        static_cast<GPU::BufferUsage>(
-            static_cast<int>(GPU::BufferUsage::uniform) |
-            static_cast<int>(GPU::BufferUsage::copyDst)),
-        &u);
-    if (!ubuf) return;
-    frame_buffers_.push_back(ubuf);
-
     GPU::BindGroupDescriptor bg_desc{};
     bg_desc.layout = quad_bgl_;
     bg_desc.entries = {
-        { 0, GPU::BufferBinding{ ubuf, 0, sizeof(ClipShapeUniforms) } },
         { 1, child_tex },
         { 2, linear_sampler_ }
     };
@@ -1184,6 +1147,7 @@ void VulkanDrawBackend::drawClipShapeComposite(
     applyScissor(clip, encoder);
     encoder.setPipeline(clip_shape_pipeline_);
     encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(ClipShapeUniforms), &u);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
 }

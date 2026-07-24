@@ -1,9 +1,7 @@
 #pragma once
 
-#include <campello_widgets/ui/size.hpp>
+#include "../gpu/vulkan/text_rasterizer.hpp"
 #include <campello_widgets/ui/color.hpp>
-#include <campello_widgets/ui/text_span.hpp>
-#include <vector>
 #include <cstdint>
 #include <string>
 #include <memory>
@@ -27,27 +25,20 @@ namespace systems::leal::campello_widgets
 //
 // One texture per draw call — no glyph atlas (same pattern as Metal).
 // ---------------------------------------------------------------------------
-class LinuxTextRasterizer
+class LinuxTextRasterizer final : public ITextRasterizer
 {
 public:
     LinuxTextRasterizer();
-    ~LinuxTextRasterizer();
+    ~LinuxTextRasterizer() override;
 
     /** @brief Measures the bounding box of @p span. */
-    Size measure(const TextSpan& span);
-
-    struct Bitmap
-    {
-        std::vector<uint8_t> pixels; ///< BGRA8 premultiplied, row-major
-        int                  width  = 0;
-        int                  height = 0;
-    };
+    Size measure(const TextSpan& span) override;
 
     /** @brief Rasterises @p span into a CPU bitmap. */
-    Bitmap rasterize(const TextSpan& span);
+    Bitmap rasterize(const TextSpan& span) override;
 
     /** @brief Returns true if a system font was successfully loaded. */
-    bool isAvailable() const noexcept { return variants_[0].face != nullptr; }
+    bool isAvailable() const noexcept override { return variants_[0].face != nullptr; }
 
 private:
     bool initialize();

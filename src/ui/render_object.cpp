@@ -94,11 +94,37 @@ namespace systems::leal::campello_widgets
         if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
             r->notePaintRequested();
 
-        // Stop bubbling once we reach a node that owns its own paint cache
-        // (OffsetLayer) — its paint() will independently decide replay-vs-
-        // record next paint without needing ancestors above it to know.
-        if (parent_ && !isRepaintBoundary())
-            parent_->markNeedsPaint();
+        // Stop bubbling the full signal once we reach a node that owns its
+        // own paint cache (OffsetLayer) — its paint() will independently
+        // decide replay-vs-record next paint without needing ancestors
+        // above it to know. That node still needs to inform ITS ancestors
+        // that something below it needs a real (non-replayed) visit,
+        // though — see markNeedsDescendantPaint()'s doc for why skipping
+        // this stranded a nested boundary's dirty state forever.
+        if (parent_)
+        {
+            if (!isRepaintBoundary())
+                parent_->markNeedsPaint();
+            else
+                parent_->markNeedsDescendantPaint();
+        }
+    }
+
+    void RenderObject::markNeedsDescendantPaint() noexcept
+    {
+        ThreadChecker::instance().assertOnBoundThread("RenderObject::markNeedsDescendantPaint");
+        if (needs_descendant_paint_) return;
+        needs_descendant_paint_ = true;
+
+        FrameScheduler::scheduleFrame();
+        if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+            r->notePaintRequested();
+
+        // Unlike markNeedsPaint(), this weaker signal must cross every
+        // ancestor boundary, not just the nearest one — see this method's
+        // doc comment on why.
+        if (parent_)
+            parent_->markNeedsDescendantPaint();
     }
 
     void RenderObject::layout(const BoxConstraints& constraints)
@@ -157,7 +183,21 @@ namespace systems::leal::campello_widgets
             context.canvas().drawRect(bounds, Paint::filled(nextRainbowColor()));
         }
 
-        needs_paint_ = false;
+        // A plain (non-boundary) node's performPaint() unconditionally
+        // visits every child every time it runs — there is no cache to
+        // "skip" here, unlike RenderRepaintBoundary/RenderClipRRect/the
+        // self-boundaring scrollables. That means this call always fully
+        // satisfies any pending "a descendant below me needs a real visit"
+        // signal too, not just this node's own dirty flag. Without clearing
+        // needs_descendant_paint_ here, the first time any descendant's
+        // markNeedsDescendantPaint() passed through this node it would
+        // latch true and never be cleared again (only the boundary classes'
+        // overridden paint() reset it) — permanently blocking every future
+        // descendant-dirty notification from ever reaching the real
+        // boundary above this node, after its very first
+        // successful repaint.
+        needs_paint_             = false;
+        needs_descendant_paint_  = false;
         performPaint(context, offset);
 
         if (DebugFlags::paintSizeEnabled || DebugFlags::paintBaselinesEnabled)

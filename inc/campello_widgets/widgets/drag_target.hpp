@@ -59,7 +59,14 @@ namespace systems::leal::campello_widgets
 
         void performPaint(PaintContext& ctx, const Offset& offset) override
         {
-            global_offset_ = offset;
+            // Convert to tree-local space (subtract the safe-area inset baked
+            // into `offset` — see RenderObject::setActivePaintOriginOffset's
+            // doc comment) so these bounds are in the same coordinate space
+            // as the drag position DragManager::updatePosition() receives
+            // (tree-local, from PointerDispatcher), not offset from it by
+            // the inset.
+            const Offset paint_origin = RenderObject::activePaintOriginOffset();
+            global_offset_ = { offset.x - paint_origin.x, offset.y - paint_origin.y };
 
             // Update bounds with DragManager
             if (auto* mgr = DragManager::active())

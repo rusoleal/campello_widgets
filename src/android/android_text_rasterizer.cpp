@@ -70,11 +70,28 @@ bool AndroidTextRasterizer::initializeJni()
         return false;
     }
 
-    jni_.bitmap_cls = env->FindClass("android/graphics/Bitmap");
-    jni_.bitmap_config_cls = env->FindClass("android/graphics/Bitmap$Config");
-    jni_.canvas_cls = env->FindClass("android/graphics/Canvas");
-    jni_.paint_cls = env->FindClass("android/graphics/Paint");
-    jni_.paint_font_metrics_cls = env->FindClass("android/graphics/Paint$FontMetrics");
+    // FindClass() returns a *local* reference, valid only in this thread's
+    // local-ref table and only for the duration of this call — but
+    // measure()/rasterize() below run on whichever thread calls into this
+    // rasterizer (the raster thread, via RasterThread, not necessarily the
+    // thread that constructed this object). Promote each to a global ref so
+    // it stays valid across threads and beyond this function; otherwise
+    // Android's JNI aborts the process with "jclass is an invalid local
+    // reference: reference outside the table" the first time a cached
+    // class is used from a different thread.
+    auto globalClassRef = [&](const char* name) -> jclass {
+        jclass local = env->FindClass(name);
+        if (!local) return nullptr;
+        auto global = static_cast<jclass>(env->NewGlobalRef(local));
+        env->DeleteLocalRef(local);
+        return global;
+    };
+
+    jni_.bitmap_cls             = globalClassRef("android/graphics/Bitmap");
+    jni_.bitmap_config_cls      = globalClassRef("android/graphics/Bitmap$Config");
+    jni_.canvas_cls              = globalClassRef("android/graphics/Canvas");
+    jni_.paint_cls               = globalClassRef("android/graphics/Paint");
+    jni_.paint_font_metrics_cls  = globalClassRef("android/graphics/Paint$FontMetrics");
 
     if (!jni_.bitmap_cls || !jni_.bitmap_config_cls || !jni_.canvas_cls ||
         !jni_.paint_cls || !jni_.paint_font_metrics_cls)
@@ -111,13 +128,15 @@ bool AndroidTextRasterizer::initializeJni()
 
     jni_.argb_8888_field_ = env->GetStaticFieldID(
         jni_.bitmap_config_cls, "ARGB_8888", "Landroid/graphics/Bitmap$Config;");
+    jni_.ascent_field_ = env->GetFieldID(jni_.paint_font_metrics_cls, "ascent", "F");
+    jni_.descent_field_ = env->GetFieldID(jni_.paint_font_metrics_cls, "descent", "F");
 
     if (!jni_.bitmap_create_ || !jni_.bitmap_copy_pixels_to_buffer_ ||
         !jni_.canvas_ctor_ || !jni_.canvas_draw_text_ ||
         !jni_.paint_ctor_ || !jni_.paint_set_color_ ||
         !jni_.paint_set_text_size_ || !jni_.paint_set_antialias_ ||
         !jni_.paint_measure_text_ || !jni_.paint_get_font_metrics_ ||
-        !jni_.argb_8888_field_)
+        !jni_.argb_8888_field_ || !jni_.ascent_field_ || !jni_.descent_field_)
     {
         LOGE("AndroidTextRasterizer: failed to cache JNI methods");
         return false;
@@ -131,11 +150,11 @@ void AndroidTextRasterizer::releaseJni()
     JNIEnv* env = getAndroidJniEnv();
     if (!env) return;
 
-    if (jni_.bitmap_cls)             env->DeleteLocalRef(jni_.bitmap_cls);
-    if (jni_.bitmap_config_cls)      env->DeleteLocalRef(jni_.bitmap_config_cls);
-    if (jni_.canvas_cls)             env->DeleteLocalRef(jni_.canvas_cls);
-    if (jni_.paint_cls)              env->DeleteLocalRef(jni_.paint_cls);
-    if (jni_.paint_font_metrics_cls) env->DeleteLocalRef(jni_.paint_font_metrics_cls);
+    if (jni_.bitmap_cls)             env->DeleteGlobalRef(jni_.bitmap_cls);
+    if (jni_.bitmap_config_cls)      env->DeleteGlobalRef(jni_.bitmap_config_cls);
+    if (jni_.canvas_cls)             env->DeleteGlobalRef(jni_.canvas_cls);
+    if (jni_.paint_cls)              env->DeleteGlobalRef(jni_.paint_cls);
+    if (jni_.paint_font_metrics_cls) env->DeleteGlobalRef(jni_.paint_font_metrics_cls);
 
     jni_ = JniRefs{};
 }
@@ -172,10 +191,8 @@ Size AndroidTextRasterizer::measure(const TextSpan& span)
     jobject fm = env->CallObjectMethod(paint, jni_.paint_get_font_metrics_);
     float ascent = 0.0f, descent = 0.0f;
     if (fm) {
-        jfieldID ascent_field  = env->GetFieldID(jni_.paint_font_metrics_cls, "ascent", "F");
-        jfieldID descent_field = env->GetFieldID(jni_.paint_font_metrics_cls, "descent", "F");
-        if (ascent_field)  ascent  = env->GetFloatField(fm, ascent_field);
-        if (descent_field) descent = env->GetFloatField(fm, descent_field);
+        ascent  = env->GetFloatField(fm, jni_.ascent_field_);
+        descent = env->GetFloatField(fm, jni_.descent_field_);
         env->DeleteLocalRef(fm);
     }
     float height = descent - ascent;
@@ -198,53 +215,68 @@ AndroidTextRasterizer::Bitmap AndroidTextRasterizer::rasterize(const TextSpan& s
     JNIEnv* env = getAndroidJniEnv();
     if (!env) return bmp;
 
-    // Measure first
-    Size sz = measure(span);
-    int w = static_cast<int>(std::ceil(sz.width));
-    int h = static_cast<int>(std::ceil(sz.height));
-    if (w <= 0 || h <= 0) return bmp;
-
-    // Get ARGB_8888 config
-    jobject config = env->GetStaticObjectField(
-        jni_.bitmap_config_cls, jni_.argb_8888_field_);
-    if (!config) return bmp;
-
-    // Create bitmap
-    jobject bitmap = env->CallStaticObjectMethod(
-        jni_.bitmap_cls, jni_.bitmap_create_, w, h, config);
-    env->DeleteLocalRef(config);
-    if (!bitmap) return bmp;
-
-    // Create canvas
-    jobject canvas = env->NewObject(jni_.canvas_cls, jni_.canvas_ctor_, bitmap);
-    if (!canvas) {
-        env->DeleteLocalRef(bitmap);
-        return bmp;
-    }
-
-    // Create paint
+    // One Paint (and one jstring) does double duty for both measuring and
+    // drawing below — this used to be two separate JNI round-trips (this
+    // function called measure(), which built its own throwaway Paint and
+    // re-measured everything a second time), doubling the JNI overhead of
+    // an already-expensive per-glyph-run call.
     jobject paint = env->NewObject(jni_.paint_cls, jni_.paint_ctor_);
-    if (!paint) {
-        env->DeleteLocalRef(canvas);
-        env->DeleteLocalRef(bitmap);
-        return bmp;
-    }
+    if (!paint) return bmp;
 
     env->CallVoidMethod(paint, jni_.paint_set_color_, colorToArgb(span.style.color));
     env->CallVoidMethod(paint, jni_.paint_set_text_size_, span.style.font_size);
     env->CallVoidMethod(paint, jni_.paint_set_antialias_, true);
 
-    // Get font metrics for baseline
+    jstring jtext = env->NewStringUTF(span.text.c_str());
+    float width = env->CallFloatMethod(paint, jni_.paint_measure_text_, jtext);
+
     jobject fm = env->CallObjectMethod(paint, jni_.paint_get_font_metrics_);
-    float ascent = 0.0f;
+    float ascent = 0.0f, descent = 0.0f;
     if (fm) {
-        jfieldID ascent_field = env->GetFieldID(jni_.paint_font_metrics_cls, "ascent", "F");
-        if (ascent_field) ascent = env->GetFloatField(fm, ascent_field);
+        ascent  = env->GetFloatField(fm, jni_.ascent_field_);
+        descent = env->GetFloatField(fm, jni_.descent_field_);
         env->DeleteLocalRef(fm);
+    }
+    float height = descent - ascent;
+    if (height <= 0.0f) height = span.style.font_size * 1.2f;
+
+    int w = static_cast<int>(std::ceil(width));
+    int h = static_cast<int>(std::ceil(height));
+    if (w <= 0 || h <= 0) {
+        env->DeleteLocalRef(jtext);
+        env->DeleteLocalRef(paint);
+        return bmp;
+    }
+
+    // Get ARGB_8888 config
+    jobject config = env->GetStaticObjectField(
+        jni_.bitmap_config_cls, jni_.argb_8888_field_);
+    if (!config) {
+        env->DeleteLocalRef(jtext);
+        env->DeleteLocalRef(paint);
+        return bmp;
+    }
+
+    // Create bitmap
+    jobject bitmap = env->CallStaticObjectMethod(
+        jni_.bitmap_cls, jni_.bitmap_create_, w, h, config);
+    env->DeleteLocalRef(config);
+    if (!bitmap) {
+        env->DeleteLocalRef(jtext);
+        env->DeleteLocalRef(paint);
+        return bmp;
+    }
+
+    // Create canvas
+    jobject canvas = env->NewObject(jni_.canvas_cls, jni_.canvas_ctor_, bitmap);
+    if (!canvas) {
+        env->DeleteLocalRef(bitmap);
+        env->DeleteLocalRef(jtext);
+        env->DeleteLocalRef(paint);
+        return bmp;
     }
 
     // Draw text at baseline (y = -ascent places top of text at y=0)
-    jstring jtext = env->NewStringUTF(span.text.c_str());
     env->CallVoidMethod(canvas, jni_.canvas_draw_text_, jtext, 0.0f, -ascent, paint);
     env->DeleteLocalRef(jtext);
 
@@ -265,6 +297,11 @@ AndroidTextRasterizer::Bitmap AndroidTextRasterizer::rasterize(const TextSpan& s
     env->DeleteLocalRef(bitmap);
 
     return bmp;
+}
+
+std::unique_ptr<ITextRasterizer> createPlatformTextRasterizer()
+{
+    return std::make_unique<AndroidTextRasterizer>();
 }
 
 } // namespace systems::leal::campello_widgets

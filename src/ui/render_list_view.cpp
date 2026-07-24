@@ -186,10 +186,16 @@ namespace systems::leal::campello_widgets
 
     void RenderListView::paint(PaintContext& context, const Offset& offset)
     {
-        if (!offset_layer_.maybeReplay(context, offset, size_, needsPaint()))
+        // OR needsDescendantPaint() in: a replay skips performPaint()
+        // entirely, so a nested boundary further down (e.g. a ClipRRect
+        // avatar in a list item) must not be silently stranded — see that
+        // flag's doc comment.
+        if (!offset_layer_.maybeReplay(context, offset, size_,
+                                        needsPaint() || needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
 
         needs_paint_ = false;
+        needs_descendant_paint_ = false;
     }
 
     // -------------------------------------------------------------------------
@@ -322,6 +328,7 @@ namespace systems::leal::campello_widgets
             won_arena_     = false;
             lost_arena_    = false;
             pan_last_pos_  = event.position;
+            pan_down_pos_  = event.position;
             device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
             pan_velocity_  = 0.0f;
@@ -340,14 +347,25 @@ namespace systems::leal::campello_widgets
             const float dx   = event.position.x - pan_last_pos_.x;
             const float dy   = event.position.y - pan_last_pos_.y;
 
-            // Only this list's own scroll axis counts toward the pan-slop
+            // The slop check measures cumulative distance from pointer-down
+            // (pan_down_pos_, fixed for the whole gesture), NOT the
+            // frame-to-frame delta (dx/dy above, from pan_last_pos_, which
+            // advances every move). Touch delivery arrives in many small
+            // increments — checking each individual increment against the
+            // slop threshold means a slow-building drag whose per-frame
+            // steps never individually exceed the threshold would never
+            // start panning at all, no matter how far the finger travels in
+            // total. Only this list's own scroll axis counts toward the
             // threshold — not total Euclidean movement — so a horizontal
-            // list nested inside a vertical one (or vice versa) only
-            // claims the gesture arena for drags actually aligned with its
-            // own axis. Mirrors Flutter's VerticalDragGestureRecognizer/
+            // list nested inside a vertical one (or vice versa) only claims
+            // the gesture arena for drags actually aligned with its own
+            // axis. Mirrors Flutter's VerticalDragGestureRecognizer/
             // HorizontalDragGestureRecognizer, which likewise measure only
             // their own axis's displacement, not the diagonal distance.
-            if (!panning_ && std::abs(is_v ? dy : dx) > computePanSlop(device_kind_))
+            const float total_dx = event.position.x - pan_down_pos_.x;
+            const float total_dy = event.position.y - pan_down_pos_.y;
+
+            if (!panning_ && std::abs(is_v ? total_dy : total_dx) > computePanSlop(device_kind_))
             {
                 if (won_arena_)
                 {

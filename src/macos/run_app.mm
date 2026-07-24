@@ -23,7 +23,7 @@
 #import <campello_gpu/texture_view.hpp>
 #import <campello_gpu/constants/pixel_format.hpp>
 
-#import "metal_draw_backend.hpp"
+#import "../gpu/metal/metal_draw_backend.hpp"
 
 #import <Cocoa/Cocoa.h>
 #import <MetalKit/MetalKit.h>
@@ -119,7 +119,17 @@ namespace {
     // Return coordinates in logical pixels (points), not physical pixels.
     // The Renderer converts to physical pixels internally using DPR.
     const CGPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
-    return { (float)pt.x, (float)(self.bounds.size.height - pt.y) };
+    const float flipped_y = (float)(self.bounds.size.height - pt.y);
+
+    // generateDrawList() paints the root tree offset by (view_insets_.left,
+    // .top) — the safe-area inset (e.g. the camera housing on notched
+    // MacBook Pros) — so the tree's own local origin sits that far in from
+    // the view's top-left. PointerDispatcher::hitTest() expects positions in
+    // that same tree-local space, so this must subtract the same insets, or
+    // clicks land offset from what's visually under the cursor whenever the
+    // inset is non-zero.
+    Widgets::EdgeInsets insets = gRenderer ? gRenderer->viewInsets() : Widgets::EdgeInsets::zero();
+    return { (float)pt.x - insets.left, flipped_y - insets.top };
 }
 
 - (void)mouseDown:(NSEvent*)event

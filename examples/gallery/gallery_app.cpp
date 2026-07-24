@@ -1407,7 +1407,7 @@ class GalleryShell;
 class GalleryShellState : public cw::State<GalleryShell>
 {
 public:
-    void initState() override { selected_ = 4; }
+    void initState() override { selected_ = 0; }
 
     cw::WidgetRef build(cw::BuildContext&) override
     {

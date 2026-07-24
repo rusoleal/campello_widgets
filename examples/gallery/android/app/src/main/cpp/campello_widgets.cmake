@@ -8,9 +8,15 @@ endif()
 
 include(FetchContent)
 
+# This file lives inside the campello_widgets repo itself (examples/gallery/
+# android/app/src/main/cpp/) — point SOURCE_DIR at the repo root relative to
+# this file's own location rather than a developer-specific absolute path.
+get_filename_component(_campello_widgets_repo_root
+    "${CMAKE_CURRENT_LIST_DIR}/../../../../../../.." ABSOLUTE)
+
 FetchContent_Declare(
     campello_widgets
-    SOURCE_DIR /home/ruben/repos/campello_widgets
+    SOURCE_DIR ${_campello_widgets_repo_root}
 )
 
 if(NOT campello_widgets_POPULATED)

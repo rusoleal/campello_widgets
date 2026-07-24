@@ -1,10 +1,14 @@
 #include <campello_widgets/ui/canvas.hpp>
+#include <vector_math/vector4.hpp>
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <cstdio>
 
 namespace systems::leal::campello_widgets
 {
+    namespace vm = systems::leal::vector_math;
 
     // Helper for rotation matrix
     static Matrix4 rotationMatrix(float radians)
@@ -288,9 +292,44 @@ namespace systems::leal::campello_widgets
     // Clip
     // ------------------------------------------------------------------
 
+    namespace
+    {
+        // Clip rects are specified in the caller's *local* space (the same
+        // space as the `offset` it was derived from), but current_clip_ is
+        // tracked in absolute space. Ancestors that scroll their content
+        // (ListView, SingleChildScrollView, ...) apply that scroll purely
+        // via canvas.translate() — current_transform_ — without touching
+        // `offset` itself, so any descendant that establishes its own clip
+        // from a raw offset-derived rect must transform it through
+        // current_transform_ first, or it ends up intersecting a
+        // pre-scroll rect against a post-scroll ambient clip. Corners are
+        // transformed individually (not just two opposite ones) and
+        // min/maxed into an AABB so rotation/skew don't produce an
+        // inverted or wrong-sized box.
+        Rect transformRectAABB(const Rect& rect, const Matrix4& m)
+        {
+            const vm::Vector4<float> corners[4] = {
+                m * vm::Vector4<float>(rect.left(),  rect.top(),    0.0f, 1.0f),
+                m * vm::Vector4<float>(rect.right(), rect.top(),    0.0f, 1.0f),
+                m * vm::Vector4<float>(rect.left(),  rect.bottom(), 0.0f, 1.0f),
+                m * vm::Vector4<float>(rect.right(), rect.bottom(), 0.0f, 1.0f),
+            };
+            float minx = corners[0].x(), maxx = corners[0].x();
+            float miny = corners[0].y(), maxy = corners[0].y();
+            for (int i = 1; i < 4; ++i)
+            {
+                minx = std::min(minx, corners[i].x());
+                maxx = std::max(maxx, corners[i].x());
+                miny = std::min(miny, corners[i].y());
+                maxy = std::max(maxy, corners[i].y());
+            }
+            return Rect::fromLTRB(minx, miny, maxx, maxy);
+        }
+    }
+
     void Canvas::clipRect(const Rect& rect)
     {
-        const Rect clipped = current_clip_.intersection(rect);
+        const Rect clipped = current_clip_.intersection(transformRectAABB(rect, current_transform_));
         commands_.push_back(PushClipRectCmd{clipped});
         current_clip_ = clipped;
 
@@ -302,7 +341,7 @@ namespace systems::leal::campello_widgets
     {
         // For now, clip to the bounding rect
         // Full implementation would need GPU stencil buffer or shader-based clipping
-        const Rect clipped = current_clip_.intersection(rrect.rect);
+        const Rect clipped = current_clip_.intersection(transformRectAABB(rrect.rect, current_transform_));
         commands_.push_back(PushClipRRectCmd{rrect});
         current_clip_ = clipped;
 
@@ -312,7 +351,7 @@ namespace systems::leal::campello_widgets
 
     void Canvas::clipOval(const Rect& rect)
     {
-        const Rect clipped = current_clip_.intersection(rect);
+        const Rect clipped = current_clip_.intersection(transformRectAABB(rect, current_transform_));
         commands_.push_back(PushClipOvalCmd{rect});
         current_clip_ = clipped;
 

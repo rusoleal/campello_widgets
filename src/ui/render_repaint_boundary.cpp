@@ -30,10 +30,16 @@ namespace systems::leal::campello_widgets
         // including clips — correct for *this* offset. See OffsetLayer's
         // doc for the mechanism (identity replay, cheap delta-translate
         // reposition when safe, full re-record fallback otherwise).
-        if (!offset_layer_.maybeReplay(context, offset, size_, needsPaint()))
+        // OR needsDescendantPaint() in: a replay skips paintChild()
+        // entirely, so if some nested boundary further down has unconsumed
+        // dirty state, it must not be silently stranded — see that flag's
+        // doc comment.
+        if (!offset_layer_.maybeReplay(context, offset, size_,
+                                        needsPaint() || needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { paintChild(context, offset); });
 
         needs_paint_ = false;
+        needs_descendant_paint_ = false;
     }
 
 } // namespace systems::leal::campello_widgets

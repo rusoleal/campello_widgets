@@ -1,6 +1,6 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform RectUniforms {
+layout(push_constant) uniform RectUniforms {
     vec4 rect;
     vec4 color;
     vec2 viewport;

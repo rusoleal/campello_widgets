@@ -18,9 +18,10 @@
 #import <campello_gpu/texture_view.hpp>
 #import <campello_gpu/constants/pixel_format.hpp>
 
-// MetalDrawBackend is in src/macos/ — on iOS we use the same Metal backend.
-// The file is compiled for both macOS and iOS via GLOB_RECURSE in ios.cmake.
-#import "../macos/metal_draw_backend.hpp"
+// MetalDrawBackend lives in src/gpu/metal/ — the single Metal backend shared
+// by macOS and iOS (compiled in via GLOB_RECURSE in both macos.cmake and
+// ios.cmake).
+#import "../gpu/metal/metal_draw_backend.hpp"
 
 #import <UIKit/UIKit.h>
 #import <MetalKit/MetalKit.h>
@@ -38,6 +39,108 @@ namespace Widgets = ::systems::leal::campello_widgets;
 namespace {
     Widgets::WidgetRef gRootWidget;
     Widgets::MediaQueryData gMediaData;
+
+    // Maps a physical (hardware) keyboard press to the framework's
+    // platform-agnostic KeyCode — the iOS/Simulator equivalent of
+    // macosKeyCodeToKeyCode() in src/macos/run_app.mm. UIKeyboardHIDUsage
+    // values are USB HID keyboard-page usage IDs (stable, standardized —
+    // not an Apple-specific numbering), available via UIKey.keyCode since
+    // iOS 13.4. Only covers the subset of keys this framework's KeyCode
+    // enum represents (see key_event.hpp); anything else maps to unknown.
+    static Widgets::KeyCode iosHIDUsageToKeyCode(UIKeyboardHIDUsage usage)
+    {
+        switch (usage)
+        {
+        case UIKeyboardHIDUsageKeyboardA: return Widgets::KeyCode::a;
+        case UIKeyboardHIDUsageKeyboardB: return Widgets::KeyCode::b;
+        case UIKeyboardHIDUsageKeyboardC: return Widgets::KeyCode::c;
+        case UIKeyboardHIDUsageKeyboardD: return Widgets::KeyCode::d;
+        case UIKeyboardHIDUsageKeyboardE: return Widgets::KeyCode::e;
+        case UIKeyboardHIDUsageKeyboardF: return Widgets::KeyCode::f;
+        case UIKeyboardHIDUsageKeyboardG: return Widgets::KeyCode::g;
+        case UIKeyboardHIDUsageKeyboardH: return Widgets::KeyCode::h;
+        case UIKeyboardHIDUsageKeyboardI: return Widgets::KeyCode::i;
+        case UIKeyboardHIDUsageKeyboardJ: return Widgets::KeyCode::j;
+        case UIKeyboardHIDUsageKeyboardK: return Widgets::KeyCode::k;
+        case UIKeyboardHIDUsageKeyboardL: return Widgets::KeyCode::l;
+        case UIKeyboardHIDUsageKeyboardM: return Widgets::KeyCode::m;
+        case UIKeyboardHIDUsageKeyboardN: return Widgets::KeyCode::n;
+        case UIKeyboardHIDUsageKeyboardO: return Widgets::KeyCode::o;
+        case UIKeyboardHIDUsageKeyboardP: return Widgets::KeyCode::p;
+        case UIKeyboardHIDUsageKeyboardQ: return Widgets::KeyCode::q;
+        case UIKeyboardHIDUsageKeyboardR: return Widgets::KeyCode::r;
+        case UIKeyboardHIDUsageKeyboardS: return Widgets::KeyCode::s;
+        case UIKeyboardHIDUsageKeyboardT: return Widgets::KeyCode::t;
+        case UIKeyboardHIDUsageKeyboardU: return Widgets::KeyCode::u;
+        case UIKeyboardHIDUsageKeyboardV: return Widgets::KeyCode::v;
+        case UIKeyboardHIDUsageKeyboardW: return Widgets::KeyCode::w;
+        case UIKeyboardHIDUsageKeyboardX: return Widgets::KeyCode::x;
+        case UIKeyboardHIDUsageKeyboardY: return Widgets::KeyCode::y;
+        case UIKeyboardHIDUsageKeyboardZ: return Widgets::KeyCode::z;
+
+        case UIKeyboardHIDUsageKeyboard0: return Widgets::KeyCode::digit_0;
+        case UIKeyboardHIDUsageKeyboard1: return Widgets::KeyCode::digit_1;
+        case UIKeyboardHIDUsageKeyboard2: return Widgets::KeyCode::digit_2;
+        case UIKeyboardHIDUsageKeyboard3: return Widgets::KeyCode::digit_3;
+        case UIKeyboardHIDUsageKeyboard4: return Widgets::KeyCode::digit_4;
+        case UIKeyboardHIDUsageKeyboard5: return Widgets::KeyCode::digit_5;
+        case UIKeyboardHIDUsageKeyboard6: return Widgets::KeyCode::digit_6;
+        case UIKeyboardHIDUsageKeyboard7: return Widgets::KeyCode::digit_7;
+        case UIKeyboardHIDUsageKeyboard8: return Widgets::KeyCode::digit_8;
+        case UIKeyboardHIDUsageKeyboard9: return Widgets::KeyCode::digit_9;
+
+        case UIKeyboardHIDUsageKeyboardSpacebar:           return Widgets::KeyCode::space;
+        case UIKeyboardHIDUsageKeyboardReturnOrEnter:      return Widgets::KeyCode::enter;
+        case UIKeyboardHIDUsageKeyboardTab:                return Widgets::KeyCode::tab;
+        case UIKeyboardHIDUsageKeyboardDeleteOrBackspace:  return Widgets::KeyCode::backspace;
+        case UIKeyboardHIDUsageKeyboardEscape:              return Widgets::KeyCode::escape;
+        case UIKeyboardHIDUsageKeyboardDeleteForward:       return Widgets::KeyCode::delete_forward;
+
+        case UIKeyboardHIDUsageKeyboardLeftArrow:  return Widgets::KeyCode::left;
+        case UIKeyboardHIDUsageKeyboardRightArrow: return Widgets::KeyCode::right;
+        case UIKeyboardHIDUsageKeyboardUpArrow:    return Widgets::KeyCode::up;
+        case UIKeyboardHIDUsageKeyboardDownArrow:  return Widgets::KeyCode::down;
+        case UIKeyboardHIDUsageKeyboardHome:       return Widgets::KeyCode::home;
+        case UIKeyboardHIDUsageKeyboardEnd:        return Widgets::KeyCode::end;
+        case UIKeyboardHIDUsageKeyboardPageUp:     return Widgets::KeyCode::page_up;
+        case UIKeyboardHIDUsageKeyboardPageDown:   return Widgets::KeyCode::page_down;
+
+        case UIKeyboardHIDUsageKeyboardF1:  return Widgets::KeyCode::f1;
+        case UIKeyboardHIDUsageKeyboardF2:  return Widgets::KeyCode::f2;
+        case UIKeyboardHIDUsageKeyboardF3:  return Widgets::KeyCode::f3;
+        case UIKeyboardHIDUsageKeyboardF4:  return Widgets::KeyCode::f4;
+        case UIKeyboardHIDUsageKeyboardF5:  return Widgets::KeyCode::f5;
+        case UIKeyboardHIDUsageKeyboardF6:  return Widgets::KeyCode::f6;
+        case UIKeyboardHIDUsageKeyboardF7:  return Widgets::KeyCode::f7;
+        case UIKeyboardHIDUsageKeyboardF8:  return Widgets::KeyCode::f8;
+        case UIKeyboardHIDUsageKeyboardF9:  return Widgets::KeyCode::f9;
+        case UIKeyboardHIDUsageKeyboardF10: return Widgets::KeyCode::f10;
+        case UIKeyboardHIDUsageKeyboardF11: return Widgets::KeyCode::f11;
+        case UIKeyboardHIDUsageKeyboardF12: return Widgets::KeyCode::f12;
+
+        case UIKeyboardHIDUsageKeyboardLeftShift:    return Widgets::KeyCode::left_shift;
+        case UIKeyboardHIDUsageKeyboardRightShift:   return Widgets::KeyCode::right_shift;
+        case UIKeyboardHIDUsageKeyboardLeftControl:  return Widgets::KeyCode::left_ctrl;
+        case UIKeyboardHIDUsageKeyboardRightControl: return Widgets::KeyCode::right_ctrl;
+        case UIKeyboardHIDUsageKeyboardLeftAlt:      return Widgets::KeyCode::left_alt;
+        case UIKeyboardHIDUsageKeyboardRightAlt:     return Widgets::KeyCode::right_alt;
+        case UIKeyboardHIDUsageKeyboardLeftGUI:      return Widgets::KeyCode::left_meta;
+        case UIKeyboardHIDUsageKeyboardRightGUI:     return Widgets::KeyCode::right_meta;
+        case UIKeyboardHIDUsageKeyboardCapsLock:     return Widgets::KeyCode::caps_lock;
+
+        default: return Widgets::KeyCode::unknown;
+        }
+    }
+
+    static uint32_t iosModifiersToKeyModifiers(UIKeyModifierFlags flags)
+    {
+        uint32_t mods = Widgets::KeyModifiers::none;
+        if (flags & UIKeyModifierShift)     mods |= Widgets::KeyModifiers::shift;
+        if (flags & UIKeyModifierControl)   mods |= Widgets::KeyModifiers::ctrl;
+        if (flags & UIKeyModifierAlternate) mods |= Widgets::KeyModifiers::alt;
+        if (flags & UIKeyModifierCommand)   mods |= Widgets::KeyModifiers::meta;
+        return mods;
+    }
 
     static Widgets::Brightness getSystemBrightness()
     {
@@ -113,6 +216,8 @@ namespace {
 
     id<UITextInputTokenizer>  _tokenizer;
     __weak id<UITextInputDelegate> _inputDelegate;
+    UIView*                   _emptyInputView;
+    UIView*                   _emptyInputAccessoryView;
 }
 
 @synthesize inputDelegate = _inputDelegate;
@@ -128,6 +233,64 @@ namespace {
 - (BOOL)canBecomeFirstResponder
 {
     return YES;
+}
+
+// viewDidAppear: makes this view first responder proactively (see its own
+// comment) so hardware-key routing works even with nothing focused. On a
+// device with no hardware keyboard attached, UIKit's default behavior for
+// any UIKeyInput-conforming first responder is to raise the on-screen
+// keyboard — which would then pop up on launch, with no TextField actually
+// focused. Returning a non-nil, zero-size view here while no TextField
+// holds input focus suppresses that (UIKit shows *this* as "the keyboard"
+// instead of its own); returning nil once a TextField is focused restores
+// the real system keyboard. reloadInputViews (called from
+// setOnInputTargetChanged below) is what makes UIKit re-query this after
+// focus changes — it isn't polled automatically.
+- (UIView*)inputView
+{
+    if (_textInputManager && _textInputManager->hasInputTarget())
+        return nil;
+
+    if (!_emptyInputView)
+        _emptyInputView = [[UIView alloc] initWithFrame:CGRectZero];
+    return _emptyInputView;
+}
+
+// Without this, iPadOS still shows its own default accessory bar (the
+// predictive-text/dictation strip, with a floating mic button) docked to
+// the bottom of the screen even though -inputView above suppresses the
+// actual keyboard — that default accessory is supplied independently
+// whenever a UITextInput-conforming responder is first responder and this
+// method returns nil. Same nil-while-editing / suppressed-otherwise split
+// as -inputView, for the same reason.
+- (UIView*)inputAccessoryView
+{
+    if (_textInputManager && _textInputManager->hasInputTarget())
+        return nil;
+
+    if (!_emptyInputAccessoryView)
+        _emptyInputAccessoryView = [[UIView alloc] initWithFrame:CGRectZero];
+    return _emptyInputAccessoryView;
+}
+
+// Neither -inputView nor -inputAccessoryView above is enough on iPadOS: a
+// floating dictation/predictive-text control still appears independently,
+// because UIKit decides whether to treat the first responder as a "text
+// input" (and show that control) by asking
+// -conformsToProtocol:@protocol(UITextInput) — a real, dynamic message
+// send, not the static <UITextInput> in this class's @interface. Denying
+// conformance while no TextField is focused makes UIKit fall back to
+// plain UIResponder/UIKeyInput behavior (no text-editing system UI at
+// all); pressesBegan:/pressesEnded: keep working regardless, since those
+// are delivered to any first responder and don't depend on this.
+- (BOOL)conformsToProtocol:(Protocol*)aProtocol
+{
+    if (aProtocol == @protocol(UITextInput) &&
+        !(_textInputManager && _textInputManager->hasInputTarget()))
+    {
+        return NO;
+    }
+    return [super conformsToProtocol:aProtocol];
 }
 
 - (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
@@ -153,18 +316,42 @@ namespace {
     __weak CampelloMTKView* weakSelf = self;
     _textInputManager->setOnInputTargetChanged([weakSelf](bool has_target) {
         if (CampelloMTKView* strongSelf = weakSelf) {
-            if (has_target && !strongSelf.isFirstResponder)
-                [strongSelf becomeFirstResponder];
-            else if (!has_target && strongSelf.isFirstResponder)
+            if (has_target) {
+                if (!strongSelf.isFirstResponder) [strongSelf becomeFirstResponder];
+            } else if (strongSelf.isFirstResponder) {
+                // Resigning here is what dismisses any on-screen keyboard
+                // raised for the TextField that just lost focus. But nothing
+                // else in this class ever re-requests first-responder status
+                // afterward (viewDidAppear: only claims it once, at launch),
+                // so without immediately reclaiming it here, this view would
+                // permanently stop receiving pressesBegan:/pressesEnded: —
+                // breaking hardware-keyboard input everywhere, not just in
+                // text fields, for the rest of the session.
                 [strongSelf resignFirstResponder];
+                [strongSelf becomeFirstResponder];
+            }
+            // -inputView's answer depends on hasInputTarget(), which just
+            // changed — UIKit doesn't re-query it on its own, so without
+            // this the keyboard would show/hide a step behind (or not at
+            // all) rather than tracking focus.
+            [strongSelf reloadInputViews];
         }
     });
 
-    // On-demand rendering: stop the continuous display link.
-    // Register the callback before mounting so initial markNeedsPaint() calls
-    // during tree construction already reach the view.
-    self.paused               = YES;
-    self.enableSetNeedsDisplay = YES;
+    // True continuous rendering: MTKView's own internal CADisplayLink drives
+    // drawInMTKView: every tick (paused defaults to NO already); each call
+    // is a cheap no-op via Renderer::buildFrame()'s "nothing dirty" early
+    // exit when there's genuinely nothing to paint. This is deliberately
+    // NOT on-demand (enableSetNeedsDisplay=YES + manual setNeedsDisplay()
+    // per FrameScheduler tick, which is what src/macos/run_app.mm uses):
+    // that combination was found to fully starve UIKit's touch delivery
+    // (hitTest: stops being invoked entirely, not just delayed) once a
+    // continuous AnimationController is running — reproduced identically on
+    // both the Simulator and a real device. Driving the redraw loop by
+    // rapidly re-invoking setNeedsDisplay() from application code doesn't
+    // get the same run-loop-friendly scheduling as MTKView's own
+    // CADisplayLink-paced path.
+    self.enableSetNeedsDisplay = NO;
     Widgets::FrameScheduler::setCallback([weakSelf] {
         if (weakSelf) [weakSelf setNeedsDisplay];
     });
@@ -278,11 +465,15 @@ namespace {
     CGRect bounds = self.bounds;
     CGSize drawableSize = view.drawableSize;
 
-    // The Renderer expects LOGICAL viewport dimensions (in points).
-    // It internally divides by DPR to get logical constraints for layout.
-    // The Metal drawable and backend need PHYSICAL dimensions (in pixels).
-    float logical_width  = (float)bounds.size.width;
-    float logical_height = (float)bounds.size.height;
+    // Use drawableSize (physical pixels) for the Renderer, matching macOS's
+    // drawInMTKView: — Renderer::renderFrame's viewport_width/height are
+    // PHYSICAL pixels; it divides by DPR internally to get logical layout
+    // constraints (see Renderer::layoutPass), and the backend's scissor/NDC
+    // math (applyScissor) compares against that same physical viewport.
+    // Passing logical points here (as this used to) desyncs the two: clip
+    // rects computed in physical pixels get clamped against a viewport 1/DPR
+    // too small, collapsing most content's scissor rect to empty.
+    (void)bounds;
     float physical_width = (float)drawableSize.width;
     float physical_height= (float)drawableSize.height;
 
@@ -297,7 +488,7 @@ namespace {
     // Renderer::renderFrame() itself — don't duplicate that here.
     auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
     _renderer->setPendingDrawable((__bridge void*)drawable);
-    bool rendered = colorView && _renderer->renderFrame(colorView, logical_width, logical_height);
+    bool rendered = colorView && _renderer->renderFrame(colorView, physical_width, physical_height);
     if (!rendered)
         _device->scheduleNextPresent(nullptr);
 }
@@ -332,7 +523,17 @@ namespace {
     // Return coordinates in logical pixels (points), not physical pixels.
     // The Renderer converts to physical pixels internally using DPR.
     const CGPoint pt = [touch locationInView:self];
-    return { (float)pt.x, (float)pt.y };
+
+    // generateDrawList() paints the root tree offset by (view_insets_.left,
+    // .top) — the safe-area inset (status bar / Dynamic Island) — so the
+    // tree's own local origin sits that far in from the view's top-left.
+    // PointerDispatcher::hitTest() expects positions in that same
+    // tree-local space, so touch coordinates (which are in full-view space)
+    // must have the same insets subtracted here, or every tap on a device
+    // with a non-zero safe area (i.e. any iPhone) lands offset from what's
+    // visually under the finger.
+    Widgets::EdgeInsets insets = _renderer ? _renderer->viewInsets() : Widgets::EdgeInsets::zero();
+    return { (float)pt.x - insets.left, (float)pt.y - insets.top };
 }
 
 - (float)pressureForTouch:(UITouch*)touch
@@ -402,6 +603,123 @@ namespace {
             0.0f});
         [self releasePointerIdForTouch:touch];
     }
+}
+
+// ============================================================================
+// Physical keyboard (UIPress) — mirrors src/macos/run_app.mm's keyDown:/
+// keyUp:. A Bluetooth/Smart Keyboard, or (in Simulator) the host Mac's own
+// keyboard, delivers presses here via UIKit's hardware-keyboard API
+// (iOS 13.4+) rather than through UIKeyInput, which only ever sees the
+// characters a text-composition session accepts. Requires this view to be
+// first responder — see CampelloViewController's viewDidLoad, which calls
+// becomeFirstResponder proactively (not just reactively when a TextField
+// gains focus) so global shortcuts work even with nothing focused.
+// ============================================================================
+
+- (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event
+{
+    // Presses that carry a UIKey are always fully handled below (either
+    // routed into text insertion or into FocusManager), so they're removed
+    // here before forwarding to super. Any press WITHOUT a UIKey (e.g. from
+    // a game controller) is left in and still reaches super's default
+    // handling. Forwarding an already-handled UIKey press to super would
+    // let UIKit's own UIResponder implementation auto-bridge it into
+    // insertText:/deleteBackward a second time — since this view conforms
+    // to UIKeyInput — producing a duplicate/garbled character on every
+    // hardware keystroke.
+    NSMutableSet<UIPress*>* unhandledPresses = [presses mutableCopy];
+    for (UIPress* press in presses)
+    {
+        UIKey* key = press.key;
+        if (!key) { continue; }
+        [unhandledPresses removeObject:press];
+
+        Widgets::KeyCode keyCode  = iosHIDUsageToKeyCode(key.keyCode);
+        uint32_t         modifiers = iosModifiersToKeyModifiers(key.modifierFlags);
+
+        // Mirrors macOS's isNavigationKey/isSpecialKey split: these never
+        // flow through UIKeyInput's text-composition pipeline (insertText:/
+        // deleteBackward), so they must be routed to FocusManager directly
+        // regardless of whether a TextField currently has input focus.
+        BOOL isNavigationKey =
+            (keyCode == Widgets::KeyCode::left  || keyCode == Widgets::KeyCode::right ||
+             keyCode == Widgets::KeyCode::up    || keyCode == Widgets::KeyCode::down  ||
+             keyCode == Widgets::KeyCode::home  || keyCode == Widgets::KeyCode::end   ||
+             keyCode == Widgets::KeyCode::page_up || keyCode == Widgets::KeyCode::page_down);
+
+        BOOL isSpecialKey =
+            (keyCode == Widgets::KeyCode::escape || keyCode == Widgets::KeyCode::tab ||
+             keyCode == Widgets::KeyCode::enter  || keyCode == Widgets::KeyCode::backspace ||
+             keyCode == Widgets::KeyCode::delete_forward ||
+             keyCode == Widgets::KeyCode::f1  || keyCode == Widgets::KeyCode::f2  ||
+             keyCode == Widgets::KeyCode::f3  || keyCode == Widgets::KeyCode::f4  ||
+             keyCode == Widgets::KeyCode::f5  || keyCode == Widgets::KeyCode::f6  ||
+             keyCode == Widgets::KeyCode::f7  || keyCode == Widgets::KeyCode::f8  ||
+             keyCode == Widgets::KeyCode::f9  || keyCode == Widgets::KeyCode::f10 ||
+             keyCode == Widgets::KeyCode::f11 || keyCode == Widgets::KeyCode::f12);
+
+        // A Command- or Control-held keystroke is an app/system shortcut by
+        // convention, never text composition — see macOS's identical
+        // hasCommandModifier check for why this must bypass text input even
+        // while a TextField holds it.
+        BOOL hasShortcutModifier =
+            (modifiers & (Widgets::KeyModifiers::meta | Widgets::KeyModifiers::ctrl)) != 0;
+
+        if (_textInputManager && _textInputManager->hasInputTarget() &&
+            !hasShortcutModifier && !isNavigationKey && !isSpecialKey)
+        {
+            // Plain character key while a TextField is focused. Unlike the
+            // on-screen keyboard — whose taps call insertText: directly —
+            // UIKit does NOT automatically bridge hardware key presses into
+            // a custom UITextInput's insertText:/deleteBackward; for a
+            // built-in UITextField that translation is hidden inside
+            // Apple's own implementation, but ours has to do it explicitly
+            // here, or hardware typing does nothing while the on-screen
+            // keyboard is showing.
+            if (key.characters.length > 0)
+                [self insertText:key.characters];
+            continue;
+        }
+
+        if (_focusManager)
+        {
+            Widgets::KeyEvent ke;
+            ke.kind      = Widgets::KeyEventKind::down;
+            ke.key_code  = keyCode;
+            ke.modifiers = modifiers;
+            ke.character = key.characters.length > 0
+                ? (uint32_t)[key.characters characterAtIndex:0] : 0u;
+            _focusManager->handleKeyEvent(ke);
+        }
+    }
+    if (unhandledPresses.count > 0)
+        [super pressesBegan:unhandledPresses withEvent:event];
+}
+
+- (void)pressesEnded:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event
+{
+    if (_focusManager)
+    {
+        for (UIPress* press in presses)
+        {
+            UIKey* key = press.key;
+            if (!key) continue;
+            Widgets::KeyEvent ke;
+            ke.kind      = Widgets::KeyEventKind::up;
+            ke.key_code  = iosHIDUsageToKeyCode(key.keyCode);
+            ke.modifiers = iosModifiersToKeyModifiers(key.modifierFlags);
+            ke.character = 0;
+            _focusManager->handleKeyEvent(ke);
+        }
+    }
+    [super pressesEnded:presses withEvent:event];
+}
+
+- (void)pressesCancelled:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event
+{
+    // Treat a cancelled press the same as a release — matches
+    // touchesCancelled:'s "cancel is a variant of up" handling above.
+    [self pressesEnded:presses withEvent:event];
 }
 
 // ============================================================================
@@ -732,6 +1050,19 @@ namespace {
     
     // Initial safe area update
     [self updateSafeAreaInsets];
+}
+
+- (void)viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+    // Proactively claim first responder so hardware-keyboard presses
+    // (pressesBegan:/pressesEnded: on CampelloMTKView) are delivered from
+    // the start — not just once a TextField requests it via
+    // setOnInputTargetChanged — so global shortcuts (e.g. the gallery's
+    // Cmd/Ctrl+D debug-overlay toggle) work with nothing focused. Done here
+    // rather than viewDidLoad: the view isn't guaranteed to be in a window
+    // yet at that point, and becomeFirstResponder silently no-ops outside one.
+    [_metalView becomeFirstResponder];
 }
 
 - (void)viewSafeAreaInsetsDidChange

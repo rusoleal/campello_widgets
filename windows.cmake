@@ -3,6 +3,8 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|linux)/.*")
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
+# Windows uses its own D3D12 backend (src/windows/), not Vulkan or Metal.
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/gpu/(vulkan|metal)/.*")
 
 add_library(campello_widgets SHARED ${CAMPELLO_WIDGETS_SOURCES})
 set_target_properties(campello_widgets PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)

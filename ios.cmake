@@ -3,6 +3,8 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.mm"
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|windows|linux)/.*")
+# iOS uses the shared Metal backend (src/gpu/metal/), not Vulkan.
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/gpu/vulkan/.*")
 
 add_library(campello_widgets STATIC ${CAMPELLO_WIDGETS_SOURCES})
 
@@ -11,6 +13,8 @@ target_include_directories(campello_widgets
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/inc>
         $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
         $<INSTALL_INTERFACE:inc>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 target_link_libraries(campello_widgets

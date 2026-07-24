@@ -329,4 +329,9 @@ LinuxTextRasterizer::Bitmap LinuxTextRasterizer::rasterize(const TextSpan& span)
     return bmp;
 }
 
+std::unique_ptr<ITextRasterizer> createPlatformTextRasterizer()
+{
+    return std::make_unique<LinuxTextRasterizer>();
+}
+
 } // namespace systems::leal::campello_widgets

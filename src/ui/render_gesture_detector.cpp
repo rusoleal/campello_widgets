@@ -87,8 +87,16 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::resolveTapOutcome()
     {
-        // Check for double-tap.
-        if (last_tap_valid_ && down_time_ms_ != 0 &&
+        // Check for double-tap — only when something is actually listening.
+        // Mirrors Flutter's GestureDetector: with no onDoubleTap callback, no
+        // DoubleTapGestureRecognizer is ever armed, so every tap resolves
+        // immediately as a single tap. Without this guard, a second tap
+        // landing within the double-tap window at roughly the same spot hit
+        // the early `return` below regardless of on_double_tap being set,
+        // silently swallowing that tap — on_tap() never fired for it. That's
+        // exactly what made rapid tapping on a plain (single-tap-only)
+        // button feel like it dropped taps.
+        if (on_double_tap && last_tap_valid_ && down_time_ms_ != 0 &&
             (down_time_ms_ - last_tap_time_ms_) <= kDoubleTapMs)
         {
             const float dtx   = down_pos_.x - last_tap_pos_.x;
@@ -96,7 +104,7 @@ namespace systems::leal::campello_widgets
             const float ddist = std::sqrt(dtx * dtx + dty * dty);
             if (ddist < kStationaryTolerance)
             {
-                if (on_double_tap) on_double_tap();
+                on_double_tap();
                 last_tap_valid_ = false;
                 return;
             }
@@ -243,7 +251,15 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::performPaint(PaintContext& ctx, const Offset& offset)
     {
-        global_offset_ = offset;
+        // Convert to tree-local space (subtract the safe-area inset baked
+        // into `offset` — see RenderObject::setActivePaintOriginOffset's doc
+        // comment). globalOffset() feeds anchor positioning for overlays
+        // (e.g. DropdownButton's menu, via Positioned) that live in the same
+        // tree-local coordinate space as everything else painted — leaving
+        // this in screen space would offset anchored overlays by the inset
+        // whenever it's non-zero (any iPhone).
+        const Offset paint_origin = RenderObject::activePaintOriginOffset();
+        global_offset_ = { offset.x - paint_origin.x, offset.y - paint_origin.y };
         if (child_) paintChild(ctx, offset);
     }
 

@@ -248,16 +248,24 @@ namespace systems::leal::campello_widgets
         frame_encoder_ = encoder.get();
         frame_target_  = target;
 
+        // Age out frame_bd_view_ from two generations ago — see its doc
+        // comment in renderer.hpp for why this can no longer just be a
+        // rasterFrame()-local variable. Unconditional (not just when this
+        // frame has a backdrop filter) so a stretch of filter-less frames
+        // still ages the retained views out instead of holding them forever.
+        prev2_frame_bd_view_.reset();
+        prev2_frame_bd_view_ = std::move(prev_frame_bd_view_);
+        prev_frame_bd_view_  = std::move(frame_bd_view_);
+
         // ------------------------------------------------------------------
         // Pass 1 (optional): backdrop capture
         // Render the full scene to `backdrop_tex_` with backdrop-filter
         // children skipped.  The result is then blurred for use in Pass 2.
         // ------------------------------------------------------------------
-        // bd_view is declared here (outside the if block) so it stays alive
-        // past device_->submit() on line ~348.  vkCmdBeginRenderingKHR records
-        // the raw VkImageView; destroying the TextureView before vkQueueSubmit
-        // is a Vulkan spec violation that crashes the validation layer.
-        std::shared_ptr<GPU::TextureView> bd_view;
+        // frame_bd_view_ (declared in renderer.hpp) stays alive across the
+        // two generations after this frame — see its doc comment there. A
+        // rasterFrame()-local variable was only safe while
+        // Device::submit() blocked until the GPU finished before returning.
         if (package.has_backdrop_filter && draw_backend_)
         {
             const uint32_t tw = static_cast<uint32_t>(package.viewport_width);
@@ -281,9 +289,9 @@ namespace systems::leal::campello_widgets
             // arrayLayerCount = 1 (non-array 2D texture) — the default (-1,
             // an unsigned sentinel) produces an out-of-bounds slice range
             // that Metal's argument validation rejects.
-            bd_view = backdrop_tex_->createView(draw_backend_->offscreenPixelFormat(), 1);
+            frame_bd_view_ = backdrop_tex_->createView(draw_backend_->offscreenPixelFormat(), 1);
             GPU::ColorAttachment bd_ca{};
-            bd_ca.view          = bd_view;
+            bd_ca.view          = frame_bd_view_;
             bd_ca.loadOp        = GPU::LoadOp::clear;
             bd_ca.storeOp       = GPU::StoreOp::store;
             bd_ca.clearValue[0] = package.clear_color.r;
@@ -296,7 +304,7 @@ namespace systems::leal::campello_widgets
 
             auto bd_rpe = encoder->beginRenderPass(bd_desc);
             markSubPhase("backdrop begin");
-            flushDrawList(package.draw_list, bd_rpe, bd_view,
+            flushDrawList(package.draw_list, bd_rpe, frame_bd_view_,
                           package.viewport_width, package.viewport_height, dpr,
                           /*backdrop_pass=*/true);
             markSubPhase("backdrop flush");
@@ -332,7 +340,20 @@ namespace systems::leal::campello_widgets
             std::fprintf(stderr, "[raster] beginRenderPass returned null\n");
             frame_encoder_ = nullptr;
             frame_target_.reset();
-            encoder->finish();
+            // createCommandEncoder() already advanced the frames-in-flight
+            // ring and reset this generation's fence before we ever got
+            // here (see DeviceData::beginFrameRing()). That fence can only
+            // be signaled by a submission referencing it — discarding the
+            // encoder without submitting leaves it permanently unsignaled,
+            // and every future frame that cycles back to this same ring
+            // slot (or, if a swapchain image was acquired, this same image
+            // index) then hangs forever waiting on it. Submit the
+            // (possibly empty) command buffer so the ring stays healthy;
+            // this drops one frame instead of freezing the app.
+            auto cmd_buffer = encoder->finish();
+            if (cmd_buffer) {
+                device_->submit(std::move(cmd_buffer));
+            }
             return false;
         }
 
@@ -438,26 +459,43 @@ namespace systems::leal::campello_widgets
         // in case layoutPass was skipped.
         RenderObject::setActiveBackend(draw_backend_.get());
         RenderObject::setActiveDevicePixelRatio(device_pixel_ratio_);
-        root_->paint(ctx, Offset{view_insets_.left, view_insets_.top});
+        const Offset paint_origin{view_insets_.left, view_insets_.top};
+        RenderObject::setActivePaintOriginOffset(paint_origin);
+        root_->paint(ctx, paint_origin);
         // Note: We don't clear the backend here because it's needed for text
         // measurement during hit testing (e.g., TextField cursor positioning).
         // The backend pointer remains valid for the lifetime of the Renderer.
 
+        // Debug overlays below position themselves using plain arithmetic
+        // against the viewport size (e.g. "bottom-left corner"), so — unlike
+        // the widget tree above, which only ever consumes paint_origin plus
+        // its own already-logical layout results — they need genuinely
+        // logical dimensions here, matching layoutPass()'s identical
+        // conversion. viewport_width/height are physical pixels (the
+        // caller passes drawableSize/physical_width straight through on
+        // every platform); using them unconverted put the overlay several
+        // times its own height below the visible logical area — invisible
+        // once the dpr-scale transform pushed it further off-screen still.
+        const float logical_viewport_width  = viewport_width  / device_pixel_ratio_;
+        const float logical_viewport_height = viewport_height / device_pixel_ratio_;
+
         if (DebugFlags::showPerformanceOverlay)
-            paintPerformanceOverlay(ctx, viewport_width, viewport_height);
+            paintPerformanceOverlay(ctx, logical_viewport_width, logical_viewport_height);
 
         if (DebugFlags::showDebugBanner)
         {
             constexpr float kBannerH  = 24.0f;
             constexpr float kBannerW  = 96.0f;
-            const float     bx        = viewport_width - kBannerW;
+            const float     bx        = logical_viewport_width - kBannerW;
 
             ctx.canvas().drawRect(
                 Rect::fromLTWH(bx, 0.0f, kBannerW, kBannerH),
                 Paint::filled(Color::fromRGBA(0.85f, 0.08f, 0.08f, 0.90f)));
 
+            TextStyle debug_style{Color::white(), 11.0f, {}};
+            debug_style.font_size *= device_pixel_ratio_;
             ctx.canvas().drawText(
-                TextSpan{"DEBUG", TextStyle{Color::white(), 11.0f, {}}},
+                TextSpan{"DEBUG", debug_style},
                 Offset{bx + 18.0f, 6.0f});
         }
 
@@ -549,6 +587,11 @@ namespace systems::leal::campello_widgets
         struct TypeStats { int count = 0; float ms = 0.0f; };
         TypeStats rect_stats, text_stats, image_stats, circle_stats, oval_stats, rrect_stats, line_stats;
         TypeStats backdrop_stats; // BackdropFilter's main-pass composite draw — previously untimed.
+        // applyClipShape/applyShaderMask/applyBoxShadow run their own
+        // offscreen render passes and were previously entirely outside
+        // timeDraw()'s accounting, leaving a large unexplained gap between
+        // the itemized categories above and the reported main-flush total.
+        TypeStats clip_shape_stats, shader_mask_stats, shadow_stats;
         auto timeDraw = [&](TypeStats& stats, auto&& fn)
         {
             if (!print_breakdown) { fn(); return; }
@@ -578,9 +621,11 @@ namespace systems::leal::campello_widgets
                             rid  = replay_region_stack.back().first;
                             ridx = replay_region_stack.back().second++;
                         }
-                        applyShaderMask(shader_mask_info, shader_mask_cmds,
-                                        rpe, target_view, viewport_width, viewport_height, dpr,
-                                        current_transform, current_clip, rid, ridx);
+                        timeDraw(shader_mask_stats, [&] {
+                            applyShaderMask(shader_mask_info, shader_mask_cmds,
+                                            rpe, target_view, viewport_width, viewport_height, dpr,
+                                            current_transform, current_clip, rid, ridx);
+                        });
                         shader_mask_cmds.clear();
                     }
                     else
@@ -615,10 +660,12 @@ namespace systems::leal::campello_widgets
                                 rid  = replay_region_stack.back().first;
                                 ridx = replay_region_stack.back().second++;
                             }
-                            applyClipShape(clip_shape_bounds, clip_shape_corner_r,
-                                           clip_shape_is_oval, clip_shape_cmds,
-                                           rpe, target_view, viewport_width, viewport_height, dpr,
-                                           current_transform, current_clip, rid, ridx);
+                            timeDraw(clip_shape_stats, [&] {
+                                applyClipShape(clip_shape_bounds, clip_shape_corner_r,
+                                               clip_shape_is_oval, clip_shape_cmds,
+                                               rpe, target_view, viewport_width, viewport_height, dpr,
+                                               current_transform, current_clip, rid, ridx);
+                            });
                             clip_shape_cmds.clear();
                         }
                         else
@@ -768,8 +815,23 @@ namespace systems::leal::campello_widgets
                     if (!replay_region_stack.empty())
                         replay_region_stack.pop_back();
                 }
-                // SaveLayerCmd, DrawPathCmd, DrawShadowCmd, etc. are planned
-                // for a later phase and silently fall through for now.
+                else if constexpr (std::is_same_v<T, DrawShadowCmd>)
+                {
+                    const void* rid  = nullptr;
+                    size_t      ridx = 0;
+                    if (!replay_region_stack.empty())
+                    {
+                        rid  = replay_region_stack.back().first;
+                        ridx = replay_region_stack.back().second++;
+                    }
+                    timeDraw(shadow_stats, [&] {
+                        applyBoxShadow(c, rpe, target_view, viewport_width, viewport_height,
+                                       dpr, current_transform, current_clip, rid, ridx);
+                    });
+                }
+
+                // SaveLayerCmd, DrawPathCmd, etc. are planned for a later
+                // phase and silently fall through for now.
 
             }, cmd);
         }
@@ -791,6 +853,9 @@ namespace systems::leal::campello_widgets
             printType("rrect",  rrect_stats);
             printType("line",   line_stats);
             printType("backdrop", backdrop_stats);
+            printType("clipshape", clip_shape_stats);
+            printType("shadermask", shader_mask_stats);
+            printType("shadow", shadow_stats);
         }
     }
 
@@ -1009,6 +1074,147 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void Renderer::applyBoxShadow(
+        const DrawShadowCmd&                                cmd,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
+        float dpr,
+        const Matrix4& transform,
+        const Rect&    clip,
+        const void*    replay_region_id,
+        size_t         replay_bracket_index)
+    {
+        if (!draw_backend_ || !frame_encoder_) return;
+
+        // Cache-hit path — see applyClipShape()'s identical comment and
+        // shadow_gpu_cache_'s doc comment.
+        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        if (replay_region_id != nullptr)
+        {
+            auto it = shadow_gpu_cache_.find(cache_key);
+            if (it != shadow_gpu_cache_.end())
+            {
+                it->second.last_used_frame = frame_counter_;
+                const Rect& cb = it->second.bounds;
+                const float cm = it->second.margin;
+                DrawImageCmd img_cmd{
+                    it->second.texture,
+                    Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
+                    Rect::fromLTWH(cb.x - cm, cb.y - cm,
+                                   cb.width + 2.0f * cm, cb.height + 2.0f * cm),
+                    1.0f };
+                draw_backend_->drawImage(img_cmd, transform, clip, *rpe);
+                return;
+            }
+        }
+
+        // Path doesn't trace rounded corners itself yet (see
+        // Path::addRRect()'s doc comment) — simpleRRectShape() is the only
+        // reliable source of the corner radius for the common case (this is
+        // the sole DrawShadowCmd producer). Falling back to the path's
+        // bounding box with a square corner still draws a reasonable shadow
+        // rather than none for any future non-simple-shape caller.
+        RRect rr;
+        if (auto simple = cmd.path.simpleRRectShape())
+            rr = *simple;
+        else
+            rr = RRect{cmd.path.getBounds(), 0.0f};
+
+        const Rect& bounds = rr.rect;
+        if (!std::isfinite(bounds.width) || !std::isfinite(bounds.height) ||
+            bounds.width <= 0.0f || bounds.height <= 0.0f)
+            return;
+
+        // cmd.elevation carries the shadow's blur_radius (see
+        // RenderDecoratedBox::paintDecoration) — convert to a Gaussian sigma
+        // via the same radius→sigma formula Flutter's BoxShadow.blurSigma
+        // uses, so a given blur_radius produces comparably soft results.
+        const float sigma  = cmd.elevation * 0.57735f + 0.5f;
+        const float margin = std::min(sigma * 3.0f, 48.0f); // ~3-sigma cutoff, capped
+
+        const float padded_w = bounds.width  + 2.0f * margin;
+        const float padded_h = bounds.height + 2.0f * margin;
+
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(padded_w * dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(padded_h * dpr));
+        if (tw == 0 || th == 0) return;
+
+        auto shadow_tex = draw_backend_->createOffscreenTexture(tw, th);
+        if (!shadow_tex) return;
+
+        rpe->end();
+
+        std::shared_ptr<campello_gpu::Texture> blurred;
+        auto shadow_rpe = draw_backend_->beginOffscreenPass(shadow_tex, *frame_encoder_);
+        if (shadow_rpe)
+        {
+            draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
+
+            // Fill the shape — padded by `margin` on every side so the blur
+            // has room to spread without clipping against the texture edge
+            // — with the shadow's own color/alpha; blurring then diffuses
+            // that alpha into a soft-edged shadow.
+            //
+            // The offscreen texture (and this pass's viewport, set above)
+            // is sized in *physical* pixels (padded_w/h * dpr), but
+            // local_bounds below is logical — so the transform must carry
+            // the same dpr scale flushDrawList's own current_transform
+            // seeds every other draw call with, or the shape is rasterized
+            // at 1/dpr its intended size in the texture's top-left corner
+            // (invisible at dpr==1, but shrunk-and-shifted at dpr>1, e.g.
+            // iOS's Retina displays).
+            Matrix4 dpr_scale  = Matrix4::identity();
+            dpr_scale.data[0]  = dpr;
+            dpr_scale.data[5]  = dpr;
+            const Rect     texture_clip = Rect::fromLTWH(0.0f, 0.0f, padded_w, padded_h);
+            const Rect     local_bounds = Rect::fromLTWH(margin, margin, bounds.width, bounds.height);
+            if (rr.radius_x > 0.0f || rr.radius_y > 0.0f)
+            {
+                DrawRRectCmd rrect_cmd{
+                    RRect{local_bounds, rr.radius_x, rr.radius_y},
+                    Paint::filled(cmd.color) };
+                draw_backend_->drawRRect(rrect_cmd, dpr_scale, texture_clip, *shadow_rpe);
+            }
+            else
+            {
+                DrawRectCmd rect_cmd{ local_bounds, Paint::filled(cmd.color) };
+                draw_backend_->drawRect(rect_cmd, dpr_scale, texture_clip, *shadow_rpe);
+            }
+
+            shadow_rpe->end();
+
+            blurred = draw_backend_->blurTexture(shadow_tex, sigma, sigma, *frame_encoder_);
+
+            draw_backend_->setViewportSize(viewport_width, viewport_height);
+        }
+
+        rpe = restartRenderPass(target_view);
+
+        if (blurred)
+        {
+            DrawImageCmd img_cmd{
+                blurred,
+                Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
+                Rect::fromLTWH(bounds.x - margin, bounds.y - margin, padded_w, padded_h),
+                1.0f };
+            draw_backend_->drawImage(img_cmd, transform, clip, *rpe);
+
+            // Populate the cache for a future replay — see
+            // applyClipShape()'s identical comment.
+            if (replay_region_id != nullptr)
+            {
+                ShadowGpuCacheEntry entry;
+                entry.texture         = blurred;
+                entry.bounds          = bounds;
+                entry.margin          = margin;
+                entry.last_used_frame = frame_counter_;
+                shadow_gpu_cache_[cache_key] = std::move(entry);
+            }
+        }
+    }
+
     void Renderer::evictStaleGpuCaches()
     {
         auto sweep = [&](auto& cache, uint64_t max_age)
@@ -1023,6 +1229,7 @@ namespace systems::leal::campello_widgets
         };
         sweep(clip_shape_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(shader_mask_gpu_cache_, kClipShapeCacheMaxAgeFrames);
+        sweep(shadow_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(text_texture_cache_, kTextTextureCacheMaxAgeFrames);
     }
 
@@ -1133,8 +1340,15 @@ namespace systems::leal::campello_widgets
         {
             char buf[96];
             std::snprintf(buf, sizeof(buf), "UI: %.1f ms   RASTER: %.1f ms", ui_avg, raster_avg);
+            // font_size is in physical pixels, like every other drawText()
+            // call site (RenderText/RenderParagraph/RenderTextField all
+            // multiply by dpr before drawing) — without this the glyph
+            // rasterizes at 1/dpr the intended size on any Retina/high-DPI
+            // display.
+            TextStyle style{Color::white(), 11.0f, {}};
+            style.font_size *= device_pixel_ratio_;
             ctx.canvas().drawText(
-                TextSpan{buf, TextStyle{Color::white(), 11.0f, {}}},
+                TextSpan{buf, style},
                 Offset{6.0f, chart_top + 4.0f});
         }
 
@@ -1217,6 +1431,15 @@ namespace systems::leal::campello_widgets
 
         const float oy = viewport_height - kTotalH;
 
+        // Not a widget — this is painted directly by the Renderer outside
+        // the widget tree, so it can't be wrapped in a SafeArea widget the
+        // normal way. Applying the same insets manually here is the
+        // equivalent: without it the overlay's bottom edge sits flush with
+        // the physical screen edge, under the iOS home-indicator (or any
+        // other platform's bottom system chrome).
+        ctx.canvas().save();
+        ctx.canvas().translate(view_insets_.left, -view_insets_.bottom);
+
         ctx.canvas().drawRect(
             Rect::fromLTWH(0.0f, oy, kOverlayW, kTotalH),
             Paint::filled(Color::fromRGBA(0.10f, 0.10f, 0.10f, 0.80f)));
@@ -1224,6 +1447,8 @@ namespace systems::leal::campello_widgets
         paintUnifiedFrameChart(ctx, build_sampler_, raster_sampler_, oy,
                                kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW,
                                kDisplayedFrames);
+
+        ctx.canvas().restore();
     }
 
 } // namespace systems::leal::campello_widgets

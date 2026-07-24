@@ -151,6 +151,7 @@ namespace systems::leal::campello_widgets
         bool   lost_arena_    = false;
         std::optional<GestureArenaEntry> arena_entry_;
         Offset pan_last_pos_;
+        Offset pan_down_pos_; ///< Position at pointer-down — fixed; used for the slop check (cumulative distance), unlike pan_last_pos_ which advances every move.
         PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
         std::chrono::steady_clock::time_point last_pan_time_;
         float  pan_velocity_  = 0.0f;

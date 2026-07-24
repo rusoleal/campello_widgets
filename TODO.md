@@ -149,6 +149,57 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 - [x] Linux: Wayland integration with `wl_surface` / `xdg_toplevel`
 - [ ] Platform channel / FFI abstraction for native calls
 
+### iOS hardening + Android/Linux Vulkan backend unification (2026-07-24)
+
+iOS moved from "builds, mostly untested" to real device + simulator bring-up:
+- `src/ios/run_app.mm` — hardware-keyboard support (`UIKeyboardHIDUsage`→`KeyCode`
+  mapping, `pressesBegan:/pressesEnded:/pressesCancelled:`), on-screen
+  keyboard/predictive-bar suppression via `-inputView`/`-inputAccessoryView`/
+  `-conformsToProtocol:` overrides, switched from on-demand `MTKView` redraw to
+  continuous `CADisplayLink`-paced rendering (on-demand was found to starve
+  `hitTest:`/touch delivery once any continuous `AnimationController` is
+  running — reproduced on both Simulator and device), physical-pixel (not
+  logical-point) viewport dimensions, and safe-area-inset-aware touch
+  coordinates for notched devices.
+- `build_metal_shaders.sh` now compiles three Metal shader variants
+  (macOS / iOS device / iOS simulator — Metal bytecode is target-triple
+  specific) via `xcrun -sdk {macosx,iphoneos,iphonesimulator}`, all three
+  embedded into `src/shaders/metal_widgets.h`; picked at compile time via
+  `TargetConditionals.h`'s `TARGET_OS_SIMULATOR`/`TARGET_OS_IPHONE`.
+- `examples/gallery/ios/run.sh` (new) builds+installs+launches on a
+  connected physical device via `xcrun devicectl` if attached, else
+  Simulator via `xcrun simctl`. `CMakeLists.txt` gained a `POST_BUILD` step
+  that copies + re-signs `campello_gpu`/`campello_image` dylibs into the
+  app bundle's `Frameworks/` — required for on-device (sandboxed) launch,
+  not needed on Simulator.
+
+Android and Linux's Vulkan backends unified into one
+`src/gpu/vulkan/vulkan_draw_backend.{hpp,cpp}` (Android's separate 463-line
+copy deleted), with per-platform text rasterization injected via a new
+`ITextRasterizer` interface (`src/gpu/vulkan/text_rasterizer.hpp`,
+implemented once each in `src/android/android_text_rasterizer.cpp` /
+`src/linux/linux_text_rasterizer.cpp`). Real perf/correctness work landed
+as part of the merge:
+- Push constants (`vkCmdPushConstants`) replace per-draw uniform
+  buffers/bind groups for rect/rrect/circle/oval — was the dominant
+  Vulkan-vs-Metal raster gap (~57 rect draws/frame each allocating a
+  descriptor set). Directly relevant to the Vulkan-performance backlog
+  item above.
+- Triple-buffered per-frame GPU resource retention (`frame_*_` /
+  `prev_frame_*_` / `prev2_frame_*_`), fixing real `VUID-vkDestroySampler-*`
+  / `VUID-vkDestroyPipeline-*` validation crashes / black screens on
+  Android caused by destroying resources still in flight under
+  `campello_gpu`'s non-blocking 2-deep frame pipelining.
+- Android now gets `drawCircle`/`drawOval`/`blurTexture`/`drawBackdropFilter`
+  (previously no-ops), swapchain pixel format queried from the device
+  instead of hardcoded `bgra8unorm` (some devices only expose RGBA8, which
+  corrupted clip-shape/shader-mask composites), and a dedicated
+  `RasterThread` (`src/android/run_app.cpp`) so GPU-submit-blocking work no
+  longer stalls the same thread pumping `android_native_app_glue`'s input
+  queue — a stalled input thread previously froze touch handling entirely.
+  Also fixed: touch coordinates never divided by DPR (broke hit-testing on
+  non-1x devices), and the first frame never being scheduled on launch.
+
 ---
 
 ## Phase 11 — Developer Experience
@@ -436,6 +487,31 @@ runApp(make_shared<Theme>(Theme{
 - [x] Dialog / overlay / modal system
 - [x] Drag-and-drop (`Draggable` + `DragTarget`)
 - [x] **Gesture arena (Flutter-equivalent gesture arbitration)** — see dedicated section below
+- [ ] **Vulkan raster performance** (found 2026-07-24) — raster time exceeds
+      16ms in some gallery example tabs on Vulkan (Android/Linux). Target:
+      raster time under 16ms in *all* gallery tabs. Needs profiling per-tab
+      (`CW_TRACE_RASTER=1`) to find which draw paths are the bottleneck on
+      Vulkan specifically (Metal path is not known to have this problem).
+- [ ] **Stylus/pencil input support** (found 2026-07-24) — check and
+      implement pencil/stylus input across platforms: pressure, tilt, and
+      other pencil-specific fields, not just plain pointer events. Test
+      devices available: Android tablet with a stylus, and an iPad with
+      Apple Pencil. Needs investigation into what `campello_input` already
+      surfaces for stylus events on each platform vs. what's plumbed
+      through to widgets.
+- [ ] **Tap unresponsive after prolonged infinite animation** (found
+      2026-07-24) — in the gallery example, the Images tab (or any tab
+      driving an infinite/looping animation) stops responding to taps after
+      a few seconds. Symptom suggests a queue backing up or an event being
+      dropped/lost under sustained ticker load. Needs repro + tracing of
+      `PointerDispatcher`/`TickerScheduler` interaction during a long-running
+      animation to find where input is starved or queued indefinitely.
+- [ ] **Android gallery example not fullscreen** (found 2026-07-24) — the
+      Android gallery example should render fullscreen (edge-to-edge, under
+      the system bars), not just in the space below them. Needs forcing
+      Android fullscreen/edge-to-edge mode, then verifying `SafeArea` insets
+      correctly account for the system bars once content is drawn behind
+      them.
 
 ### Gesture Arena / Recognizer Arbitration (found 2026-06-18)
 

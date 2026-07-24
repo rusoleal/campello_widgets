@@ -76,7 +76,13 @@ namespace systems::leal::campello_widgets
 
         void performPaint(PaintContext& ctx, const Offset& offset) override
         {
-            global_offset_ = offset;
+            // Convert to tree-local space (subtract the safe-area inset baked
+            // into `offset` — see RenderObject::setActivePaintOriginOffset's
+            // doc comment) so grab_offset's subtraction against down_pos_
+            // (already tree-local, from PointerDispatcher) isn't off by that
+            // inset.
+            const Offset paint_origin = RenderObject::activePaintOriginOffset();
+            global_offset_ = { offset.x - paint_origin.x, offset.y - paint_origin.y };
             if (child_) paintChild(ctx, offset);
         }
 

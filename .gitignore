@@ -29,3 +29,10 @@ flutter_fidelity_tester/pubspec.lock
 .claude/settings.local.json
 gallery.log
 crash_dumps/
+
+# Android / Gradle
+.gradle/
+local.properties
+.idea/
+*.iml
+.cxx/

@@ -1,6 +1,6 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform ColoredQuadUniforms {
+layout(push_constant) uniform ColoredQuadUniforms {
     vec4 rect;      // unused — occupies offset 0 so layout matches RectUniforms
     vec4 color;     // r, g, b, a (straight alpha — frag premultiplies)
     vec2 viewport;  // physical pixel size

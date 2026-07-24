@@ -2,6 +2,7 @@
 
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/box_decoration.hpp>
+#include <campello_widgets/ui/offset_layer.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -28,6 +29,19 @@ namespace systems::leal::campello_widgets
      *
      * For DecorationPosition::foreground the child is painted first, then
      * steps 1–3.
+     *
+     * Self-boundaring (see `RenderClipRRect`'s doc comment for the general
+     * mechanism/rationale), but only when `decoration.box_shadow` is
+     * non-empty: `Renderer::applyBoxShadow()` runs its own offscreen
+     * blur composite per shadow (a texture allocation plus two extra
+     * render-pass restarts on the enclosing pass) — as expensive as
+     * `applyClipShape()` and with the exact same problem, since plain
+     * `RenderObject::paint()` re-runs `performPaint()` unconditionally on
+     * every visit from an animating ancestor. Plain decorations (color/
+     * border only, no shadow) are cheap direct draws and skip the
+     * OffsetLayer machinery entirely — `isRepaintBoundary()`/`paint()`
+     * both check `decoration.box_shadow` fresh each call, so a widget
+     * that starts adding a shadow later picks up the caching immediately.
      */
     class RenderDecoratedBox : public RenderBox
     {
@@ -37,9 +51,13 @@ namespace systems::leal::campello_widgets
 
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
+        void paint(PaintContext& context, const Offset& offset) override;
+        bool isRepaintBoundary() const noexcept override { return !decoration.box_shadow.empty(); }
 
     private:
         void paintDecoration(Canvas& canvas, const Offset& offset) const;
+
+        OffsetLayer offset_layer_;
     };
 
 } // namespace systems::leal::campello_widgets

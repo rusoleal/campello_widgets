@@ -1,6 +1,6 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform BlurUniforms {
+layout(push_constant) uniform BlurUniforms {
     vec4  dstRect;      // x, y, w, h (pixels, destination quad)
     vec4  srcRect;      // u0, v0, u1, v1 (normalised UV of source region)
     vec2  viewport;     // framebuffer width, height

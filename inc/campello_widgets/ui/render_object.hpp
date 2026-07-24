@@ -109,20 +109,58 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Marks this object as needing a paint pass.
          *
-         * Propagates upward only until it reaches a node for which
-         * `isRepaintBoundary()` is true (or the root) — that node owns its
-         * own paint cache (see `OffsetLayer`) and will independently decide
-         * whether to replay or re-record next paint, so ancestors above it
-         * don't need to be told. Matches Flutter's
-         * `RenderObject.markNeedsPaint()`, which stops at the nearest
-         * `isRepaintBoundary` ancestor rather than bubbling all the way to
-         * root. A frame is still requested (`FrameScheduler::scheduleFrame()`)
-         * regardless of where propagation stops.
+         * Propagates the *full* signal (this ancestor must fully re-record,
+         * not just replay its cache) upward only until it reaches a node
+         * for which `isRepaintBoundary()` is true (or the root) — that node
+         * owns its own paint cache (see `OffsetLayer`) and will
+         * independently decide whether to replay or re-record next paint.
+         * Matches Flutter's `RenderObject.markNeedsPaint()`, which stops at
+         * the nearest `isRepaintBoundary` ancestor rather than bubbling all
+         * the way to root. A frame is still requested
+         * (`FrameScheduler::scheduleFrame()`) regardless of where
+         * propagation stops.
+         *
+         * Once it does stop at a boundary, propagation continues past it
+         * (all the way to root) as the weaker `markNeedsDescendantPaint()`
+         * signal instead — see that method's doc for why this second signal
+         * is necessary: without it, a boundary nested inside another
+         * boundary can have its dirty state silently stranded forever.
          */
         void markNeedsPaint() noexcept;
 
+        /**
+         * @brief Marks that *some* descendant repaint boundary has
+         * unconsumed dirty state, without marking this node's own content
+         * dirty.
+         *
+         * `markNeedsPaint()`, on reaching the first `isRepaintBoundary()`
+         * ancestor, stops propagating the full "re-record me" signal but
+         * switches to this weaker one and keeps going — through and past
+         * every further ancestor boundary, all the way to root. Every
+         * repaint-boundary `paint()` override must OR this into its replay
+         * decision (alongside its own `needsPaint()`): a boundary whose own
+         * content is unchanged must still force a real record — not a
+         * cached replay — whenever this flag is set, because a replay skips
+         * calling `paintChild()` entirely, and any nested boundary
+         * underneath would then never get visited to consume its own
+         * pending `needs_paint_`. Left unconsumed, that nested boundary's
+         * `needs_paint_` stays stuck true forever (the `if (needs_paint_)
+         * return;` guard in `markNeedsPaint()` makes every future mark a
+         * silent no-op on it), which starves `Renderer::paint_requested_`
+         * of any future signal and freezes the app — this happened in
+         * practice with a `RenderDecoratedBox` shadow boundary nested
+         * outside a `RenderClipRRect` boundary before this flag existed.
+         *
+         * Consumed (reset to false) by a boundary's `paint()` exactly when
+         * `needs_paint_` is: after a call that actually descended (recorded
+         * fresh rather than replayed), since that descent is what gives any
+         * nested boundary its chance to run its own replay-vs-record logic.
+         */
+        void markNeedsDescendantPaint() noexcept;
+
         bool needsLayout() const noexcept { return needs_layout_; }
         bool needsPaint()  const noexcept { return needs_paint_;  }
+        bool needsDescendantPaint() const noexcept { return needs_descendant_paint_; }
 
         /**
          * @brief True for nodes that own their own paint cache (`OffsetLayer`)
@@ -219,11 +257,50 @@ namespace systems::leal::campello_widgets
          */
         static float activeDevicePixelRatio() noexcept { return s_active_dpr_.load(std::memory_order_relaxed); }
 
+        // ------------------------------------------------------------------
+        // Paint-origin offset access
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Set the offset the current paint pass starts from.
+         *
+         * Renderer::generateDrawList() seeds root_->paint() with
+         * Offset{view_insets_.left, view_insets_.top} — the safe-area inset
+         * (status bar / Dynamic Island) — so the whole tree paints shifted
+         * down from the physical screen origin. That makes the `offset`
+         * parameter performPaint() receives "screen space", NOT the
+         * tree-local space PointerDispatcher's hit-testing and PointerEvent
+         * positions use. Render objects that capture their own paint offset
+         * to later compare or combine it with a pointer position (e.g.
+         * RenderDraggable/RenderDragTarget tracking where a drag started
+         * relative to their own bounds) must subtract this to convert back
+         * to tree-local space first, or the two disagree by exactly the
+         * inset whenever it's non-zero (invisible on platforms/orientations
+         * where the inset happens to be zero, e.g. macOS — very visible on
+         * any iPhone).
+         */
+        static void setActivePaintOriginOffset(Offset offset) noexcept
+        {
+            s_active_paint_origin_x_.store(offset.x, std::memory_order_relaxed);
+            s_active_paint_origin_y_.store(offset.y, std::memory_order_relaxed);
+        }
+
+        /** @brief Returns the offset set for the current paint pass (see setActivePaintOriginOffset). */
+        static Offset activePaintOriginOffset() noexcept
+        {
+            return Offset{
+                s_active_paint_origin_x_.load(std::memory_order_relaxed),
+                s_active_paint_origin_y_.load(std::memory_order_relaxed)};
+        }
+
     protected:
         BoxConstraints  constraints_;
         Size            size_;
-        bool            needs_layout_ = true;
-        bool            needs_paint_  = true;
+        bool            needs_layout_          = true;
+        bool            needs_paint_           = true;
+        // See markNeedsDescendantPaint()'s doc. Defaults true so the very
+        // first paint always descends, matching needs_paint_'s own default.
+        bool            needs_descendant_paint_ = true;
         RenderObject*   parent_       = nullptr;
 
         void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
@@ -232,6 +309,8 @@ namespace systems::leal::campello_widgets
     private:
         inline static std::atomic<IDrawBackend*> s_active_backend_{nullptr};
         inline static std::atomic<float> s_active_dpr_{1.0f};
+        inline static std::atomic<float> s_active_paint_origin_x_{0.0f};
+        inline static std::atomic<float> s_active_paint_origin_y_{0.0f};
         static std::unordered_set<const RenderObject*> s_alive_;
     };
 

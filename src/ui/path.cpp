@@ -6,6 +6,7 @@ namespace systems::leal::campello_widgets
 
     void Path::moveTo(float x, float y)
     {
+        simple_rrect_shape_.reset();
         PathCommand cmd;
         cmd.type = PathCommandType::moveTo;
         cmd.p1 = Offset{x, y};
@@ -17,6 +18,7 @@ namespace systems::leal::campello_widgets
 
     void Path::lineTo(float x, float y)
     {
+        simple_rrect_shape_.reset();
         if (!has_current_point_) {
             moveTo(x, y);
             return;
@@ -30,6 +32,7 @@ namespace systems::leal::campello_widgets
 
     void Path::cubicTo(float cp1x, float cp1y, float cp2x, float cp2y, float x, float y)
     {
+        simple_rrect_shape_.reset();
         if (!has_current_point_) {
             moveTo(x, y);
             return;
@@ -45,6 +48,7 @@ namespace systems::leal::campello_widgets
 
     void Path::quadTo(float cpx, float cpy, float x, float y)
     {
+        simple_rrect_shape_.reset();
         if (!has_current_point_) {
             moveTo(x, y);
             return;
@@ -59,6 +63,7 @@ namespace systems::leal::campello_widgets
 
     void Path::arcTo(const Rect& rect, float start_angle, float sweep_angle, bool force_move_to)
     {
+        simple_rrect_shape_.reset();
         if (force_move_to || !has_current_point_) {
             // Calculate start point on the oval
             float a = rect.width * 0.5f;
@@ -92,6 +97,7 @@ namespace systems::leal::campello_widgets
 
     void Path::arcToPoint(const Offset& arc_end, const Offset& /*arc_control*/, float /*radius*/)
     {
+        simple_rrect_shape_.reset();
         // Simplified implementation - just draw a line
         // Full implementation would compute the tangent arc
         if (!has_current_point_) {
@@ -113,11 +119,16 @@ namespace systems::leal::campello_widgets
 
     void Path::addRect(const Rect& rect)
     {
+        const bool was_empty = commands_.empty();
         moveTo(rect.left(), rect.top());
         lineTo(rect.right(), rect.top());
         lineTo(rect.right(), rect.bottom());
         lineTo(rect.left(), rect.bottom());
         close();
+        // moveTo/lineTo above already cleared simple_rrect_shape_ — restore
+        // it now that the shape is complete, but only if this rect is the
+        // path's sole content (see simpleRRectShape()'s doc comment).
+        if (was_empty) simple_rrect_shape_ = RRect{rect, 0.0f};
     }
 
     void Path::addOval(const Rect& rect)
@@ -141,18 +152,26 @@ namespace systems::leal::campello_widgets
 
     void Path::addRRect(const RRect& rrect)
     {
+        const bool was_empty = commands_.empty();
+
         // Simplified: draw as regular rect if radius is small
         float rx, ry;
         rrect.getSafeRadii(rx, ry);
-        
+
         if (rx < 0.001f || ry < 0.001f) {
             addRect(rrect.rect);
             return;
         }
-        
+
         // For now, just draw the rect without rounded corners
         // Full implementation would use arcs at corners
         addRect(rrect.rect);
+        // addRect() already set simple_rrect_shape_ to a zero-radius RRect;
+        // override with the real radius so consumers that only need the
+        // shape (not the exact segment geometry) — e.g. box-shadow
+        // rendering — still get proper rounded corners despite this path
+        // not tracing them itself yet.
+        if (was_empty) simple_rrect_shape_ = rrect;
     }
 
     void Path::addArc(const Rect& oval, float start_angle, float sweep_angle)
@@ -178,6 +197,7 @@ namespace systems::leal::campello_widgets
         commands_.clear();
         has_current_point_ = false;
         fill_type_ = FillType::winding;
+        simple_rrect_shape_.reset();
     }
 
     Rect Path::getBounds() const

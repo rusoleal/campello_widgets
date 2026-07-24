@@ -1,6 +1,6 @@
 #version 450
 
-layout(std140, set = 0, binding = 0) uniform QuadUniforms {
+layout(push_constant) uniform QuadUniforms {
     vec2  viewport;  // w, h (physical pixels)
     float opacity;
     float _pad;

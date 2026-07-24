@@ -79,6 +79,7 @@ namespace systems::leal::campello_widgets
     {
         line_height_ = measureText().height;
 
+
         computeLines(constraints_.max_width);
 
         float max_line_width = 0.0f;

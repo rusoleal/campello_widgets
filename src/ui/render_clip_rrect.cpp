@@ -30,4 +30,20 @@ namespace systems::leal::campello_widgets
         canvas.restore();
     }
 
+    void RenderClipRRect::paint(PaintContext& context, const Offset& offset)
+    {
+        // See this class's doc comment and RenderRepaintBoundary::paint()
+        // for the mechanism: replay the cached composite when this node is
+        // clean and its offset hasn't moved, otherwise record fresh. OR in
+        // needsDescendantPaint() too — see its doc comment for why a
+        // replay must not skip past a nested boundary with unconsumed
+        // dirty state.
+        if (!offset_layer_.maybeReplay(context, offset, size_,
+                                        needsPaint() || needsDescendantPaint()))
+            offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
+
+        needs_paint_ = false;
+        needs_descendant_paint_ = false;
+    }
+
 } // namespace systems::leal::campello_widgets

@@ -4,6 +4,8 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|ios|windows|linux)/.*")
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
+# macOS uses the shared Metal backend (src/gpu/metal/), not Vulkan.
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/gpu/vulkan/.*")
 
 add_library(campello_widgets SHARED ${CAMPELLO_WIDGETS_SOURCES})
 
