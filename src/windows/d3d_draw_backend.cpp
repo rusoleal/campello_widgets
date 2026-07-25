@@ -1119,50 +1119,30 @@ std::shared_ptr<GPU::Texture> D3DDrawBackend::blurTexture(
     const uint32_t tw = static_cast<uint32_t>(source->getWidth());
     const uint32_t th = static_cast<uint32_t>(source->getHeight());
 
-    // See kBlurGenerations' doc comment: this frame's blur writes must land
-    // in a slot the GPU is confirmed done reading from — the same
-    // generation-rotation scheme the other pools use, keyed off
-    // frame_counter_ (incremented once per setViewport() call, i.e. once
-    // per raster frame) rather than a pool-local counter, since blur
-    // textures aren't acquired from a pool.
-    const size_t gen = frame_counter_ % kBlurGenerations;
+    // Acquired from blur_texture_pool_ — see its doc comment for why this
+    // must be a size-keyed, generation-rotated pool (matching every other
+    // offscreen consumer) rather than one fixed-size pair shared by every
+    // caller: a UI can legitimately ask for more than one distinct blur
+    // size across a session (or within the same frame), and a fixed pair
+    // used to force-recreate every generation on any size change —
+    // including a generation the GPU might still be mid-flight reading
+    // from a prior frame under campello_gpu's 2-deep frame pipelining.
+    const auto usage = static_cast<GPU::TextureUsage>(
+        static_cast<int>(GPU::TextureUsage::renderTarget) |
+        static_cast<int>(GPU::TextureUsage::textureBinding));
+    auto h_tex = blur_texture_pool_.acquire(*device_, tw, th, pixel_format_, usage, frame_counter_);
+    auto v_tex = blur_texture_pool_.acquire(*device_, tw, th, pixel_format_, usage, frame_counter_);
 
-    if (!blur_h_tex_[gen] || blur_tex_w_ != tw || blur_tex_h_ != th)
-    {
-        // A resize invalidates every generation, not just the current one —
-        // recreate all slots together so a stale differently-sized texture
-        // never surfaces when rotation reaches an untouched slot later.
-        for (size_t i = 0; i < kBlurGenerations; ++i)
-        {
-            // About to become new GPU objects — drop their old cache
-            // entries (the cache's own strong reference would otherwise
-            // keep the old textures alive uselessly until the cache
-            // happens to be cleared).
-            if (blur_h_tex_[i]) blur_source_bind_group_cache_.erase(blur_h_tex_[i].get());
-            if (blur_v_tex_[i]) blur_source_bind_group_cache_.erase(blur_v_tex_[i].get());
-
-            const auto usage = static_cast<GPU::TextureUsage>(
-                static_cast<int>(GPU::TextureUsage::renderTarget) |
-                static_cast<int>(GPU::TextureUsage::textureBinding));
-            blur_h_tex_[i] = device_->createTexture(GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1, usage);
-            blur_v_tex_[i] = device_->createTexture(GPU::TextureType::tt2d, pixel_format_, tw, th, 1, 1, 1, usage);
-        }
-        blur_tex_w_ = tw;
-        blur_tex_h_ = th;
-    }
-
-    // Horizontal blur: source -> blur_h_tex_[gen]. `source` rotates through
+    // Horizontal blur: source -> h_tex. `source` rotates through
     // OffscreenTexturePool, but lookupOrCreateSourceBindGroup() caches per
     // texture object, so this stays cheap once the pool warms up.
-    runBlurPass(source, blur_h_tex_[gen], sigma_x, /*horizontal=*/true, encoder,
+    runBlurPass(source, h_tex, sigma_x, /*horizontal=*/true, encoder,
                 lookupOrCreateSourceBindGroup(source));
-    // Vertical blur: blur_h_tex_[gen] -> blur_v_tex_[gen]. Each slot is a
-    // stable, persistent object across the frames it's reused for, so this
-    // is a cache hit every time after the first frame that lands on it.
-    runBlurPass(blur_h_tex_[gen], blur_v_tex_[gen], sigma_y, /*horizontal=*/false, encoder,
-                lookupOrCreateSourceBindGroup(blur_h_tex_[gen]));
+    // Vertical blur: h_tex -> v_tex.
+    runBlurPass(h_tex, v_tex, sigma_y, /*horizontal=*/false, encoder,
+                lookupOrCreateSourceBindGroup(h_tex));
 
-    return blur_v_tex_[gen];
+    return v_tex;
 }
 
 void D3DDrawBackend::drawBackdropFilter(

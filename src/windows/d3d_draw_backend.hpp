@@ -168,6 +168,8 @@ public:
         clip_shape_uniform_pool_.beginFrame();
         offscreen_texture_pool_.beginFrame();
         offscreen_texture_pool_.evictStale(frame_counter_);
+        blur_texture_pool_.beginFrame();
+        blur_texture_pool_.evictStale(frame_counter_);
     }
 
     void setViewportSize(float w, float h) noexcept override
@@ -464,42 +466,50 @@ private:
 
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;
 
-    // Persistent blur scratch textures (resized on demand) — see
-    // blurTexture(). Double-buffered (kBlurGenerations = 2, matching
-    // campello_gpu's DeviceData::kFramesInFlight): these are written every
-    // frame the blur runs, and campello_gpu's DirectX backend now pipelines
-    // up to kFramesInFlight frames — Device::submit() no longer blocks until
-    // the GPU is done, so frame N+1 could start writing new blur content
-    // into a single shared texture while frame N's GPU work is still
-    // reading it. Indexed by frame_counter_ % kBlurGenerations (see
-    // frame_counter_'s doc comment — it increments exactly once per
-    // setViewport() call, i.e. once per raster frame). Each slot's IDENTITY
-    // is otherwise stable across the frames it's reused for (unlike the
-    // rotating OffscreenTexturePool-sourced first-pass input), so the
-    // BindGroups that read a given slot can still be cached and reused
-    // across every frame that lands on that slot — see runBlurPass()'s doc
-    // comment. Reset to nullptr alongside blur_h_tex_/blur_v_tex_ whenever
-    // those get recreated on resize.
-    static constexpr size_t kBlurGenerations = 2;
-    std::array<std::shared_ptr<campello_gpu::Texture>, kBlurGenerations> blur_h_tex_;
-    std::array<std::shared_ptr<campello_gpu::Texture>, kBlurGenerations> blur_v_tex_;
-    uint32_t                                        blur_tex_w_ = 0;
-    uint32_t                                        blur_tex_h_ = 0;
+    // Blur scratch textures — see blurTexture(). Acquired per-call from a
+    // dedicated OffscreenTexturePool (same size-keyed/generation-rotated
+    // pool used for BackdropFilter/ClipRRect captures — see that class'
+    // doc comment for why kGenerations=2 is exactly right for campello_gpu's
+    // DirectX backend's 2-deep frame pipelining) instead of a single fixed
+    // (width, height) pair.
+    //
+    // A single shared pair used to be enough back when Device::submit()
+    // blocked synchronously, but campello_gpu's DirectX backend now
+    // pipelines up to kFramesInFlight (=2) frames — and a UI can easily ask
+    // blurTexture() for more than one distinct size in the same session
+    // (e.g. two differently-sized DrawShadowCmds), or even the same frame.
+    // A single-pair-per-backend design has to blow away EVERY generation
+    // and recreate at the new size the moment any caller asks for a
+    // different (width, height) than last time — including whichever
+    // generation the GPU might still be mid-flight reading from a *prior*
+    // frame's blur (the ~2-frame pipeline hasn't confirmed it idle yet).
+    // Destroying that texture out from under an unfinished command list is
+    // exactly the D3D12 resource-lifetime violation the debug layer flags
+    // as "deleted prior to closing/executing the command list", escalating
+    // to a driver-level corruption abort under sustained load (confirmed
+    // via a real minidump: the crash's stack terminates in
+    // D3D12SDKLayers!ReportCorruption, called from campello_gpu::Texture's
+    // destructor, called from this old resize path). A size-keyed pool
+    // sidesteps this the same way it already does for every other offscreen
+    // consumer: a new size gets its own bucket instead of evicting
+    // in-flight generations of an unrelated size.
+    OffscreenTexturePool blur_texture_pool_;
 
     // Cache for any texture@0/sampler@1 BindGroup read by the blur/backdrop
-    // path (each blur_h_tex_/blur_v_tex_ generation slot, AND the rotating
-    // OffscreenTexturePool "source" capture texture) OR by
+    // path (each blur_texture_pool_-sourced h/v scratch texture, AND the
+    // rotating OffscreenTexturePool "source" capture texture) OR by
     // drawClipShapeComposite()'s child_tex (also OffscreenTexturePool-sourced).
-    // A per-Texture-object cache works uniformly for both cases: each
-    // blur_h_tex_/blur_v_tex_ slot has a stable identity across every frame
-    // it's reused for (just like the rotating sources, only with a longer
-    // reuse period), so keying by raw Texture* naturally caches all of them.
+    // A per-Texture-object cache works uniformly for all three cases, keyed
+    // by raw Texture* — whenever the pool hands back the same object it
+    // handed out before (common once a given size's rotation warms up),
+    // this is a cache hit; a churned/new object is just a cache miss, never
+    // a correctness issue.
     // Without it, a fresh BindGroup every frame permanently leaks one
     // shader-visible descriptor-heap slot (campello_gpu's DirectX backend
     // never reclaims them) — with a 65536-slot heap and ~60fps continuous
     // BackdropFilter animation, that's ~18 minutes to exhaustion, which is
     // exactly the delayed crash an earlier, narrower version of this cache
-    // (single slots for only blur_h_tex_/blur_v_tex_, before they were
+    // (single slots for only the old fixed blur pair, before they were
     // double-buffered) missed.
     // Keyed by raw Texture* for lookup, but the map ALSO holds a strong
     // shared_ptr<Texture> reference so a cached entry can never dangle even
@@ -518,8 +528,7 @@ private:
     // `tex` against quad_tex_bgl_. Clears the whole cache first if it would
     // exceed kMaxSourceBindGroupCacheSize — a crude but simple bound; in
     // steady state the cache never grows past OffscreenTexturePool's own
-    // rotation depth per distinct BackdropFilter size on screen, plus the
-    // two stable blur_h_tex_/blur_v_tex_ entries.
+    // rotation depth per distinct BackdropFilter/blur size on screen.
     std::shared_ptr<campello_gpu::BindGroup> lookupOrCreateSourceBindGroup(
         const std::shared_ptr<campello_gpu::Texture>& tex);
 
