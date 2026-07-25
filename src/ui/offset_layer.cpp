@@ -7,7 +7,7 @@ namespace systems::leal::campello_widgets
 {
 
     bool OffsetLayer::maybeReplay(PaintContext& context, const Offset& offset,
-                                   const Size& size, bool dirty)
+                                   const Size& size, bool own_dirty, bool descendant_dirty)
     {
         auto* renderer = detail::currentRenderer().load(std::memory_order_acquire);
         // Projected through the ambient transform (Transform widgets, or a
@@ -38,9 +38,15 @@ namespace systems::leal::campello_widgets
         // that one is a pure correctness precaution with nothing actually
         // changed, so it must NOT be reported as dirty, or it would defeat
         // the very optimization this mechanism exists for.
-        if (dirty || !has_recorded_ || !picture_.hasContent())
+        //
+        // own_dirty and descendant_dirty both force the same real-record
+        // fallback, but only own_dirty is reported via noteDirty() — see
+        // maybeReplay()'s doc comment in offset_layer.hpp for why folding
+        // descendant_dirty in here too would spuriously widen this frame's
+        // dirty region to this whole boundary's bounds.
+        if (own_dirty || descendant_dirty || !has_recorded_ || !picture_.hasContent())
         {
-            if (dirty) noteDirty(offset, "dirty");
+            if (own_dirty) noteDirty(offset, "dirty");
             return false;
         }
 

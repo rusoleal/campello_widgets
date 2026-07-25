@@ -72,6 +72,34 @@ TEST(Renderer, BuildFrameSnapshotsDprAndClearColorIndependently)
     EXPECT_FLOAT_EQ(pkg2->clear_color.b, 0.0f);
 }
 
+// Covers setDisplayRefreshHz()'s contract: the performance overlay's
+// budget line (paintPerformanceOverlay()/paintUnifiedFrameChart()) reads
+// this instead of a hardcoded 60Hz assumption, so a window dragged onto a
+// higher-refresh-rate display (e.g. a 144Hz external monitor on macOS)
+// shows a budget line that reflects that display's actual frame budget.
+// Defaults to 60Hz so platforms that never call this see unchanged
+// behavior; clamped to a sane range so a bogus value (e.g. 0, from a
+// platform query gone wrong) can't divide-by-zero the budget-line math.
+TEST(Renderer, SetDisplayRefreshHzDefaultsAndClamps)
+{
+    auto root = std::make_shared<SimplePaintingBox>();
+    cw::Renderer renderer(/*device=*/nullptr, root, cw::Color::white());
+
+    EXPECT_FLOAT_EQ(renderer.displayRefreshHz(), 60.0f)
+        << "must default to 60Hz for platforms that never call setDisplayRefreshHz()";
+
+    renderer.setDisplayRefreshHz(144.0f);
+    EXPECT_FLOAT_EQ(renderer.displayRefreshHz(), 144.0f);
+
+    renderer.setDisplayRefreshHz(0.0f);
+    EXPECT_FLOAT_EQ(renderer.displayRefreshHz(), 1.0f)
+        << "must clamp to a sane minimum, not divide-by-zero the budget line";
+
+    renderer.setDisplayRefreshHz(5000.0f);
+    EXPECT_FLOAT_EQ(renderer.displayRefreshHz(), 1000.0f)
+        << "must clamp to a sane maximum";
+}
+
 TEST(Renderer, BuildFrameReturnsNulloptWhenNotDirty)
 {
     auto root = std::make_shared<SimplePaintingBox>();
@@ -138,6 +166,12 @@ TEST(Renderer, PerformanceOverlayEmitsUnifiedChartDrawCommands)
             if (text->span.text.find("UI:") != std::string::npos &&
                 text->span.text.find("RASTER:") != std::string::npos)
                 found_label = true;
+            if (text->span.text.find("FPS:") != std::string::npos)
+            {
+                EXPECT_NE(text->span.text.find("FPS: --"), std::string::npos)
+                    << "No rasterFrame() ever ran in this test, so the real-FPS "
+                       "sampler must still read as empty ('--'), not a bogus 0";
+            }
         }
         else if (std::get_if<cw::DrawRectCmd>(&cmd))
         {
@@ -154,4 +188,56 @@ TEST(Renderer, PerformanceOverlayEmitsUnifiedChartDrawCommands)
     // Box content (1) + overlay background (1) + (kFrames-1) UI bars
     // (raster bars are 0 since no rasterFrame() ever ran) + 1 budget line.
     EXPECT_EQ(rect_count, 1 + 1 + (kFrames - 1) + 1);
+}
+
+// Covers the exact scenario that motivated present_fps_sampler_: this is an
+// on-demand renderer (see FrameScheduler), so after being idle for a while
+// the next presented frame is naturally far apart from the last one. A
+// naive cadence sampler would store that gap as a single nonsensical
+// "instant fps" sample (e.g. one frame after 3s idle ≈ 0.3fps) and drag the
+// rolling average down for a while right as a fresh animation starts.
+// Renderer::recordPresentSample() is a static, dependency-free helper
+// (no `this`) precisely so this can be tested with synthetic timestamps —
+// rasterFrame() itself can't be exercised here without a real Device/GPU.
+TEST(Renderer, PresentFpsSamplerResetsAcrossIdleGap)
+{
+    systems::leal::campello_gpu::FrameTimeSampler sampler;
+    uint64_t                       last_ms = 0;
+
+    // A burst of frames at a steady cadence, 16ms apart (~62.5fps).
+    cw::Renderer::recordPresentSample(sampler, last_ms, 1000, /*idle_gap_reset_ms=*/200);
+    cw::Renderer::recordPresentSample(sampler, last_ms, 1016, 200);
+    cw::Renderer::recordPresentSample(sampler, last_ms, 1032, 200);
+    ASSERT_EQ(sampler.count(), 2);
+    EXPECT_NEAR(1000.0f / sampler.averageMs(), 62.5f, 1.0f);
+
+    // A 3-second idle gap — nothing requested a frame in between.
+    cw::Renderer::recordPresentSample(sampler, last_ms, 4032, 200);
+    // The gap must never be recorded as a sample: this call only
+    // re-establishes the baseline (mirrors FrameTimeSampler::record()'s
+    // "first call stores nothing" contract), so count() drops back to 0
+    // instead of holding a bogus ~0.3fps reading.
+    EXPECT_EQ(sampler.count(), 0);
+
+    // The burst resumes at a normal cadence; the very next sample is
+    // measured fresh from the reset baseline, not across the idle gap.
+    cw::Renderer::recordPresentSample(sampler, last_ms, 4048, 200);
+    ASSERT_EQ(sampler.count(), 1);
+    EXPECT_NEAR(1000.0f / sampler.averageMs(), 62.5f, 1.0f); // 16ms delta
+}
+
+// An ordinary slow/janky frame (still well under the idle-gap threshold)
+// must NOT trigger a reset — only a genuine "nothing was requested for a
+// while" gap should. Otherwise every dropped frame would also wipe the
+// rolling average, defeating its purpose.
+TEST(Renderer, PresentFpsSamplerDoesNotResetForOrdinaryJank)
+{
+    systems::leal::campello_gpu::FrameTimeSampler sampler;
+    uint64_t                       last_ms = 0;
+
+    cw::Renderer::recordPresentSample(sampler, last_ms, 1000, /*idle_gap_reset_ms=*/200);
+    cw::Renderer::recordPresentSample(sampler, last_ms, 1016, 200);  // 16ms, normal
+    cw::Renderer::recordPresentSample(sampler, last_ms, 1150, 200);  // 134ms jank, still < 200ms
+
+    EXPECT_EQ(sampler.count(), 2) << "Both deltas should be kept — no reset for ordinary jank";
 }

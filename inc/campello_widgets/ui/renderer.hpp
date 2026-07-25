@@ -218,6 +218,29 @@ namespace systems::leal::campello_widgets
         float devicePixelRatio() const noexcept { return device_pixel_ratio_; }
 
         /**
+         * @brief Sets the refresh rate of the display this content is
+         * currently presented on, in Hz — used only by the performance
+         * overlay's budget reference line (`paintUnifiedFrameChart()`), not
+         * by frame scheduling itself (this is an on-demand renderer; actual
+         * present cadence is paced by the OS compositor/vsync of whichever
+         * display the window is on, and already adapts automatically —
+         * this setter just lets the overlay's "budget" line reflect that
+         * same reality instead of always assuming 60Hz).
+         *
+         * Platforms with multiple displays at different refresh rates
+         * (e.g. macOS with an external 144Hz monitor) should call this
+         * whenever the window moves to a different display — there's no
+         * portable way for the Renderer to detect that itself. Defaults to
+         * 60.0 so platforms that never call this see unchanged behavior.
+         *
+         * @param hz Refresh rate in Hz (clamped to a sane [1, 1000] range).
+         */
+        void setDisplayRefreshHz(float hz) noexcept;
+
+        /** @brief Returns the display refresh rate last set via `setDisplayRefreshHz()`. */
+        float displayRefreshHz() const noexcept { return display_refresh_hz_; }
+
+        /**
          * @brief Registers the platform-specific draw backend.
          *
          * Must be set before the first `renderFrame()` call for GPU drawing
@@ -359,6 +382,39 @@ namespace systems::leal::campello_widgets
             FrameScheduler::scheduleFrame();
         }
 
+        /**
+         * @brief Records a new presentation timestamp for the real-FPS
+         * sampler, discarding (not storing) the delta if it spans an
+         * idle gap rather than an ordinary frame.
+         *
+         * `sampler` normally just accumulates call-to-call deltas via
+         * `record()`. But this is fed from an on-demand renderer — no
+         * frame happens at all while nothing requests one — so the first
+         * call after being idle for a while would otherwise store one
+         * wildly small "instant fps" sample (e.g. one frame after 3s
+         * idle ≈ 0.3fps) and drag the rolling average down for up to
+         * `FrameTimeSampler::kCapacity` frames right when a fresh
+         * animation starts. When the gap since `last_ms` exceeds
+         * `idle_gap_reset_ms`, `sampler` is reset() first, so this call
+         * only re-establishes the baseline (per `record()`'s own "first
+         * call stores nothing" contract) instead of recording the gap.
+         *
+         * A static method with no `this` (takes the sampler and baseline
+         * explicitly) purely so it can be unit-tested with synthetic
+         * timestamps — `rasterFrame()` can't otherwise be exercised
+         * without a real `Device`/GPU (see test_renderer.cpp).
+         *
+         * @param idle_gap_reset_ms  Comfortably above one vsync period
+         *   even at a slow 30Hz display, so this only fires on a genuine
+         *   "nothing was requested for a while" gap, not an ordinary
+         *   slow/janky frame.
+         */
+        static void recordPresentSample(
+            campello_gpu::FrameTimeSampler& sampler,
+            uint64_t&                       last_ms,
+            uint64_t                        now_ms,
+            uint64_t                        idle_gap_reset_ms = 200);
+
     private:
         void layoutPass(float viewport_width, float viewport_height);
 
@@ -468,10 +524,10 @@ namespace systems::leal::campello_widgets
          * chart, matching Flutter DevTools' "Flutter frames chart" — one
          * pair of adjacent bars per frame (UI + raster), sharing one chart
          * area and one budget reference line (at the panel's vertical
-         * midpoint — full panel height is 2x the 60fps budget), with
-         * frames over budget highlighted in red. See buildFrame()/
-         * rasterFrame() for where each phase is bracketed with start/end
-         * timestamps.
+         * midpoint — full panel height is 2x the current display's
+         * refresh-rate budget, see `setDisplayRefreshHz()`), with frames
+         * over budget highlighted in red. See buildFrame()/rasterFrame()
+         * for where each phase is bracketed with start/end timestamps.
          */
         void paintPerformanceOverlay(
             PaintContext& ctx,
@@ -492,6 +548,7 @@ namespace systems::leal::campello_widgets
             PaintContext&                         ctx,
             const campello_gpu::FrameTimeSampler& build_sampler,
             const campello_gpu::FrameTimeSampler& raster_sampler,
+            const campello_gpu::FrameTimeSampler& present_fps_sampler,
             float                                 chart_top,
             float                                 chart_w,
             float                                 panel_h,
@@ -523,6 +580,28 @@ namespace systems::leal::campello_widgets
         campello_gpu::FrameTimeSampler build_sampler_;  // build + layout + paint recording
         campello_gpu::FrameTimeSampler raster_sampler_; // GPU encode + submit
 
+        // Actual presentation cadence (real FPS), as distinct from the cost
+        // samplers above: build_sampler_/raster_sampler_ each answer "how
+        // expensive was this phase", not "how often did a frame actually
+        // reach the screen" — a frame can be cheap on both counts and still
+        // not be presented promptly (thread scheduling, a stalled backend,
+        // etc). present_fps_sampler_ uses FrameTimeSampler::record()'s
+        // call-to-call-cadence mode (not recordDuration()) to measure the
+        // wall-clock delta between successive rasterFrame() completions —
+        // see the bottom of rasterFrame() for where it's fed.
+        //
+        // This is an on-demand renderer (frames only happen when something
+        // requests one — see FrameScheduler): after being idle for a while,
+        // the next rasterFrame() call is naturally far apart from the last
+        // one, which would otherwise register as a single nonsensical
+        // "instant fps" sample (e.g. one frame after 3s idle => ~0.3fps)
+        // and drag the rolling average down for up to kCapacity frames
+        // right when a fresh animation starts. last_present_ms_ lets
+        // rasterFrame() detect that gap and reset() the sampler instead of
+        // recording it, so resuming from idle starts a clean new window.
+        campello_gpu::FrameTimeSampler present_fps_sampler_;
+        uint64_t                       last_present_ms_ = 0;
+
         // --- paint-requested latch (see notePaintRequested()'s doc) ---
         // Not per-frame state (unlike dirty_rects_/backdrop_regions_ below,
         // which are reset every layoutPass()) — persists across buildFrame()
@@ -538,6 +617,9 @@ namespace systems::leal::campello_widgets
 
         // --- device pixel ratio ---
         float device_pixel_ratio_ = 1.0f;
+
+        // --- display refresh rate (see setDisplayRefreshHz()'s doc) ---
+        float display_refresh_hz_ = 60.0f;
 
         // --- backdrop filter state (per-frame, reset in layoutPass) ---
         bool  has_backdrop_filter_ = false;

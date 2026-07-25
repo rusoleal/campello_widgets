@@ -76,6 +76,13 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void Renderer::setDisplayRefreshHz(float hz) noexcept
+    {
+        if (hz < 1.0f) hz = 1.0f;
+        if (hz > 1000.0f) hz = 1000.0f;
+        display_refresh_hz_ = hz;
+    }
+
     std::optional<FramePackage> Renderer::buildFrame(float viewport_width, float viewport_height)
     {
         ThreadChecker::instance().assertOnBoundThread("Renderer::buildFrame");
@@ -389,9 +396,25 @@ namespace systems::leal::campello_widgets
             std::lock_guard<std::mutex> lock(sampler_mutex_);
             raster_sampler_.recordDuration(
                 std::chrono::duration<float, std::milli>(raster_end - raster_start).count());
+
+            const uint64_t present_now_ms = std::chrono::duration_cast<
+                std::chrono::milliseconds>(raster_end.time_since_epoch()).count();
+            recordPresentSample(present_fps_sampler_, last_present_ms_, present_now_ms);
         }
 
         return true;
+    }
+
+    void Renderer::recordPresentSample(
+        campello_gpu::FrameTimeSampler& sampler,
+        uint64_t&                       last_ms,
+        uint64_t                        now_ms,
+        uint64_t                        idle_gap_reset_ms)
+    {
+        if (last_ms != 0 && now_ms - last_ms > idle_gap_reset_ms)
+            sampler.reset();
+        sampler.record(now_ms);
+        last_ms = now_ms;
     }
 
     bool Renderer::renderFrame(
@@ -1291,8 +1314,8 @@ namespace systems::leal::campello_widgets
     // DevTools' "Flutter frames chart": one pair of adjacent bars per
     // frame (UI + raster), sharing a single chart area and a single
     // budget reference line at the panel's vertical midpoint (full panel
-    // height == 2x the 60fps budget), with over-budget frames flagged in
-    // red.
+    // height == 2x the current display's refresh-rate budget, see
+    // setDisplayRefreshHz()), with over-budget frames flagged in red.
     //
     // Each bar shows the *measured duration* of one frame phase, not how
     // often a frame was requested — see the build_sampler_/raster_sampler_
@@ -1304,6 +1327,7 @@ namespace systems::leal::campello_widgets
         PaintContext&                         ctx,
         const campello_gpu::FrameTimeSampler& build_sampler,
         const campello_gpu::FrameTimeSampler& raster_sampler,
+        const campello_gpu::FrameTimeSampler& present_fps_sampler,
         float                                 chart_top,
         float                                 chart_w,
         float                                 panel_h,
@@ -1317,6 +1341,14 @@ namespace systems::leal::campello_widgets
         const int   raster_total = raster_sampler.count();
         const float ui_avg    = (ui_total > 0) ? build_sampler.averageMs() : 0.0f;
         const float raster_avg = (raster_total > 0) ? raster_sampler.averageMs() : 0.0f;
+
+        // present_fps_sampler's average is an inter-frame *cadence* (ms
+        // between successive presents), not a phase cost — invert it to
+        // get an actual displayed frames-per-second. count() == 0 right
+        // after a fresh start or an idle-gap reset() (see its doc comment
+        // in renderer.hpp), so there's deliberately no fps to show yet.
+        const int   fps_total = present_fps_sampler.count();
+        const float fps_avg   = (fps_total > 0) ? 1000.0f / present_fps_sampler.averageMs() : 0.0f;
 
         // Only plot the most recent max_frames samples — the samplers
         // retain more history than that (kCapacity), so this lets the
@@ -1338,8 +1370,15 @@ namespace systems::leal::campello_widgets
 
         if (DebugFlags::performanceOverlayTextEnabled)
         {
-            char buf[96];
-            std::snprintf(buf, sizeof(buf), "UI: %.1f ms   RASTER: %.1f ms", ui_avg, raster_avg);
+            char fps_buf[8];
+            if (fps_total > 0)
+                std::snprintf(fps_buf, sizeof(fps_buf), "%.0f", fps_avg);
+            else
+                std::snprintf(fps_buf, sizeof(fps_buf), "--");
+
+            char buf[112];
+            std::snprintf(buf, sizeof(buf), "UI: %.1f ms   RASTER: %.1f ms   FPS: %s",
+                          ui_avg, raster_avg, fps_buf);
             // font_size is in physical pixels, like every other drawText()
             // call site (RenderText/RenderParagraph/RenderTextField all
             // multiply by dpr before drawing) — without this the glyph
@@ -1408,14 +1447,18 @@ namespace systems::leal::campello_widgets
         float         /*viewport_width*/,
         float         viewport_height)
     {
-        constexpr float kPanelH   = 90.0f;
-        constexpr float kLabelH   = 16.0f;
-        constexpr float kTotalH   = kLabelH + kPanelH;
-        constexpr float kTargetMs = 1000.0f / 60.0f;
-        // Full panel height represents 2x the 60fps budget, so the single
-        // budget line sits at the panel's vertical midpoint — a bar
-        // filling the whole panel is 30fps-equivalent cost.
-        constexpr float kMaxMs    = 2.0f * kTargetMs;
+        constexpr float kPanelH = 90.0f;
+        constexpr float kLabelH = 16.0f;
+        constexpr float kTotalH = kLabelH + kPanelH;
+        // Budget line tracks the *actual* display refresh rate (see
+        // setDisplayRefreshHz()'s doc) rather than assuming 60Hz — a
+        // window dragged onto a 144Hz monitor has a real ~6.9ms budget,
+        // not 16.67ms, and the overlay should say so.
+        const float kTargetMs = 1000.0f / display_refresh_hz_;
+        // Full panel height represents 2x the target-rate budget, so the
+        // single budget line sits at the panel's vertical midpoint — a bar
+        // filling the whole panel is half-the-target-rate-equivalent cost.
+        const float kMaxMs = 2.0f * kTargetMs;
 
         // Each frame group is three 4px segments — UI bar, raster bar,
         // blank gap — so a frame's UI+RASTER pair reads as one adjacent
@@ -1444,7 +1487,7 @@ namespace systems::leal::campello_widgets
             Rect::fromLTWH(0.0f, oy, kOverlayW, kTotalH),
             Paint::filled(Color::fromRGBA(0.10f, 0.10f, 0.10f, 0.80f)));
 
-        paintUnifiedFrameChart(ctx, build_sampler_, raster_sampler_, oy,
+        paintUnifiedFrameChart(ctx, build_sampler_, raster_sampler_, present_fps_sampler_, oy,
                                kOverlayW, kPanelH, kLabelH, kTargetMs, kMaxMs, kBarW,
                                kDisplayedFrames);
 

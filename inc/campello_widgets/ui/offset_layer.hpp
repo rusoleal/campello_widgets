@@ -51,9 +51,31 @@ namespace systems::leal::campello_widgets
          * delta-translate reposition path fires: content visibly changed
          * at both the old and new screen position even though nothing was
          * marked `needs_paint_` — see `Renderer::noteDirtyRegion()`'s doc.
+         *
+         * `own_dirty` and `descendant_dirty` are deliberately separate, not
+         * OR'd by the caller into one flag, even though both force the same
+         * real-record fallback: only `own_dirty` — this object's *own*
+         * `needs_paint_` — means *this* boundary's own footprint might have
+         * genuinely different pixels, so only it triggers a `noteDirty()`
+         * report of `offset`/`size`. `descendant_dirty` (from
+         * `needsDescendantPaint()`) means a *nested* boundary further down
+         * needs a real repaint; that nested boundary (or, if it's an
+         * ordinary non-boundary node, `RenderObject::paint()`'s own
+         * `was_dirty` check) already reports its own precise bounds
+         * separately once the re-record reaches it. Folding
+         * `descendant_dirty` into the same `noteDirty()` report as
+         * `own_dirty` would additionally mark *this entire boundary's*
+         * bounds dirty on every such frame — found in practice with a
+         * `SingleChildScrollView` whose only actually-changing content was
+         * one small animating child: the whole scroll viewport registered
+         * as dirty every frame, which spuriously defeated `BackdropFilter`'s
+         * dirty-region capture-skip gating (see `anyRegionDirty()`'s doc)
+         * for any unrelated `BackdropFilter` sharing that viewport, forcing
+         * its full capture-and-blur pass every frame regardless of how far
+         * away on screen the two actually were.
          */
         bool maybeReplay(PaintContext& context, const Offset& offset,
-                         const Size& size, bool dirty);
+                         const Size& size, bool own_dirty, bool descendant_dirty = false);
 
         /**
          * @brief Records fresh content at `offset` by invoking

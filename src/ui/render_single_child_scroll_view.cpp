@@ -140,7 +140,7 @@ namespace systems::leal::campello_widgets
         // ClipRRect avatar in scrolled content) must not be silently
         // stranded — see that flag's doc comment.
         if (!offset_layer_.maybeReplay(context, offset, size_,
-                                        needsPaint() || needsDescendantPaint()))
+                                        needsPaint(), needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
 
         needs_paint_ = false;

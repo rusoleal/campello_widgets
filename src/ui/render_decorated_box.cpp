@@ -55,7 +55,7 @@ namespace systems::leal::campello_widgets
         // exact bug that previously froze the app: a nested RenderClipRRect's
         // dirty state got stranded under this boundary's replay).
         if (!offset_layer_.maybeReplay(context, offset, size_,
-                                        needsPaint() || needsDescendantPaint()))
+                                        needsPaint(), needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
 
         needs_paint_ = false;

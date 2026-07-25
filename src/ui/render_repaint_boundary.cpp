@@ -35,7 +35,7 @@ namespace systems::leal::campello_widgets
         // dirty state, it must not be silently stranded — see that flag's
         // doc comment.
         if (!offset_layer_.maybeReplay(context, offset, size_,
-                                        needsPaint() || needsDescendantPaint()))
+                                        needsPaint(), needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { paintChild(context, offset); });
 
         needs_paint_ = false;

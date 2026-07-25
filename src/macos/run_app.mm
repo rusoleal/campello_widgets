@@ -252,6 +252,18 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     return mods;
 }
 
+// Falls back to NSScreen.mainScreen (never nil while any display is
+// attached) when `screen` is nil — e.g. before the window has been placed
+// on a screen yet — and to a hardcoded 60 pre-macOS 12, where
+// maximumFramesPerSecond doesn't exist.
+static float macosScreenRefreshHz(NSScreen* screen)
+{
+    NSScreen* effective = screen ?: NSScreen.mainScreen;
+    if (@available(macOS 12.0, *))
+        return effective ? static_cast<float>(effective.maximumFramesPerSecond) : 60.0f;
+    return 60.0f;
+}
+
 - (void)keyDown:(NSEvent*)event
 {
     // Global debug shortcut: F12 dumps the widget and render trees
@@ -847,10 +859,7 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     _metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
     _metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
     _metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
-    if (@available(macOS 12.0, *))
-        _metalView.preferredFramesPerSecond = NSScreen.mainScreen.maximumFramesPerSecond;
-    else
-        _metalView.preferredFramesPerSecond = 60;
+    _metalView.preferredFramesPerSecond = static_cast<NSInteger>(macosScreenRefreshHz(nil));
     _metalView.autoresizingMask         = NSViewWidthSizable | NSViewHeightSizable;
 
     // On-demand rendering: stop the continuous display link.  Frames are now
@@ -963,6 +972,11 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
         _device, renderBox, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
     gRenderer = _renderer;  // Store globally for requestRefresh()
+
+    // Seeds the performance overlay's budget line with this window's
+    // actual starting screen — windowDidChangeScreen: below keeps it
+    // correct if the window is later dragged to a different display.
+    _renderer->setDisplayRefreshHz(macosScreenRefreshHz(_window.screen));
 
     // -----------------------------------------------------------------------
     // Wire up appearance change detection
@@ -1115,6 +1129,20 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
     // Request a redraw so the widget tree lays out at the new size.
     // updateSafeAreaInsets may not mark the tree dirty if insets are unchanged.
     Widgets::FrameScheduler::scheduleFrame();
+}
+
+// NSWindowDelegate method fired when the window moves to a different
+// display (e.g. dragged from a 60Hz monitor onto a 144Hz one) — AppKit
+// already vsync-paces actual presentation to whichever screen the window
+// is now on, with no action needed here; this just keeps the performance
+// overlay's budget line (Renderer::setDisplayRefreshHz()) and MTKView's
+// own pacing hint in sync with that same reality.
+- (void)windowDidChangeScreen:(NSNotification *)notification
+{
+    (void)notification;
+    const float hz = macosScreenRefreshHz(_window.screen);
+    _metalView.preferredFramesPerSecond = static_cast<NSInteger>(hz);
+    if (_renderer) _renderer->setDisplayRefreshHz(hz);
 }
 
 // KVO for safeAreaInsets changes (macOS 12.1+)

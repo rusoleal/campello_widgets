@@ -39,7 +39,7 @@ namespace systems::leal::campello_widgets
         // replay must not skip past a nested boundary with unconsumed
         // dirty state.
         if (!offset_layer_.maybeReplay(context, offset, size_,
-                                        needsPaint() || needsDescendantPaint()))
+                                        needsPaint(), needsDescendantPaint()))
             offset_layer_.record(context, offset, [&] { performPaint(context, offset); });
 
         needs_paint_ = false;

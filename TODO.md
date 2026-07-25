@@ -487,11 +487,35 @@ runApp(make_shared<Theme>(Theme{
 - [x] Dialog / overlay / modal system
 - [x] Drag-and-drop (`Draggable` + `DragTarget`)
 - [x] **Gesture arena (Flutter-equivalent gesture arbitration)** — see dedicated section below
-- [ ] **Vulkan raster performance** (found 2026-07-24) — raster time exceeds
-      16ms in some gallery example tabs on Vulkan (Android/Linux). Target:
-      raster time under 16ms in *all* gallery tabs. Needs profiling per-tab
-      (`CW_TRACE_RASTER=1`) to find which draw paths are the bottleneck on
-      Vulkan specifically (Metal path is not known to have this problem).
+- [x] **Performance overlay: add a real FPS counter** (found 2026-07-24,
+      done 2026-07-25) — new `Renderer::present_fps_sampler_`/
+      `recordPresentSample()` measures the wall-clock cadence between
+      successive `rasterFrame()` completions (not per-phase cost), reset
+      across any idle-gap wider than 200ms so resuming from an on-demand
+      renderer's idle period doesn't register a bogus low reading. Shown as
+      `FPS: …` in the overlay label. This is what surfaced the item below —
+      the gallery's Images tab measured a real ~45fps despite both UI and
+      raster *cost* looking fine, which the old overlay had no way to show.
+- [x] **Performance overlay budget line should track actual display Hz,
+      not hardcoded 60** (found 2026-07-25 during multi-monitor testing,
+      done same day) — `Renderer::setDisplayRefreshHz()`/`displayRefreshHz()`
+      feed the budget line's `kTargetMs`; wired up on macOS via
+      `windowDidChangeScreen:` (`src/macos/run_app.mm`). **Follow-up**:
+      iOS (ProMotion 120Hz via `UIScreen.maximumFramesPerSecond`),
+      Windows, and Linux (per-monitor Hz via each platform's own display
+      API) still just use the 60Hz default — only macOS is wired up so
+      far since that's the multi-monitor setup this was found on.
+- [x] **Vulkan raster performance** (found 2026-07-24, partially fixed
+      2026-07-25) — investigated via the new FPS counter above: the
+      gallery's Images tab was stuck at ~45fps on macOS/Metal too (not
+      Vulkan-specific as originally suspected), root-caused to a
+      dirty-region over-reporting bug affecting all backends alike — see
+      CHANGELOG `[Unreleased] → Fixed`, "Gallery Images tab held at ~45fps
+      instead of 60 on macOS". Fixed there; macOS confirmed at a stable
+      60fps for that tab. **Still open**: re-profile specifically on
+      Vulkan (Android/Linux) with `CW_TRACE_RASTER=1` per gallery tab now
+      that this shared bug is fixed, to check whether Vulkan hits 60fps
+      too or still has its own additional backend-specific gap.
 - [ ] **Stylus/pencil input support** (found 2026-07-24) — check and
       implement pencil/stylus input across platforms: pressure, tilt, and
       other pencil-specific fields, not just plain pointer events. Test
@@ -499,6 +523,19 @@ runApp(make_shared<Theme>(Theme{
       Apple Pencil. Needs investigation into what `campello_input` already
       surfaces for stylus events on each platform vs. what's plumbed
       through to widgets.
+- [ ] **Gallery: new "Draw" tab — freehand canvas widget** (found
+      2026-07-24) — a new gallery tab with a canvas the user can draw on
+      with a finger or, where available, a pencil/stylus (pressure + tilt
+      modulating stroke width/opacity, matching the platform's native
+      drawing apps). Depends on the stylus/pencil input item above being
+      done first — this is the end-to-end demo/consumer of that plumbing,
+      not a separate input path. Large task; likely needs its own
+      `RenderObject` (incremental stroke rasterization rather than
+      replaying the full path every frame — a naive full-repaint approach
+      will not hold up under a long freehand drawing) plus a
+      `CustomPainter`-equivalent widget API if one doesn't already exist.
+      Should gracefully fall back to finger-only (no pressure/tilt) on
+      devices/platforms without a pencil.
 - [ ] **Tap unresponsive after prolonged infinite animation** (found
       2026-07-24) — in the gallery example, the Images tab (or any tab
       driving an infinite/looping animation) stops responding to taps after
