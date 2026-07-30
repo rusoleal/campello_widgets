@@ -1366,11 +1366,86 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// 10. DRAW — freehand canvas backed by a persistent GPU texture
+//
+// Strokes are stamped-circle segments accumulated incrementally into the
+// surface's own dedicated texture (RenderDrawSurface), rather than
+// replaying the whole stroke history every frame — see
+// inc/campello_widgets/ui/render_draw_surface.hpp's doc comment. Pressure
+// (from a stylus, where available) modulates stroke width; mouse/finger
+// input reports a constant pressure of 1.0, so this degrades gracefully to
+// a fixed-width pen on macOS.
+// ---------------------------------------------------------------------------
+class DrawSection;
+
+class DrawSectionState : public cw::State<DrawSection>
+{
+public:
+    void initState() override
+    {
+        draw_key_ = std::make_shared<cw::GlobalKey>();
+    }
+
+    cw::WidgetRef build(cw::BuildContext&) override
+    {
+        auto surface = std::make_shared<cw::DrawSurface>();
+        surface->stroke_color      = cw::Color::fromRGB(0.15f, 0.15f, 0.18f);
+        surface->background_color  = cw::Color::white();
+        surface->stroke_width      = 5.0f;
+        surface->key               = draw_key_;
+
+        cw::BoxDecoration clear_deco;
+        clear_deco.color         = cw::Color::fromRGB(0.92f, 0.92f, 0.95f);
+        clear_deco.border_radius = 6.0f;
+        auto clear_box = std::make_shared<cw::DecoratedBox>(clear_deco);
+        clear_box->child = cw::mw<cw::Padding>(cw::EdgeInsets::symmetric(16.0f, 8.0f),
+            cw::mw<cw::Text>("Clear", ts(13.0f, cw::Color::fromRGB(0.4f, 0.4f, 0.45f))));
+        auto clear_tap = std::make_shared<cw::GestureDetector>();
+        clear_tap->on_tap = [this] { clearSurface(); };
+        clear_tap->child  = clear_box;
+
+        auto toolbar = cw::mw<cw::Row>(cw::MainAxisAlignment::spaceBetween, cw::CrossAxisAlignment::center,
+            cw::WidgetList{
+                cw::mw<cw::Text>("Draw", ts(20.0f)),
+                ptr(clear_tap),
+            });
+
+        auto canvas_area = card(repaintBoundary(surface), 0.0f);
+
+        auto col = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+            cw::WidgetList{
+                toolbar,
+                vspace(12.0f),
+                cw::mw<cw::Expanded>(canvas_area),
+            });
+
+        return cw::mw<cw::Padding>(cw::EdgeInsets::all(24.0f), col);
+    }
+
+private:
+    void clearSurface()
+    {
+        if (auto* el = draw_key_->currentElement())
+            if (auto* roe = dynamic_cast<cw::RenderObjectElement*>(el))
+                if (auto* ro = roe->renderObject())
+                    static_cast<cw::RenderDrawSurface*>(ro)->clear();
+    }
+
+    std::shared_ptr<cw::GlobalKey> draw_key_;
+};
+
+class DrawSection : public cw::StatefulWidget {
+public:
+    std::unique_ptr<cw::StateBase> createState() const override
+    { return std::make_unique<DrawSectionState>(); }
+};
+
+// ---------------------------------------------------------------------------
 // Gallery Shell — left sidebar nav + section content
 // ---------------------------------------------------------------------------
 static const std::vector<std::string> kSectionNames = {
     "Layout", "Controls", "Text & Input", "Lists",
-    "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images",
+    "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images", "Draw",
 };
 
 // One glyph per section, shown alone when the sidebar collapses to
@@ -1378,7 +1453,7 @@ static const std::vector<std::string> kSectionNames = {
 // this framework has no Icon widget yet.
 static const std::vector<std::string> kSectionIcons = {
     "▦", "⚙", "Aa", "☰",
-    "▶", "✋", "✂", "⌨", "\U0001F5BC",
+    "▶", "✋", "✂", "⌨", "\U0001F5BC", "✏",
 };
 
 // Below this total window width the sidebar collapses to icon-only.
@@ -1398,6 +1473,7 @@ static cw::WidgetRef buildSection(int idx)
         case 6: return std::make_shared<ClippingSection>();
         case 7: return std::make_shared<KeyboardSection>();
         case 8: return std::make_shared<ImagesSection>();
+        case 9: return std::make_shared<DrawSection>();
         default: return std::make_shared<LayoutSection>();
     }
 }
@@ -1442,7 +1518,8 @@ private:
     // collapsed. Active tab keeps its left accent bar in both modes.
     cw::WidgetRef buildNavItem(int i, bool collapsed)
     {
-        const bool active = (i == selected_);
+        const bool active  = (i == selected_);
+        const bool hovered = (i == hovered_) && !active;
         const cw::Color fg = active ? kBlue : cw::Color::fromRGB(0.25f, 0.25f, 0.30f);
         auto icon = cw::mw<cw::Text>(kSectionIcons[i], ts(16.0f, fg));
 
@@ -1469,7 +1546,9 @@ private:
             : cw::EdgeInsets::symmetric(16.0f, 11.0f);
         item_container->color = active
             ? cw::Color::fromRGB(0.88f, 0.94f, 1.0f)
-            : cw::Color::white();
+            : hovered
+                ? cw::Color::fromRGB(0.95f, 0.96f, 0.98f)
+                : cw::Color::white();
         item_container->child = content;
 
         cw::WidgetRef item_bg = item_container;
@@ -1491,7 +1570,13 @@ private:
         auto g   = std::make_shared<cw::GestureDetector>();
         g->on_tap = [this, i] { setState([this, i] { selected_ = i; }); };
         g->child  = item_bg;
-        return ptr(g);
+
+        auto region = std::make_shared<cw::MouseRegion>();
+        region->cursor   = cw::SystemMouseCursor::pointer;
+        region->on_enter = [this, i] { setState([this, i] { hovered_ = i; }); };
+        region->on_exit  = [this, i] { setState([this, i] { if (hovered_ == i) hovered_ = -1; }); };
+        region->child    = g;
+        return region;
     }
 
     cw::WidgetRef buildSidebar(bool collapsed)
@@ -1538,12 +1623,18 @@ private:
         auto sidebar_box = std::make_shared<cw::DecoratedBox>(sidebar_deco);
         sidebar_box->child = nav_col;
 
+        // No explicit RepaintBoundary needed here: RenderDecoratedBox
+        // self-promotes to one automatically whenever decoration.box_shadow
+        // is non-empty (see its isRepaintBoundary() override) — a shadow's
+        // Gaussian blur is expensive enough that every such box gets this
+        // for free, this one included.
         return std::make_shared<cw::SizedBox>(
             collapsed ? kSidebarCollapsedWidth : kSidebarExpandedWidth,
             std::nullopt, sidebar_box);
     }
 
     int selected_ = 0;
+    int hovered_  = -1; ///< Index of the sidebar nav item currently under the pointer, or -1.
 };
 
 class GalleryShell : public cw::StatefulWidget {

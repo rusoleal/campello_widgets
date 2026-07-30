@@ -316,6 +316,8 @@ struct DrawCommandVisitor {
     void operator()(const cw::DrawShaderMaskEndCmd&) {}
     void operator()(const cw::CacheReplayBeginCmd&) {}
     void operator()(const cw::CacheReplayEndCmd&) {}
+    void operator()(const cw::DrawSurfaceUpdateBeginCmd&) {}
+    void operator()(const cw::DrawSurfaceUpdateEndCmd&) {}
 };
 
 void cwt::VisualRenderer::renderDrawList(const cw::DrawList& commands)

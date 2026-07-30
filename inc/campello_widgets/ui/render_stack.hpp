@@ -28,6 +28,14 @@ namespace systems::leal::campello_widgets
         // Child management
         // ------------------------------------------------------------------
 
+        /**
+         * @brief Places `box` at `index`, re-applying its Positioned spec.
+         *
+         * If the same box is already at `index`, this reuses the slot in
+         * place instead of detaching/reattaching it (see the .cpp for why
+         * that distinction matters) — only its position spec is updated,
+         * and only if it actually changed.
+         */
         void insertChild(
             std::shared_ptr<RenderBox> box,
             int                        index,
@@ -39,6 +47,15 @@ namespace systems::leal::campello_widgets
             std::optional<float>       height);
 
         void clearChildren();
+
+        /**
+         * @brief Drops any slots at index >= `count`, detaching their boxes.
+         *
+         * Used after re-inserting the first `count` children in place (see
+         * `insertChild()`'s doc) to handle removals without re-parenting
+         * the children that remain.
+         */
+        void truncateChildren(size_t count);
 
         // ------------------------------------------------------------------
         // RenderObject overrides

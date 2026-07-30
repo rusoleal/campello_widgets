@@ -362,6 +362,39 @@ static uint32_t androidKeyCodeToCharacter(int32_t keyCode, int32_t metaState)
 // Input event processing (motion + key)
 // ---------------------------------------------------------------------------
 
+static Widgets::PointerDeviceKind deviceKindForMotionEvent(
+    const AInputEvent* event, size_t pointer_index)
+{
+    switch (AMotionEvent_getToolType(event, pointer_index))
+    {
+        case AMOTION_EVENT_TOOL_TYPE_STYLUS: return Widgets::PointerDeviceKind::stylus;
+        case AMOTION_EVENT_TOOL_TYPE_ERASER: return Widgets::PointerDeviceKind::invertedStylus;
+        case AMOTION_EVENT_TOOL_TYPE_MOUSE:  return Widgets::PointerDeviceKind::mouse;
+        default:                             return Widgets::PointerDeviceKind::touch;
+    }
+}
+
+// AMOTION_EVENT_AXIS_TILT/_ORIENTATION only ever report nonzero for a
+// stylus/eraser tool — a finger or mouse reads back 0 here, which already
+// matches PointerEvent::tilt's "0.0 == no tilt data" convention, so no
+// separate tool-type check is needed before calling these.
+
+static float tiltForMotionEvent(const AInputEvent* event, size_t pointer_index)
+{
+    // AMOTION_EVENT_AXIS_TILT: magnitude only, 0 (perpendicular) to pi/2
+    // (flat) — already matches PointerEvent::tilt's convention directly.
+    return AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_TILT, pointer_index);
+}
+
+static float tiltOrientationForMotionEvent(const AInputEvent* event, size_t pointer_index)
+{
+    // AMOTION_EVENT_AXIS_ORIENTATION is already -pi..pi, same range as
+    // PointerEvent::tilt_orientation — though, per that field's doc
+    // comment, the two platforms' zero-direction reference does not
+    // necessarily agree.
+    return AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_ORIENTATION, pointer_index);
+}
+
 static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
 {
     auto* session_ptr = reinterpret_cast<std::unique_ptr<WidgetSession>*>(app->userData);
@@ -394,14 +427,18 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         case AMOTION_EVENT_ACTION_DOWN:
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
         {
-            const int32_t id = AMotionEvent_getPointerId(event, static_cast<size_t>(pointer_index));
-            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index)) / dpr;
-            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index)) / dpr;
+            const size_t idx = static_cast<size_t>(pointer_index);
+            const int32_t id = AMotionEvent_getPointerId(event, idx);
+            const float x = AMotionEvent_getX(event, idx) / dpr;
+            const float y = AMotionEvent_getY(event, idx) / dpr;
             session->dispatcher->handlePointerEvent({
-                Widgets::PointerEventKind::down,
-                id,
-                { x, y },
-                1.0f});
+                .kind        = Widgets::PointerEventKind::down,
+                .pointer_id  = id,
+                .position    = { x, y },
+                .pressure    = AMotionEvent_getPressure(event, idx),
+                .device_kind = deviceKindForMotionEvent(event, idx),
+                .tilt        = tiltForMotionEvent(event, idx),
+                .tilt_orientation = tiltOrientationForMotionEvent(event, idx)});
             break;
         }
 
@@ -414,10 +451,13 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
                 const float x = AMotionEvent_getX(event, j) / dpr;
                 const float y = AMotionEvent_getY(event, j) / dpr;
                 session->dispatcher->handlePointerEvent({
-                    Widgets::PointerEventKind::move,
-                    id,
-                    { x, y },
-                    1.0f});
+                    .kind        = Widgets::PointerEventKind::move,
+                    .pointer_id  = id,
+                    .position    = { x, y },
+                    .pressure    = AMotionEvent_getPressure(event, j),
+                    .device_kind = deviceKindForMotionEvent(event, j),
+                    .tilt        = tiltForMotionEvent(event, j),
+                    .tilt_orientation = tiltOrientationForMotionEvent(event, j)});
             }
             break;
         }
@@ -425,14 +465,16 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         case AMOTION_EVENT_ACTION_UP:
         case AMOTION_EVENT_ACTION_POINTER_UP:
         {
-            const int32_t id = AMotionEvent_getPointerId(event, static_cast<size_t>(pointer_index));
-            const float x = AMotionEvent_getX(event, static_cast<size_t>(pointer_index)) / dpr;
-            const float y = AMotionEvent_getY(event, static_cast<size_t>(pointer_index)) / dpr;
+            const size_t idx = static_cast<size_t>(pointer_index);
+            const int32_t id = AMotionEvent_getPointerId(event, idx);
+            const float x = AMotionEvent_getX(event, idx) / dpr;
+            const float y = AMotionEvent_getY(event, idx) / dpr;
             session->dispatcher->handlePointerEvent({
-                Widgets::PointerEventKind::up,
-                id,
-                { x, y },
-                0.0f});
+                .kind        = Widgets::PointerEventKind::up,
+                .pointer_id  = id,
+                .position    = { x, y },
+                .pressure    = 0.0f,
+                .device_kind = deviceKindForMotionEvent(event, idx)});
             break;
         }
 
@@ -445,10 +487,11 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
                 const float x = AMotionEvent_getX(event, j) / dpr;
                 const float y = AMotionEvent_getY(event, j) / dpr;
                 session->dispatcher->handlePointerEvent({
-                    Widgets::PointerEventKind::cancel,
-                    id,
-                    { x, y },
-                    0.0f});
+                    .kind        = Widgets::PointerEventKind::cancel,
+                    .pointer_id  = id,
+                    .position    = { x, y },
+                    .pressure    = 0.0f,
+                    .device_kind = deviceKindForMotionEvent(event, j)});
             }
             break;
         }

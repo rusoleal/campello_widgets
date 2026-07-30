@@ -55,6 +55,8 @@
 #include <campello_widgets/ui/render_text.hpp>
 #include <campello_widgets/widgets/raw_image.hpp>
 #include <campello_widgets/ui/render_image.hpp>
+#include <campello_widgets/widgets/draw_surface.hpp>
+#include <campello_widgets/ui/render_draw_surface.hpp>
 #include <campello_widgets/widgets/raw_custom_paint.hpp>
 #include <campello_widgets/ui/render_custom_paint.hpp>
 

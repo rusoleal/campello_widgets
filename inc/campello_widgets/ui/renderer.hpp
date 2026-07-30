@@ -309,6 +309,31 @@ namespace systems::leal::campello_widgets
             dirty_rects_.push_back(bounds);
         }
 
+        /**
+         * @brief Drops any clip-shape/shader-mask/shadow GPU cache entries
+         * keyed by `region_id`.
+         *
+         * Call this from an `OffsetLayer`'s destructor, passing its own
+         * address (the same value it uses as `region_id` in
+         * `CacheReplayBeginCmd`). Those caches are keyed by the
+         * `OffsetLayer`'s raw address purely as an opaque, never-
+         * dereferenced map key (see `clip_shape_gpu_cache_`'s doc comment)
+         * — safe against address reuse only because a *fresh* `OffsetLayer`
+         * never reads the cache on its first paint (always a full record,
+         * never a replay). But its first *replay* (second paint, once
+         * offset-unchanged) does consult the cache, and without this call
+         * that lookup can spuriously hit a *stale* entry a different,
+         * already-destroyed `OffsetLayer` left behind at the same
+         * (reused) address — the periodic idle-sweep
+         * (`kClipShapeCacheMaxAgeFrames`) only reclaims entries unused for
+         * ~2 seconds, far slower than a virtualized list/grid recycling
+         * same-sized cells can reuse a freed address. Without this,
+         * scrolling a `GridView`/`ListView` whose cells clip their content
+         * can make a newly-mounted cell briefly render a previous,
+         * unrelated cell's cached appearance.
+         */
+        void evictReplayCacheEntries(const void* region_id) noexcept;
+
         // ------------------------------------------------------------------
         // View insets (safe area, keyboard, etc.)
         // ------------------------------------------------------------------
@@ -513,6 +538,24 @@ namespace systems::leal::campello_widgets
             const Rect&    clip,
             const void*    replay_region_id     = nullptr,
             size_t         replay_bracket_index  = 0);
+
+        // Renders `child_cmds` (a `RenderDrawSurface`'s newly-added stroke
+        // segments) directly into `cmd.target` — preserving its existing
+        // content unless `cmd.clear_first` is set — instead of into an
+        // offscreen texture that then gets composited into the main pass.
+        // There is no composite step: the caller (RenderDrawSurface) emits
+        // its own DrawImageCmd for `cmd.target` right after this bracket,
+        // so the persistent texture is simply displayed like any other
+        // image once this call returns. See flushDrawList() for
+        // `target_view`.
+        void applyDrawSurfaceUpdate(
+            const DrawSurfaceUpdateBeginCmd&                   cmd,
+            const DrawList&                                    child_cmds,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
+            float viewport_width,
+            float viewport_height,
+            float dpr);
 
         // Restarts a render pass on `target_view` with LoadOp::load (preserves
         // existing content).  Used after an offscreen composite operation.

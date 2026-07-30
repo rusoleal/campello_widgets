@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/drag_details.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
+#include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/rect.hpp>
 
@@ -35,12 +36,16 @@ namespace systems::leal::campello_widgets
         {
             if (auto* mgr = DragManager::active())
                 registerWithManager(mgr);
+            if (auto* d = PointerDispatcher::activeDispatcher())
+                registerTickHandler(d);
         }
 
         ~RenderDragTarget() override
         {
             if (auto* mgr = DragManager::active())
                 mgr->unregisterTarget(this);
+            if (auto* d = PointerDispatcher::activeDispatcher())
+                d->removeTickHandler(this);
         }
 
         void performLayout() override
@@ -79,10 +84,37 @@ namespace systems::leal::campello_widgets
                 mgr->updateTargetBounds(this, bounds);
             }
 
+            if (!tick_registered_)
+            {
+                if (auto* d = PointerDispatcher::activeDispatcher())
+                    registerTickHandler(d);
+            }
+
             if (child_) paintChild(ctx, offset);
         }
 
     private:
+        // A repaint-boundary ancestor (e.g. a box-shadowed DecoratedBox) may
+        // replay a cached picture instead of calling performPaint() on us
+        // when nothing here is individually dirty — see OffsetLayer's doc.
+        // That's fine for rendering, but it also skips the bounds update
+        // above, so DragManager's hover hit-test would silently drift stale
+        // relative to our true on-screen position (e.g. once the page
+        // scrolls) while a drag is in progress. Forcing markNeedsPaint()
+        // every tick during an active drag guarantees a real repaint each
+        // frame, so bounds stay live for the whole gesture.
+        void onTick(uint64_t)
+        {
+            if (auto* mgr = DragManager::active(); mgr && mgr->isDragging())
+                markNeedsPaint();
+        }
+
+        void registerTickHandler(PointerDispatcher* dispatcher)
+        {
+            tick_registered_ = true;
+            dispatcher->addTickHandler(this, [this](uint64_t now_ms) { onTick(now_ms); });
+        }
+
         void registerWithManager(DragManager* mgr)
         {
             registered_ = true;
@@ -104,7 +136,8 @@ namespace systems::leal::campello_widgets
                 });
         }
 
-        bool   registered_   = false;
+        bool   registered_      = false;
+        bool   tick_registered_ = false;
         Offset global_offset_;
     };
 

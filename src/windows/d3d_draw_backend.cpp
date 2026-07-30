@@ -1001,9 +1001,29 @@ std::shared_ptr<GPU::Texture> D3DDrawBackend::createOffscreenTexture(
         frame_counter_);
 }
 
+std::shared_ptr<GPU::Texture> D3DDrawBackend::createDedicatedOffscreenTexture(
+    uint32_t width, uint32_t height)
+{
+    // Bypasses offscreen_texture_pool_ entirely — see this method's doc
+    // comment on IDrawBackend for why a pooled texture is unsafe for a
+    // caller that keeps referencing it (and relying on its content) across
+    // many future frames. copyDst (in addition to copySrc) so a
+    // RenderDrawSurface-style caller can blit a previous dedicated
+    // texture's content into this one on resize (see Renderer::
+    // applyDrawSurfaceUpdate()'s blit_source path).
+    return device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copySrc) |
+            static_cast<int>(GPU::TextureUsage::copyDst)));
+}
+
 std::shared_ptr<GPU::RenderPassEncoder> D3DDrawBackend::beginOffscreenPass(
     std::shared_ptr<GPU::Texture> tex,
-    GPU::CommandEncoder&          encoder)
+    GPU::CommandEncoder&          encoder,
+    bool                          preserve_content)
 {
     // New encoder == fresh scissor/viewport state.
     last_scissor_x_ = last_scissor_y_ = last_scissor_w_ = last_scissor_h_ = -1.0f;
@@ -1015,7 +1035,7 @@ std::shared_ptr<GPU::RenderPassEncoder> D3DDrawBackend::beginOffscreenPass(
 
     GPU::ColorAttachment ca{};
     ca.view          = view;
-    ca.loadOp        = GPU::LoadOp::clear;
+    ca.loadOp        = preserve_content ? GPU::LoadOp::load : GPU::LoadOp::clear;
     ca.storeOp       = GPU::StoreOp::store;
     ca.clearValue[0] = 0.0f;
     ca.clearValue[1] = 0.0f;

@@ -463,6 +463,34 @@ void VulkanDrawBackend::applyScissor(
 }
 
 // ---------------------------------------------------------------------------
+// UniformBufferPool — see its doc comment in vulkan_draw_backend.hpp
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<GPU::Buffer> VulkanDrawBackend::UniformBufferPool::acquire(
+    GPU::Device& device, uint64_t size, const void* data)
+{
+    auto&  buffers = generations_[current_generation_];
+    size_t idx     = next_index_[current_generation_]++;
+
+    if (idx >= buffers.size())
+        buffers.push_back(device.createBuffer(size,
+            static_cast<GPU::BufferUsage>(
+                static_cast<int>(GPU::BufferUsage::vertex) |
+                static_cast<int>(GPU::BufferUsage::copyDst)),
+            const_cast<void*>(data)));
+    else
+        buffers[idx]->upload(0, size, const_cast<void*>(data));
+
+    return buffers[idx];
+}
+
+void VulkanDrawBackend::UniformBufferPool::beginFrame() noexcept
+{
+    current_generation_ = (current_generation_ + 1) % kGenerations;
+    next_index_[current_generation_] = 0;
+}
+
+// ---------------------------------------------------------------------------
 // drawRect
 // ---------------------------------------------------------------------------
 
@@ -533,12 +561,8 @@ void VulkanDrawBackend::drawRect(
         { c10.x(), c10.y(), c10.w() },  // TR
         { c11.x(), c11.y(), c11.w() },  // BR
     };
-    auto vbuf = device_->createBuffer(sizeof(verts),
-        static_cast<GPU::BufferUsage>(static_cast<int>(GPU::BufferUsage::vertex) |
-                                      static_cast<int>(GPU::BufferUsage::copyDst)),
-        verts);
+    auto vbuf = colored_quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
     if (!vbuf) return;
-    frame_buffers_.push_back(vbuf);
 
     // Uniform: RectUniforms layout — only color and viewport are read by the shader.
     RectUniforms u{};
@@ -734,13 +758,8 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
         {c10.x, c10.y, c10.w, c10.u, c10.v},
         {c11.x, c11.y, c11.w, c11.u, c11.v},
     };
-    auto vbuf = device_->createBuffer(sizeof(verts),
-        static_cast<GPU::BufferUsage>(
-            static_cast<int>(GPU::BufferUsage::vertex) |
-            static_cast<int>(GPU::BufferUsage::copyDst)),
-        verts);
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
     if (!vbuf) return cached_bind_group;
-    frame_buffers_.push_back(vbuf);
 
     // NOT safe to honor `cached_bind_group` across frames here, even
     // though the bind group is now texture+sampler only (uniforms moved to
@@ -1051,13 +1070,20 @@ void VulkanDrawBackend::drawBackdropFilter(
 std::shared_ptr<GPU::Texture> VulkanDrawBackend::createOffscreenTexture(
     uint32_t width, uint32_t height)
 {
+    // copySrc/copyDst included so a RenderDrawSurface-style caller (which
+    // relies on this method for its dedicated texture too — Vulkan never
+    // pools, see createDedicatedOffscreenTexture()'s doc comment) can blit
+    // a previous texture's content into this one on resize (see
+    // Renderer::applyDrawSurfaceUpdate()'s blit_source path).
     auto tex = device_->createTexture(
         GPU::TextureType::tt2d,
         pixel_format_,
         width, height, 1, 1, 1,
         static_cast<GPU::TextureUsage>(
             static_cast<int>(GPU::TextureUsage::renderTarget) |
-            static_cast<int>(GPU::TextureUsage::textureBinding)));
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copySrc) |
+            static_cast<int>(GPU::TextureUsage::copyDst)));
     if (tex)
         frame_textures_.push_back(tex);
     return tex;
@@ -1065,7 +1091,8 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::createOffscreenTexture(
 
 std::shared_ptr<GPU::RenderPassEncoder> VulkanDrawBackend::beginOffscreenPass(
     std::shared_ptr<GPU::Texture> tex,
-    GPU::CommandEncoder&          encoder)
+    GPU::CommandEncoder&          encoder,
+    bool                          preserve_content)
 {
     if (!tex) return nullptr;
     auto view = tex->createView(pixel_format_, 1);
@@ -1079,7 +1106,7 @@ std::shared_ptr<GPU::RenderPassEncoder> VulkanDrawBackend::beginOffscreenPass(
 
     GPU::ColorAttachment ca{};
     ca.view          = view;
-    ca.loadOp        = GPU::LoadOp::clear;
+    ca.loadOp        = preserve_content ? GPU::LoadOp::load : GPU::LoadOp::clear;
     ca.storeOp       = GPU::StoreOp::store;
     ca.clearValue[0] = 0.0f;
     ca.clearValue[1] = 0.0f;
@@ -1119,13 +1146,8 @@ void VulkanDrawBackend::drawClipShapeComposite(
         {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
         {c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
     };
-    auto vbuf = device_->createBuffer(sizeof(verts),
-        static_cast<GPU::BufferUsage>(
-            static_cast<int>(GPU::BufferUsage::vertex) |
-            static_cast<int>(GPU::BufferUsage::copyDst)),
-        verts);
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
     if (!vbuf) return;
-    frame_buffers_.push_back(vbuf);
 
     ClipShapeUniforms u{};
     u.rect_size[0] = bounds.width;

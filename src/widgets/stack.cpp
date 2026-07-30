@@ -44,8 +44,16 @@ namespace systems::leal::campello_widgets
         const auto& sw = static_cast<const Stack&>(*widget_);
         auto&       rs = static_cast<RenderStack&>(*render_object_);
 
-        rs.clearChildren();
-
+        // Re-insert every current child in place (RenderStack::insertChild()
+        // reuses a slot without re-parenting when the same box is already
+        // there) rather than clearChildren()-ing first — this can run once
+        // per pointer-move (a Positioned several layers below an Overlay
+        // entry re-notifying via onDescendantRenderObjectChanged(), see
+        // PositionedElement's doc), and a blind clear would detach/reattach
+        // every sibling — including, at the root Overlay's Stack, the
+        // entire rest of the app — just to reposition the one child that
+        // actually changed.
+        int count = 0;
         for (int i = 0; i < static_cast<int>(child_elements_.size()); ++i)
         {
             if (!child_elements_[i]) continue;
@@ -70,8 +78,11 @@ namespace systems::leal::campello_widgets
                 }
             }
 
-            rs.insertChild(std::move(box), i, left, top, right, bottom, width, height);
+            rs.insertChild(std::move(box), count, left, top, right, bottom, width, height);
+            ++count;
         }
+
+        rs.truncateChildren(static_cast<size_t>(count));
     }
 
     // ------------------------------------------------------------------

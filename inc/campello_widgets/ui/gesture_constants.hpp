@@ -33,6 +33,21 @@ namespace systems::leal::campello_widgets
     inline constexpr float kStationaryTolerance = kTouchSlop;
 
     /**
+     * @brief True for pointer kinds whose contact point is pixel-precise —
+     * mouse/trackpad cursors and a stylus tip — as opposed to a finger,
+     * which covers many pixels. Mirrors Flutter's own treatment of
+     * `PointerDeviceKind.stylus`/`invertedStylus` alongside mouse/trackpad
+     * in its gesture-slop logic (a pen tip is not a fingertip).
+     */
+    constexpr bool isPrecisePointer(PointerDeviceKind kind) noexcept
+    {
+        return kind == PointerDeviceKind::mouse ||
+               kind == PointerDeviceKind::trackpad ||
+               kind == PointerDeviceKind::stylus ||
+               kind == PointerDeviceKind::invertedStylus;
+    }
+
+    /**
      * @brief Movement (px) past which a tap/press is no longer stationary.
      *
      * Used for gestures (e.g. Draggable) that mirror Flutter's
@@ -43,7 +58,7 @@ namespace systems::leal::campello_widgets
      */
     constexpr float computeHitSlop(PointerDeviceKind kind) noexcept
     {
-        return kind == PointerDeviceKind::mouse ? kPrecisePointerHitSlop : kTouchSlop;
+        return isPrecisePointer(kind) ? kPrecisePointerHitSlop : kTouchSlop;
     }
 
     /**
@@ -56,7 +71,7 @@ namespace systems::leal::campello_widgets
      */
     constexpr float computePanSlop(PointerDeviceKind kind) noexcept
     {
-        return kind == PointerDeviceKind::mouse ? kPrecisePointerPanSlop : kPanSlop;
+        return isPrecisePointer(kind) ? kPrecisePointerPanSlop : kPanSlop;
     }
 
 } // namespace systems::leal::campello_widgets

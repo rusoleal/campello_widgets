@@ -41,6 +41,14 @@ namespace systems::leal::campello_widgets
     {
     public:
         /**
+         * @brief Evicts any GPU replay-cache entries keyed by this layer's
+         * own address — see `Renderer::evictReplayCacheEntries()`'s doc for
+         * why this matters (stale-address-reuse cache collisions when a
+         * virtualized list/grid recycles same-sized cells during scroll).
+         */
+        ~OffsetLayer();
+
+        /**
          * @brief Attempts to replay the cache. Returns true if it did (the
          * caller must not record anything else this frame); false if the
          * cache is missing, dirty, or the offset changed and the picture

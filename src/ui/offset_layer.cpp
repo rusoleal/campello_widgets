@@ -6,6 +6,12 @@
 namespace systems::leal::campello_widgets
 {
 
+    OffsetLayer::~OffsetLayer()
+    {
+        if (auto* renderer = detail::currentRenderer().load(std::memory_order_acquire))
+            renderer->evictReplayCacheEntries(this);
+    }
+
     bool OffsetLayer::maybeReplay(PaintContext& context, const Offset& offset,
                                    const Size& size, bool own_dirty, bool descendant_dirty)
     {

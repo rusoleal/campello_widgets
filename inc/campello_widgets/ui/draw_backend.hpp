@@ -237,14 +237,62 @@ namespace systems::leal::campello_widgets
             uint32_t /*width*/, uint32_t /*height*/) { return nullptr; }
 
         /**
+         * @brief Allocates an offscreen texture that will NOT be reused by
+         * this backend's own internal pool, for callers that intend to keep
+         * the returned texture referenced (and its content relied upon)
+         * across many future frames.
+         *
+         * `createOffscreenTexture()` may hand back a texture from a
+         * size-keyed rotating pool — safe for a one-off composite that gets
+         * fully re-recorded every frame it's used (the pool's own
+         * `kGenerations`-deep ring guarantees the GPU is done reading a
+         * slot's *previous* content before it's handed out again a few
+         * frames later), but NOT safe for `Renderer::applyClipShape()` /
+         * `applyShaderMask()` / `applyBoxShadow()`'s replay-cache path
+         * (`clip_shape_gpu_cache_` etc.): those stash the returned texture
+         * in a map keyed by the paint tree's `OffsetLayer` identity and
+         * keep reading it on every subsequent identity-replay, for as long
+         * as ~120 frames (or until that `OffsetLayer` is destroyed) — far
+         * longer than the pool's own rotation window. If the pool hands
+         * that same physical texture to an unrelated composite in the
+         * meantime (exactly what happens scrolling a virtualized
+         * `GridView`/`ListView`, which mounts/unmounts many same-sized
+         * clipped cells), the pool has no way to know a long-lived cache
+         * entry still depends on that texture's content — the unrelated
+         * composite silently overwrites it, and the next identity-replay
+         * of the *original* region shows the *other* cell's content. This
+         * variant defaults to `createOffscreenTexture()` (correct for
+         * backends, like Vulkan, that don't pool at all — see
+         * `VulkanDrawBackend::createOffscreenTexture()`'s always-fresh
+         * `device_->createTexture()`), and is overridden by pooled
+         * backends to allocate a genuinely dedicated texture instead.
+         */
+        virtual std::shared_ptr<campello_gpu::Texture> createDedicatedOffscreenTexture(
+            uint32_t width, uint32_t height)
+        {
+            return createOffscreenTexture(width, height);
+        }
+
+        /**
          * @brief Begins a render pass that targets `tex`.
          *
-         * The pass clears the texture to transparent black.  The caller ends the
-         * returned encoder when all child commands have been flushed.
+         * By default the pass clears the texture to transparent black — the
+         * right behavior for a one-shot composite (ClipRRect/ShaderMask/
+         * BackdropFilter) that's fully re-painted every time it records.
+         * Pass `preserve_content = true` to load the texture's existing
+         * contents instead of clearing them, for a caller that accumulates
+         * drawing into a persistent texture incrementally across many
+         * separate passes (e.g. a freehand-drawing surface appending one
+         * new stroke segment at a time) rather than repainting the whole
+         * thing from scratch each time.
+         *
+         * The caller ends the returned encoder when all child commands have
+         * been flushed.
          */
         virtual std::shared_ptr<campello_gpu::RenderPassEncoder> beginOffscreenPass(
             std::shared_ptr<campello_gpu::Texture> /*tex*/,
-            campello_gpu::CommandEncoder&          /*encoder*/) { return nullptr; }
+            campello_gpu::CommandEncoder&          /*encoder*/,
+            bool                                    /*preserve_content*/ = false) { return nullptr; }
 
         /**
          * @brief Applies a separable Gaussian blur to `source` and returns the result.

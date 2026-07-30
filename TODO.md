@@ -512,30 +512,216 @@ runApp(make_shared<Theme>(Theme{
       dirty-region over-reporting bug affecting all backends alike — see
       CHANGELOG `[Unreleased] → Fixed`, "Gallery Images tab held at ~45fps
       instead of 60 on macOS". Fixed there; macOS confirmed at a stable
-      60fps for that tab. **Still open**: re-profile specifically on
-      Vulkan (Android/Linux) with `CW_TRACE_RASTER=1` per gallery tab now
-      that this shared bug is fixed, to check whether Vulkan hits 60fps
-      too or still has its own additional backend-specific gap.
-- [ ] **Stylus/pencil input support** (found 2026-07-24) — check and
-      implement pencil/stylus input across platforms: pressure, tilt, and
-      other pencil-specific fields, not just plain pointer events. Test
-      devices available: Android tablet with a stylus, and an iPad with
-      Apple Pencil. Needs investigation into what `campello_input` already
-      surfaces for stylus events on each platform vs. what's plumbed
-      through to widgets.
-- [ ] **Gallery: new "Draw" tab — freehand canvas widget** (found
-      2026-07-24) — a new gallery tab with a canvas the user can draw on
-      with a finger or, where available, a pencil/stylus (pressure + tilt
-      modulating stroke width/opacity, matching the platform's native
-      drawing apps). Depends on the stylus/pencil input item above being
-      done first — this is the end-to-end demo/consumer of that plumbing,
-      not a separate input path. Large task; likely needs its own
-      `RenderObject` (incremental stroke rasterization rather than
-      replaying the full path every frame — a naive full-repaint approach
-      will not hold up under a long freehand drawing) plus a
-      `CustomPainter`-equivalent widget API if one doesn't already exist.
-      Should gracefully fall back to finger-only (no pressure/tilt) on
-      devices/platforms without a pencil.
+      60fps for that tab. Confirmed via `CW_TRACE_DIRTY=1` (readable on
+      Android via `adb shell setprop debug.cw_trace_dirty 1` before
+      relaunching — env vars set before `am start` aren't inherited by the
+      app process) that this shared fix also lands `needs_capture=0` on a
+      real Android/Vulkan device (Galaxy Tab S7 FE, Snapdragon 750G/Adreno
+      619). **Still open, and the real remaining gap**: a *separate*,
+      apparently content-independent ~28-33ms floor inside Vulkan
+      `Device::submit()`, present even on a trivial 3-rect animation with
+      no shadows/clips/backdrop-filter — identical magnitude to the heavy
+      Images tab. Ruled out so far, each tested directly on-device:
+        - Vulkan validation layers (confirmed `CAMPELLO_GPU_VALIDATION=OFF`)
+        - Samsung GOS/Game Booster (disabled the 3 packages via
+          `pm disable-user`, no change, re-enabled afterward)
+        - GPU debug overlays / dev options (none active)
+        - Battery saver / CPU governor (`schedutil`, 100% battery, no throttle)
+        - Display refresh rate (genuinely locked 60.00Hz, confirmed via
+          `dumpsys SurfaceFlinger`, not adaptively downshifted)
+        - Debug vs. Release native build (Release halved CPU-encode cost —
+          main-flush 15ms→8.4ms — but barely touched the ~28-33ms `submit()`
+          floor: 30.8ms→27.98ms)
+        - Fine-grained timing *inside* `campello_gpu`'s Vulkan
+          `Device::submit()` (temporary local instrumentation, reverted):
+          `vkResetFences`/`vkQueueSubmit`/`vkQueuePresentKHR`/the
+          `genCommandBuffer` ring-slot replace are all consistently
+          sub-millisecond.
+        - Raster-thread priority elevation (`setpriority(PRIO_PROCESS,
+          gettid(), -8)`, matching SurfaceFlinger's RenderThread nice
+          value — confirmed applied via `adb shell ps -T`) — no
+          measurable effect; reverted (not committed) since unproven.
+
+      **Root-caused 2026-07-25 via a real Perfetto trace** (`adb shell
+      perfetto`, config pushed as `-c -`/output as `-o -` to dodge
+      `/data/local/tmp` permission issues; analyzed locally with the
+      Python `perfetto` package's `TraceProcessor` SQL interface —
+      `pip install perfetto`, no Perfetto UI needed). The plain-`fprintf`
+      CPU timing above was misleading in isolation: the trace shows
+      neither thread is CPU-bound or wrongly blocked.
+        - SurfaceFlinger's own `vsyncCallback` ticks (ground truth from
+          the compositor) land ~16.5-17ms apart — genuine 60Hz; the
+          display/compositor itself is not the bottleneck.
+        - Our own `AChoreographer_frameCallback` (UI thread, `Thread-3`)
+          only arrives every ~47.7ms on average (≈21Hz) — roughly every
+          3rd real vsync. `Thread-3` spends 91% of the trace asleep
+          (`thread_state` = `S`), not busy; `TickerScheduler::tick()`
+          (`src/ui/ticker.cpp`) correctly calls
+          `FrameScheduler::scheduleFrame()` every tick while any
+          `AnimationController` is active, so the re-arm logic isn't the
+          bug either.
+        - The raster thread (`Thread-4`) does real work fast — main-flush
+          (draw-list encode) ~10-20ms, then `QueueSubmit`+`QueuePresentKHR`
+          together under 1ms (per Android's own `libvulkan` loader
+          atrace slices, not just our instrumentation) — then legitimately
+          sleeps ~10ms waiting for the next `FramePackage`.
+        - Conclusion: `vkQueueSubmit`/`vkQueuePresentKHR` returning fast
+          only proves the CPU handed work to the GPU quickly, not that the
+          GPU *finished* it — Vulkan submission is async by design.
+          Android's compositor throttles vsync-callback delivery to an
+          app based on how backed-up its buffer queue is; a ~3x throttle
+          with every CPU-side step measured as fast points at genuine GPU
+          hardware execution time (Adreno 619) exceeding one vsync period
+          for this scene — invisible to any CPU-side timer, ours or
+          Perfetto's ftrace, since neither observes actual GPU execution.
+      **Actually root-caused and fixed 2026-07-25**, same day, via GPU
+      timestamp queries: added temporary instrumentation calling
+      `CommandBuffer::getGPUExecutionTime()` — a real `campello_gpu`
+      feature (`VkQueryPool` timestamps, all 4 backends) that already
+      existed in the pinned `v0.20.0` tag but had never actually been
+      called from `campello_widgets`. Real GPU execution time measured a
+      steady ~10ms/frame — comfortably within budget, ruling out "slow
+      GPU" as the cause after all. Cross-referencing that against the
+      Perfetto trace's `queueBuffer`→`AcquireNextImageKHR` frame period
+      (which matched the observed ~40-50ms, not the 10ms GPU time) pointed
+      at something in between, and a full unfiltered per-frame timeline
+      dump found it: `CreateSwapchainKHR` firing on **literally every
+      frame** (155/155 `AcquireNextImageKHR` calls in one capture), each
+      costing 5-16ms plus cascading buffer teardown/reallocation via the
+      platform's Gralloc HAL (3 fresh `dequeueBuffer`→`allocateHelper`
+      calls per recreation). Root cause: `Device::submit()`
+      (`campello_gpu` `src/vulkan/device.cpp`) treated the advisory
+      `VK_SUBOPTIMAL_KHR` the same as the mandatory
+      `VK_ERROR_OUT_OF_DATE_KHR`, and on this physically-rotated tablet
+      (`currentTransform = ROTATE_90`) every present came back SUBOPTIMAL
+      forever, because this renderer deliberately requests
+      `preTransform = IDENTITY` (never pre-rotating content) whenever the
+      surface supports it, regardless of its actual current transform —
+      confirmed directly via a one-off diagnostic print
+      (`present result=SUBOPTIMAL -> recreating swapchain`,
+      `currentTransform=2 supportedTransforms=511`). Fixed in
+      `campello_gpu` (only recreate on `VK_ERROR_OUT_OF_DATE_KHR` — see
+      its own `CHANGELOG.md`) — confirmed `CreateSwapchainKHR` count drops
+      to 0 and gallery Images tab FPS: **~21fps → ~34-43fps**, more than
+      double, now bottlenecked by legitimate CPU/GPU work instead.
+
+      **Further improved same day**, chasing a *separate* regression
+      report ("buffer improvements, but no improvement seen" — UI 2ms,
+      raster 22ms, 35fps, matching the post-swapchain-fix baseline almost
+      exactly): `campello_gpu`'s new device-local-memory-preferring
+      `Device::createBuffer()` (see its own `CHANGELOG.md` `[Added]`) was
+      actually a small *net regression* on this Android/Adreno UMA
+      device — device-local memory there is already host-visible, so the
+      extra `findMemoryTypeIndex()` scanning was pure overhead with zero
+      benefit, ~8-13% slower per draw call across every category. Cached
+      `VkPhysicalDeviceMemoryProperties` once per `Device` instead of
+      re-querying per `createBuffer()` call (`campello_gpu`), recovering
+      about half the regression — but the *real* fix was noticing Metal's
+      `UniformBufferPool` already avoids this whole problem by pooling
+      vertex buffers across frames instead of allocating fresh ones per
+      draw, and Vulkan's `vulkan_draw_backend.cpp` simply never had the
+      same pattern. Ported it directly (`VulkanDrawBackend::
+      UniformBufferPool`, see this repo's own `CHANGELOG.md`
+      `[Unreleased] → Changed`): main-flush 14.50ms → 9.93ms (-31%),
+      FPS 42.9 → 44.9 — beating the pre-regression baseline outright,
+      since pooling also eliminates the *original* per-draw allocation
+      cost that predated this specific regression.
+
+      **Resolved 2026-07-30**, same investigation continued: `shadow`
+      draws turned out to be the real next lever, exactly as flagged
+      above. `getGPUExecutionTime()` (bracketing the whole command
+      buffer, sampled every 10th frame) showed a rock-solid ~10-12ms of
+      *real GPU hardware time* per frame regardless of scene — the same
+      on a near-blank Draw-tab canvas as on the much busier Images tab —
+      pointing at something fixed and shared rather than proportional to
+      visual complexity. Confirmed via A/B test (temporarily bypassing
+      `blurTexture()` entirely): the box-shadow Gaussian blur alone
+      accounted for roughly half of it. `blur.frag` is a naive per-tap
+      loop (up to 25 texture fetches/pixel/pass, two passes); since a
+      shadow's blurred output is inherently low-frequency, rendering it
+      at half resolution and upscaling via the existing linear-filtered
+      composite is visually indistinguishable while cutting the pixel
+      count 4x (`campello_widgets` `CHANGELOG.md`, `Renderer::
+      applyBoxShadow()`) — `GPU_EXEC` ~10-12ms → ~5-7ms.
+      Separately, `campello_gpu`'s traditional-render-pass-fallback path
+      (this device reports Vulkan 1.1, no dynamic rendering) was calling
+      `vkCreateRenderPass()`/`vkCreateFramebuffer()` fresh for every
+      single offscreen composite despite `buildRenderPass()` being a
+      pure function of 4 parameters with only 1-2 *distinct* combinations
+      ever occurring per frame — now cached (`campello_gpu`
+      `CHANGELOG.md`, `DeviceData::offscreenRenderPassCache`); confirmed
+      via the same GPU timestamps that this was real CPU/driver overhead
+      but not what was driving the `GPU_EXEC` floor (hardware timestamps
+      only capture GPU execution, not CPU-side object creation before
+      it). Finally, two swapchain-level changes in `campello_gpu`: raised
+      `kFramesInFlight` 2→3 (helps bursty/event-driven workloads like the
+      Draw tab; doesn't move a continuously-saturated ticker-driven one —
+      it's already submitting flat-out every vsync) and switched the
+      default present mode to `VK_PRESENT_MODE_MAILBOX_KHR` (falls back
+      to FIFO automatically if unsupported) — this alone eliminated the
+      entire `vkAcquireNextImageKHR`/"images in flight" fence wait, which
+      turned out to be ~10ms/frame of the CPU just blocked waiting for
+      the display to actually want the next image. Verified this doesn't
+      hit the classic MAILBOX battery-drain failure mode (an unbounded
+      render loop flooding the GPU with frames that get discarded before
+      ever being shown): `campello_widgets`' own frame requests are
+      already vsync-gated by `FrameScheduler`/the platform choreographer
+      callback independent of present mode — measured frame count stayed
+      ~60/sec under both FIFO and MAILBOX on this device.
+      **Final measured result on the Galaxy Tab S7 FE**: gallery Draw tab
+      26fps/37ms raster → **60fps/5.3ms raster** (Images tab: 60fps/6.5ms)
+      — roughly a 7x improvement in raster time from the session's
+      starting point, landing close to the original 1-3ms aspiration,
+      with what remains being genuine GPU shader/fillrate cost rather
+      than synchronization or driver overhead. All of the Vulkan-side
+      fixes apply equally to Linux (same shared `src/vulkan/*` source set
+      in `campello_gpu`, confirmed via `android.cmake`/`linux.cmake` both
+      compiling the identical file list) even though only Android
+      hardware was available to verify on directly this session.
+- [x] **Stylus/pencil input support** (found 2026-07-24, done same session)
+      — `PointerEvent` gained `tilt`/`tilt_orientation` fields alongside the
+      existing `pressure`; `PointerDeviceKind::stylus`/`invertedStylus` are
+      now actually populated by both platform bridges instead of never
+      being set. iOS (`src/ios/run_app.mm`): sources pressure from
+      `UITouch.force`/`maximumPossibleForce`, device kind from
+      `touch.type == UITouchTypePencil`, tilt from `altitudeAngle`,
+      orientation from `azimuthAngleInView:`. Android (`src/android/
+      run_app.cpp`): sources from `AMotionEvent_getPressure()`/
+      `getToolType()` (`AMOTION_EVENT_TOOL_TYPE_STYLUS`/`_ERASER`/
+      `_MOUSE`)/`getAxisValue(..., AXIS_TILT/_ORIENTATION, ...)`. New
+      `isPrecisePointer()` (`gesture_constants.hpp`) extends the existing
+      mouse/trackpad "precise pointer" gesture-slop treatment to stylus
+      input too (a pen tip isn't a fingertip). Verified live on a Galaxy
+      Tab S7 FE with an S Pen (both stylus and finger input checked); iOS
+      side is code-complete but not yet verified on a real iPad/Pencil.
+- [x] **Gallery: new "Draw" tab — freehand canvas widget** (found
+      2026-07-24, done same session) — new `RenderDrawSurface`
+      (`RenderImage` subclass + `GestureArenaMember`, mirroring
+      `RenderSlider`'s pointer-handling pattern) and `DrawSurface` widget.
+      Strokes accumulate into a persistent, dedicated GPU texture rather
+      than replaying the full stroke history every frame: only the new
+      segment since the last paint is submitted, via a new
+      `DrawSurfaceUpdateBeginCmd`/`EndCmd` draw-command bracket and
+      `Renderer::applyDrawSurfaceUpdate()` (uses `beginOffscreenPass(...,
+      preserve_content=true)`, a new parameter added to `IDrawBackend`
+      for exactly this — LOAD instead of CLEAR). Strokes are built from
+      stamped `drawCircle` calls rather than `drawLine`, since Vulkan
+      doesn't implement the latter. Pressure modulates stroke width
+      (mouse/finger reports a constant 1.0, so this degrades gracefully
+      without a pencil, per the fallback requirement below). Resizing the
+      canvas blits the old texture into the new one (`blit_source` on the
+      update command, via `CommandEncoder::copyTextureToTexture`) instead
+      of clearing it, cropping/extending like a real drawing app rather
+      than wiping the drawing. Root-caused and fixed a real bug found
+      during macOS testing along the way: `RenderImage::setTexture()`
+      calls `markNeedsPaint()` internally, which — when called from
+      *inside* `performPaint()` (where the base class had already cleared
+      the dirty flag for that frame) — permanently wedged the flag with
+      nothing left to ever clear it again, silently killing every future
+      repaint after the first. Fixed by moving the texture (re)allocation
+      into `performLayout()` instead, which always runs before paint in
+      the same frame. Verified interactively on macOS (mouse) and Android
+      (S Pen + finger, Galaxy Tab S7 FE).
 - [ ] **Tap unresponsive after prolonged infinite animation** (found
       2026-07-24) — in the gallery example, the Images tab (or any tab
       driving an infinite/looping animation) stops responding to taps after

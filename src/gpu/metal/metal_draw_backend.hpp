@@ -115,9 +115,13 @@ public:
     std::shared_ptr<campello_gpu::Texture> createOffscreenTexture(
         uint32_t width, uint32_t height) override;
 
+    std::shared_ptr<campello_gpu::Texture> createDedicatedOffscreenTexture(
+        uint32_t width, uint32_t height) override;
+
     std::shared_ptr<campello_gpu::RenderPassEncoder> beginOffscreenPass(
         std::shared_ptr<campello_gpu::Texture> tex,
-        campello_gpu::CommandEncoder&          encoder) override;
+        campello_gpu::CommandEncoder&          encoder,
+        bool                                    preserve_content = false) override;
 
     std::shared_ptr<campello_gpu::Texture> blurTexture(
         std::shared_ptr<campello_gpu::Texture> source,

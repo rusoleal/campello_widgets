@@ -383,8 +383,31 @@ namespace systems::leal::campello_widgets
 
         auto cmd_buffer = encoder->finish();
         markSubPhase("finish");
+
+        // TEMP diagnostic — measuring real GPU execution time (not just
+        // CPU-side submit cost) via campello_gpu's CommandBuffer::
+        // getGPUExecutionTime(), to find out whether the ~3x vsync-callback
+        // throttle measured via Perfetto on Android/Adreno is explained by
+        // actual GPU hardware time exceeding one frame budget. Retains a
+        // second shared_ptr so this doesn't disturb submit()'s own
+        // genCommandBuffer[gen] lifetime tracking. getGPUExecutionTime()
+        // blocks (VK_QUERY_RESULT_WAIT_BIT) until the timestamp is
+        // available, so this deliberately introduces a real GPU-vs-CPU
+        // sync point — acceptable for occasional diagnostic frames, never
+        // for every frame. Remove before committing.
+        static int s_gpu_time_frame = 0;
+        const bool measure_gpu_time = print_sub_phases && (++s_gpu_time_frame % 10 == 0);
+        std::shared_ptr<GPU::CommandBuffer> cmd_buffer_for_timing =
+            measure_gpu_time ? cmd_buffer : nullptr;
+
         device_->submit(std::move(cmd_buffer));
         markSubPhase("submit");
+
+        if (cmd_buffer_for_timing) {
+            const uint64_t gpu_ns = cmd_buffer_for_timing->getGPUExecutionTime();
+            std::fprintf(stderr, "  [raster] %-16s %6.3f ms (real GPU time)\n",
+                "GPU_EXEC", gpu_ns / 1e6);
+        }
 
         if (print_sub_phases)
             std::fprintf(stderr, "  [raster] %-16s %6.3f ms\n", "TOTAL",
@@ -587,6 +610,11 @@ namespace systems::leal::campello_widgets
         float    clip_shape_corner_r = 0.0f;
         bool     clip_shape_is_oval  = false;
 
+        // DrawSurface incremental-update accumulation state.
+        bool                       in_surface_update = false;
+        DrawList                   surface_update_cmds;
+        DrawSurfaceUpdateBeginCmd  surface_update_info{};
+
         // BackdropFilter child-skip counter (can nest theoretically).
         int backdrop_skip_depth = 0;
 
@@ -699,6 +727,23 @@ namespace systems::leal::campello_widgets
                     else
                     {
                         clip_shape_cmds.push_back(c);
+                    }
+                    return;
+                }
+
+                // ── DrawSurface incremental-update accumulation ──────────
+                if (in_surface_update)
+                {
+                    if constexpr (std::is_same_v<T, DrawSurfaceUpdateEndCmd>)
+                    {
+                        in_surface_update = false;
+                        applyDrawSurfaceUpdate(surface_update_info, surface_update_cmds,
+                                               rpe, target_view, viewport_width, viewport_height, dpr);
+                        surface_update_cmds.clear();
+                    }
+                    else
+                    {
+                        surface_update_cmds.push_back(c);
                     }
                     return;
                 }
@@ -829,6 +874,15 @@ namespace systems::leal::campello_widgets
                 {
                     // Mismatched end — ignore.
                 }
+                else if constexpr (std::is_same_v<T, DrawSurfaceUpdateBeginCmd>)
+                {
+                    in_surface_update  = true;
+                    surface_update_info = c;
+                }
+                else if constexpr (std::is_same_v<T, DrawSurfaceUpdateEndCmd>)
+                {
+                    // Mismatched end — ignore.
+                }
                 else if constexpr (std::is_same_v<T, CacheReplayBeginCmd>)
                 {
                     replay_region_stack.push_back({c.region_id, size_t{0}});
@@ -922,7 +976,12 @@ namespace systems::leal::campello_widgets
         const uint32_t th = static_cast<uint32_t>(std::ceil(cmd.bounds.height * dpr));
         if (tw == 0 || th == 0) return;
 
-        auto child_tex = draw_backend_->createOffscreenTexture(tw, th);
+        // See applyClipShape()'s identical comment: a texture that will be
+        // stashed in shader_mask_gpu_cache_ for future identity-replay
+        // reuse must not come from the backend's size-keyed rotating pool.
+        auto child_tex = (replay_region_id != nullptr)
+            ? draw_backend_->createDedicatedOffscreenTexture(tw, th)
+            : draw_backend_->createOffscreenTexture(tw, th);
         if (!child_tex) return;
 
         // End the current main render pass.
@@ -1048,7 +1107,16 @@ namespace systems::leal::campello_widgets
         const uint32_t th = static_cast<uint32_t>(std::ceil(bounds.height * dpr));
         if (tw == 0 || th == 0) return;
 
-        auto child_tex = draw_backend_->createOffscreenTexture(tw, th);
+        // A texture that's about to be stashed in clip_shape_gpu_cache_ for
+        // future identity-replay reuse must not come from the backend's
+        // size-keyed rotating pool (createOffscreenTexture()) — see
+        // IDrawBackend::createDedicatedOffscreenTexture()'s doc comment.
+        // Content that WON'T be cached (replay_region_id == nullptr, i.e.
+        // this is a fresh, non-replayed record) keeps using the pool, which
+        // is exactly the case it's designed for.
+        auto child_tex = (replay_region_id != nullptr)
+            ? draw_backend_->createDedicatedOffscreenTexture(tw, th)
+            : draw_backend_->createOffscreenTexture(tw, th);
         if (!child_tex) return;
 
         rpe->end();
@@ -1160,11 +1228,35 @@ namespace systems::leal::campello_widgets
         const float padded_w = bounds.width  + 2.0f * margin;
         const float padded_h = bounds.height + 2.0f * margin;
 
-        const uint32_t tw = static_cast<uint32_t>(std::ceil(padded_w * dpr));
-        const uint32_t th = static_cast<uint32_t>(std::ceil(padded_h * dpr));
+        // Render (fill + both blur passes) at reduced resolution for
+        // softer shadows — a box shadow's blurred output is inherently
+        // low-frequency content, so halving the working resolution (and
+        // halving sigma to match, keeping the same blur extent relative to
+        // the shadow's logical size — see the comment at the blurTexture()
+        // call below) is visually indistinguishable once linearly upsampled
+        // back to `bounds` at composite time, but cuts the pixel count
+        // blur.frag's O(sigma) per-pixel tap loop runs over by 4x. Found
+        // via a real device measurement (Galaxy Tab S7 FE, Adreno): the
+        // Gaussian blur passes alone accounted for roughly half of this
+        // renderer's entire per-frame GPU execution time (measured via
+        // CommandBuffer::getGPUExecutionTime()) on a typical UI frame with
+        // ~5 box-shadows. Small/crisp shadows (sigma below the threshold)
+        // skip downsampling entirely — the softening only becomes
+        // perceptually free once the blur itself is already wide enough to
+        // dominate over the resolution loss.
+        const float downsample    = (sigma >= 1.5f) ? 2.0f : 1.0f;
+        const float effective_dpr = dpr / downsample;
+
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(padded_w * effective_dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(padded_h * effective_dpr));
         if (tw == 0 || th == 0) return;
 
-        auto shadow_tex = draw_backend_->createOffscreenTexture(tw, th);
+        // See applyClipShape()'s identical comment: a texture that will be
+        // stashed in shadow_gpu_cache_ for future identity-replay reuse
+        // must not come from the backend's size-keyed rotating pool.
+        auto shadow_tex = (replay_region_id != nullptr)
+            ? draw_backend_->createDedicatedOffscreenTexture(tw, th)
+            : draw_backend_->createOffscreenTexture(tw, th);
         if (!shadow_tex) return;
 
         rpe->end();
@@ -1189,8 +1281,8 @@ namespace systems::leal::campello_widgets
             // (invisible at dpr==1, but shrunk-and-shifted at dpr>1, e.g.
             // iOS's Retina displays).
             Matrix4 dpr_scale  = Matrix4::identity();
-            dpr_scale.data[0]  = dpr;
-            dpr_scale.data[5]  = dpr;
+            dpr_scale.data[0]  = effective_dpr;
+            dpr_scale.data[5]  = effective_dpr;
             const Rect     texture_clip = Rect::fromLTWH(0.0f, 0.0f, padded_w, padded_h);
             const Rect     local_bounds = Rect::fromLTWH(margin, margin, bounds.width, bounds.height);
             if (rr.radius_x > 0.0f || rr.radius_y > 0.0f)
@@ -1208,7 +1300,16 @@ namespace systems::leal::campello_widgets
 
             shadow_rpe->end();
 
-            blurred = draw_backend_->blurTexture(shadow_tex, sigma, sigma, *frame_encoder_);
+            // Scale sigma down by the same factor the texture resolution
+            // was reduced by — blur.frag's kernel is expressed in texels of
+            // *this* texture, so halving the texture's texel density while
+            // leaving sigma unchanged would make the blur look half as wide
+            // (in logical terms) as intended. Scaling both together keeps
+            // sigma-as-a-fraction-of-the-padded-region identical to the
+            // non-downsampled path, so the result is the same blur, just
+            // computed over fewer texels.
+            const float blur_sigma = sigma / downsample;
+            blurred = draw_backend_->blurTexture(shadow_tex, blur_sigma, blur_sigma, *frame_encoder_);
 
             draw_backend_->setViewportSize(viewport_width, viewport_height);
         }
@@ -1236,6 +1337,23 @@ namespace systems::leal::campello_widgets
                 shadow_gpu_cache_[cache_key] = std::move(entry);
             }
         }
+    }
+
+    void Renderer::evictReplayCacheEntries(const void* region_id) noexcept
+    {
+        auto eraseByRegion = [&](auto& cache)
+        {
+            for (auto it = cache.begin(); it != cache.end(); )
+            {
+                if (it->first.first == region_id)
+                    it = cache.erase(it);
+                else
+                    ++it;
+            }
+        };
+        eraseByRegion(clip_shape_gpu_cache_);
+        eraseByRegion(shader_mask_gpu_cache_);
+        eraseByRegion(shadow_gpu_cache_);
     }
 
     void Renderer::evictStaleGpuCaches()
@@ -1307,6 +1425,72 @@ namespace systems::leal::campello_widgets
         desc.colorAttachments = {ca};
 
         return frame_encoder_->beginRenderPass(desc);
+    }
+
+    void Renderer::applyDrawSurfaceUpdate(
+        const DrawSurfaceUpdateBeginCmd&                   cmd,
+        const DrawList&                                    child_cmds,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
+        float dpr)
+    {
+        if (!draw_backend_ || !frame_encoder_ || !cmd.target) return;
+        if (child_cmds.empty() && !cmd.blit_source) return;
+
+        const uint32_t tw = cmd.target->getWidth();
+        const uint32_t th = cmd.target->getHeight();
+        if (tw == 0 || th == 0) return;
+
+        rpe->end();
+
+        // Resize path: copy the previous (differently-sized) texture's
+        // content into this one's top-left corner before drawing anything
+        // else, so a RenderDrawSurface resize crops/extends the canvas
+        // instead of wiping it — see DrawSurfaceUpdateBeginCmd's doc
+        // comment. Must happen before beginOffscreenPass() below, since a
+        // copy command can't be recorded inside an active render pass.
+        if (cmd.blit_source)
+        {
+            const uint32_t sw = cmd.blit_source->getWidth();
+            const uint32_t sh = cmd.blit_source->getHeight();
+            const uint32_t copy_w = std::min(sw, tw);
+            const uint32_t copy_h = std::min(sh, th);
+            if (copy_w > 0 && copy_h > 0)
+            {
+                frame_encoder_->copyTextureToTexture(
+                    cmd.blit_source, 0, GPU::Offset3D{0, 0, 0},
+                    cmd.target, 0, GPU::Offset3D{0, 0, 0},
+                    GPU::Extent3D{copy_w, copy_h, 1});
+            }
+        }
+
+        // preserve_content = !clear_first: an ongoing stroke session only
+        // submits the new segments since the last update, relying on the
+        // texture's existing content (all previously baked strokes, or the
+        // blit just performed above) being preserved rather than cleared —
+        // see DrawSurfaceUpdateBeginCmd's doc comment.
+        auto surface_rpe = draw_backend_->beginOffscreenPass(
+            cmd.target, *frame_encoder_, /*preserve_content=*/!cmd.clear_first);
+        if (surface_rpe)
+        {
+            draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
+
+            auto surface_view = cmd.target->createView(draw_backend_->offscreenPixelFormat(), 1);
+            flushDrawList(child_cmds, surface_rpe, surface_view,
+                          static_cast<float>(tw), static_cast<float>(th), dpr,
+                          /*backdrop_pass=*/false);
+            surface_rpe->end();
+
+            draw_backend_->setViewportSize(viewport_width, viewport_height);
+        }
+
+        // No composite step — unlike ShaderMask/ClipShape, the caller
+        // displays cmd.target itself via a normal DrawImageCmd emitted
+        // right after this bracket. Just resume the pass this call
+        // interrupted.
+        rpe = restartRenderPass(target_view);
     }
 
     // ------------------------------------------------------------------

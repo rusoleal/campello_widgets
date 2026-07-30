@@ -3,6 +3,7 @@
 #include <campello_widgets/ui/draw_backend.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
+#include <array>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -123,6 +124,8 @@ public:
         std::swap(prev_frame_buffers_,   frame_buffers_);
         std::swap(prev_frame_textures_,  frame_textures_);
         std::swap(prev_frame_views_,     frame_views_);
+        colored_quad_vertex_pool_.beginFrame();
+        quad_vertex_pool_.beginFrame();
         setViewportSize(w, h);
     }
 
@@ -160,7 +163,8 @@ public:
 
     std::shared_ptr<campello_gpu::RenderPassEncoder> beginOffscreenPass(
         std::shared_ptr<campello_gpu::Texture> tex,
-        campello_gpu::CommandEncoder&          encoder) override;
+        campello_gpu::CommandEncoder&          encoder,
+        bool                                    preserve_content = false) override;
 
     std::shared_ptr<campello_gpu::Texture> blurTexture(
         std::shared_ptr<campello_gpu::Texture> source,
@@ -185,6 +189,44 @@ public:
 
     // Per-vertex projected position + UV — mirrors Metal's ProjectedCorner.
     struct QuadCorner { float x, y, w, u, v; };
+
+    // ------------------------------------------------------------------
+    // Uniform buffer pool — mirrors MetalDrawBackend::UniformBufferPool
+    // exactly (see its doc comment). drawFilledQuad/drawTexturedQuad/
+    // drawClipShapeComposite each called Device::createBuffer() — a real
+    // VkBuffer + vkAllocateMemory, not just a memcpy — on every single
+    // draw, purely to hold six vertices' worth of per-draw geometry.
+    // Found costing ~8-13% of per-draw-call time on Android/Adreno (real
+    // device measurement, Galaxy Tab S7 FE): this pool amortizes the
+    // allocation the same way Metal's already does — each draw still gets
+    // fresh contents via Buffer::upload(), but the underlying GPU buffer
+    // objects are reused round-robin across a small ring of frame
+    // "generations" instead of being allocated from scratch every time.
+    // kGenerations=4 gives comfortable margin over the 2-3 generations
+    // this backend's own frame_buffers_/prev_frame_buffers_/
+    // prev2_frame_buffers_ retention scheme already proves necessary for
+    // safety (see setViewport()'s doc comment) — a slot is only reused
+    // once every kGenerations beginFrame() calls, by which point the GPU
+    // is long done with whatever it last read from that slot. Pooled
+    // buffers are NOT also pushed into frame_buffers_ — the pool itself
+    // owns them permanently, so there's nothing to retain-then-free.
+    // ------------------------------------------------------------------
+
+    class UniformBufferPool
+    {
+    public:
+        std::shared_ptr<campello_gpu::Buffer> acquire(
+            campello_gpu::Device& device, uint64_t size, const void* data);
+
+        // Advances to the next ring slot; called once per frame.
+        void beginFrame() noexcept;
+
+    private:
+        static constexpr size_t kGenerations = 4;
+        std::array<std::vector<std::shared_ptr<campello_gpu::Buffer>>, kGenerations> generations_;
+        std::array<size_t, kGenerations>                                              next_index_{};
+        size_t                                                                        current_generation_ = 0;
+    };
 
 private:
     void applyScissor(
@@ -235,6 +277,12 @@ private:
     std::shared_ptr<campello_gpu::PipelineLayout>  rrect_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  quad_layout_;
     std::shared_ptr<campello_gpu::Sampler>          linear_sampler_;
+    // Two pools, one per fixed vertex-struct size — see UniformBufferPool's
+    // doc comment. colored_quad_vertex_pool_ backs drawFilledQuad()'s
+    // ColoredQuadVertex; quad_vertex_pool_ backs drawTexturedQuad()'s and
+    // drawClipShapeComposite()'s (shared) QuadVertex.
+    UniformBufferPool colored_quad_vertex_pool_;
+    UniformBufferPool quad_vertex_pool_;
     // Per-frame resources for the frame currently being recorded.
     std::vector<std::shared_ptr<campello_gpu::Buffer>>      frame_buffers_;
     std::vector<std::shared_ptr<campello_gpu::Texture>>     frame_textures_;

@@ -543,6 +543,40 @@ namespace {
     return (f > 0.0f) ? f : 1.0f;
 }
 
+- (Widgets::PointerDeviceKind)deviceKindForTouch:(UITouch*)touch
+{
+    return touch.type == UITouchTypePencil
+        ? Widgets::PointerDeviceKind::stylus
+        : Widgets::PointerDeviceKind::touch;
+}
+
+// altitudeAngle/azimuthAngleInView: are only meaningful for an actual Apple
+// Pencil touch (UITouchTypePencil) — for anything else they either read 0
+// or aren't reported at all, which already matches this codebase's "0.0 ==
+// no tilt data" convention (see PointerEvent::tilt's doc comment), so no
+// separate has-tilt check is needed before calling these.
+
+- (float)tiltForTouch:(UITouch*)touch
+{
+    if (touch.type != UITouchTypePencil) return 0.0f;
+    // UITouch.altitudeAngle: 0 = flat against the surface, pi/2 =
+    // perpendicular to it. PointerEvent::tilt uses the opposite sense (0 =
+    // perpendicular, pi/2 = flat, matching Android's AMOTION_EVENT_AXIS_TILT
+    // convention) — take the complement.
+    return (float)(M_PI_2 - touch.altitudeAngle);
+}
+
+- (float)tiltOrientationForTouch:(UITouch*)touch
+{
+    if (touch.type != UITouchTypePencil) return 0.0f;
+    // UITouch.azimuthAngleInView: returns 0..2*pi, measured clockwise from
+    // the view's positive x axis. PointerEvent::tilt_orientation uses
+    // -pi..pi — rebase into that range.
+    float azimuth = (float)[touch azimuthAngleInView:self];
+    if (azimuth > (float)M_PI) azimuth -= (float)(2.0 * M_PI);
+    return azimuth;
+}
+
 // ------------------------------------------------------------------
 // UIResponder touch callbacks
 // ------------------------------------------------------------------
@@ -554,10 +588,13 @@ namespace {
     for (UITouch* touch in touches)
     {
         _dispatcher->handlePointerEvent({
-            Widgets::PointerEventKind::down,
-            [self acquirePointerIdForTouch:touch],
-            [self offsetForTouch:touch],
-            [self pressureForTouch:touch]});
+            .kind        = Widgets::PointerEventKind::down,
+            .pointer_id  = [self acquirePointerIdForTouch:touch],
+            .position    = [self offsetForTouch:touch],
+            .pressure    = [self pressureForTouch:touch],
+            .device_kind = [self deviceKindForTouch:touch],
+            .tilt        = [self tiltForTouch:touch],
+            .tilt_orientation = [self tiltOrientationForTouch:touch]});
     }
 }
 
@@ -568,10 +605,13 @@ namespace {
     for (UITouch* touch in touches)
     {
         _dispatcher->handlePointerEvent({
-            Widgets::PointerEventKind::move,
-            [self acquirePointerIdForTouch:touch],
-            [self offsetForTouch:touch],
-            [self pressureForTouch:touch]});
+            .kind        = Widgets::PointerEventKind::move,
+            .pointer_id  = [self acquirePointerIdForTouch:touch],
+            .position    = [self offsetForTouch:touch],
+            .pressure    = [self pressureForTouch:touch],
+            .device_kind = [self deviceKindForTouch:touch],
+            .tilt        = [self tiltForTouch:touch],
+            .tilt_orientation = [self tiltOrientationForTouch:touch]});
     }
 }
 
@@ -582,10 +622,11 @@ namespace {
     for (UITouch* touch in touches)
     {
         _dispatcher->handlePointerEvent({
-            Widgets::PointerEventKind::up,
-            [self acquirePointerIdForTouch:touch],
-            [self offsetForTouch:touch],
-            0.0f});
+            .kind        = Widgets::PointerEventKind::up,
+            .pointer_id  = [self acquirePointerIdForTouch:touch],
+            .position    = [self offsetForTouch:touch],
+            .pressure    = 0.0f,
+            .device_kind = [self deviceKindForTouch:touch]});
         [self releasePointerIdForTouch:touch];
     }
 }
@@ -597,10 +638,11 @@ namespace {
     for (UITouch* touch in touches)
     {
         _dispatcher->handlePointerEvent({
-            Widgets::PointerEventKind::cancel,
-            [self acquirePointerIdForTouch:touch],
-            [self offsetForTouch:touch],
-            0.0f});
+            .kind        = Widgets::PointerEventKind::cancel,
+            .pointer_id  = [self acquirePointerIdForTouch:touch],
+            .position    = [self offsetForTouch:touch],
+            .pressure    = 0.0f,
+            .device_kind = [self deviceKindForTouch:touch]});
         [self releasePointerIdForTouch:touch];
     }
 }

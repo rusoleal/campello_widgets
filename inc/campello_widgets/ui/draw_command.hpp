@@ -254,6 +254,44 @@ namespace systems::leal::campello_widgets
     struct CacheReplayEndCmd {};
 
     // ------------------------------------------------------------------
+    // DrawSurface incremental-update commands
+    // ------------------------------------------------------------------
+
+    /**
+     * @brief Marks the start of an incremental update to a persistent
+     * drawing surface's texture (see `RenderDrawSurface`).
+     *
+     * Unlike ShaderMask/ClipRRect's offscreen brackets — which capture
+     * their children fresh into a throwaway texture every single frame —
+     * commands between this and `DrawSurfaceUpdateEndCmd` are rendered
+     * into `target` with the texture's *existing* content preserved
+     * (`clear_first == false`) rather than cleared, so only the newly
+     * added strokes since the last update need to be submitted. `target`
+     * is then displayed like any other texture via a normal `DrawImageCmd`
+     * emitted right after this bracket — the Renderer never composites it
+     * itself.
+     *
+     * `blit_source`, when set, is a previous (differently-sized) surface
+     * texture whose content should be copied into `target`'s top-left
+     * corner before any of this bracket's draw commands run — used when
+     * a `RenderDrawSurface` is resized: a GPU texture can't be resized in
+     * place, so a fresh one is allocated, but the prior strokes shouldn't
+     * simply vanish (matches how a real drawing app crops/extends a
+     * canvas on resize rather than clearing it). Mutually exclusive with
+     * `clear_first` in practice — a caller that's blitting prior content
+     * in never also wants it cleared.
+     */
+    struct DrawSurfaceUpdateBeginCmd
+    {
+        std::shared_ptr<campello_gpu::Texture> target;
+        bool                                    clear_first = false;
+        std::shared_ptr<campello_gpu::Texture> blit_source;
+    };
+
+    /** @brief Marks the end of a `DrawSurfaceUpdateBeginCmd` region. */
+    struct DrawSurfaceUpdateEndCmd {};
+
+    // ------------------------------------------------------------------
     // Variant
     // ------------------------------------------------------------------
 
@@ -303,7 +341,11 @@ namespace systems::leal::campello_widgets
 
         // Cache-replay markers (begin/end pair wrapping a verbatim replay)
         CacheReplayBeginCmd,
-        CacheReplayEndCmd
+        CacheReplayEndCmd,
+
+        // DrawSurface incremental update (begin/end pair wrapping new strokes)
+        DrawSurfaceUpdateBeginCmd,
+        DrawSurfaceUpdateEndCmd
     >;
 
     using DrawList = std::vector<DrawCommand>;
