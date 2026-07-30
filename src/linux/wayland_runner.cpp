@@ -31,7 +31,7 @@
 #include <campello_gpu/platform/linux_surface.hpp>
 
 #include "ibus_ime.hpp"
-#include "vulkan_draw_backend.hpp"
+#include "../gpu/vulkan/vulkan_draw_backend.hpp"
 
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>

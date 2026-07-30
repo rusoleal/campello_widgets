@@ -500,7 +500,8 @@
       "Bash(sips -g pixelWidth -g pixelHeight /dev/null)",
       "Bash(cmake -S . -B build/darwin-debug-test -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug)",
       "Bash(export LC_NUMERIC=C)",
-      "Bash(sort -k1,1)"
+      "Bash(sort -k1,1)",
+      "WebFetch(domain:productionresultssa10.blob.core.windows.net)"
     ]
   }
 }
