@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-05
+
+### Added
+
+- **`EmbeddedApp`** (`inc/campello_widgets/linux/embedded_app.hpp`, `src/linux/embedded_app.cpp`) — a headless entry point for hosting a widget tree without an owned window, surface, or event loop, for embedding this library inside a host that already owns its GPU device and its own render loop (the motivating case: a Wayland compositor drawing a dashboard/overlay on top of other content it composites itself). Takes an existing `Device` + root widget + initial size; `renderFrame(target, w, h)` renders into whatever `TextureView` the host chooses, not necessarily a swapchain image. `pointerDispatcher()`/`focusManager()` are exposed so the host forwards its own input events; `tick()`/`forceRefresh()` let the host keep animations advancing or force a redraw on frames it doesn't otherwise draw. No new capability was needed in `Renderer`/`VulkanDrawBackend` — both were already window-agnostic; this just adds the missing "don't create a window at all" entry point, generalizing the pattern macOS's `runApp(device, ...)` overload already documents for device sharing.
+
+### Fixed
+
+- `docker/Dockerfile` was missing `libdecor-0-dev`, which the file's own stated purpose ("reproducing the Linux CI environment locally") requires — the real CI workflow already installs it. Drift between the two; found because it broke a from-scratch Docker build.
+
 ## [0.5.0] - 2026-07-30
 
 ### Added
