@@ -33,6 +33,7 @@ RUN apt-get update && apt-get install -y \
     libfontconfig1-dev \
     libwayland-dev \
     libxkbcommon-dev \
+    libdecor-0-dev \
     libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
