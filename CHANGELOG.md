@@ -13,9 +13,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`EmbeddedApp`** (`inc/campello_widgets/linux/embedded_app.hpp`, `src/linux/embedded_app.cpp`) — a headless entry point for hosting a widget tree without an owned window, surface, or event loop, for embedding this library inside a host that already owns its GPU device and its own render loop (the motivating case: a Wayland compositor drawing a dashboard/overlay on top of other content it composites itself). Takes an existing `Device` + root widget + initial size; `renderFrame(target, w, h)` renders into whatever `TextureView` the host chooses, not necessarily a swapchain image. `pointerDispatcher()`/`focusManager()` are exposed so the host forwards its own input events; `tick()`/`forceRefresh()` let the host keep animations advancing or force a redraw on frames it doesn't otherwise draw. No new capability was needed in `Renderer`/`VulkanDrawBackend` — both were already window-agnostic; this just adds the missing "don't create a window at all" entry point, generalizing the pattern macOS's `runApp(device, ...)` overload already documents for device sharing.
 
+### Changed
+
+- **`campello_gpu` dependency bumped `v0.21.0` → `v0.22.0`** (`dependencies/campello_gpu.cmake`) — brings in `Device::createTextureFromDmaBuf()`/`getSupportedDmaBufModifiers()`/`getDrmDeviceNode()` (Linux/Vulkan dma-buf import, the primitive `campello_native`'s compositor needs) and a portable-build fix (`<cstdint>` was missing in `begin_render_pass_descriptor.hpp`, latent on GCC 13, broke on GCC 16). See `campello_gpu`'s own `CHANGELOG.md` (v0.21.1/v0.22.0) for the full list, including an unrelated Metal ray-tracing bind-group crash fix.
+
 ### Fixed
 
 - `docker/Dockerfile` was missing `libdecor-0-dev`, which the file's own stated purpose ("reproducing the Linux CI environment locally") requires — the real CI workflow already installs it. Drift between the two; found because it broke a from-scratch Docker build.
+
+### Tests
+
+- **`tests/platform/test_embedded_app.cpp`** — `EmbeddedApp` shipped with zero coverage originally; this closes that gap with 4 real integration tests (require `BUILD_INTEGRATION_TESTS`, a real GPU — `Device::createDefaultDevice(nullptr)` is headless, so no display needed, runs fine against CI's own lavapipe environment): first-frame-always-draws / idle-frame-draws-nothing (mirrors `Renderer::buildFrame()`'s `std::nullopt`-on-no-change contract), `forceRefresh()` overriding that, tick/input-forwarding don't crash, and — the one that actually matters most — a real pixel readback confirming a red `ColoredBox` root actually lands as red pixels in the caller-provided texture, not just "the call didn't crash." Verified passing directly (`docker/Dockerfile`'s CI-repro container): 4/4 pass, and the full universal suite (501 tests) still passes with the `campello_gpu` bump above (0 failures).
 
 ## [0.5.0] - 2026-07-30
 
