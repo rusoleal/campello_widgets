@@ -255,7 +255,8 @@ private:
         float                                     opacity,
         const Rect&                               clip,
         campello_gpu::RenderPassEncoder&          encoder,
-        std::shared_ptr<campello_gpu::BindGroup>  cached_bind_group = nullptr);
+        std::shared_ptr<campello_gpu::BindGroup>  cached_bind_group = nullptr,
+        bool                                      persistent        = false);
 
     std::shared_ptr<campello_gpu::Device>         device_;
     Color                                          bg_color_;
@@ -265,6 +266,7 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  colored_quad_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rrect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  quad_aa_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  clip_shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  blur_pipeline_;
     // Intermediate textures for the two-pass Gaussian blur.

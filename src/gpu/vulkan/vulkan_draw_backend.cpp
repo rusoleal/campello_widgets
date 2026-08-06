@@ -60,6 +60,16 @@ struct alignas(16) QuadUniforms
     float _pad;
 };
 
+// Push constants for the axis-aligned fast path — no vertex buffer needed.
+struct alignas(16) QuadAAUniforms
+{
+    float viewport[2];  // physical pixel size
+    float opacity;
+    float _pad;
+    float pos[4];       // pixel-space rect: x, y, w, h
+    float uv[4];        // texture UV rect: u0, v0, u1, v1
+};
+
 // Per-vertex data uploaded in a vertex buffer — (x,y,w) projected pixel
 // position with perspective-correct w, plus (u,v) texture coordinate.
 // Matches layout(location=0) in vec3 in_posw / layout(location=1) in vec2 in_uv.
@@ -366,6 +376,36 @@ VulkanDrawBackend::VulkanDrawBackend(
         if (!quad_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] quad_pipeline_ creation FAILED\n");
     }
 
+    // Axis-aligned quad pipeline — same fragment shader as quad, but vertex
+    // shader derives positions and UVs from push constants (no vertex buffer).
+    // Used for all normal UI image/text draws; falls back to quad_pipeline_
+    // for perspective-rotated quads where w≠1 or edges aren't grid-aligned.
+    {
+        auto aa_vert = loadSpv(device_, shaders::kquad_aa_vert_spv, shaders::kquad_aa_vert_spvSize);
+        auto aa_frag = loadSpv(device_, shaders::kquad_frag_spv,    shaders::kquad_frag_spvSize);
+        if (aa_vert && aa_frag)
+        {
+            GPU::RenderPipelineDescriptor desc{};
+            desc.layout      = quad_layout_;
+            desc.topology    = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode    = GPU::CullMode::none;
+            desc.frontFace   = GPU::FrontFace::ccw;
+
+            desc.vertex.module     = aa_vert;
+            desc.vertex.entryPoint = "main";
+            // No vertex.buffers — vertices come entirely from push constants.
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = aa_frag;
+            frag.entryPoint = "main";
+            frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+            desc.fragment   = frag;
+
+            quad_aa_pipeline_ = device_->createRenderPipeline(desc);
+            if (!quad_aa_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] quad_aa_pipeline_ creation FAILED\n");
+        }
+    }
+
     // ClipShape pipeline — composites ClipRRect/ClipOval offscreen child
     // texture back to the main pass through an SDF rounded-rect/oval mask.
     // Reuses quad_layout_ (same BGL: texture@1, sampler@2; uniform data rides a push constant).
@@ -420,9 +460,9 @@ VulkanDrawBackend::VulkanDrawBackend(
         }
     }
 
-    std::fprintf(stderr, "[VulkanDrawBackend] pipelines: rect=%d cq=%d rrect=%d quad=%d clip=%d blur=%d\n",
+    std::fprintf(stderr, "[VulkanDrawBackend] pipelines: rect=%d cq=%d rrect=%d quad=%d quad_aa=%d clip=%d blur=%d\n",
         !!rect_pipeline_, !!colored_quad_pipeline_, !!rrect_pipeline_,
-        !!quad_pipeline_, !!clip_shape_pipeline_, !!blur_pipeline_);
+        !!quad_pipeline_, !!quad_aa_pipeline_, !!clip_shape_pipeline_, !!blur_pipeline_);
 }
 
 // ---------------------------------------------------------------------------
@@ -547,24 +587,54 @@ void VulkanDrawBackend::drawRect(
         return;
     }
 
-    // Fill: use the colored_quad_pipeline_ with actual per-vertex corner positions
-    // so that rotation/perspective transforms render as genuine quads, not AABBs.
+    // Fill: detect whether the transform is axis-aligned (translation + uniform
+    // scale only — all corners have w≈1 and the edges are horizontal/vertical).
+    // This is always true for normal widget-tree transforms. In that case reuse
+    // rect_pipeline_ with push constants — no vertex buffer needed, matching
+    // the speed of drawRRect. Only fall back to colored_quad_pipeline_ for
+    // genuinely rotated or perspective-projected rects.
+    const bool is_axis_aligned =
+        std::abs(c00.y() - c10.y()) < 0.5f &&
+        std::abs(c01.y() - c11.y()) < 0.5f &&
+        std::abs(c00.x() - c01.x()) < 0.5f &&
+        std::abs(c10.x() - c11.x()) < 0.5f;
+
+    if (is_axis_aligned) {
+        RectUniforms u{};
+        u.rect[0] = min_x; u.rect[1] = min_y; u.rect[2] = w; u.rect[3] = h;
+        u.color[0] = cmd.paint.color.r;
+        u.color[1] = cmd.paint.color.g;
+        u.color[2] = cmd.paint.color.b;
+        u.color[3] = cmd.paint.color.a;
+        u.viewport[0] = vp_w_;
+        u.viewport[1] = vp_h_;
+
+        applyScissor(clip, encoder);
+        encoder.setPipeline(rect_pipeline_);
+        encoder.setPushConstants(
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(RectUniforms), &u);
+        encoder.draw(6);
+        return;
+    }
+
+    // Rotated / perspective quad — upload per-vertex projected positions.
     if (!colored_quad_pipeline_) return;
 
-    // 6 vertices: two triangles covering the transformed quad (CCW winding)
     struct ColoredQuadVertex { float x, y, w; };
     ColoredQuadVertex verts[6] = {
-        { c00.x(), c00.y(), c00.w() },  // TL
-        { c10.x(), c10.y(), c10.w() },  // TR
-        { c01.x(), c01.y(), c01.w() },  // BL
-        { c01.x(), c01.y(), c01.w() },  // BL
-        { c10.x(), c10.y(), c10.w() },  // TR
-        { c11.x(), c11.y(), c11.w() },  // BR
+        { c00.x(), c00.y(), c00.w() },
+        { c10.x(), c10.y(), c10.w() },
+        { c01.x(), c01.y(), c01.w() },
+        { c01.x(), c01.y(), c01.w() },
+        { c10.x(), c10.y(), c10.w() },
+        { c11.x(), c11.y(), c11.w() },
     };
     auto vbuf = colored_quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
     if (!vbuf) return;
 
-    // Uniform: RectUniforms layout — only color and viewport are read by the shader.
     RectUniforms u{};
     u.color[0] = cmd.paint.color.r;
     u.color[1] = cmd.paint.color.g;
@@ -744,12 +814,60 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     float                           opacity,
     const Rect&                     clip,
     GPU::RenderPassEncoder&         encoder,
-    std::shared_ptr<GPU::BindGroup> cached_bind_group)
+    std::shared_ptr<GPU::BindGroup> cached_bind_group,
+    bool                            persistent)
 {
     if (!quad_pipeline_ || !quad_bgl_ || !linear_sampler_) return nullptr;
     if (!texture) return nullptr;
 
-    // Two CCW triangles: (00,10,01), (01,10,11)
+    std::shared_ptr<GPU::BindGroup> bind_group;
+    if (cached_bind_group) {
+        bind_group = cached_bind_group;
+    } else {
+        GPU::BindGroupDescriptor bg_desc{};
+        bg_desc.layout  = quad_bgl_;
+        bg_desc.entries = {
+            { 1, texture },
+            { 2, linear_sampler_ }
+        };
+        bind_group = device_->createBindGroup(bg_desc, persistent);
+        if (!bind_group) return nullptr;
+    }
+
+    applyScissor(clip, encoder);
+    encoder.setBindGroup(0, bind_group);
+
+    // Axis-aligned fast path: edges are horizontal/vertical, so the quad is
+    // fully described by two rects (position + UV). Skip the vertex pool
+    // acquire and vertex buffer bind — push constants only.
+    const bool is_axis_aligned = quad_aa_pipeline_ &&
+        std::abs(c00.y - c10.y) < 0.5f &&
+        std::abs(c01.y - c11.y) < 0.5f &&
+        std::abs(c00.x - c01.x) < 0.5f &&
+        std::abs(c10.x - c11.x) < 0.5f &&
+        std::abs(c00.u - c01.u) < 1e-4f &&
+        std::abs(c10.u - c11.u) < 1e-4f &&
+        std::abs(c00.v - c10.v) < 1e-4f &&
+        std::abs(c01.v - c11.v) < 1e-4f;
+
+    if (is_axis_aligned) {
+        QuadAAUniforms u{};
+        u.viewport[0] = vp_w_;
+        u.viewport[1] = vp_h_;
+        u.opacity     = opacity;
+        u.pos[0] = std::min(c00.x, c01.x);
+        u.pos[1] = std::min(c00.y, c10.y);
+        u.pos[2] = std::max(c10.x, c11.x) - u.pos[0];
+        u.pos[3] = std::max(c01.y, c11.y) - u.pos[1];
+        u.uv[0]  = c00.u; u.uv[1] = c00.v;
+        u.uv[2]  = c11.u; u.uv[3] = c11.v;
+        encoder.setPipeline(quad_aa_pipeline_);
+        encoder.setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(QuadAAUniforms), &u);
+        encoder.draw(6);
+        return bind_group;
+    }
+
+    // Perspective / rotated quad — upload per-vertex projected positions.
     QuadVertex verts[6] = {
         {c00.x, c00.y, c00.w, c00.u, c00.v},
         {c10.x, c10.y, c10.w, c10.u, c10.v},
@@ -761,39 +879,11 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
     if (!vbuf) return cached_bind_group;
 
-    // NOT safe to honor `cached_bind_group` across frames here, even
-    // though the bind group is now texture+sampler only (uniforms moved to
-    // a push constant — see quad_layout_'s doc comment): every
-    // createBindGroup() call allocates from the CURRENT frame-ring
-    // generation's descriptor pool (descriptorPools[currentFrameGen], see
-    // DeviceData::beginFrameRing() in campello_gpu), which gets wholesale
-    // vkResetDescriptorPool'd roughly every 2 frames. A bind group cached
-    // by Renderer::text_texture_cache_ and reused several frames later
-    // ends up pointing at a descriptor slot that's since been reset and
-    // reallocated to some unrelated draw — the exact cause of a real bug
-    // seen here (glyph quads rendering other textures' content). A correct
-    // fix needs bind groups meant for cross-frame caching to come from a
-    // separate, never-reset descriptor pool; until that exists, always
-    // rebuild. `cached_bind_group` is accepted for interface parity with
-    // Windows/Metal (see IDrawBackend::drawTextTexture()) but intentionally
-    // unused here.
-    GPU::BindGroupDescriptor bg_desc{};
-    bg_desc.layout  = quad_bgl_;
-    bg_desc.entries = {
-        { 1, texture },
-        { 2, linear_sampler_ }
-    };
-    auto bind_group = device_->createBindGroup(bg_desc);
-    if (!bind_group) return nullptr;
-
     QuadUniforms u{};
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
     u.opacity     = opacity;
-
-    applyScissor(clip, encoder);
     encoder.setPipeline(quad_pipeline_);
-    encoder.setBindGroup(0, bind_group);
     encoder.setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(QuadUniforms), &u);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
@@ -915,7 +1005,8 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTextTexture(
         1.0f,   // opacity baked into texture
         clip,
         encoder,
-        cached_bind_group);
+        cached_bind_group,
+        /*persistent=*/true);
 }
 
 // ---------------------------------------------------------------------------

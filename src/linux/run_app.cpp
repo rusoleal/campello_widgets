@@ -876,12 +876,26 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
 
+    // Unmount element / render-object tree before tearing down GPU resources.
+    state.root_element.reset();
+
     // Stop the raster thread before releasing the renderer — stop() blocks
     // until any in-flight rasterFrame() call completes and joins the thread,
     // so no raster work can ever observe a half-destroyed Renderer/Device.
     state.raster_thread.reset();
 
     state.renderer.reset();
+
+    // Release everything else that can hold GPU-backed textures before the
+    // device is destroyed. render_box is a local variable that would otherwise
+    // outlive state.device; state.dispatcher holds a ref to it via setRoot().
+    // OffsetLayer caches DrawLists that contain DrawImageCmd with
+    // shared_ptr<Texture> — those textures call vkFreeMemory in their dtor.
+    render_box.reset();
+    state.dispatcher.reset();
+    state.focus_manager.reset();
+    Widgets::ImageCache::instance().clear();
+
     state.device.reset();
 
     XDestroyWindow(display, window);

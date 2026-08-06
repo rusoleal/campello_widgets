@@ -67,6 +67,10 @@ static void crashHandler(int sig)
     raise(sig);
 }
 
+// SIGINT / SIGTERM: request a clean shutdown via the event loop.
+static volatile sig_atomic_t gInterruptRequested = 0;
+static void interruptHandler(int) { gInterruptRequested = 1; }
+
 namespace GPU     = ::systems::leal::campello_gpu;
 namespace Widgets = ::systems::leal::campello_widgets;
 
@@ -629,6 +633,8 @@ int runAppWayland(const std::string& title, int width, int height,
 
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
+    signal(SIGINT,  interruptHandler);
+    signal(SIGTERM, interruptHandler);
 
     // -------------------------------------------------------------------------
     // Connect to Wayland display
@@ -852,6 +858,8 @@ int runAppWayland(const std::string& title, int width, int height,
     // -------------------------------------------------------------------------
     while (state.running) {
         // Process all pending Wayland events
+        if (gInterruptRequested) { state.running = false; continue; }
+
         wl_display_dispatch_pending(display);
         // Dispatch libdecor events (decoration redraws, resize negotiations, etc.)
         libdecor_dispatch(state.libdecor_ctx, 0);
@@ -957,6 +965,16 @@ int runAppWayland(const std::string& title, int width, int height,
     state.raster_thread.reset();
 
     state.renderer.reset();
+
+    // Release everything else that can hold GPU-backed textures before the
+    // device is destroyed. render_box is a local variable that would otherwise
+    // outlive state.device; state.dispatcher holds a ref to it via setRoot().
+    // OffsetLayer caches DrawLists that contain DrawImageCmd/DrawTextCmd with
+    // shared_ptr<Texture> — those textures call vkFreeMemory in their dtor.
+    render_box.reset();
+    state.dispatcher.reset();
+    state.focus_manager.reset();
+    Widgets::ImageCache::instance().clear();
 
     state.device.reset();
     // The local `device` variable also holds a ref to the GPU::Device; reset it
