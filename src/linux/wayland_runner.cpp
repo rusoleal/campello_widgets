@@ -49,6 +49,8 @@
 #include <iostream>
 #include <climits>
 #include <cstdlib>
+#include <utility>
+#include <vector>
 #include <libdecor.h>
 
 // ---------------------------------------------------------------------------
@@ -243,16 +245,62 @@ struct WaylandWindowState
     bool closed              = false;
     int  width               = 800;
     int  height              = 600;
-    int  device_width        = 0;    // size at which the current GPU device was created
+    int  device_width        = 0;    // size (physical px) at which the current GPU device was created
     int  device_height       = 0;
     bool mouse_pressed       = false;
     float last_pointer_x     = 0.0f;
     float last_pointer_y     = 0.0f;
+
+    // HiDPI: outputs seen so far (wl_output*, scale factor from wl_output.scale),
+    // the scale of whichever output wl_surface.enter last reported (0 = unknown
+    // yet), and the scale actually applied via wl_surface_set_buffer_scale().
+    std::vector<std::pair<struct wl_output*, int>> outputs;
+    int  entered_scale       = 0;
+    int  output_scale        = 1;
 };
 
 // ============================================================================
 // Wayland listeners
 // ============================================================================
+
+// --- wl_output (HiDPI scale discovery) ---
+static void output_geometry(void*, struct wl_output*, int32_t, int32_t, int32_t, int32_t,
+                            int32_t, const char*, const char*, int32_t) {}
+static void output_mode(void*, struct wl_output*, uint32_t, int32_t, int32_t, int32_t) {}
+static void output_done(void*, struct wl_output*) {}
+
+static void output_scale_cb(void* data, struct wl_output* wl_output, int32_t factor)
+{
+    auto* state = static_cast<WaylandWindowState*>(data);
+    for (auto& entry : state->outputs) {
+        if (entry.first == wl_output) { entry.second = factor; return; }
+    }
+    state->outputs.emplace_back(wl_output, factor);
+}
+
+// Trailing members (name/description, added in wl_output v4) are left
+// zero-initialized — we bind at version <= 2, so the server never sends them.
+static const struct wl_output_listener output_listener = {
+    .geometry = output_geometry,
+    .mode     = output_mode,
+    .done     = output_done,
+    .scale    = output_scale_cb,
+};
+
+// --- wl_surface (which output are we actually on right now?) ---
+static void surface_enter(void* data, struct wl_surface*, struct wl_output* output)
+{
+    auto* state = static_cast<WaylandWindowState*>(data);
+    for (const auto& entry : state->outputs) {
+        if (entry.first == output) { state->entered_scale = entry.second; return; }
+    }
+}
+static void surface_leave(void*, struct wl_surface*, struct wl_output*) {}
+
+static const struct wl_surface_listener surface_listener = {
+    .enter = surface_enter,
+    .leave = surface_leave,
+};
 
 // --- Registry ---
 static void registry_global(void* data, struct wl_registry* registry,
@@ -265,6 +313,15 @@ static void registry_global(void* data, struct wl_registry* registry,
     } else if (std::strcmp(interface, wl_seat_interface.name) == 0) {
         state->seat = static_cast<struct wl_seat*>(
             wl_registry_bind(registry, name, &wl_seat_interface, 7));
+    } else if (std::strcmp(interface, wl_output_interface.name) == 0) {
+        // wl_output.scale was added in version 2; clamp to whatever the
+        // compositor actually advertises so we don't request an unsupported
+        // version on an old server.
+        uint32_t bind_version = version < 2 ? version : 2;
+        auto* output = static_cast<struct wl_output*>(
+            wl_registry_bind(registry, name, &wl_output_interface, bind_version));
+        state->outputs.emplace_back(output, 1);
+        wl_output_add_listener(output, &output_listener, state);
     }
 }
 
@@ -308,7 +365,8 @@ static void frame_configure(struct libdecor_frame* frame,
     // recreate the device (analogous to Metal's automatic drawableSize update
     // on macOS) before the next frame.
     if (state->device &&
-        (state->width != state->device_width || state->height != state->device_height)) {
+        (state->width  * state->output_scale != state->device_width ||
+         state->height * state->output_scale != state->device_height)) {
         state->needs_device_resize = true;
     }
 
@@ -583,8 +641,8 @@ static bool renderFrame(WaylandWindowState* state)
     if (!state || !state->renderer || !state->device) return false;
 
     auto package = state->renderer->buildFrame(
-        static_cast<float>(state->width),
-        static_cast<float>(state->height));
+        static_cast<float>(state->width  * state->output_scale),
+        static_cast<float>(state->height * state->output_scale));
 
     if (!package) return false;
 
@@ -675,6 +733,7 @@ int runAppWayland(const std::string& title, int width, int height,
         wl_display_disconnect(display);
         return 1;
     }
+    wl_surface_add_listener(state.surface, &surface_listener, &state);
 
     state.libdecor_ctx = libdecor_new(display,
         const_cast<struct libdecor_interface*>(&libdecor_iface));
@@ -732,14 +791,35 @@ int runAppWayland(const std::string& title, int width, int height,
     }
 
     // -------------------------------------------------------------------------
+    // Determine the compositor output scale (HiDPI support)
+    // -------------------------------------------------------------------------
+    // wl_surface.enter (which output we actually ended up on) typically
+    // arrives shortly after the first commit that the configure-wait loop
+    // above already performed — one more roundtrip flushes it, along with
+    // any wl_output.scale events still in flight, before we size the GPU
+    // surface. Falls back to the first known output, then to 1x, if the
+    // compositor never sends an enter event (e.g. single-output setups on
+    // some compositors).
+    wl_display_roundtrip(display);
+
+    state.output_scale = state.entered_scale > 0 ? state.entered_scale
+                        : (!state.outputs.empty() ? state.outputs.front().second : 1);
+    if (state.output_scale < 1) state.output_scale = 1;
+    wl_surface_set_buffer_scale(state.surface, state.output_scale);
+
+    if (state.output_scale != 1) {
+        std::cerr << "[Linux/Wayland] Output scale: " << state.output_scale << "x\n";
+    }
+
+    // -------------------------------------------------------------------------
     // Create GPU device (Wayland surface)
     // -------------------------------------------------------------------------
     GPU::LinuxSurfaceInfo surfaceInfo{};
     surfaceInfo.display = display;
     surfaceInfo.window  = state.surface;
     surfaceInfo.api     = GPU::LinuxWindowApi::wayland;
-    surfaceInfo.width   = static_cast<uint32_t>(state.width);
-    surfaceInfo.height  = static_cast<uint32_t>(state.height);
+    surfaceInfo.width   = static_cast<uint32_t>(state.width  * state.output_scale);
+    surfaceInfo.height  = static_cast<uint32_t>(state.height * state.output_scale);
 
     auto device = GPU::Device::createDefaultDevice(&surfaceInfo);
     if (!device) {
@@ -752,8 +832,8 @@ int runAppWayland(const std::string& title, int width, int height,
               << "  Engine: " << GPU::Device::getEngineVersion() << "\n";
 
     state.device        = device;
-    state.device_width  = state.width;
-    state.device_height = state.height;
+    state.device_width  = state.width  * state.output_scale;
+    state.device_height = state.height * state.output_scale;
 
     // -------------------------------------------------------------------------
     // Create dispatcher, focus manager, ticker, text input
@@ -800,7 +880,10 @@ int runAppWayland(const std::string& title, int width, int height,
     // Wrap root widget with MediaQuery and mount
     // -------------------------------------------------------------------------
     Widgets::MediaQueryData mediaData;
-    mediaData.device_pixel_ratio = 1.0f;
+    mediaData.device_pixel_ratio = static_cast<float>(state.output_scale);
+    mediaData.logical_size = Widgets::Size{
+        static_cast<float>(state.width),
+        static_cast<float>(state.height) };
 
     auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(mediaData, root_widget);
 
@@ -842,6 +925,12 @@ int runAppWayland(const std::string& title, int width, int height,
     state.renderer = std::make_shared<Widgets::Renderer>(
         device, render_box, bgColor);
     state.renderer->setDrawBackend(std::move(backendOwned));
+    // Renderer::device_pixel_ratio_ is distinct from MediaQueryData's copy —
+    // it's what buildFrame() actually divides the physical viewport by to
+    // get logical layout constraints. Without this, layout sizes everything
+    // against the full physical viewport as if DPR were 1, shrinking every
+    // fixed-size widget to roughly 1/scale of its intended on-screen size.
+    state.renderer->setDevicePixelRatio(static_cast<float>(state.output_scale));
     std::cerr << "[Linux/Wayland] Renderer ready\n";
 
     state.raster_thread = std::make_unique<Widgets::RasterThread>(
@@ -885,10 +974,10 @@ int runAppWayland(const std::string& title, int width, int height,
             if (state.raster_thread)
                 state.raster_thread->drain();
             campello_gpu_wayland_resize(
-                static_cast<uint32_t>(state.width),
-                static_cast<uint32_t>(state.height));
-            state.device_width  = state.width;
-            state.device_height = state.height;
+                static_cast<uint32_t>(state.width  * state.output_scale),
+                static_cast<uint32_t>(state.height * state.output_scale));
+            state.device_width  = state.width  * state.output_scale;
+            state.device_height = state.height * state.output_scale;
         }
 
         // Render if needed
@@ -995,6 +1084,7 @@ int runAppWayland(const std::string& title, int width, int height,
     if (state.decor_frame)  libdecor_frame_unref(state.decor_frame);
     if (state.libdecor_ctx) libdecor_unref(state.libdecor_ctx);
     if (state.surface)      wl_surface_destroy(state.surface);
+    for (auto& entry : state.outputs) wl_output_destroy(entry.first);
     if (state.compositor)   wl_compositor_destroy(state.compositor);
     if (state.registry)     wl_registry_destroy(state.registry);
 

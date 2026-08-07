@@ -25,11 +25,13 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/XKBlib.h>
+#include <X11/Xresource.h>
 #include <X11/keysym.h>
 
 #include <dbus/dbus.h>
 
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <cstring>
@@ -83,6 +85,7 @@ struct WindowState
     bool running = true;
     bool needs_redraw = true;
     bool mouse_pressed = false;
+    float display_scale = 1.0f;
     Widgets::MediaQueryData                     media_data;
     Widgets::WidgetRef                          user_root_widget;
 };
@@ -273,6 +276,56 @@ static void rebuildMediaQuery(WindowState* state)
 }
 
 // ---------------------------------------------------------------------------
+// HiDPI scale detection
+// ---------------------------------------------------------------------------
+// X11 has no automatic window-content scaling: unlike macOS/Windows, the
+// server never stretches a client's buffer to match the display's true
+// pixel density. A client that wants to look correct on a HiDPI screen must
+// size its own window in real (physical) pixels and report the physical/
+// logical ratio itself. The desktop-standard signal for that ratio is the
+// `Xft.dpi` X resource — every major desktop environment's settings daemon
+// publishes it (including for XWayland clients), so it's checked first.
+// RandR/core-protocol physical screen size (mm) is a last-resort fallback
+// for setups that never populate it.
+static float getX11DisplayScale(Display* display, int screen)
+{
+    bool  found = false;
+    float scale = 1.0f;
+
+    char* resource_string = XResourceManagerString(display);
+    if (resource_string) {
+        XrmDatabase db = XrmGetStringDatabase(resource_string);
+        if (db) {
+            char*    type = nullptr;
+            XrmValue value;
+            if (XrmGetResource(db, "Xft.dpi", "Xft.Dpi", &type, &value) && value.addr) {
+                float dpi = static_cast<float>(std::atof(value.addr));
+                if (dpi > 0.0f) {
+                    scale = dpi / 96.0f;
+                    found = true;
+                }
+            }
+            XrmDestroyDatabase(db);
+        }
+    }
+
+    if (!found) {
+        int width_px = DisplayWidth(display, screen);
+        int width_mm = DisplayWidthMM(display, screen);
+        if (width_px > 0 && width_mm > 0) {
+            float dpi = static_cast<float>(width_px) * 25.4f / static_cast<float>(width_mm);
+            // Snap to the nearest quarter step — matches desktop-environment
+            // scale presets (1.0, 1.25, 1.5, ...) and smooths out imprecise
+            // EDID physical-size reporting that would otherwise produce
+            // odd-looking float scales from this fallback path.
+            scale = std::round((dpi / 96.0f) * 4.0f) / 4.0f;
+        }
+    }
+
+    return scale < 1.0f ? 1.0f : scale;
+}
+
+// ---------------------------------------------------------------------------
 // X11 keycode translation
 // ---------------------------------------------------------------------------
 
@@ -407,17 +460,21 @@ static void updateImeCursorPosition(WindowState* state)
 
     if (rect[2] <= 0.0f || rect[3] <= 0.0f) return;
 
-    // Convert from client coordinates to screen coordinates
+    // Convert from client coordinates to screen coordinates. `rect` is in
+    // logical pixels (RenderBox tree space); the X11 window is sized in
+    // physical pixels, so scale up before translating.
     Window root;
     int x_root, y_root;
     XTranslateCoordinates(state->display, state->window,
         DefaultRootWindow(state->display),
-        static_cast<int>(rect[0]), static_cast<int>(rect[1] + rect[3]),
+        static_cast<int>(rect[0] * state->display_scale),
+        static_cast<int>((rect[1] + rect[3]) * state->display_scale),
         &x_root, &y_root, &root);
 
     state->ibus_ime->setCursorLocation(
         x_root, y_root,
-        static_cast<int>(rect[2]), static_cast<int>(rect[3]));
+        static_cast<int>(rect[2] * state->display_scale),
+        static_cast<int>(rect[3] * state->display_scale));
 }
 
 // ---------------------------------------------------------------------------
@@ -433,8 +490,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
                 gHeight = ev.xconfigure.height;
                 Widgets::MediaQueryData newData = state->media_data;
                 newData.logical_size = Widgets::Size{
-                    static_cast<float>(ev.xconfigure.width),
-                    static_cast<float>(ev.xconfigure.height) };
+                    static_cast<float>(ev.xconfigure.width)  / state->display_scale,
+                    static_cast<float>(ev.xconfigure.height) / state->display_scale };
                 if (newData != state->media_data) {
                     state->media_data = newData;
                     rebuildMediaQuery(state);
@@ -465,7 +522,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::down;
             e.pointer_id = 0;
-            e.position = { static_cast<float>(x), static_cast<float>(y) };
+            e.position = { static_cast<float>(x) / state->display_scale,
+                           static_cast<float>(y) / state->display_scale };
             e.pressure = 1.0f;
             state->dispatcher->handlePointerEvent(e);
             state->mouse_pressed = true;
@@ -483,7 +541,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::up;
             e.pointer_id = 0;
-            e.position = { static_cast<float>(x), static_cast<float>(y) };
+            e.position = { static_cast<float>(x) / state->display_scale,
+                           static_cast<float>(y) / state->display_scale };
             e.pressure = 0.0f;
             state->dispatcher->handlePointerEvent(e);
             state->mouse_pressed = false;
@@ -498,7 +557,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::move;
             e.pointer_id = 0;
-            e.position = { static_cast<float>(x), static_cast<float>(y) };
+            e.position = { static_cast<float>(x) / state->display_scale,
+                           static_cast<float>(y) / state->display_scale };
             e.pressure = state->mouse_pressed ? 1.0f : 0.0f;
             state->dispatcher->handlePointerEvent(e);
             break;
@@ -673,6 +733,16 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Window root = RootWindow(display, screen);
 
     // -----------------------------------------------------------------------
+    // Detect HiDPI scale and size the window in physical pixels
+    // -----------------------------------------------------------------------
+    const float x11_scale = getX11DisplayScale(display, screen);
+    if (x11_scale != 1.0f) {
+        std::cerr << "[Linux] Display scale: " << x11_scale << "x\n";
+    }
+    const int phys_width  = static_cast<int>(std::lround(width  * x11_scale));
+    const int phys_height = static_cast<int>(std::lround(height * x11_scale));
+
+    // -----------------------------------------------------------------------
     // Create X11 window
     // -----------------------------------------------------------------------
     XSetWindowAttributes swa = {};
@@ -683,7 +753,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
     Window window = XCreateWindow(
         display, root,
-        0, 0, static_cast<unsigned int>(width), static_cast<unsigned int>(height), 0,
+        0, 0, static_cast<unsigned int>(phys_width), static_cast<unsigned int>(phys_height), 0,
         CopyFromParent, InputOutput, CopyFromParent,
         CWEventMask, &swa);
 
@@ -724,6 +794,13 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.window  = window;
     state.screen  = screen;
     state.device  = device;
+    state.display_scale = x11_scale;
+
+    // Window was created at physical-pixel size; keep gWidth/gHeight (which
+    // feed buildFrame() and the swapchain query) in sync with that, not the
+    // caller's originally-requested logical size.
+    gWidth  = phys_width;
+    gHeight = phys_height;
 
     // -----------------------------------------------------------------------
     // Create dispatcher and focus manager before mounting
@@ -780,8 +857,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // Wrap root widget with MediaQuery and mount
     // -----------------------------------------------------------------------
     Widgets::MediaQueryData mediaData;
-    // X11 doesn't have a built-in DPR concept; use 1.0 as default
-    mediaData.device_pixel_ratio = 1.0f;
+    mediaData.device_pixel_ratio = x11_scale;
     mediaData.platform_brightness = getSystemBrightness();
     mediaData.logical_size = Widgets::Size{
         static_cast<float>(width),
@@ -824,6 +900,12 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.renderer = std::make_shared<Widgets::Renderer>(
         device, render_box, bgColor);
     state.renderer->setDrawBackend(std::move(backendOwned));
+    // Renderer::device_pixel_ratio_ is distinct from MediaQueryData's copy —
+    // it's what buildFrame() actually divides the physical viewport by to
+    // get logical layout constraints. Without this, layout sizes everything
+    // against the full physical viewport as if DPR were 1, shrinking every
+    // fixed-size widget to roughly 1/scale of its intended on-screen size.
+    state.renderer->setDevicePixelRatio(x11_scale);
 
     state.raster_thread = std::make_unique<Widgets::RasterThread>(
         [renderer = state.renderer](const Widgets::FramePackage& pkg) {
