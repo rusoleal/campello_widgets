@@ -462,6 +462,54 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             break;
         }
 
+        // A stylus with proximity sensing (e.g. S-Pen) reports these while
+        // hovering, not touching — distinct action codes from ACTION_MOVE,
+        // which requires actual contact. Previously unhandled here, so
+        // MouseRegion::on_enter/on_exit (which PointerDispatcher's "hover"
+        // path — active_pointers_ has no entry for an untouched pointer —
+        // drives off PointerEventKind::move) never fired for a hovering
+        // stylus, even though the exact same mechanism already works for a
+        // desktop mouse moved without a button held. pressure=0 matches
+        // PointerEvent::pressure's documented "0.0 for hover" convention.
+        case AMOTION_EVENT_ACTION_HOVER_ENTER:
+        case AMOTION_EVENT_ACTION_HOVER_MOVE:
+        {
+            const size_t pointer_count = AMotionEvent_getPointerCount(event);
+            for (size_t j = 0; j < pointer_count; ++j)
+            {
+                const int32_t id = AMotionEvent_getPointerId(event, j);
+                const float x = AMotionEvent_getX(event, j) / dpr;
+                const float y = AMotionEvent_getY(event, j) / dpr;
+                session->dispatcher->handlePointerEvent({
+                    .kind        = Widgets::PointerEventKind::move,
+                    .pointer_id  = id,
+                    .position    = { x, y },
+                    .pressure    = 0.0f,
+                    .device_kind = deviceKindForMotionEvent(event, j),
+                    .tilt        = tiltForMotionEvent(event, j),
+                    .tilt_orientation = tiltOrientationForMotionEvent(event, j)});
+            }
+            break;
+        }
+
+        // The stylus left proximity range entirely (no further HOVER_MOVE
+        // will follow to naturally re-hit-test to "nothing hovered") —
+        // dispatch one final hover move far outside the surface so
+        // PointerDispatcher's hover-diff logic sends on_exit to whatever
+        // was last hovered, instead of leaving it stuck highlighted.
+        case AMOTION_EVENT_ACTION_HOVER_EXIT:
+        {
+            const size_t idx = static_cast<size_t>(pointer_index);
+            const int32_t id = AMotionEvent_getPointerId(event, idx);
+            session->dispatcher->handlePointerEvent({
+                .kind        = Widgets::PointerEventKind::move,
+                .pointer_id  = id,
+                .position    = { -1.0e6f, -1.0e6f },
+                .pressure    = 0.0f,
+                .device_kind = deviceKindForMotionEvent(event, idx)});
+            break;
+        }
+
         case AMOTION_EVENT_ACTION_UP:
         case AMOTION_EVENT_ACTION_POINTER_UP:
         {

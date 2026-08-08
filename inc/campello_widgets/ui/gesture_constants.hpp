@@ -34,17 +34,26 @@ namespace systems::leal::campello_widgets
 
     /**
      * @brief True for pointer kinds whose contact point is pixel-precise —
-     * mouse/trackpad cursors and a stylus tip — as opposed to a finger,
-     * which covers many pixels. Mirrors Flutter's own treatment of
-     * `PointerDeviceKind.stylus`/`invertedStylus` alongside mouse/trackpad
-     * in its gesture-slop logic (a pen tip is not a fingertip).
+     * a mouse cursor — as opposed to a finger or stylus tip.
+     *
+     * A stylus (and a finger) makes *physical contact* with the surface:
+     * pressing down inherently pivots/rocks the tip a few pixels, the same
+     * way a fingertip does, just less so — unlike a mouse cursor, which is
+     * frictionlessly decoupled from the button click and can stay
+     * genuinely stationary. Treating stylus as precise-pointer previously
+     * gave it a 1px pan slop (kPrecisePointerPanSlop), which a real stylus
+     * tap on glass exceeds almost every time — an ancestor scrollable
+     * (SingleChildScrollView/ListView/...) would then win the gesture
+     * arena over a button's tap on every single stylus tap, silently
+     * swallowing it as an imperceptible scroll. Matches Flutter's actual
+     * `computeHitSlop`/`computePanSlop` (gestures/constants.dart), which
+     * only special-cases `PointerDeviceKind.mouse` this way — touch,
+     * stylus, invertedStylus, and trackpad all fall through to the touch
+     * slop there too.
      */
     constexpr bool isPrecisePointer(PointerDeviceKind kind) noexcept
     {
-        return kind == PointerDeviceKind::mouse ||
-               kind == PointerDeviceKind::trackpad ||
-               kind == PointerDeviceKind::stylus ||
-               kind == PointerDeviceKind::invertedStylus;
+        return kind == PointerDeviceKind::mouse;
     }
 
     /**

@@ -835,7 +835,6 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     }
 
     applyScissor(clip, encoder);
-    encoder.setBindGroup(0, bind_group);
 
     // Axis-aligned fast path: edges are horizontal/vertical, so the quad is
     // fully described by two rects (position + UV). Skip the vertex pool
@@ -850,6 +849,14 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
         std::abs(c00.v - c10.v) < 1e-4f &&
         std::abs(c01.v - c11.v) < 1e-4f;
 
+    // setPipeline() must precede setBindGroup(): the bind group's layout is
+    // validated against whatever pipeline layout is bound at the time of the
+    // bind call, not at draw time. Binding it before selecting between
+    // quad_aa_pipeline_/quad_pipeline_ validated it against whatever
+    // unrelated pipeline the previous draw call in this pass had left bound
+    // (e.g. a text glyph draw) — usually incompatible, which left the actual
+    // draw with no valid descriptor set 0 and made it sample whatever
+    // texture happened to still be resident in that binding slot.
     if (is_axis_aligned) {
         QuadAAUniforms u{};
         u.viewport[0] = vp_w_;
@@ -862,6 +869,7 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
         u.uv[0]  = c00.u; u.uv[1] = c00.v;
         u.uv[2]  = c11.u; u.uv[3] = c11.v;
         encoder.setPipeline(quad_aa_pipeline_);
+        encoder.setBindGroup(0, bind_group);
         encoder.setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(QuadAAUniforms), &u);
         encoder.draw(6);
         return bind_group;
@@ -884,6 +892,7 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     u.viewport[1] = vp_h_;
     u.opacity     = opacity;
     encoder.setPipeline(quad_pipeline_);
+    encoder.setBindGroup(0, bind_group);
     encoder.setPushConstants(GPU::ShaderStage::vertex, 0, sizeof(QuadUniforms), &u);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
