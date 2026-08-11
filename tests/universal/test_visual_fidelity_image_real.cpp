@@ -10,6 +10,7 @@
 #include <campello_widgets/ui/render_flex.hpp>
 #include <campello_widgets/ui/render_stack.hpp>
 #include <campello_widgets/ui/render_colored_box.hpp>
+#include <campello_widgets/ui/render_clip_rrect.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
 #include <campello_widgets/ui/box_fit.hpp>
 #include <campello_widgets/ui/alignment.hpp>
@@ -116,7 +117,7 @@ static std::string getTestImagePath(const std::string& filename)
 /// Test 1: Display a single real image at explicit size
 TEST(VisualFidelityImageReal, SingleImageExplicitSize)
 {
-    auto device = cg::Device::createDefaultDevice(nullptr);
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -175,7 +176,7 @@ TEST(VisualFidelityImageReal, SingleImageExplicitSize)
 /// Test 2: Image with BoxFit.contain (preserves aspect ratio)
 TEST(VisualFidelityImageReal, ImageFitContain)
 {
-    auto device = cg::Device::createDefaultDevice(nullptr);
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -243,7 +244,7 @@ TEST(VisualFidelityImageReal, ImageFitContain)
 /// Test 3: Image with BoxFit.cover (fills and crops)
 TEST(VisualFidelityImageReal, ImageFitCover)
 {
-    auto device = cg::Device::createDefaultDevice(nullptr);
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -309,7 +310,7 @@ TEST(VisualFidelityImageReal, ImageFitCover)
 /// Test 4: Multiple different images in a grid
 TEST(VisualFidelityImageReal, ImageGallery)
 {
-    auto device = cg::Device::createDefaultDevice(nullptr);
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -336,7 +337,9 @@ TEST(VisualFidelityImageReal, ImageGallery)
     auto flex = std::make_shared<cw::RenderFlex>();
     flex->axis = cw::Axis::horizontal;
     flex->main_axis_size = cw::MainAxisSize::max;
-    flex->cross_axis_alignment = cw::CrossAxisAlignment::stretch;
+    // Matches Flutter's Row default (CrossAxisAlignment.center) — the Dart
+    // golden's Row doesn't set crossAxisAlignment explicitly.
+    flex->cross_axis_alignment = cw::CrossAxisAlignment::center;
 
     for (int i = 0; i < 3; i++) {
         auto padding = std::make_shared<cw::RenderPadding>();
@@ -355,7 +358,17 @@ TEST(VisualFidelityImageReal, ImageGallery)
         flex->insertChild(padding, i, 1);  // flex: 1
     }
 
-    root->setChild(flex);
+    // Matches the Dart golden's explicit SizedBox(width, height) wrapper —
+    // without it, RenderColoredBox loosens the constraints it passes down
+    // (matching Flutter's Scaffold background), so the Row would only be
+    // as tall as its tallest child instead of filling the full canvas
+    // height, leaving no room for CrossAxisAlignment::center to center in.
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width  = std::optional<float>(kFidelityWidth);
+    sized->height = std::optional<float>(kFidelityHeight);
+    sized->setChild(flex);
+
+    root->setChild(sized);
 
     std::string outputPath = getCppOutputPath("real_image_gallery.png");
     bool success = cwt::captureToPng(
@@ -385,7 +398,7 @@ TEST(VisualFidelityImageReal, ImageGallery)
 /// Test 5: Image with opacity
 TEST(VisualFidelityImageReal, ImageWithOpacity)
 {
-    auto device = cg::Device::createDefaultDevice(nullptr);
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -406,9 +419,9 @@ TEST(VisualFidelityImageReal, ImageWithOpacity)
     auto stack = std::make_shared<cw::RenderStack>();
     stack->fit = cw::StackFit::expand;
 
-    // Background pattern - match Flutter's blue/grey color
+    // Background pattern - matches Flutter's const Color(0xFF334455)
     auto bgBox = std::make_shared<cw::RenderColoredBox>();
-    bgBox->color = cw::Color::fromRGB(0.2f, 0.3f, 0.4f);  // Colors.blueGrey
+    bgBox->color = cw::Color::fromARGB(0xFF334455);
 
     auto bgSized = std::make_shared<cw::RenderSizedBox>();
     bgSized->setChild(bgBox);
@@ -426,7 +439,7 @@ TEST(VisualFidelityImageReal, ImageWithOpacity)
     center->setChild(image);
 
     stack->insertChild(bgSized, 0, 0, 0, 0, 0, std::nullopt, std::nullopt);
-    stack->insertChild(center, 1, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 600, 450);
+    stack->insertChild(center, 1, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt);
 
     root->setChild(stack);
 
@@ -449,6 +462,280 @@ TEST(VisualFidelityImageReal, ImageWithOpacity)
         if (!result.diffImagePath.empty())
             std::cout << "Diff image: " << result.diffImagePath << std::endl;
         EXPECT_LT(result.pixelDifference, 15.0)
+            << "Visual difference: " << result.pixelDifference << "%";
+    } else {
+        GTEST_SKIP() << "Flutter golden not found";
+    }
+}
+
+// ----------------------------------------------------------------------------
+// BoxFit coverage — every other real-image test above only exercises
+// contain/cover, and the "fake" (RenderColoredBox-simulated) tests in
+// test_visual_fidelity_image.cpp never touch RenderImage's actual BoxFit
+// switch at all. fill/fitWidth/fitHeight/none/scaleDown have never been
+// verified against Flutter before.
+// ----------------------------------------------------------------------------
+
+TEST(VisualFidelityImageReal, BoxFitModes)
+{
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    if (!device) {
+        GTEST_SKIP() << "GPU device not available";
+        return;
+    }
+
+    int imgWidth, imgHeight;
+    auto texture = loadTextureFromFile(getTestImagePath("sample1.jpg"), device, imgWidth, imgHeight);
+    if (!texture) {
+        GTEST_SKIP() << "Failed to load test image";
+        return;
+    }
+
+    auto root = std::make_shared<cw::RenderColoredBox>();
+    root->color = cw::Color::white();
+
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width  = std::optional<float>(kFidelityWidth);
+    sized->height = std::optional<float>(kFidelityHeight);
+
+    auto stack = std::make_shared<cw::RenderStack>();
+
+    // sample1.jpg is 400x300 (4:3) — a 260x180 box is small enough (and
+    // not an exact aspect-ratio match) to force real scaling/cropping/
+    // clipping decisions for every fit mode, unlike a box that happens to
+    // share the image's exact aspect ratio.
+    const struct { cw::BoxFit fit; float left; float top; } cells[] = {
+        {cw::BoxFit::fill,      40.0f,  40.0f},
+        {cw::BoxFit::contain,   340.0f, 40.0f},
+        {cw::BoxFit::cover,     640.0f, 40.0f},
+        {cw::BoxFit::fitWidth,  940.0f, 40.0f},
+        {cw::BoxFit::fitHeight, 40.0f,  280.0f},
+        {cw::BoxFit::none,      340.0f, 280.0f},
+        {cw::BoxFit::scaleDown, 640.0f, 280.0f},
+    };
+
+    int index = 0;
+    for (const auto& c : cells) {
+        auto image = std::make_shared<cw::RenderImage>();
+        image->setTexture(texture);
+        image->setFit(c.fit);
+        image->setAlignment(cw::Alignment::center());
+
+        // Re-tightens the constraints RenderColoredBox loosens for its
+        // child (matches Flutter's Container(color:...), which does not
+        // loosen) — without this, RenderImage would fall back to its own
+        // aspect-preserving auto-size instead of filling the 260x180 cell,
+        // per RenderImage::performLayout()'s "no explicit size" branch.
+        auto cellSized = std::make_shared<cw::RenderSizedBox>();
+        cellSized->width  = std::optional<float>(260.0f);
+        cellSized->height = std::optional<float>(180.0f);
+        cellSized->setChild(image);
+
+        auto bg = std::make_shared<cw::RenderColoredBox>();
+        bg->color = cw::Color::fromRGB(0.9f, 0.9f, 0.9f);  // Colors.grey.shade300
+        bg->setChild(cellSized);
+
+        stack->insertChild(bg, index, c.left, c.top, std::nullopt, std::nullopt, 260.0f, 180.0f);
+        ++index;
+    }
+
+    sized->setChild(stack);
+    root->setChild(sized);
+
+    std::string outputPath = getCppOutputPath("real_image_boxfit_modes.png");
+    bool success = cwt::captureToPng(
+        *root,
+        cw::BoxConstraints::tight(kFidelityWidth, kFidelityHeight),
+        kFidelityWidth, kFidelityHeight,
+        outputPath
+    );
+
+    EXPECT_TRUE(success);
+
+    if (flutterGoldenExists("real_image_boxfit_modes.png")) {
+        auto result = cwt::comparePngImages(
+            getFlutterGoldenPath("real_image_boxfit_modes.png"),
+            outputPath,
+            10, true
+        );
+        if (!result.diffImagePath.empty())
+            std::cout << "Diff image: " << result.diffImagePath << std::endl;
+        EXPECT_LT(result.pixelDifference, 10.0)
+            << "Visual difference: " << result.pixelDifference << "%";
+    } else {
+        GTEST_SKIP() << "Flutter golden not found";
+    }
+}
+
+TEST(VisualFidelityImageReal, BoxFitScaleDownDoesNotUpscale)
+{
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    if (!device) {
+        GTEST_SKIP() << "GPU device not available";
+        return;
+    }
+
+    int imgWidth, imgHeight;
+    auto texture = loadTextureFromFile(getTestImagePath("sample1.jpg"), device, imgWidth, imgHeight);
+    if (!texture) {
+        GTEST_SKIP() << "Failed to load test image";
+        return;
+    }
+
+    auto root = std::make_shared<cw::RenderColoredBox>();
+    root->color = cw::Color::white();
+
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width  = std::optional<float>(kFidelityWidth);
+    sized->height = std::optional<float>(kFidelityHeight);
+
+    auto stack = std::make_shared<cw::RenderStack>();
+
+    // sample1.jpg is 400x300 — a 550x450 box is larger than the source in
+    // both axes, so BoxFit.contain upscales it to fill the box, while
+    // BoxFit.scaleDown must not — the only scenario where the two modes
+    // actually differ (a box smaller than the source makes them identical).
+    const struct { cw::BoxFit fit; float left; } cells[] = {
+        {cw::BoxFit::contain,   40.0f},
+        {cw::BoxFit::scaleDown, 650.0f},
+    };
+
+    int index = 0;
+    for (const auto& c : cells) {
+        auto image = std::make_shared<cw::RenderImage>();
+        image->setTexture(texture);
+        image->setFit(c.fit);
+        image->setAlignment(cw::Alignment::center());
+
+        auto cellSized = std::make_shared<cw::RenderSizedBox>();
+        cellSized->width  = std::optional<float>(550.0f);
+        cellSized->height = std::optional<float>(450.0f);
+        cellSized->setChild(image);
+
+        auto bg = std::make_shared<cw::RenderColoredBox>();
+        bg->color = cw::Color::fromRGB(0.9f, 0.9f, 0.9f);
+        bg->setChild(cellSized);
+
+        stack->insertChild(bg, index, c.left, 100.0f, std::nullopt, std::nullopt, 550.0f, 450.0f);
+        ++index;
+    }
+
+    sized->setChild(stack);
+    root->setChild(sized);
+
+    std::string outputPath = getCppOutputPath("real_image_boxfit_scaledown_cap.png");
+    bool success = cwt::captureToPng(
+        *root,
+        cw::BoxConstraints::tight(kFidelityWidth, kFidelityHeight),
+        kFidelityWidth, kFidelityHeight,
+        outputPath
+    );
+
+    EXPECT_TRUE(success);
+
+    if (flutterGoldenExists("real_image_boxfit_scaledown_cap.png")) {
+        auto result = cwt::comparePngImages(
+            getFlutterGoldenPath("real_image_boxfit_scaledown_cap.png"),
+            outputPath,
+            10, true
+        );
+        if (!result.diffImagePath.empty())
+            std::cout << "Diff image: " << result.diffImagePath << std::endl;
+        EXPECT_LT(result.pixelDifference, 10.0)
+            << "Visual difference: " << result.pixelDifference << "%";
+    } else {
+        GTEST_SKIP() << "Flutter golden not found";
+    }
+}
+
+// Mirrors examples/gallery/gallery_app.cpp's fitSample() exactly (same
+// 120x120 box, same background color, same 8px ClipRRect, same
+// mountains.jpg source) — the actual widget tree shape the gallery's
+// "Images" tab BoxFit showcase renders, as opposed to the more generic
+// bare-RenderImage setup the other BoxFit tests above use.
+TEST(VisualFidelityImageReal, BoxFitGalleryReplica)
+{
+    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    if (!device) {
+        GTEST_SKIP() << "GPU device not available";
+        return;
+    }
+
+    int imgWidth, imgHeight;
+    auto texture = loadTextureFromFile(getTestImagePath("mountains.jpg"), device, imgWidth, imgHeight);
+    if (!texture) {
+        GTEST_SKIP() << "Failed to load test image";
+        return;
+    }
+
+    auto root = std::make_shared<cw::RenderColoredBox>();
+    root->color = cw::Color::white();
+
+    auto sized = std::make_shared<cw::RenderSizedBox>();
+    sized->width  = std::optional<float>(kFidelityWidth);
+    sized->height = std::optional<float>(kFidelityHeight);
+
+    auto stack = std::make_shared<cw::RenderStack>();
+
+    const float kBoxSize = 120.0f;
+    const struct { cw::BoxFit fit; float left; } cells[] = {
+        {cw::BoxFit::fill,      40.0f},
+        {cw::BoxFit::contain,   220.0f},
+        {cw::BoxFit::cover,     400.0f},
+        {cw::BoxFit::fitWidth,  580.0f},
+        {cw::BoxFit::fitHeight, 760.0f},
+        {cw::BoxFit::none,      940.0f},
+        {cw::BoxFit::scaleDown, 1120.0f},
+    };
+
+    int index = 0;
+    for (const auto& c : cells) {
+        auto image = std::make_shared<cw::RenderImage>();
+        image->setTexture(texture);
+        image->setFit(c.fit);
+        image->setAlignment(cw::Alignment::center());
+
+        // Re-tightens what RenderColoredBox loosens for its child — see
+        // BoxFitModes' comment above.
+        auto reTight = std::make_shared<cw::RenderSizedBox>();
+        reTight->width  = std::optional<float>(kBoxSize);
+        reTight->height = std::optional<float>(kBoxSize);
+        reTight->setChild(image);
+
+        auto bg = std::make_shared<cw::RenderColoredBox>();
+        bg->color = cw::Color::fromRGB(0.90f, 0.90f, 0.93f);
+        bg->setChild(reTight);
+
+        auto clip = std::make_shared<cw::RenderClipRRect>();
+        clip->border_radius = 8.0f;
+        clip->setChild(bg);
+
+        stack->insertChild(clip, index, c.left, 40.0f, std::nullopt, std::nullopt, kBoxSize, kBoxSize);
+        ++index;
+    }
+
+    sized->setChild(stack);
+    root->setChild(sized);
+
+    std::string outputPath = getCppOutputPath("real_image_boxfit_gallery_replica.png");
+    bool success = cwt::captureToPng(
+        *root,
+        cw::BoxConstraints::tight(kFidelityWidth, kFidelityHeight),
+        kFidelityWidth, kFidelityHeight,
+        outputPath
+    );
+
+    EXPECT_TRUE(success);
+
+    if (flutterGoldenExists("real_image_boxfit_gallery_replica.png")) {
+        auto result = cwt::comparePngImages(
+            getFlutterGoldenPath("real_image_boxfit_gallery_replica.png"),
+            outputPath,
+            10, true
+        );
+        if (!result.diffImagePath.empty())
+            std::cout << "Diff image: " << result.diffImagePath << std::endl;
+        EXPECT_LT(result.pixelDifference, 10.0)
             << "Visual difference: " << result.pixelDifference << "%";
     } else {
         GTEST_SKIP() << "Flutter golden not found";

@@ -2,8 +2,10 @@
 
 #include <campello_widgets/ui/draw_backend.hpp>
 #include <campello_widgets/ui/color.hpp>
+#include <campello_widgets/ui/paint.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 #include <array>
+#include <map>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -35,11 +37,10 @@ class ITextRasterizer;
 // Linux) is injected via ITextRasterizer / createPlatformTextRasterizer(),
 // the one genuinely OS-specific seam.
 //
-// Supported:  drawRect, drawRRect, drawImage, drawCircle, drawOval, text
-//             (rasterizeText/drawTextTexture — cached by Renderer),
+// Supported:  drawRect, drawRRect, drawImage, drawCircle, drawOval, drawLine,
+//             drawPoints, drawArc, text (rasterizeText/drawTextTexture),
 //             createOffscreenTexture, beginOffscreenPass, blurTexture,
-//             drawBackdropFilter, drawClipShapeComposite
-// No-op:      drawLine, drawShaderMaskComposite
+//             drawBackdropFilter, drawClipShapeComposite, drawShaderMaskComposite
 //
 // Call setViewport(w, h) once per frame before Renderer::renderFrame().
 // ---------------------------------------------------------------------------
@@ -79,6 +80,30 @@ public:
 
     void drawOval(
         const DrawOvalCmd&               cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawLine(
+        const DrawLineCmd&               cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawPoints(
+        const DrawPointsCmd&             cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawArc(
+        const DrawArcCmd&                cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawPath(
+        const DrawPathCmd&               cmd,
         const Matrix4&                   transform,
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
@@ -187,6 +212,20 @@ public:
         const Rect&                                   clip,
         campello_gpu::RenderPassEncoder&              encoder) override;
 
+    void drawShaderMaskComposite(
+        std::shared_ptr<campello_gpu::Texture>        child_tex,
+        const DrawShaderMaskBeginCmd&                 cmd,
+        const Matrix4&                                transform,
+        const Rect&                                   clip,
+        campello_gpu::RenderPassEncoder&              encoder) override;
+
+    void saveLayerComposite(
+        std::shared_ptr<campello_gpu::Texture>        child_tex,
+        const SaveLayerCmd&                           cmd,
+        const Matrix4&                                transform,
+        const Rect&                                   clip,
+        campello_gpu::RenderPassEncoder&              encoder) override;
+
     // Per-vertex projected position + UV — mirrors Metal's ProjectedCorner.
     struct QuadCorner { float x, y, w, u, v; };
 
@@ -233,11 +272,21 @@ private:
         const Rect& clip,
         campello_gpu::RenderPassEncoder& encoder);
 
+    std::shared_ptr<campello_gpu::RenderPipeline> pipelineForBlendMode(
+        BlendMode mode,
+        const std::shared_ptr<campello_gpu::RenderPipeline>& base,
+        const std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>>& variants) const;
+
     void runBlurPass(
         std::shared_ptr<campello_gpu::Texture> src,
         std::shared_ptr<campello_gpu::Texture> dst,
         float sigma, bool horizontal,
         campello_gpu::CommandEncoder& encoder);
+
+    // Build a 256×1 RGBA LUT texture from gradient colors/stops.
+    std::shared_ptr<campello_gpu::Texture> buildGradientLUT(
+        const std::vector<Color>& colors,
+        const std::vector<float>& stops);
 
     // `cached_bind_group`, if non-null, is reused as-is instead of building
     // a fresh BindGroup for `texture` (see Renderer::text_texture_cache_'s
@@ -265,9 +314,20 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  colored_quad_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rrect_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
+
+    // Blend-mode variants of the solid-color pipelines. Only a subset of
+    // BlendMode is supported by the fixed-function blend state; unsupported
+    // modes fall back to srcOver.
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rect_blend_pipelines_;
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> colored_quad_blend_pipelines_;
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rrect_blend_pipelines_;
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> line_blend_pipelines_;
+
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_aa_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  clip_shape_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  shader_mask_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  blur_pipeline_;
     // Intermediate textures for the two-pass Gaussian blur.
     std::shared_ptr<campello_gpu::Texture>         blur_h_tex_;
@@ -275,9 +335,12 @@ private:
     uint32_t                                        blur_tex_w_ = 0;
     uint32_t                                        blur_tex_h_ = 0;
     std::shared_ptr<campello_gpu::BindGroupLayout> quad_bgl_;
+    std::shared_ptr<campello_gpu::BindGroupLayout> shader_mask_bgl_;
     std::shared_ptr<campello_gpu::PipelineLayout>  rect_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  rrect_layout_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  line_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  quad_layout_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  shader_mask_layout_;
     std::shared_ptr<campello_gpu::Sampler>          linear_sampler_;
     // Two pools, one per fixed vertex-struct size — see UniformBufferPool's
     // doc comment. colored_quad_vertex_pool_ backs drawFilledQuad()'s

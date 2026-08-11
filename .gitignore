@@ -24,6 +24,7 @@ tests/visual_fidelity/diffs/
 flutter_fidelity_tester/.dart_tool/
 flutter_fidelity_tester/build/
 flutter_fidelity_tester/pubspec.lock
+.flutter/
 *.spv
 *.cso
 .claude/settings.local.json

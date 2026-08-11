@@ -12,19 +12,30 @@ namespace systems::leal::campello_widgets
      * slice, for `OffsetLayer` to replay.
      *
      * Also classifies the recording: `hasUnsafeGeometry()` is true if any
-     * command bakes absolute (non-transform-deferred) geometry — clip rects/
-     * rrects/ovals/paths, backdrop-filter and shader-mask bounds, and
-     * save-layer bounds. `Renderer::flushDrawList()` treats these
-     * differently from ordinary draw geometry: `PushTransformCmd` composes
-     * multiplicatively into the ambient transform
-     * (`current_transform = current_transform * c.transform`), so draw
-     * geometry recorded under it is safe to relocate by wrapping it in an
-     * additional `Canvas::translate()` later. Clip commands are not —
-     * `PushClipRectCmd` is a direct absolute reassignment
-     * (`current_clip = c.rect`), never multiplied by the transform stack —
-     * so a cached slice containing one cannot be safely repositioned by a
-     * wrapping translate alone; it must be re-recorded at the new position
-     * instead. `OffsetLayer` uses this flag to decide which path is safe.
+     * command bakes absolute geometry that its *sole* consumer uses via a
+     * direct reassignment never multiplied by the ambient transform, and
+     * that this class has no way to correct for a moved replay. Only two
+     * commands qualify: `PushClipPathCmd` (`current_clip =
+     * current_clip.intersection(c.path.getBounds())` — a direct-assignment
+     * consumer like `PushClipRectCmd` below, but `Path` has no
+     * `translate()` yet to shift it with) and `DrawBackdropFilterBeginCmd`
+     * (see `hasBackdropFilter()` below — excluded here too for belt-and-
+     * suspenders clarity, though `OffsetLayer` already special-cases it
+     * before this flag is even consulted). `OffsetLayer` forces a full
+     * re-record on reposition for these — see `maybeReplay()`.
+     *
+     * Everything else that bakes absolute geometry turns out *not* to need
+     * that: `PushClipRectCmd` is a direct reassignment too
+     * (`current_clip = c.rect`) but `OffsetLayer::maybeReplay()` shifts its
+     * stored rect by hand when repositioning, since it's simple to. And
+     * `PushClipRRectCmd`/`PushClipOvalCmd`/`DrawShaderMaskBeginCmd`/
+     * `SaveLayerCmd`'s stored bounds all flow through exactly one
+     * consumer — an offscreen-composite draw
+     * (`drawClipShapeComposite`/`drawShaderMaskComposite`/
+     * `saveLayerComposite`) that *does* multiply that bounds by the
+     * ambient transform, the same mechanism that already makes ordinary
+     * draw geometry safe to relocate by wrapping it in an additional
+     * `Canvas::translate()` — so these need no special handling either.
      *
      * `hasBackdropFilter()` is a stricter, separate flag: a recording
      * containing `DrawBackdropFilterBeginCmd` must never be replayed at

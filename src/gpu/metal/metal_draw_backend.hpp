@@ -82,6 +82,24 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawArc(
+        const DrawArcCmd&                cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawPath(
+        const DrawPathCmd&               cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawPoints(
+        const DrawPointsCmd&             cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     std::shared_ptr<campello_gpu::Texture> rasterizeText(
         const TextSpan& span, float dpr,
         uint32_t& out_width, uint32_t& out_height) override;
@@ -151,6 +169,13 @@ public:
         const Rect&                            clip,
         campello_gpu::RenderPassEncoder&       encoder) override;
 
+    void saveLayerComposite(
+        std::shared_ptr<campello_gpu::Texture> child_tex,
+        const SaveLayerCmd&                    cmd,
+        const Matrix4&                         transform,
+        const Rect&                            clip,
+        campello_gpu::RenderPassEncoder&       encoder) override;
+
     // ------------------------------------------------------------------
 
     void setViewport(float w, float h) noexcept override
@@ -213,6 +238,13 @@ private:
     void drawFilledQuad(
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
+        const Color& color,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Variable-length triangle batch for drawArc / drawPath. `count` must be
+    // a multiple of 3; each vertex carries its own pre-projected (x,y,w).
+    void drawFilledVertices(
+        const std::vector<RectVertex>& verts,
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 

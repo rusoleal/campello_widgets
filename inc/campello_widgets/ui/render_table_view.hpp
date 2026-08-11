@@ -10,6 +10,7 @@
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/span.hpp>
 #include <campello_widgets/ui/scroll_physics.hpp>
+#include <campello_widgets/ui/velocity_tracker.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -155,10 +156,19 @@ namespace systems::leal::campello_widgets
         // this gesture, instead of fighting them every tick.
         uint64_t last_scroll_event_ms_ = 0;
 
+        // See RenderListView::wheel_velocity_tracker_'s doc — this is the
+        // only interaction TableView actually supports (pan-to-scroll is
+        // disabled; see onPointerEvent()'s move case), so this tracks each
+        // axis's own recent wheel velocity to hand off to onTick()'s
+        // momentum the instant the OS stops sending scroll events.
+        VelocityTracker wheel_velocity_tracker_x_, wheel_velocity_tracker_y_;
+        bool wheel_momentum_pending_ = false;
+
         static constexpr float    kMinVelocity = 1.0f;
         // See RenderListView::kSpringCoeff's doc.
         static constexpr float    kSpringCoeff = 20.0f;
-        static constexpr uint64_t kScrollActiveWindowMs = 120;
+        // See RenderListView::kScrollActiveWindowMs's doc.
+        static constexpr uint64_t kScrollActiveWindowMs = 40;
     };
 
 } // namespace systems::leal::campello_widgets

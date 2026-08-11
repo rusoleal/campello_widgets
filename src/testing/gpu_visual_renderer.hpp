@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 
+namespace systems::leal::campello_gpu { class Device; }
+
 namespace systems::leal::campello_widgets::testing
 {
 
@@ -12,16 +14,13 @@ namespace systems::leal::campello_widgets::testing
      * @brief GPU-backed visual renderer for fidelity testing.
      *
      * Creates a headless GPU device, renders a DrawList to an offscreen RGBA8
-     * texture via MetalDrawBackend, and reads back pixels using
-     * Texture::download() for PNG export.
+     * texture via the platform draw backend (Metal, Vulkan, or DirectX 12),
+     * and reads back pixels using Texture::download() for PNG export.
      *
      * Falls back gracefully: isValid() returns false when no GPU device is
      * available (headless CI), and renderDrawList() returns false when the
      * draw list contains commands unsupported by the GPU path (caller should
      * fall back to VisualRenderer).
-     *
-     * Platform support: macOS (Metal).  All other platforms use a null stub
-     * that always returns false / isValid() == false.
      */
     class GpuVisualRenderer
     {
@@ -31,6 +30,20 @@ namespace systems::leal::campello_widgets::testing
 
         GpuVisualRenderer(const GpuVisualRenderer&)            = delete;
         GpuVisualRenderer& operator=(const GpuVisualRenderer&) = delete;
+
+        /**
+         * @brief Returns the GPU device shared by every GpuVisualRenderer in
+         * this process, creating it on first call.
+         *
+         * A Vulkan `VkImageView` (and similarly Metal/D3D12 resources) can
+         * only be bound into commands submitted on the same logical device
+         * that created it. Tests that build their own GPU resources (e.g.
+         * loading an image into a texture) and then feed them through a
+         * GpuVisualRenderer must create those resources on this shared
+         * device — not a separate `Device::createDefaultDevice()` — or the
+         * resource will be invalid on the device actually used to render.
+         */
+        static std::shared_ptr<campello_gpu::Device> sharedDevice();
 
         /** @brief Returns true if a GPU device was successfully created. */
         bool isValid() const;

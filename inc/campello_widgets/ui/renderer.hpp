@@ -539,6 +539,25 @@ namespace systems::leal::campello_widgets
             const void*    replay_region_id     = nullptr,
             size_t         replay_bracket_index  = 0);
 
+        // Applies a SaveLayer region: renders child commands to an offscreen
+        // texture, then composites the texture back into the main pass using
+        // the layer paint's opacity (and, eventually, blend mode / color
+        // filter). Mirrors applyClipShape()'s offscreen-then-composite
+        // structure. See applyShaderMask() for `replay_region_id` /
+        // `replay_bracket_index` and caching rationale.
+        void applySaveLayer(
+            const SaveLayerCmd&                                cmd,
+            const DrawList&                                    child_cmds,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
+            float viewport_width,
+            float viewport_height,
+            float dpr,
+            const Matrix4& transform,
+            const Rect&    clip,
+            const void*    replay_region_id     = nullptr,
+            size_t         replay_bracket_index  = 0);
+
         // Renders `child_cmds` (a `RenderDrawSurface`'s newly-added stroke
         // segments) directly into `cmd.target` — preserving its existing
         // content unless `cmd.clear_first` is set — instead of into an
@@ -758,6 +777,14 @@ namespace systems::leal::campello_widgets
             uint64_t last_used_frame = 0;
         };
 
+        // Same rationale as the caches above, for Renderer::applySaveLayer().
+        struct SaveLayerGpuCacheEntry
+        {
+            std::shared_ptr<campello_gpu::Texture> texture;
+            SaveLayerCmd cmd{Rect{}, Paint{}};
+            uint64_t last_used_frame = 0;
+        };
+
         static constexpr uint64_t kClipShapeCacheMaxAgeFrames = 120;
 
         std::unordered_map<std::pair<const void*, size_t>, ClipShapeGpuCacheEntry, ReplayKeyHash>
@@ -766,6 +793,8 @@ namespace systems::leal::campello_widgets
             shader_mask_gpu_cache_;
         std::unordered_map<std::pair<const void*, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
             shadow_gpu_cache_;
+        std::unordered_map<std::pair<const void*, size_t>, SaveLayerGpuCacheEntry, ReplayKeyHash>
+            save_layer_gpu_cache_;
 
         // Platform-independent text-rasterization cache. GDI/CoreText/
         // FreeType+HarfBuzz rasterization plus GPU texture allocation/

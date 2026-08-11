@@ -345,6 +345,7 @@ namespace systems::leal::campello_widgets
             float   opacity           = 1.0f;
             int     pushed_transforms = 0;
             int     pushed_clips      = 0;
+            bool    is_layer          = false;
         };
 
         DrawList               commands_;

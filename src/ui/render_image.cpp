@@ -9,6 +9,42 @@
 namespace systems::leal::campello_widgets
 {
 
+    namespace
+    {
+        // Mirrors Flutter's BoxConstraints.constrainSizeAndAttemptToPreserveAspectRatio:
+        // fits `natural` within `constraints`, shrinking/growing it towards
+        // whichever bound it exceeds while keeping its aspect ratio, rather
+        // than stretching it independently on each axis.
+        Size constrainPreservingAspectRatio(const BoxConstraints& constraints, Size natural)
+        {
+            if (constraints.isTight())
+                return {constraints.min_width, constraints.min_height};
+
+            float width  = natural.width;
+            float height = natural.height;
+            const float aspect_ratio = width / height;
+
+            if (width > constraints.max_width) {
+                width  = constraints.max_width;
+                height = width / aspect_ratio;
+            }
+            if (height > constraints.max_height) {
+                height = constraints.max_height;
+                width  = height * aspect_ratio;
+            }
+            if (width < constraints.min_width) {
+                width  = constraints.min_width;
+                height = width / aspect_ratio;
+            }
+            if (height < constraints.min_height) {
+                height = constraints.min_height;
+                width  = height * aspect_ratio;
+            }
+
+            return constraints.constrain({width, height});
+        }
+    }
+
     void RenderImage::setTexture(
         std::shared_ptr<campello_gpu::Texture> texture) noexcept
     {
@@ -48,12 +84,27 @@ namespace systems::leal::campello_widgets
     void RenderImage::performLayout()
     {
         const bool has_explicit = explicit_size_.width > 0.0f || explicit_size_.height > 0.0f;
+        const float natural_w = texture_ ? static_cast<float>(texture_->getWidth())  : 0.0f;
+        const float natural_h = texture_ ? static_cast<float>(texture_->getHeight()) : 0.0f;
+
         if (has_explicit)
         {
             size_ = constraints_.constrain(explicit_size_);
         }
+        else if (texture_ && natural_w > 0.0f && natural_h > 0.0f)
+        {
+            // No explicit size: mirror Flutter's Image, which sizes itself to
+            // the source image's natural dimensions, preserving aspect ratio
+            // as it fits within the incoming constraints.
+            size_ = constrainPreservingAspectRatio(constraints_, Size{natural_w, natural_h});
+        }
         else
         {
+            // No explicit size and no (usable) texture yet — e.g.
+            // RenderDrawSurface sizes itself on its first layout, before it
+            // has created a texture to report a natural size from. There's
+            // nothing to preserve the aspect ratio of, so fall back to
+            // filling the available space, as before.
             const float w = std::isinf(constraints_.max_width)  ? 0.0f : constraints_.max_width;
             const float h = std::isinf(constraints_.max_height) ? 0.0f : constraints_.max_height;
             size_ = constraints_.constrain(Size{w, h});

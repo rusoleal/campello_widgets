@@ -13,6 +13,7 @@
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
 #include <campello_widgets/ui/gesture_constants.hpp>
 #include <campello_widgets/ui/offset_layer.hpp>
+#include <campello_widgets/ui/velocity_tracker.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -153,10 +154,28 @@ namespace systems::leal::campello_widgets
         Offset pan_last_pos_;
         Offset pan_down_pos_; ///< Position at pointer-down — fixed; used for the slop check (cumulative distance), unlike pan_last_pos_ which advances every move.
         PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
-        std::chrono::steady_clock::time_point last_pan_time_;
-        float  pan_velocity_  = 0.0f;
+        // Fits a line through recent (time, position) samples instead of
+        // using only the delta between the last two — see its doc comment
+        // for why a single-sample estimate is unreliable for release
+        // velocity specifically.
+        VelocityTracker velocity_tracker_;
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
+
+        // Trackpad/wheel scrolling never goes through onPointerEvent's
+        // down/move/up drag path above, so velocity_tracker_ never sees it.
+        // This tracks the wheel's own recent delivered velocity instead, so
+        // onTick() can hand off to our own momentum simulation the instant
+        // the OS stops sending scroll events — seeing this hand-off through
+        // is what actually produces a felt "coast," rather than the list's
+        // motion being entirely at the mercy of however long (or short) a
+        // kinetic tail the platform's own trackpad driver happens to send.
+        VelocityTracker wheel_velocity_tracker_;
+        // Set on each "significant" wheel event (see onPointerEvent's
+        // scroll case); consumed exactly once by onTick() at the tick where
+        // the active-scroll-window gate first closes, to seed velocity_px_s_
+        // from wheel_velocity_tracker_ before momentum decay takes over.
+        bool wheel_momentum_pending_ = false;
 
         // See RenderSingleChildScrollView::last_scroll_event_ms_'s doc —
         // lets onTick() defer spring-back while the OS is still actively
@@ -184,7 +203,16 @@ namespace systems::leal::campello_widgets
         // requests) would keep re-triggering forever, imperceptibly, after
         // every bounce.
         static constexpr float    kSpringSettleThreshold = 0.05f;
-        static constexpr uint64_t kScrollActiveWindowMs = 80;
+        // How long to wait, after the last "significant" wheel event,
+        // before treating the OS as done delivering scroll for this
+        // gesture (both for letting spring-back take over, and for handing
+        // off to our own momentum — see onTick()'s doc). During genuinely
+        // active scrolling, events arrive roughly once per tick (~16-20ms
+        // at 60Hz) — 40ms comfortably outlasts that cadence's jitter
+        // without (as an earlier, more conservative 80ms did) leaving a
+        // visible ~5-frame dead zone where the list sits frozen before our
+        // momentum handoff engages.
+        static constexpr uint64_t kScrollActiveWindowMs = 40;
     };
 
 } // namespace systems::leal::campello_widgets

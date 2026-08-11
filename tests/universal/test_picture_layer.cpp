@@ -45,7 +45,7 @@ TEST(PictureLayer, RecordsPlainContentAsSafe)
     EXPECT_FALSE(layer.commands().empty());
 }
 
-TEST(PictureLayer, ClipRectContentIsUnsafe)
+TEST(PictureLayer, ClipRectContentIsSafe)
 {
     auto leaf = std::make_shared<PictureLayerLeafBox>();
     auto clip = std::make_shared<cw::RenderClipRect>();
@@ -57,8 +57,9 @@ TEST(PictureLayer, ClipRectContentIsUnsafe)
     layer.record(ctx, [&] { clip->paint(ctx, cw::Offset{0.0f, 0.0f}); });
 
     EXPECT_TRUE(layer.hasContent());
-    EXPECT_TRUE(layer.hasUnsafeGeometry())
-        << "PushClipRectCmd bakes an absolute rect and must be flagged unsafe";
+    EXPECT_FALSE(layer.hasUnsafeGeometry())
+        << "PushClipRectCmd bakes an absolute rect, but OffsetLayer::maybeReplay() "
+           "shifts it by hand on reposition (see shiftClipRects()), so it's not unsafe";
 }
 
 TEST(PictureLayer, BackdropFilterContentIsUnsafe)
@@ -90,9 +91,9 @@ TEST(PictureLayer, PlainClipContentHasNoBackdropFilter)
     cw::PaintContext ctx(200.0f, 200.0f);
     layer.record(ctx, [&] { clip->paint(ctx, cw::Offset{0.0f, 0.0f}); });
 
-    EXPECT_TRUE(layer.hasUnsafeGeometry());
+    EXPECT_FALSE(layer.hasUnsafeGeometry());
     EXPECT_FALSE(layer.hasBackdropFilter())
-        << "a plain clip is repositionable-unsafe but must not be flagged as a backdrop filter";
+        << "a plain clip must not be flagged as a backdrop filter";
 }
 
 TEST(PictureLayer, EmptyContentHasNoCommands)

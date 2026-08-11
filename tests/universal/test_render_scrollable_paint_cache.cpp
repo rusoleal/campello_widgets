@@ -24,13 +24,13 @@ namespace cw = systems::leal::campello_widgets;
 //
 // Stage 0d note: unlike RenderRepaintBoundary, these four always clip their
 // own content to their own viewport in performPaint() — so their cached
-// picture always contains a PushClipRectCmd and PictureLayer::
-// hasUnsafeGeometry() is always true for them. This means OffsetLayer's
-// cheap delta-translate reposition path (see test_offset_layer.cpp) never
-// actually triggers here — repositioning one of these always falls back to
-// a full re-record, correctly, since the viewport clip itself must move.
-// The tests below assert that honestly rather than a delta-translate that
-// would never happen for this class.
+// picture always contains a PushClipRectCmd. PictureLayer no longer flags
+// PushClipRectCmd as unsafe (OffsetLayer::maybeReplay() shifts its stored
+// rect by hand on reposition — see shiftClipRects()), so repositioning one
+// of these now takes the cheap delta-translate path too, same as any other
+// clipped content. This is the scroll/resize performance fix's actual
+// payoff: previously every scroll delta forced a full re-record of the
+// scrollable's entire visible content.
 
 namespace
 {
@@ -221,7 +221,7 @@ TEST(RenderPageViewPaintCache, MarkNeedsPaintForcesReRecording)
         << "dirtying the page view (e.g. a page-drag delta) should force a fresh recording";
 }
 
-TEST(RenderSingleChildScrollViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
+TEST(RenderSingleChildScrollViewPaintCache, RepositionShiftsOwnViewportClipWithoutReRecording)
 {
     auto child = std::make_shared<ScrollableCountingRenderBox>();
     cw::RenderSingleChildScrollView view;
@@ -236,12 +236,12 @@ TEST(RenderSingleChildScrollViewPaintCache, RepositionForcesReRecordDueToOwnView
     cw::PaintContext ctx2(200.0f, 200.0f);
     view.paint(ctx2, cw::Offset{50.0f, 0.0f});
 
-    EXPECT_EQ(child->paintCount, 2)
-        << "a scroll view always clips to its own viewport, so its cached picture "
-           "always has unsafe geometry — reposition must fall back to a full re-record";
+    EXPECT_EQ(child->paintCount, 1)
+        << "a scroll view's own viewport clip is a PushClipRectCmd, which is cheaply "
+           "repositionable — reposition must not force a full re-record";
 }
 
-TEST(RenderListViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
+TEST(RenderListViewPaintCache, RepositionShiftsOwnViewportClipWithoutReRecording)
 {
     auto child = std::make_shared<ScrollableCountingRenderBox>();
     cw::RenderListView view;
@@ -257,12 +257,12 @@ TEST(RenderListViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
     cw::PaintContext ctx2(200.0f, 200.0f);
     view.paint(ctx2, cw::Offset{0.0f, 40.0f});
 
-    EXPECT_EQ(child->paintCount, 2)
-        << "a list view always clips to its own viewport, so reposition must "
-           "fall back to a full re-record";
+    EXPECT_EQ(child->paintCount, 1)
+        << "a list view's own viewport clip is cheaply repositionable — reposition "
+           "must not force a full re-record";
 }
 
-TEST(RenderGridViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
+TEST(RenderGridViewPaintCache, RepositionShiftsOwnViewportClipWithoutReRecording)
 {
     auto child = std::make_shared<ScrollableCountingRenderBox>();
     cw::RenderGridView view;
@@ -279,12 +279,12 @@ TEST(RenderGridViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
     cw::PaintContext ctx2(200.0f, 200.0f);
     view.paint(ctx2, cw::Offset{0.0f, 40.0f});
 
-    EXPECT_EQ(child->paintCount, 2)
-        << "a grid view always clips to its own viewport, so reposition must "
-           "fall back to a full re-record";
+    EXPECT_EQ(child->paintCount, 1)
+        << "a grid view's own viewport clip is cheaply repositionable — reposition "
+           "must not force a full re-record";
 }
 
-TEST(RenderPageViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
+TEST(RenderPageViewPaintCache, RepositionShiftsOwnViewportClipWithoutReRecording)
 {
     auto child = std::make_shared<ScrollableCountingRenderBox>();
     cw::RenderPageView view;
@@ -298,7 +298,7 @@ TEST(RenderPageViewPaintCache, RepositionForcesReRecordDueToOwnViewportClip)
     cw::PaintContext ctx2(200.0f, 200.0f);
     view.paint(ctx2, cw::Offset{40.0f, 0.0f});
 
-    EXPECT_EQ(child->paintCount, 2)
-        << "a page view always clips to its own viewport, so reposition must "
-           "fall back to a full re-record";
+    EXPECT_EQ(child->paintCount, 1)
+        << "a page view's own viewport clip is cheaply repositionable — reposition "
+           "must not force a full re-record";
 }

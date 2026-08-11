@@ -107,11 +107,14 @@ TEST(OffsetLayer, IdentityReplayIsBracketedWithCacheReplayMarkers)
         << "identity replay must close with CacheReplayEndCmd";
 }
 
-// The delta-translate reposition path can never carry clip-shape/shader-mask
-// content in the first place (hasUnsafeGeometry() forces a full re-record
-// on reposition instead — see RepositionWithUnsafeGeometryForcesReRecording
-// above), so it is intentionally left unbracketed.
-TEST(OffsetLayer, DeltaTranslateReplayIsNotBracketed)
+// The delta-translate reposition path is content the GPU clip-shape/
+// shader-mask/save-layer/shadow caches can still reuse — only *where* it's
+// drawn moved, not the content itself — so it's bracketed exactly like an
+// identity replay (see CacheReplayBeginCmd's doc comment and
+// PictureLayer's doc comment for why every GPU-cacheable consumer already
+// re-applies the ambient transform, which now includes this reposition, on
+// every use regardless of cache hit).
+TEST(OffsetLayer, DeltaTranslateReplayIsBracketed)
 {
     cw::OffsetLayer layer;
     int invocations = 0;
@@ -126,13 +129,14 @@ TEST(OffsetLayer, DeltaTranslateReplayIsNotBracketed)
     const bool replayed = layer.maybeReplay(ctx2, secondOffset, cw::Size{60.0f, 50.0f}, /*dirty=*/false);
     ASSERT_TRUE(replayed);
 
+    bool sawBegin = false, sawEnd = false;
     for (const auto& c : ctx2.commands())
     {
-        EXPECT_EQ(std::get_if<cw::CacheReplayBeginCmd>(&c), nullptr)
-            << "delta-translate replay must not be wrapped in cache-replay markers";
-        EXPECT_EQ(std::get_if<cw::CacheReplayEndCmd>(&c), nullptr)
-            << "delta-translate replay must not be wrapped in cache-replay markers";
+        if (std::get_if<cw::CacheReplayBeginCmd>(&c)) sawBegin = true;
+        if (std::get_if<cw::CacheReplayEndCmd>(&c))   sawEnd   = true;
     }
+    EXPECT_TRUE(sawBegin) << "delta-translate replay must be wrapped in cache-replay markers";
+    EXPECT_TRUE(sawEnd)   << "delta-translate replay must be wrapped in cache-replay markers";
 }
 
 // The riskiest piece of the cache-replay design (see the clip-shape GPU
@@ -270,7 +274,10 @@ TEST(OffsetLayer, RepositionWithClipFreeContentReplaysViaDeltaTranslate)
     EXPECT_TRUE(foundOriginalRect);
 }
 
-TEST(OffsetLayer, RepositionWithUnsafeGeometryForcesReRecording)
+// PushClipRectCmd is the one absolute-geometry command OffsetLayer can
+// still cheaply reposition (see PictureLayer's doc comment): its stored
+// rect gets shifted by hand instead of forcing a full re-record.
+TEST(OffsetLayer, RepositionWithClipRectShiftsClipGeometryAndReplays)
 {
     cw::OffsetLayer layer;
     int invocations = 0;
@@ -284,20 +291,28 @@ TEST(OffsetLayer, RepositionWithUnsafeGeometryForcesReRecording)
     cw::PaintContext ctx2(200.0f, 200.0f);
     const bool replayed = layer.maybeReplay(ctx2, secondOffset, cw::Size{60.0f, 50.0f}, /*dirty=*/false);
 
-    EXPECT_FALSE(replayed)
-        << "content containing a clip must fall back to a full re-record on reposition, "
-           "matching PaintCache's existing behavior";
+    EXPECT_TRUE(replayed)
+        << "a plain clip rect is cheaply repositionable — it must not force a full re-record";
+    EXPECT_EQ(invocations, 1) << "a successful reposition-replay must not re-invoke paintContent";
 
-    if (!replayed)
-        layer.record(ctx2, secondOffset, [&] { paintClippedRect(ctx2, invocations); });
+    // paintClippedRect() clips to (0,0,100,100) at record time; the replay
+    // must carry that rect shifted by (secondOffset - firstOffset) = (20,5).
+    const cw::PushClipRectCmd* clip = nullptr;
+    for (const auto& c : ctx2.commands())
+        if (const auto* pc = std::get_if<cw::PushClipRectCmd>(&c)) { clip = pc; break; }
 
-    EXPECT_EQ(invocations, 2);
+    ASSERT_NE(clip, nullptr) << "replayed content must still carry the clip command";
+    EXPECT_FLOAT_EQ(clip->rect.x, 20.0f);
+    EXPECT_FLOAT_EQ(clip->rect.y, 5.0f);
+    EXPECT_FLOAT_EQ(clip->rect.width, 100.0f);
+    EXPECT_FLOAT_EQ(clip->rect.height, 100.0f);
 
-    // A third paint at the same (second) offset should now replay cleanly.
+    // A third paint at the same (second) offset should now replay cleanly
+    // via the identity-replay path.
     cw::PaintContext ctx3(200.0f, 200.0f);
     const bool replayedAgain = layer.maybeReplay(ctx3, secondOffset, cw::Size{60.0f, 50.0f}, /*dirty=*/false);
     EXPECT_TRUE(replayedAgain);
-    EXPECT_EQ(invocations, 2) << "unchanged offset should replay the cache again";
+    EXPECT_EQ(invocations, 1) << "unchanged offset should replay the cache again";
 }
 
 TEST(OffsetLayer, BackdropFilterContentNeverReplaysEvenAtUnchangedOffset)

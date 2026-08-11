@@ -1,4 +1,5 @@
 #include "d3d_draw_backend.hpp"
+#include "gpu/path_tessellation.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
@@ -64,9 +65,6 @@ struct alignas(16) RectUniforms
     float _pad[2];
 };
 
-// Real per-vertex data for the rect pipeline (see drawFilledQuad()).
-struct RectVertex { float x, y, w; };
-
 struct alignas(16) QuadUniforms
 {
     float viewport[2];
@@ -105,6 +103,17 @@ struct alignas(16) ClipShapeUniforms
     float corner_r;      // logical corner radius (ignored when kind == 1)
     float kind;          // 0 = rounded rect, 1 = ellipse/oval
     float _pad[2];
+};
+
+struct alignas(16) ShaderMaskUniforms
+{
+    float viewport[2];    // framebuffer width, height
+    float gradient_type;  // 0 = linear, 1 = radial
+    float _pad0;
+    float gradient_p1[4]; // linear: begin.xy; radial: center.xy (pixels)
+    float gradient_p2[4]; // linear: end.xy;   radial: radius in .x (pixels)
+    float blend_mode;     // 0 = srcIn, 1 = modulate
+    float _pad1[3];
 };
 
 struct alignas(16) BlurUniforms
@@ -322,6 +331,8 @@ D3DDrawBackend::D3DDrawBackend(
     auto blur_ps  = loadShader(device_, kblur_ps_cso,  kblur_ps_csoSize);
     auto clip_shape_vs = loadShader(device_, kclip_shape_vs_cso, kclip_shape_vs_csoSize);
     auto clip_shape_ps = loadShader(device_, kclip_shape_ps_cso, kclip_shape_ps_csoSize);
+    auto shader_mask_vs = loadShader(device_, kshader_mask_vs_cso, kshader_mask_vs_csoSize);
+    auto shader_mask_ps = loadShader(device_, kshader_mask_ps_cso, kshader_mask_ps_csoSize);
 
     if (!rect_vs || !rect_ps || !quad_vs || !quad_ps ||
         !shape_vs || !shape_ps || !line_vs || !line_ps ||
@@ -392,8 +403,41 @@ D3DDrawBackend::D3DDrawBackend(
         clip_shape_uniform_bgl_ = device_->createBindGroupLayout(desc);
     }
 
+    // --- Bind group layout 0 for shader-mask composite: uniform@0 (vertex).
+    {
+        GPU::BindGroupLayoutDescriptor desc{};
+        desc.entries = { cs(GPU::ShaderStage::vertex) };
+        shader_mask_uniform_bgl_ = device_->createBindGroupLayout(desc);
+    }
+
+    // --- Bind group layout 1 for shader-mask composite: child texture@0,
+    //     gradient LUT@1, sampler@2 (pixel) — mirrors Metal's bindings.
+    {
+        GPU::EntryObject childTex{};
+        childTex.binding    = 0;
+        childTex.visibility = GPU::ShaderStage::fragment;
+        childTex.type       = GPU::EntryObjectType::texture;
+        childTex.data.texture.multisampled  = false;
+        childTex.data.texture.sampleType    = GPU::EntryObjectTextureType::ttFloat;
+        childTex.data.texture.viewDimension = GPU::TextureType::tt2d;
+
+        GPU::EntryObject lutTex = childTex;
+        lutTex.binding = 1;
+
+        GPU::EntryObject smp{};
+        smp.binding    = 2;
+        smp.visibility = GPU::ShaderStage::fragment;
+        smp.type       = GPU::EntryObjectType::sampler;
+        smp.data.sampler.type = GPU::EntryObjectSamplerType::filtering;
+
+        GPU::BindGroupLayoutDescriptor desc{};
+        desc.entries = { childTex, lutTex, smp };
+        shader_mask_bgl_ = device_->createBindGroupLayout(desc);
+    }
+
     if (!rect_bgl_ || !shape_bgl_ || !line_bgl_ || !quad_uniform_bgl_ ||
-        !quad_tex_bgl_ || !blur_uniform_bgl_ || !clip_shape_uniform_bgl_)
+        !quad_tex_bgl_ || !blur_uniform_bgl_ || !clip_shape_uniform_bgl_ ||
+        !shader_mask_uniform_bgl_ || !shader_mask_bgl_)
         return;
 
     auto makeLayout = [&](std::vector<std::shared_ptr<GPU::BindGroupLayout>> bgls) {
@@ -413,8 +457,10 @@ D3DDrawBackend::D3DDrawBackend(
     // Same split again, reusing quad_tex_bgl_ for the child texture+sampler —
     // see drawClipShapeComposite().
     auto clip_shape_layout = makeLayout({ clip_shape_uniform_bgl_, quad_tex_bgl_ });
+    // ShaderMask uses its own texture+sampler bind group with two textures.
+    auto shader_mask_layout = makeLayout({ shader_mask_uniform_bgl_, shader_mask_bgl_ });
     if (!rect_layout || !shape_layout || !line_layout || !quad_layout || !blur_layout ||
-        !clip_shape_layout)
+        !clip_shape_layout || !shader_mask_layout)
         return;
 
     // --- Rect pipeline (premultiplied-alpha blend) ---
@@ -618,6 +664,50 @@ D3DDrawBackend::D3DDrawBackend(
         clip_shape_pipeline_ = device_->createRenderPipeline(desc);
     }
 
+    // --- ShaderMask composite pipeline (child tex + gradient LUT + sampler) ---
+    if (shader_mask_vs && shader_mask_ps)
+    {
+        GPU::ColorState colorState{};
+        colorState.format    = pixel_format_;
+        colorState.writeMask = GPU::ColorWrite::all;
+        colorState.blend     = premultipliedAlphaBlend();
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader_mask_vs;
+        desc.vertex.entryPoint = "ShaderMaskVS";
+
+        GPU::VertexAttribute posAttr{};
+        posAttr.componentType  = GPU::ComponentType::ctFloat;
+        posAttr.accessorType   = GPU::AccessorType::acVec3;
+        posAttr.offset         = offsetof(QuadVertex, x);
+        posAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute uvAttr{};
+        uvAttr.componentType  = GPU::ComponentType::ctFloat;
+        uvAttr.accessorType   = GPU::AccessorType::acVec2;
+        uvAttr.offset         = offsetof(QuadVertex, u);
+        uvAttr.shaderLocation = 1;
+
+        GPU::VertexLayout layout{};
+        layout.arrayStride = sizeof(QuadVertex);
+        layout.attributes  = { posAttr, uvAttr };
+        layout.stepMode    = GPU::StepMode::vertex;
+        desc.vertex.buffers = { layout };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader_mask_ps;
+        frag.entryPoint = "ShaderMaskPS";
+        frag.targets.push_back(colorState);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+        desc.layout    = shader_mask_layout;
+
+        shader_mask_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
     // --- Default sampler (linear, clamp-to-edge) ---
     {
         GPU::SamplerDescriptor sd{};
@@ -725,6 +815,33 @@ void D3DDrawBackend::drawFilledRect(
         ProjectedCorner{x,     y,     1.0f, 0.0f, 0.0f}, ProjectedCorner{x + w, y,     1.0f, 0.0f, 0.0f},
         ProjectedCorner{x,     y + h, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x + w, y + h, 1.0f, 0.0f, 0.0f},
         color, encoder);
+}
+
+void D3DDrawBackend::drawFilledVertices(
+    const std::vector<RectVertex>& verts,
+    const Color& color,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_pipeline_ || !rect_bgl_ || verts.empty()) return;
+
+    auto vbuf = rect_vertex_pool_.acquire(*device_, verts.size() * sizeof(RectVertex), verts.data());
+    if (!vbuf) return;
+
+    RectUniforms u{};
+    u.color[0]    = color.r;
+    u.color[1]    = color.g;
+    u.color[2]    = color.b;
+    u.color[3]    = color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    auto slot = rect_uniform_pool_.acquire(*device_, rect_bgl_, sizeof(RectUniforms), &u);
+    if (!slot.bind_group) return;
+
+    encoder.setPipeline(rect_pipeline_);
+    encoder.setBindGroup(0, slot.bind_group);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.draw(static_cast<uint32_t>(verts.size()));
 }
 
 void D3DDrawBackend::drawRect(
@@ -895,6 +1012,238 @@ void D3DDrawBackend::drawLine(
     encoder.setPipeline(line_pipeline_);
     encoder.setBindGroup(0, slot.bind_group);
     encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// drawArc — tessellate to triangles and draw via rect_pipeline_
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::drawArc(
+    const DrawArcCmd&       cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    const float cx = cmd.rect.x + cmd.rect.width * 0.5f;
+    const float cy = cmd.rect.y + cmd.rect.height * 0.5f;
+    const float rx = cmd.rect.width * 0.5f;
+    const float ry = cmd.rect.height * 0.5f;
+    if (rx <= 0.0f || ry <= 0.0f) return;
+
+    const float abs_sweep = std::abs(cmd.sweep_angle);
+    const int   segments  = std::max(3, static_cast<int>(abs_sweep * 20.0f));
+
+    std::vector<RectVertex> verts;
+    verts.reserve(static_cast<size_t>(segments) * 6);
+
+    const bool is_stroke = (cmd.paint.style == PaintStyle::stroke);
+    const float stroke_w = std::max(1.0f, cmd.paint.stroke_width);
+
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    const float pixel_stroke = stroke_w * scale;
+
+    for (int i = 0; i < segments; ++i)
+    {
+        const float t0 = cmd.start_angle + cmd.sweep_angle * (float(i) / float(segments));
+        const float t1 = cmd.start_angle + cmd.sweep_angle * (float(i + 1) / float(segments));
+
+        if (cmd.use_center)
+        {
+            const vm::Vector4<float> p_center = transform * vm::Vector4<float>(cx, cy, 0.0f, 1.0f);
+            const vm::Vector4<float> p0 = transform * vm::Vector4<float>(cx + rx * std::cos(t0), cy + ry * std::sin(t0), 0.0f, 1.0f);
+            const vm::Vector4<float> p1 = transform * vm::Vector4<float>(cx + rx * std::cos(t1), cy + ry * std::sin(t1), 0.0f, 1.0f);
+
+            verts.push_back({p_center.x(), p_center.y(), p_center.w()});
+            verts.push_back({p0.x(), p0.y(), p0.w()});
+            verts.push_back({p1.x(), p1.y(), p1.w()});
+        }
+        else
+        {
+            const auto eval = [&](float t, float r) -> vm::Vector4<float> {
+                const float ox = cx + rx * std::cos(t);
+                const float oy = cy + ry * std::sin(t);
+                float nx = std::cos(t) / rx;
+                float ny = std::sin(t) / ry;
+                float nlen = std::sqrt(nx * nx + ny * ny);
+                if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; }
+                return transform * vm::Vector4<float>(ox - r * nx, oy - r * ny, 0.0f, 1.0f);
+            };
+
+            const float inner_r = is_stroke ? pixel_stroke : 0.0f;
+
+            const auto p00 = eval(t0, 0.0f);
+            const auto p01 = eval(t0, inner_r);
+            const auto p10 = eval(t1, 0.0f);
+            const auto p11 = eval(t1, inner_r);
+
+            verts.push_back({p01.x(), p01.y(), p01.w()});
+            verts.push_back({p00.x(), p00.y(), p00.w()});
+            verts.push_back({p11.x(), p11.y(), p11.w()});
+            verts.push_back({p11.x(), p11.y(), p11.w()});
+            verts.push_back({p00.x(), p00.y(), p00.w()});
+            verts.push_back({p10.x(), p10.y(), p10.w()});
+        }
+    }
+
+    if (!verts.empty())
+        drawFilledVertices(verts, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawPath — CPU tessellation to triangles, drawn via rect_pipeline_
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::drawPath(
+    const DrawPathCmd&      cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_pipeline_) return;
+
+    auto contours = buildPathContours(cmd.path);
+    if (contours.empty()) return;
+
+    std::vector<RectVertex> verts;
+
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+
+    if (cmd.paint.style == PaintStyle::stroke)
+    {
+        float half_sw = std::max(0.5f, cmd.paint.stroke_width * scale * 0.5f);
+        for (const auto& contour : contours)
+        {
+            for (size_t i = 0; i + 1 < contour.size(); ++i)
+            {
+                const auto& a = contour[i];
+                const auto& b = contour[i + 1];
+                float dx = b.x - a.x;
+                float dy = b.y - a.y;
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len < 1e-4f) continue;
+                float nx = -dy / len * half_sw;
+                float ny =  dx / len * half_sw;
+
+                auto p00 = transform * vm::Vector4<float>(a.x + nx, a.y + ny, 0.0f, 1.0f);
+                auto p01 = transform * vm::Vector4<float>(a.x - nx, a.y - ny, 0.0f, 1.0f);
+                auto p10 = transform * vm::Vector4<float>(b.x + nx, b.y + ny, 0.0f, 1.0f);
+                auto p11 = transform * vm::Vector4<float>(b.x - nx, b.y - ny, 0.0f, 1.0f);
+
+                verts.push_back({p01.x(), p01.y(), p01.w()});
+                verts.push_back({p00.x(), p00.y(), p00.w()});
+                verts.push_back({p11.x(), p11.y(), p11.w()});
+                verts.push_back({p11.x(), p11.y(), p11.w()});
+                verts.push_back({p00.x(), p00.y(), p00.w()});
+                verts.push_back({p10.x(), p10.y(), p10.w()});
+            }
+        }
+    }
+    else
+    {
+        std::vector<PathTessVertex> triangles;
+        for (const auto& contour : contours)
+            triangulateContour(contour, triangles);
+
+        verts.reserve(triangles.size());
+        for (const auto& v : triangles)
+        {
+            auto p = transform * vm::Vector4<float>(v.x, v.y, 0.0f, 1.0f);
+            verts.push_back({p.x(), p.y(), p.w()});
+        }
+    }
+
+    if (verts.empty()) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    drawFilledVertices(verts, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawPoints — decompose to circles/lines using existing pipelines
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::drawPoints(
+    const DrawPointsCmd&    cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (cmd.points.empty()) return;
+
+    switch (cmd.mode)
+    {
+        case PointMode::points:
+        {
+            const float radius = std::max(1.0f, cmd.paint.stroke_width * 0.5f);
+            Paint p = cmd.paint;
+            p.style = PaintStyle::fill;
+            for (const auto& pt : cmd.points)
+            {
+                DrawCircleCmd circle{pt, radius, p};
+                drawCircle(circle, transform, clip, encoder);
+            }
+            break;
+        }
+        case PointMode::lines:
+        {
+            Paint p = cmd.paint;
+            p.style = PaintStyle::stroke;
+            for (size_t i = 0; i + 1 < cmd.points.size(); i += 2)
+            {
+                DrawLineCmd line{cmd.points[i], cmd.points[i + 1], p};
+                drawLine(line, transform, clip, encoder);
+            }
+            break;
+        }
+        case PointMode::polygon:
+        {
+            if (cmd.points.size() < 2) break;
+            Paint p = cmd.paint;
+            p.style = PaintStyle::stroke;
+            for (size_t i = 0; i + 1 < cmd.points.size(); ++i)
+            {
+                DrawLineCmd line{cmd.points[i], cmd.points[i + 1], p};
+                drawLine(line, transform, clip, encoder);
+            }
+            DrawLineCmd close{cmd.points.back(), cmd.points.front(), p};
+            drawLine(close, transform, clip, encoder);
+            break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// saveLayerComposite — draw the offscreen child texture modulated by opacity
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::saveLayerComposite(
+    std::shared_ptr<GPU::Texture> child_tex,
+    const SaveLayerCmd&           cmd,
+    const Matrix4&                transform,
+    const Rect&                   clip,
+    GPU::RenderPassEncoder&       encoder)
+{
+    if (!child_tex) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+
+    drawTexturedQuad(
+        child_tex,
+        ProjectedCorner{c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+        ProjectedCorner{c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        ProjectedCorner{c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        ProjectedCorner{c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
+        cmd.paint.color.a,
+        encoder);
 }
 
 // ---------------------------------------------------------------------------
@@ -1257,6 +1606,165 @@ void D3DDrawBackend::drawClipShapeComposite(
     if (!texBindGroup) return;
 
     encoder.setPipeline(clip_shape_pipeline_);
+    encoder.setBindGroup(0, uniformSlot.bind_group);
+    encoder.setBindGroup(1, texBindGroup);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// ShaderMask compositing
+// ---------------------------------------------------------------------------
+
+std::shared_ptr<GPU::Texture> D3DDrawBackend::buildGradientLUT(
+    const std::vector<Color>& colors,
+    const std::vector<float>& stops)
+{
+    if (colors.empty()) return nullptr;
+
+    constexpr int kLutSize = 256;
+    std::vector<uint8_t> data(kLutSize * 4);
+
+    for (int i = 0; i < kLutSize; ++i)
+    {
+        const float t = static_cast<float>(i) / static_cast<float>(kLutSize - 1);
+
+        Color c;
+        if (colors.size() == 1 || stops.empty())
+        {
+            c = colors[0];
+        }
+        else
+        {
+            int lo = 0;
+            int hi = static_cast<int>(colors.size()) - 1;
+            for (int s = 0; s < static_cast<int>(stops.size()) - 1; ++s)
+            {
+                if (t >= stops[s] && t <= stops[s + 1])
+                {
+                    lo = s;
+                    hi = s + 1;
+                    break;
+                }
+            }
+            const float range = stops[hi] - stops[lo];
+            const float f     = (range > 0.0001f) ? (t - stops[lo]) / range : 0.0f;
+            const Color& ca   = colors[lo];
+            const Color& cb   = colors[hi];
+            c = Color::fromRGBA(
+                ca.r + f * (cb.r - ca.r),
+                ca.g + f * (cb.g - ca.g),
+                ca.b + f * (cb.b - ca.b),
+                ca.a + f * (cb.a - ca.a));
+        }
+
+        data[i * 4 + 0] = static_cast<uint8_t>(c.r * 255.0f);
+        data[i * 4 + 1] = static_cast<uint8_t>(c.g * 255.0f);
+        data[i * 4 + 2] = static_cast<uint8_t>(c.b * 255.0f);
+        data[i * 4 + 3] = static_cast<uint8_t>(c.a * 255.0f);
+    }
+
+    auto lut = device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_,
+        kLutSize, 1, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copyDst)));
+    if (!lut) return nullptr;
+
+    lut->upload(0, static_cast<uint64_t>(kLutSize * 4), data.data());
+    return lut;
+}
+
+void D3DDrawBackend::drawShaderMaskComposite(
+    std::shared_ptr<GPU::Texture> child_tex,
+    const DrawShaderMaskBeginCmd& cmd,
+    const Matrix4&                transform,
+    const Rect&                   clip,
+    GPU::RenderPassEncoder&       encoder)
+{
+    if (!shader_mask_pipeline_ || !shader_mask_uniform_bgl_ || !shader_mask_bgl_ || !quad_sampler_ || !child_tex)
+        return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+
+    const QuadVertex verts[6] = {
+        {c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        {c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        {c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
+    std::shared_ptr<GPU::Texture> lut_tex;
+    float gradient_type = 0.0f;
+    float p1[2] = {0.0f, 0.0f};
+    float p2[2] = {0.0f, 0.0f};
+
+    std::visit([&](auto&& s) {
+        using S = std::decay_t<decltype(s)>;
+        if constexpr (std::is_same_v<S, LinearGradient>) {
+            gradient_type = 0.0f;
+            auto tp1 = transform * vm::Vector4<float>(cmd.bounds.x + s.begin.x,
+                                                       cmd.bounds.y + s.begin.y, 0.0f, 1.0f);
+            auto tp2 = transform * vm::Vector4<float>(cmd.bounds.x + s.end.x,
+                                                       cmd.bounds.y + s.end.y,   0.0f, 1.0f);
+            p1[0] = tp1.x();
+            p1[1] = tp1.y();
+            p2[0] = tp2.x();
+            p2[1] = tp2.y();
+            lut_tex = buildGradientLUT(s.colors, s.stops);
+        } else if constexpr (std::is_same_v<S, RadialGradient>) {
+            gradient_type = 1.0f;
+            auto tc = transform * vm::Vector4<float>(cmd.bounds.x + s.center.x,
+                                                      cmd.bounds.y + s.center.y, 0.0f, 1.0f);
+            auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+            float sc = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+            p1[0] = tc.x();
+            p1[1] = tc.y();
+            p2[0] = s.radius * sc;
+            p2[1] = 0.0f;
+            lut_tex = buildGradientLUT(s.colors, s.stops);
+        }
+    }, cmd.shader);
+
+    if (!lut_tex) return;
+
+    ShaderMaskUniforms u{};
+    u.viewport[0]    = vp_w_;
+    u.viewport[1]    = vp_h_;
+    u.gradient_type  = gradient_type;
+    u.gradient_p1[0] = p1[0];
+    u.gradient_p1[1] = p1[1];
+    u.gradient_p1[2] = 0.0f;
+    u.gradient_p1[3] = 0.0f;
+    u.gradient_p2[0] = p2[0];
+    u.gradient_p2[1] = p2[1];
+    u.gradient_p2[2] = 0.0f;
+    u.gradient_p2[3] = 0.0f;
+    u.blend_mode     = (cmd.blend_mode == BlendMode::modulate) ? 1.0f : 0.0f;
+
+    auto uniformSlot = shader_mask_uniform_pool_.acquire(*device_, shader_mask_uniform_bgl_, sizeof(ShaderMaskUniforms), &u);
+    if (!uniformSlot.bind_group) return;
+
+    GPU::BindGroupDescriptor bgDesc{};
+    bgDesc.layout  = shader_mask_bgl_;
+    bgDesc.entries = {
+        GPU::BindGroupEntryDescriptor{0, child_tex},
+        GPU::BindGroupEntryDescriptor{1, lut_tex},
+        GPU::BindGroupEntryDescriptor{2, quad_sampler_},
+    };
+    auto texBindGroup = device_->createBindGroup(bgDesc);
+    if (!texBindGroup) return;
+
+    encoder.setPipeline(shader_mask_pipeline_);
     encoder.setBindGroup(0, uniformSlot.bind_group);
     encoder.setBindGroup(1, texBindGroup);
     encoder.setVertexBuffer(0, vbuf);

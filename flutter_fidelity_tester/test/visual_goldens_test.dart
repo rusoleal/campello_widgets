@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 import 'dart:typed_data';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -399,6 +400,342 @@ void main() {
       );
       await tester.pumpAndSettle();
       await captureAndSave(tester, '${goldensDir.path}/canvas_rotate.png');
+    });
+
+    testWidgets('canvas_api_arcs', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: ArcsPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_arcs.png');
+    });
+
+    testWidgets('canvas_api_paths', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: PathsPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_paths.png');
+    });
+
+    testWidgets('canvas_api_points', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: PointsPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_points.png');
+    });
+
+    testWidgets('canvas_api_clipping', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: ClippingPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_clipping.png');
+    });
+
+    testWidgets('canvas_api_paint_styles', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: PaintStylesPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_paint_styles.png');
+    });
+
+    testWidgets('canvas_api_save_layer', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: SaveLayerPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_save_layer.png');
+    });
+
+    testWidgets('canvas_api_draw_color', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: DrawColorPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_draw_color.png');
+    });
+
+    testWidgets('canvas_api_skew', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: SkewPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_skew.png');
+    });
+
+    testWidgets('canvas_api_path_arc', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: PathArcPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_path_arc.png');
+    });
+
+    testWidgets('canvas_api_draw_paint', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: DrawPaintPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_draw_paint.png');
+    });
+
+    testWidgets('canvas_api_rrect_complex', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: RRectComplexPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_rrect_complex.png');
+    });
+
+    testWidgets('canvas_api_blend_modes', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: BlendModesPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_blend_modes.png');
+    });
+
+    testWidgets('canvas_api_blend_modes_extended', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: BlendModesExtendedPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_blend_modes_extended.png');
+    });
+
+    testWidgets('canvas_api_clip_oval', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: CustomPaint(
+                  size: const Size(kFidelityWidth, kFidelityHeight),
+                  painter: ClipOvalPainter(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await captureAndSave(tester, '${goldensDir.path}/canvas_api_clip_oval.png');
     });
   });
 
@@ -858,11 +1195,31 @@ void main() {
   // Real Image tests with actual downloaded images
   group('Visual Golden PNGs - Real Image Tests', () {
     
-    // NOTE: This test uses a simpler approach - real images have async loading
-    // challenges in widget tests. The C++ comparison tests validate image rendering.
+    // Image.asset decoding runs on a background isolate outside the normal
+    // frame pipeline, so pumpAndSettle() alone does not reliably wait for
+    // the *first* decode of a given asset — the very first golden in this
+    // group would intermittently capture before the image finished loading,
+    // painting only the placeholder Container background. Precache every
+    // sample image once, up front, so all tests below hit an already-warm
+    // ImageCache (which persists for the lifetime of this test process).
+    testWidgets('warm up image cache', (WidgetTester tester) async {
+      await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+      final context = tester.element(find.byType(SizedBox));
+      // flutter test runs widget code in a fake-async zone that cannot
+      // progress genuine I/O (asset-bundle reads, JPEG decode) — awaiting
+      // precacheImage() directly here would hang forever. runAsync() steps
+      // out into the real async zone so the Future can actually complete.
+      await tester.runAsync(() async {
+        for (final asset in ['sample1.jpg', 'sample2.jpg', 'sample3.jpg', 'mountains.jpg']) {
+          await precacheImage(AssetImage('assets/images/$asset'), context);
+        }
+      });
+      await tester.pumpAndSettle();
+    });
+
     testWidgets('real_image_explicit_size', (WidgetTester tester) async {
       await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
-      
+
       await tester.pumpWidget(
         MaterialApp(
           debugShowCheckedModeBanner: false,
@@ -1054,6 +1411,174 @@ void main() {
       await tester.pumpAndSettle(const Duration(seconds: 2));
       await captureAndSave(tester, '${goldensDir.path}/real_image_with_opacity.png');
     });
+
+    testWidgets('real_image_boxfit_modes', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+
+      // sample1.jpg is 400x300 (4:3) — a 260x180 box (also ~4:3 but not
+      // identical, and smaller than the source in both axes) is small
+      // enough to force real scaling/cropping/clipping decisions for every
+      // fit mode, unlike a box that happens to share the image's exact
+      // aspect ratio (which would make several modes look identical).
+      Widget cell(double left, double top, BoxFit fit) {
+        return Positioned(
+          left: left,
+          top: top,
+          width: 260,
+          height: 180,
+          child: Container(
+            color: Colors.grey.shade300,
+            child: ClipRect(
+              child: Image.asset(
+                'assets/images/sample1.jpg',
+                fit: fit,
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Stack(
+                  children: [
+                    cell(40, 40, BoxFit.fill),
+                    cell(340, 40, BoxFit.contain),
+                    cell(640, 40, BoxFit.cover),
+                    cell(940, 40, BoxFit.fitWidth),
+                    cell(40, 280, BoxFit.fitHeight),
+                    cell(340, 280, BoxFit.none),
+                    cell(640, 280, BoxFit.scaleDown),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_boxfit_modes.png');
+    });
+
+    testWidgets('real_image_boxfit_scaledown_cap', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+
+      // sample1.jpg is 400x300 — a 550x450 box is larger than the source
+      // in both axes, so BoxFit.contain will upscale it (filling the box
+      // uniformly) while BoxFit.scaleDown must not — this is the one
+      // behavioral difference between the two modes, and the only way to
+      // exercise it (a box smaller than the source makes them identical).
+      Widget cell(double left, double top, BoxFit fit) {
+        return Positioned(
+          left: left,
+          top: top,
+          width: 550,
+          height: 450,
+          child: Container(
+            color: Colors.grey.shade300,
+            child: ClipRect(
+              child: Image.asset(
+                'assets/images/sample1.jpg',
+                fit: fit,
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Stack(
+                  children: [
+                    cell(40, 100, BoxFit.contain),
+                    cell(650, 100, BoxFit.scaleDown),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_boxfit_scaledown_cap.png');
+    });
+
+    testWidgets('real_image_boxfit_gallery_replica', (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(kFidelityWidth, kFidelityHeight));
+
+      // Mirrors examples/gallery/gallery_app.cpp's fitSample() exactly:
+      // a 120x120 Container (same background color), an 8px ClipRRect,
+      // and mountains.jpg (960x642) as the source — not the smaller,
+      // more generic sample1.jpg used by the other BoxFit goldens above.
+      const boxSize = 120.0;
+      Widget fitSample(double left, double top, BoxFit fit) {
+        return Positioned(
+          left: left,
+          top: top,
+          width: boxSize,
+          height: boxSize,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(8.0),
+            child: Container(
+              width: boxSize,
+              height: boxSize,
+              color: const Color.fromRGBO(230, 230, 237, 1.0),
+              child: Image.asset(
+                'assets/images/mountains.jpg',
+                width: boxSize,
+                height: boxSize,
+                fit: fit,
+              ),
+            ),
+          ),
+        );
+      }
+
+      await tester.pumpWidget(
+        MaterialApp(
+          debugShowCheckedModeBanner: false,
+          home: Scaffold(
+            backgroundColor: Colors.white,
+            body: SizedBox(
+              width: kFidelityWidth,
+              height: kFidelityHeight,
+              child: RepaintBoundary(
+                child: Stack(
+                  children: [
+                    fitSample(40, 40, BoxFit.fill),
+                    fitSample(220, 40, BoxFit.contain),
+                    fitSample(400, 40, BoxFit.cover),
+                    fitSample(580, 40, BoxFit.fitWidth),
+                    fitSample(760, 40, BoxFit.fitHeight),
+                    fitSample(940, 40, BoxFit.none),
+                    fitSample(1120, 40, BoxFit.scaleDown),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle(const Duration(seconds: 2));
+      await captureAndSave(tester, '${goldensDir.path}/real_image_boxfit_gallery_replica.png');
+    });
   });
 }
 
@@ -1197,7 +1722,7 @@ class ComplexScenePainter extends CustomPainter {
     // Scale coordinates for 1280x720 canvas
     final scaleX = size.width / 400.0;
     final scaleY = size.height / 400.0;
-    
+
     final bgColors = [Colors.blue.shade100, Colors.purple.shade100];
     for (int i = 0; i < 5; i++) {
       for (int j = 0; j < 5; j++) {
@@ -1209,34 +1734,33 @@ class ComplexScenePainter extends CustomPainter {
       }
     }
 
-    canvas.save();
-    canvas.translate(200 * scaleX, 200 * scaleY);
-
     final cardRRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(-120 * scaleX, -80 * scaleY, 240 * scaleX, 160 * scaleY),
+      Rect.fromLTWH(80 * scaleX, 120 * scaleY, 240 * scaleX, 160 * scaleY),
       Radius.circular(20 * scaleX),
     );
-    canvas.drawRRect(cardRRect, Paint()..color = Colors.white.withAlpha(229));
 
-    final borderPaint = Paint()
-      ..color = Colors.blue.shade300
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3 * scaleX;
-    canvas.drawRRect(cardRRect, borderPaint);
-
-    canvas.save();
-    canvas.clipRRect(cardRRect);
-
-    final circleColors = [Colors.red, Colors.green, Colors.orange];
+    // Draw inner circles first, then the card on top so the rounded rect
+    // visually clips them without relying on translated clipRRect.
+    final circleColors = [
+      const Color(0xFFF44336),
+      const Color(0xFF4CAF50),
+      const Color(0xFFFF9800),
+    ];
     for (int i = 0; i < 3; i++) {
       final paint = Paint()
         ..color = circleColors[i].withAlpha(153);
-      final x = -60.0 * scaleX + i * 60 * scaleX;
-      canvas.drawCircle(Offset(x, 0), 35 * scaleX, paint);
+      final x = 80.0 * scaleX + 60.0 * scaleX + i * 60 * scaleX;
+      final y = 120.0 * scaleY + 80.0 * scaleY;
+      canvas.drawCircle(Offset(x, y), 35 * scaleX, paint);
     }
 
-    canvas.restore();
-    canvas.restore();
+    canvas.drawRRect(cardRRect, Paint()..color = const Color(0xE6FFFFFF));
+
+    final borderPaint = Paint()
+      ..color = const Color(0xFF64B5F6)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3 * scaleX;
+    canvas.drawRRect(cardRRect, borderPaint);
   }
 
   @override
@@ -1397,6 +1921,663 @@ class RotatePainter extends CustomPainter {
         Paint()..color = const Color(0x662196F3));
       canvas.restore();
     }
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class ArcsPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Blue pie slice (matches C++ Color::fromRGB(0.1294, 0.5882, 0.9529))
+    canvas.drawArc(
+      Rect.fromLTWH(20 * scaleX, 20 * scaleY, 150 * scaleX, 150 * scaleY),
+      0.0, 1.5, true,
+      Paint()..color = const Color(0xFF2196F3),
+    );
+
+    // Green stroke arc (matches C++ Color::fromRGB(0.2980, 0.6863, 0.3137))
+    final greenStroke = Paint()
+      ..color = const Color(0xFF4CAF50)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 10 * scaleX;
+    canvas.drawArc(
+      Rect.fromLTWH(200 * scaleX, 20 * scaleY, 150 * scaleX, 150 * scaleY),
+      0.5, 2.0, false,
+      greenStroke,
+    );
+
+    // Pie chart (matches C++ pure red/orange/yellow/green)
+    final colors = [
+      const Color(0xFFFF0000),
+      const Color(0xFFFFA500),
+      const Color(0xFFFFFF00),
+      const Color(0xFF00FF00),
+    ];
+    final values = [0.3, 0.25, 0.2, 0.25];
+    var currentAngle = -math.pi / 2.0;
+    for (int i = 0; i < 4; i++) {
+      final sweep = values[i] * 2.0 * math.pi;
+      final cx = 100.0 * scaleX;
+      final cy = 280.0 * scaleY;
+      final w = 70.0 * scaleX;
+      final h = 70.0 * scaleY;
+      canvas.drawArc(
+        Rect.fromLTWH(cx - w, cy - h, w * 2, h * 2),
+        currentAngle, sweep, true,
+        Paint()..color = colors[i],
+      );
+      currentAngle += sweep;
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class PathsPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Filled triangle (matches C++ Color::fromRGBA(0, 0, 1, 0.7))
+    final triangle = Path()
+      ..moveTo(100 * scaleX, 50 * scaleY)
+      ..lineTo(50 * scaleX, 150 * scaleY)
+      ..lineTo(150 * scaleX, 150 * scaleY)
+      ..close();
+    canvas.drawPath(triangle, Paint()..color = const Color(0xB30000FF));
+
+    // Stroked quadratic (matches C++ Color::fromRGB(0, 1, 0))
+    final quad = Path()
+      ..moveTo(200 * scaleX, 150 * scaleY)
+      ..quadraticBezierTo(250 * scaleX, 50 * scaleY, 300 * scaleX, 150 * scaleY);
+    final greenStroke = Paint()
+      ..color = const Color(0xFF00FF00)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 3 * scaleX;
+    canvas.drawPath(quad, greenStroke);
+
+    // Stroked cubic (matches C++ Color::fromRGB(0.5, 0, 0.5))
+    final cubic = Path()
+      ..moveTo(50 * scaleX, 250 * scaleY)
+      ..cubicTo(
+        100 * scaleX, 200 * scaleY,
+        150 * scaleX, 300 * scaleY,
+        200 * scaleX, 250 * scaleY,
+      );
+    final purpleStroke = Paint()
+      ..color = const Color(0xFF800080)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 4 * scaleX;
+    canvas.drawPath(cubic, purpleStroke);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class PointsPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Points (matches C++ Color::fromRGB(1, 0, 0))
+    final pointPaint = Paint()
+      ..color = const Color(0xFFFF0000)
+      ..strokeWidth = 8 * scaleX;
+    final points = [
+      Offset(100 * scaleX, 100 * scaleY),
+      Offset(150 * scaleX, 120 * scaleY),
+      Offset(200 * scaleX, 110 * scaleY),
+      Offset(250 * scaleX, 130 * scaleY),
+      Offset(300 * scaleX, 100 * scaleY),
+    ];
+    canvas.drawPoints(ui.PointMode.points, points, pointPaint);
+
+    // Lines (matches C++ Color::fromRGB(0, 0, 1))
+    final linePaint = Paint()
+      ..color = const Color(0xFF0000FF)
+      ..strokeWidth = 4 * scaleX;
+    final linePoints = [
+      Offset(50 * scaleX, 200 * scaleY),
+      Offset(150 * scaleX, 280 * scaleY),
+      Offset(250 * scaleX, 220 * scaleY),
+      Offset(350 * scaleX, 300 * scaleY),
+    ];
+    canvas.drawPoints(ui.PointMode.lines, linePoints, linePaint);
+
+    // Polygon (matches C++ Color::fromRGB(0, 0.5, 0))
+    final polyPaint = Paint()
+      ..color = const Color(0xFF008000)
+      ..strokeWidth = 3 * scaleX;
+    final polyPoints = [
+      Offset(200 * scaleX, 350 * scaleY),
+      Offset(250 * scaleX, 450 * scaleY),
+      Offset(150 * scaleX, 450 * scaleY),
+    ];
+    canvas.drawPoints(ui.PointMode.polygon, polyPoints, polyPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class ClippingPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Background (matches C++ Color::fromRGB(1, 0, 0))
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFFFF0000),
+    );
+
+    // Rect clip (matches C++ Color::fromRGB(0, 0, 1))
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(20 * scaleX, 20 * scaleY, 150 * scaleX, 150 * scaleY));
+    canvas.drawCircle(
+      Offset(120 * scaleX, 120 * scaleY),
+      80 * scaleX,
+      Paint()..color = const Color(0xFF0000FF),
+    );
+    canvas.restore();
+
+    // RRect clip (matches C++ Color::fromRGB(0, 1, 0))
+    canvas.save();
+    canvas.clipRRect(RRect.fromRectAndRadius(
+      Rect.fromLTWH(200 * scaleX, 20 * scaleY, 150 * scaleX, 150 * scaleY),
+      Radius.circular(30 * scaleX),
+    ));
+    canvas.drawCircle(
+      Offset(280 * scaleX, 110 * scaleY),
+      80 * scaleX,
+      Paint()..color = const Color(0xFF00FF00),
+    );
+    canvas.restore();
+
+    // Path clip (matches C++ Color::fromRGB(1, 1, 0))
+    canvas.save();
+    final triangle = Path()
+      ..moveTo(100 * scaleX, 220 * scaleY)
+      ..lineTo(50 * scaleX, 350 * scaleY)
+      ..lineTo(150 * scaleX, 350 * scaleY)
+      ..close();
+    canvas.clipPath(triangle);
+    canvas.drawCircle(
+      Offset(100 * scaleX, 300 * scaleY),
+      80 * scaleX,
+      Paint()..color = const Color(0xFFFFFF00),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class PaintStylesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Filled rect (matches C++ Color::fromRGB(0, 0, 1))
+    canvas.drawRect(
+      Rect.fromLTWH(20 * scaleX, 20 * scaleY, 150 * scaleX, 100 * scaleY),
+      Paint()..color = const Color(0xFF0000FF),
+    );
+
+    // Stroked rect (matches C++ Color::fromRGB(1, 0, 0))
+    final strokePaint = Paint()
+      ..color = const Color(0xFFFF0000)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 8 * scaleX;
+    canvas.drawRect(
+      Rect.fromLTWH(200 * scaleX, 20 * scaleY, 150 * scaleX, 100 * scaleY),
+      strokePaint,
+    );
+
+    // Thick vs thin strokes (matches C++ Color::fromRGB(0, 0.5, 0))
+    for (int i = 0; i < 4; i++) {
+      final paint = Paint()
+        ..color = const Color(0xFF008000)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = (i + 1) * 3.0 * scaleX;
+      final y = 150.0 * scaleY + i * 30.0 * scaleY;
+      canvas.drawLine(
+        Offset(20 * scaleX, y),
+        Offset(370 * scaleX, y),
+        paint,
+      );
+    }
+
+    // Opacity (matches C++ Color::fromRGBA(1, 0, 1, 0.5))
+    final opacityPaint = Paint()
+      ..color = const Color(0x80FF00FF);
+    canvas.drawCircle(
+      Offset(100 * scaleX, 320 * scaleY),
+      50 * scaleX,
+      opacityPaint,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class SaveLayerPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Background (matches C++ Color::fromRGB(0.9, 0.9, 0.9))
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFFE6E6E6),
+    );
+
+    // SaveLayer with 50% opacity (matches C++ Color::fromRGBA(1, 1, 1, 0.5))
+    canvas.saveLayer(
+      Rect.fromLTWH(50 * scaleX, 50 * scaleY, 300 * scaleX, 300 * scaleY),
+      Paint()..color = const Color(0x80FFFFFF),
+    );
+
+    canvas.drawRect(
+      Rect.fromLTWH(50 * scaleX, 50 * scaleY, 150 * scaleX, 150 * scaleY),
+      Paint()..color = const Color(0xFFFF0000),
+    );
+
+    canvas.drawCircle(
+      Offset(250 * scaleX, 200 * scaleY),
+      60 * scaleX,
+      Paint()..color = const Color(0xFF0000FF),
+    );
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class DrawColorPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Left half: solid red fill via drawColor
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, size.width * 0.5, size.height));
+    canvas.drawColor(const Color(0xFFFF0000), BlendMode.srcOver);
+    canvas.restore();
+
+    // Right half: blue with a green rect drawn on top
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(size.width * 0.5, 0, size.width * 0.5, size.height));
+    canvas.drawColor(const Color(0xFF0000FF), BlendMode.srcOver);
+    canvas.drawRect(
+      Rect.fromLTWH(80 * scaleX, 80 * scaleY, 120 * scaleX, 120 * scaleY),
+      Paint()..color = const Color(0xFF00FF00),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class SkewPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Horizontal skew
+    canvas.save();
+    canvas.translate(80 * scaleX, 100 * scaleY);
+    canvas.skew(0.3, 0.0);
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, 100 * scaleX, 100 * scaleY),
+      Paint()..color = const Color(0xFF2196F3),
+    );
+    canvas.restore();
+
+    // Vertical skew
+    canvas.save();
+    canvas.translate(220 * scaleX, 80 * scaleY);
+    canvas.skew(0.0, 0.25);
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, 80 * scaleX, 120 * scaleY),
+      Paint()..color = const Color(0xFF4CAF50),
+    );
+    canvas.restore();
+
+    // Matrix4 rotation + scale via transform()
+    canvas.save();
+    canvas.translate(320 * scaleX, 200 * scaleY);
+    final matrix = Matrix4.rotationZ(0.523599)..scale(1.2, 1.2, 1.0);
+    canvas.transform(matrix.storage);
+    canvas.drawRect(
+      Rect.fromLTWH(-40 * scaleX, -40 * scaleY, 80 * scaleX, 80 * scaleY),
+      Paint()..color = const Color(0xFFFF9800),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class PathArcPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Filled path built with arcTo (pie slice)
+    final pie = Path()
+      ..moveTo(100 * scaleX, 100 * scaleY)
+      ..arcTo(
+        Rect.fromLTWH(50 * scaleX, 50 * scaleY, 100 * scaleX, 100 * scaleY),
+        -math.pi / 2.0,
+        math.pi * 0.75,
+        false,
+      )
+      ..close();
+    canvas.drawPath(pie, Paint()..color = const Color(0xFF2196F3));
+
+    // Stroked open arc
+    final openArc = Path()
+      ..moveTo(250 * scaleX, 150 * scaleY)
+      ..arcTo(
+        Rect.fromLTWH(200 * scaleX, 50 * scaleY, 150 * scaleX, 150 * scaleY),
+        0.0,
+        math.pi * 1.25,
+        false,
+      );
+    canvas.drawPath(
+      openArc,
+      Paint()
+        ..color = const Color(0xFFFF0000)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6 * scaleX,
+    );
+
+    // Full oval built with addArc
+    final oval = Path()
+      ..addArc(
+        Rect.fromLTWH(80 * scaleX, 200 * scaleY, 120 * scaleX, 80 * scaleY),
+        0.0,
+        math.pi * 2.0,
+      );
+    canvas.drawPath(
+      oval,
+      Paint()
+        ..color = const Color(0xFF4CAF50)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 4 * scaleX,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class DrawPaintPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Left half: cyan fill via drawPaint
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(0, 0, size.width * 0.5, size.height));
+    canvas.drawPaint(Paint()..color = const Color(0xFF00FFFF));
+    canvas.restore();
+
+    // Right half: yellow fill with a magenta rect on top
+    canvas.save();
+    canvas.clipRect(Rect.fromLTWH(size.width * 0.5, 0, size.width * 0.5, size.height));
+    canvas.drawPaint(Paint()..color = const Color(0xFFFFFF00));
+    canvas.drawRect(
+      Rect.fromLTWH(80 * scaleX, 80 * scaleY, 120 * scaleX, 120 * scaleY),
+      Paint()..color = const Color(0xFFFF00FF),
+    );
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class RRectComplexPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    final rrect = RRect.fromRectAndCorners(
+      Rect.fromLTWH(40 * scaleX, 40 * scaleY, 160 * scaleX, 120 * scaleY),
+      topLeft: Radius.circular(30 * scaleX),
+      topRight: Radius.circular(20 * scaleX),
+      bottomLeft: Radius.circular(25 * scaleX),
+      bottomRight: Radius.circular(40 * scaleX),
+    );
+    canvas.drawRRect(
+      rrect,
+      Paint()..color = const Color(0xFF2196F3),
+    );
+
+    final strokeRRect = RRect.fromRectAndCorners(
+      Rect.fromLTWH(220 * scaleX, 40 * scaleY, 160 * scaleX, 120 * scaleY),
+      topLeft: Radius.circular(10 * scaleX),
+      topRight: Radius.circular(40 * scaleX),
+      bottomLeft: Radius.circular(40 * scaleX),
+      bottomRight: Radius.circular(10 * scaleX),
+    );
+    canvas.drawRRect(
+      strokeRRect,
+      Paint()
+        ..color = const Color(0xFFFF0000)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 6 * scaleX,
+    );
+
+    // Smaller filled complex rrect in the lower area
+    final smallRRect = RRect.fromRectAndCorners(
+      Rect.fromLTWH(130 * scaleX, 200 * scaleY, 140 * scaleX, 90 * scaleY),
+      topLeft: Radius.zero,
+      topRight: Radius.circular(25 * scaleX),
+      bottomLeft: Radius.circular(25 * scaleX),
+      bottomRight: Radius.zero,
+    );
+    canvas.drawRRect(
+      smallRRect,
+      Paint()..color = const Color(0xFF4CAF50),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class BlendModesPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // Background: three grey rectangles
+    for (int i = 0; i < 3; i++) {
+      canvas.drawRect(
+        Rect.fromLTWH((40 + i * 110) * scaleX, 60 * scaleY, 80 * scaleX, 180 * scaleY),
+        Paint()..color = const Color(0xFFAAAAAA),
+      );
+    }
+
+    // Row 1: srcOver (semi-transparent red, green, blue circles)
+    const srcOverColors = [
+      Color(0x80FF0000),
+      Color(0x8000FF00),
+      Color(0x800000FF),
+    ];
+    for (int i = 0; i < 3; i++) {
+      canvas.drawCircle(
+        Offset((80 + i * 110) * scaleX, 100 * scaleY),
+        35 * scaleX,
+        Paint()
+          ..color = srcOverColors[i]
+          ..blendMode = BlendMode.srcOver,
+      );
+    }
+
+    // Row 2: modulate (opaque red/green/blue)
+    const modulateColors = [
+      Colors.red,
+      Colors.green,
+      Colors.blue,
+    ];
+    for (int i = 0; i < 3; i++) {
+      canvas.drawCircle(
+        Offset((80 + i * 110) * scaleX, 170 * scaleY),
+        35 * scaleX,
+        Paint()
+          ..color = modulateColors[i]
+          ..blendMode = BlendMode.modulate,
+      );
+    }
+
+    // Row 3: plus (opaque red/green/blue)
+    const plusColors = [
+      Colors.red,
+      Colors.green,
+      Colors.blue,
+    ];
+    for (int i = 0; i < 3; i++) {
+      canvas.drawCircle(
+        Offset((80 + i * 110) * scaleX, 240 * scaleY),
+        35 * scaleX,
+        Paint()
+          ..color = plusColors[i]
+          ..blendMode = BlendMode.plus,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class BlendModesExtendedPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    // The remaining BlendMode values not covered by BlendModesPainter
+    // (srcOver, plus, and modulate are tested there).
+    const modes = [
+      BlendMode.clear,
+      BlendMode.src,
+      BlendMode.dst,
+      BlendMode.dstOver,
+      BlendMode.srcIn,
+      BlendMode.dstIn,
+      BlendMode.srcOut,
+      BlendMode.dstOut,
+      BlendMode.srcATop,
+      BlendMode.dstATop,
+      BlendMode.xor,
+    ];
+
+    // 4x3 grid of cells, one blend mode per cell: an opaque orange
+    // "destination" square with a semi-transparent blue "source" circle
+    // composited on top using the tested blend mode.
+    const cellW = 100.0;
+    const cellH = 130.0;
+
+    for (int i = 0; i < modes.length; i++) {
+      final col = i % 4;
+      final row = i ~/ 4;
+      final originX = col * cellW;
+      final originY = row * cellH;
+
+      canvas.drawRect(
+        Rect.fromLTWH(
+            (originX + 10) * scaleX, (originY + 15) * scaleY, 55 * scaleX, 55 * scaleY),
+        Paint()..color = const Color(0xFFFF9800),
+      );
+
+      canvas.drawCircle(
+        Offset((originX + 65) * scaleX, (originY + 70) * scaleY),
+        28 * scaleX,
+        Paint()
+          ..color = const Color(0x990000FF)
+          ..blendMode = modes[i],
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+
+class ClipOvalPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final scaleX = size.width / 400.0;
+    final scaleY = size.height / 400.0;
+
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFFE6E6E6),
+    );
+
+    // Wide ellipse clip, filled with blue (matches C++ Color::fromRGB(0.1294, 0.5882, 0.9529)).
+    canvas.save();
+    canvas.clipPath(Path()
+      ..addOval(Rect.fromLTWH(20 * scaleX, 20 * scaleY, 360 * scaleX, 120 * scaleY)));
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF2196F3),
+    );
+    canvas.restore();
+
+    // Tall ellipse clip, filled with green (matches C++ Color::fromRGB(0.2980, 0.6863, 0.3137)).
+    canvas.save();
+    canvas.clipPath(Path()
+      ..addOval(Rect.fromLTWH(30 * scaleX, 180 * scaleY, 120 * scaleX, 200 * scaleY)));
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFF4CAF50),
+    );
+    canvas.restore();
+
+    // Circular clip (equal radii), filled with orange plus a nested circle.
+    canvas.save();
+    canvas.clipPath(Path()
+      ..addOval(Rect.fromLTWH(220 * scaleX, 180 * scaleY, 150 * scaleX, 150 * scaleY)));
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, size.height),
+      Paint()..color = const Color(0xFFFF9800),
+    );
+    canvas.drawCircle(
+      Offset(295 * scaleX, 255 * scaleY),
+      40 * scaleX,
+      Paint()..color = const Color(0xFF800080),
+    );
     canvas.restore();
   }
 

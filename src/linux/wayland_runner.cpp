@@ -1008,17 +1008,29 @@ int runAppWayland(const std::string& title, int width, int height,
                 wl_display_read_events(display);
             } else {
                 wl_display_cancel_read(display);
-                // Timeout: tick animations
-                auto now = std::chrono::steady_clock::now();
-                uint64_t now_ms = static_cast<uint64_t>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now.time_since_epoch()).count());
-                if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
-                if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
             }
         } else {
             // Events already pending; next loop iteration will dispatch them
         }
+
+        // Tick animations/physics every loop iteration, not only when
+        // poll() times out with no Wayland events pending. frame_done()
+        // (this window's vsync-pacing callback, above) unconditionally
+        // requests another redraw on every compositor frame callback once
+        // any animation has rendered even one frame — and that callback
+        // arrives as a Wayland event, which almost always wins the race
+        // against poll()'s 16ms timeout. Ticking only in the timeout
+        // branch meant a fling or spring-back animation got exactly one
+        // tick (whichever one happened to slip through when timing lined
+        // up), then never ticked again even though frames kept being
+        // redrawn — the animation looked like it froze instead of
+        // continuing, because nothing was left to advance its state.
+        auto now = std::chrono::steady_clock::now();
+        uint64_t now_ms = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now.time_since_epoch()).count());
+        if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
+        if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
     }
 
     // -------------------------------------------------------------------------

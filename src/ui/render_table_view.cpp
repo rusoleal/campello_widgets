@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/render_table_view.hpp>
 #include <campello_widgets/ui/scroll_controller.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/rect.hpp>
 
 namespace systems::leal::campello_widgets
@@ -619,12 +620,19 @@ namespace systems::leal::campello_widgets
             break;
 
         case PointerEventKind::scroll:
+        {
             // Invert scroll direction for natural scrolling feel on macOS
             applyScrollDelta(-event.scroll_delta_x, -event.scroll_delta_y);
+            const auto now = std::chrono::steady_clock::now();
+            // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
+            wheel_velocity_tracker_x_.addPosition(now, scrollX());
+            wheel_velocity_tracker_y_.addPosition(now, scrollY());
+            wheel_momentum_pending_ = true;
             last_scroll_event_ms_ = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
+                    now.time_since_epoch()).count());
             break;
+        }
         }
     }
 
@@ -636,7 +644,31 @@ namespace systems::leal::campello_widgets
         // keep driving the (resistance-damped) overscroll; spring-back
         // would otherwise fight them every tick. See
         // last_scroll_event_ms_'s doc.
-        if (now_ms - last_scroll_event_ms_ < kScrollActiveWindowMs) { last_tick_ms_ = now_ms; return; }
+        if (now_ms - last_scroll_event_ms_ < kScrollActiveWindowMs)
+        {
+            last_tick_ms_ = now_ms;
+            // Frames are demand-driven on this platform — see
+            // RenderListView::onTick()'s doc. Without self-requesting the
+            // next frame, spring-back/momentum only ever applies once and
+            // then freezes instead of animating.
+            const bool overscrolled = scrollX() < min_scroll_x_ || scrollX() > max_scroll_x_ ||
+                                       scrollY() < min_scroll_y_ || scrollY() > max_scroll_y_;
+            if (overscrolled || std::abs(velocity_x_) >= kMinVelocity || std::abs(velocity_y_) >= kMinVelocity)
+                FrameScheduler::scheduleFrame();
+            return;
+        }
+
+        // See RenderListView::onTick()'s doc on wheel_momentum_pending_.
+        if (wheel_momentum_pending_)
+        {
+            wheel_momentum_pending_ = false;
+            if (physics_->allowsMomentum())
+            {
+                velocity_x_ = wheel_velocity_tracker_x_.getVelocity();
+                velocity_y_ = wheel_velocity_tracker_y_.getVelocity();
+            }
+        }
+
         if (last_tick_ms_ == 0) { last_tick_ms_ = now_ms; return; }
 
         float dt_s = static_cast<float>(now_ms - last_tick_ms_) / 1000.0f;
@@ -694,6 +726,11 @@ namespace systems::leal::campello_widgets
         if (std::abs(delta_x) > 0.0f || std::abs(delta_y) > 0.0f)
         {
             applyScrollDelta(delta_x, delta_y);
+            // See the doc above on the trackpad-active branch.
+            if (std::abs(velocity_x_) >= kMinVelocity || std::abs(velocity_y_) >= kMinVelocity ||
+                scrollX() < min_scroll_x_ || scrollX() > max_scroll_x_ ||
+                scrollY() < min_scroll_y_ || scrollY() > max_scroll_y_)
+                FrameScheduler::scheduleFrame();
         }
     }
 

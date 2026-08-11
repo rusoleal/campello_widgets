@@ -12,6 +12,7 @@
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
 #include <campello_widgets/ui/gesture_constants.hpp>
 #include <campello_widgets/ui/offset_layer.hpp>
+#include <campello_widgets/ui/velocity_tracker.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -142,10 +143,18 @@ namespace systems::leal::campello_widgets
         Offset pan_last_pos_;
         Offset pan_down_pos_; ///< Position at pointer-down — fixed; used for the slop check (cumulative distance), unlike pan_last_pos_ which advances every move.
         PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
-        std::chrono::steady_clock::time_point last_pan_time_;
-        float  pan_velocity_  = 0.0f;
+        // See RenderListView::velocity_tracker_'s doc — fits a line through
+        // recent samples instead of using only the last sample-to-sample delta.
+        VelocityTracker velocity_tracker_;
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
+
+        // See RenderListView::wheel_velocity_tracker_'s doc — trackpad/
+        // wheel scrolling never goes through the drag path above, so this
+        // tracks its own recent velocity to hand off to onTick()'s momentum
+        // the instant the OS stops sending scroll events.
+        VelocityTracker wheel_velocity_tracker_;
+        bool wheel_momentum_pending_ = false;
 
         // See RenderSingleChildScrollView::last_scroll_event_ms_'s doc —
         // lets onTick() defer spring-back while the OS is still actively
@@ -160,7 +169,8 @@ namespace systems::leal::campello_widgets
         static constexpr float    kSignificantScrollDelta = 8.0f;
         // See RenderListView::kSpringSettleThreshold's doc.
         static constexpr float    kSpringSettleThreshold = 0.05f;
-        static constexpr uint64_t kScrollActiveWindowMs = 80;
+        // See RenderListView::kScrollActiveWindowMs's doc.
+        static constexpr uint64_t kScrollActiveWindowMs = 40;
     };
 
 } // namespace systems::leal::campello_widgets

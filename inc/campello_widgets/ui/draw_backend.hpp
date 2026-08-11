@@ -198,6 +198,27 @@ namespace systems::leal::campello_widgets
             const Rect&                      clip,
             campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
 
+        /** @brief Draw an arc (pie wedge or open arc segment). Default: no-op. */
+        virtual void drawArc(
+            const DrawArcCmd&                cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
+        /** @brief Draw a custom path (filled or stroked). Default: no-op. */
+        virtual void drawPath(
+            const DrawPathCmd&               cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
+        /** @brief Draw points / lines / polygon according to PointMode. Default: no-op. */
+        virtual void drawPoints(
+            const DrawPointsCmd&             cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
         /**
          * @brief Measures the bounding size of a text span using real font metrics.
          *
@@ -336,6 +357,21 @@ namespace systems::leal::campello_widgets
         virtual void drawShaderMaskComposite(
             std::shared_ptr<campello_gpu::Texture>        /*child_tex*/,
             const DrawShaderMaskBeginCmd&                 /*cmd*/,
+            const Matrix4&                                /*transform*/,
+            const Rect&                                   /*clip*/,
+            campello_gpu::RenderPassEncoder&              /*encoder*/) {}
+
+        /**
+         * @brief Composites an offscreen layer back to the current render pass.
+         *
+         * `child_tex` contains the commands recorded between SaveLayerCmd and
+         * SaveLayerEndCmd rendered to an offscreen buffer. The implementation
+         * draws `child_tex` at `cmd.bounds`, modulated by `cmd.paint.color` and
+         * respecting `cmd.paint.blend_mode` where supported.
+         */
+        virtual void saveLayerComposite(
+            std::shared_ptr<campello_gpu::Texture>        /*child_tex*/,
+            const SaveLayerCmd&                           /*cmd*/,
             const Matrix4&                                /*transform*/,
             const Rect&                                   /*clip*/,
             campello_gpu::RenderPassEncoder&              /*encoder*/) {}

@@ -9,15 +9,22 @@ file(GLOB_RECURSE UNIVERSAL_TEST_SOURCES
 set(TESTING_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/fidelity.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/visual_fidelity.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer.cpp"
 )
 
-# GPU visual renderer: real Metal implementation on macOS, null stub elsewhere
+# GPU visual renderer: platform-specific backend factory
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     list(APPEND TESTING_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/gpu_visual_renderer.mm")
+        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_metal.mm")
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
+    list(APPEND TESTING_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_vulkan.cpp")
+elseif(WIN32)
+    list(APPEND TESTING_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_d3d.cpp")
 else()
     list(APPEND TESTING_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/gpu_visual_renderer_stub.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_stub.cpp")
 endif()
 
 if(UNIVERSAL_TEST_SOURCES)

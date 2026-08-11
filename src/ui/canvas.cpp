@@ -31,11 +31,14 @@ namespace systems::leal::campello_widgets
     }
 
     // Helper for skew matrix
+    // Matches Flutter/Skia: x' = x + sx*y, y' = y + sy*x.
+    // Matrix4 is row-major with column-vector convention, so row 0 affects x'
+    // and row 1 affects y'.
     static Matrix4 skewMatrix(float sx, float sy)
     {
         Matrix4 m = Matrix4::identity();
-        m.data[4] = std::tan(sx);  // Horizontal skew
-        m.data[1] = std::tan(sy);  // Vertical skew
+        m.data[1] = sx;  // Horizontal skew (x' += sx * y)
+        m.data[4] = sy;  // Vertical skew (y' += sy * x)
         return m;
     }
 
@@ -196,24 +199,24 @@ namespace systems::leal::campello_widgets
 
     void Canvas::save()
     {
-        save_stack_.push_back({current_transform_, current_clip_, current_opacity_, 0, 0});
+        save_stack_.push_back({current_transform_, current_clip_, current_opacity_, 0, 0, false});
     }
 
     void Canvas::saveLayer(const Rect& bounds, const Paint& paint)
     {
         // Start a new compositing layer
         save();
-        
+
+        // Mark the most recent save entry as a layer so restore() emits the
+        // matching SaveLayerEndCmd.
+        if (!save_stack_.empty()) {
+            save_stack_.back().is_layer = true;
+        }
+
         // Use the provided bounds or current clip
         Rect layer_bounds = bounds.isEmpty() ? current_clip_ : bounds.intersection(current_clip_);
-        
+
         commands_.push_back(SaveLayerCmd{layer_bounds, paint});
-        
-        // Track that we pushed a layer (handled specially on restore)
-        if (!save_stack_.empty()) {
-            // Mark this save as having a layer
-            // We could track this separately if needed
-        }
     }
 
     void Canvas::restore()
@@ -231,6 +234,12 @@ namespace systems::leal::campello_widgets
         current_transform_ = entry.transform;
         current_clip_      = entry.clip;
         current_opacity_   = entry.opacity;
+
+        // Emit the layer end marker after popping the layer's local state so
+        // the Renderer composites the offscreen layer on top of the restored
+        // content.
+        if (entry.is_layer)
+            commands_.push_back(SaveLayerEndCmd{});
 
         save_stack_.pop_back();
     }

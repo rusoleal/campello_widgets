@@ -334,7 +334,7 @@ TEST(VisualFidelityImage, ImageWithOpacity)
     center->setChild(imageSized);
 
     root->insertChild(bgSized, 0, 0, 0, 0, 0, std::nullopt, std::nullopt);
-    root->insertChild(center, 1, std::nullopt, std::nullopt, std::nullopt, std::nullopt, 600, 400);
+    root->insertChild(center, 1, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt, std::nullopt);
 
     std::string outputPath = getCppOutputPath("image_with_opacity.png");
     bool success = cwt::captureToPng(
