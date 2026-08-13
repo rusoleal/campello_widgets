@@ -11,7 +11,8 @@ include(FetchContent)
 
 FetchContent_Declare(
     campello_gpu
-    SOURCE_DIR ${CMAKE_CURRENT_LIST_DIR}/../../campello_gpu
+    GIT_REPOSITORY https://github.com/rusoleal/campello_gpu.git
+    GIT_TAG        v0.23.0
 )
 
 if(NOT campello_gpu_POPULATED)
