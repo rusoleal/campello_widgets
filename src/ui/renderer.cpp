@@ -116,6 +116,20 @@ namespace systems::leal::campello_widgets
 
     Renderer::~Renderer()
     {
+        // Device::submit() is pipelined (kFramesInFlight-deep, doesn't
+        // block), so the last couple of submitted frames' command buffers
+        // may still be executing on the GPU here. The caches below
+        // (text_texture_cache_, clip_shape_gpu_cache_, ...) hold
+        // Texture/BindGroup shared_ptrs whose destructors free the
+        // underlying GPU handles immediately and unconditionally; freeing
+        // one still referenced by an in-flight command buffer is a
+        // validation error (and undefined behaviour without validation
+        // layers). Wait here, before any member below is torn down by the
+        // implicit reverse-declaration-order destruction that follows this
+        // body, so every one of those immediate frees is safe.
+        if (device_)
+            device_->waitForIdle();
+
         if (detail::currentRenderer().load(std::memory_order_acquire) == this)
             detail::currentRenderer().store(nullptr, std::memory_order_release);
     }

@@ -136,7 +136,20 @@ static std::shared_ptr<GPU::ShaderModule> loadSpv(
     return device->createShaderModule(data, size);
 }
 
-VulkanDrawBackend::~VulkanDrawBackend() = default;
+VulkanDrawBackend::~VulkanDrawBackend()
+{
+    // Device::submit() is pipelined (kFramesInFlight-deep, doesn't block —
+    // see its doc comment in campello_gpu/src/vulkan/device.cpp), so the
+    // last couple of submitted frames' command buffers may still be
+    // executing on the GPU when this destructor runs. Every member below
+    // (pipelines, samplers, ...) destroys its underlying Vulkan handle
+    // immediately and unconditionally, with no in-flight check — unlike
+    // Texture/TextureView, which defer via DeviceData::PendingTextureDestroy.
+    // Wait for the GPU to finish first so those immediate destroys are safe,
+    // matching what Device::~Device() itself does before its own teardown.
+    if (device_)
+        device_->waitForIdle();
+}
 
 static GPU::BlendState premultipliedAlphaBlend()
 {
