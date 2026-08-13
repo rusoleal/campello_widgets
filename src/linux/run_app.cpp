@@ -37,6 +37,7 @@
 // LinuxPlatformMenuDelegate instead of the default no-op.
 extern "C" void campello_widgets_initialize_linux_menu_delegate();
 
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -56,9 +57,34 @@ namespace Widgets = ::systems::leal::campello_widgets;
 #ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
 namespace systems::leal::campello_widgets {
     int runAppWayland(const std::string& title, int width, int height,
-                      WidgetRef root_widget, bool resizable);
+                      WidgetRef root_widget, bool resizable,
+                      const std::string& app_id);
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// Derives a default app_id from the window title when the caller doesn't
+// supply one explicitly — lowercased, non-alphanumerics collapsed to '-'.
+// Better than leaving the compositor with nothing, but callers that ship a
+// .desktop file should pass an app_id matching its basename explicitly.
+// ---------------------------------------------------------------------------
+static std::string defaultAppIdFromTitle(const std::string& title)
+{
+    std::string result;
+    result.reserve(title.size());
+    bool last_was_dash = false;
+    for (unsigned char c : title) {
+        if (std::isalnum(c)) {
+            result += static_cast<char>(std::tolower(c));
+            last_was_dash = false;
+        } else if (!last_was_dash && !result.empty()) {
+            result += '-';
+            last_was_dash = true;
+        }
+    }
+    while (!result.empty() && result.back() == '-') result.pop_back();
+    return result.empty() ? "campello-widgets-app" : result;
+}
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -66,6 +92,7 @@ namespace systems::leal::campello_widgets {
 namespace {
     Widgets::WidgetRef gRootWidget;
     std::string        gTitle;
+    std::string        gAppId;
     int                gWidth  = 800;
     int                gHeight = 600;
     bool               gResizable = true;
@@ -700,13 +727,20 @@ namespace systems::leal::campello_widgets
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget)
 {
-    return runApp(title, width, height, std::move(root_widget), true);
+    return runApp(title, width, height, std::move(root_widget), true, defaultAppIdFromTitle(title));
 }
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget, bool resizable)
 {
+    return runApp(title, width, height, std::move(root_widget), resizable, defaultAppIdFromTitle(title));
+}
+
+int runApp(const std::string& title, int width, int height, WidgetRef root_widget, bool resizable,
+           const std::string& app_id)
+{
     gRootWidget = std::move(root_widget);
     gTitle      = title;
+    gAppId      = app_id;
     gWidth      = width;
     gHeight     = height;
     gResizable  = resizable;
@@ -718,7 +752,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     if (wayland_display && wayland_display[0] != '\0') {
 #ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
         std::cerr << "[Linux] Wayland detected (" << wayland_display << "), trying Wayland backend.\n";
-        int result = runAppWayland(title, width, height, gRootWidget, resizable);
+        int result = runAppWayland(title, width, height, gRootWidget, resizable, gAppId);
         if (result != 2) return result; // 2 = GPU init failed, fall back to X11
         std::cerr << "[Linux] Wayland GPU init failed; falling back to X11 (XWayland).\n";
 #else
@@ -765,6 +799,16 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         CWEventMask, &swa);
 
     XStoreName(display, window, gTitle.c_str());
+
+    // WM_CLASS — lets window managers/desktop shells match this window to an
+    // installed .desktop file for the taskbar/alt-tab icon and name.
+    {
+        XClassHint* class_hint = XAllocClassHint();
+        class_hint->res_name  = const_cast<char*>(gAppId.c_str());
+        class_hint->res_class = const_cast<char*>(gAppId.c_str());
+        XSetClassHint(display, window, class_hint);
+        XFree(class_hint);
+    }
 
     // Register WM_DELETE_WINDOW protocol
     Atom wm_delete = XInternAtom(display, "WM_DELETE_WINDOW", False);

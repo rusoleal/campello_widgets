@@ -779,7 +779,7 @@ namespace systems::leal::campello_widgets
 {
 
 int runAppWayland(const std::string& title, int width, int height,
-                  WidgetRef root_widget, bool resizable)
+                  WidgetRef root_widget, bool resizable, const std::string& app_id)
 {
     (void)resizable; // Wayland compositor handles resizing
 
@@ -849,6 +849,7 @@ int runAppWayland(const std::string& title, int width, int height,
     }
 
     libdecor_frame_set_title(state.decor_frame, title.c_str());
+    libdecor_frame_set_app_id(state.decor_frame, app_id.c_str());
     libdecor_frame_set_capabilities(state.decor_frame,
         static_cast<enum libdecor_capabilities>(
             LIBDECOR_ACTION_MOVE     |
