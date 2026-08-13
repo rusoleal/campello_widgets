@@ -39,6 +39,8 @@ call :compile blur.hlsl  BlurVS  vs_5_0 blur_vs.cso
 call :compile blur.hlsl  BlurPS  ps_5_0 blur_ps.cso
 call :compile clip_shape.hlsl ClipShapeVS vs_5_0 clip_shape_vs.cso
 call :compile clip_shape.hlsl ClipShapePS ps_5_0 clip_shape_ps.cso
+call :compile shader_mask.hlsl ShaderMaskVS vs_5_0 shader_mask_vs.cso
+call :compile shader_mask.hlsl ShaderMaskPS ps_5_0 shader_mask_ps.cso
 if errorlevel 1 exit /b 1
 
 :: ---------------------------------------------------------------------

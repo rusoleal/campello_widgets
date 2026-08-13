@@ -13,8 +13,13 @@ namespace systems::leal::campello_widgets
     /**
      * @brief RenderBox that paints a GPU texture.
      *
-     * Sizes itself to `explicit_size` when set; otherwise fills the tightest
-     * available constraint (same behaviour as `RenderRectangle` with fill=true).
+     * Sizes itself to `explicit_size` when set. Otherwise, if a texture is
+     * set, it sizes itself to the texture's natural pixel dimensions,
+     * preserving aspect ratio as it fits within the incoming constraints —
+     * matching Flutter's `Image` sizing behaviour. With no explicit size and
+     * no texture (e.g. a `RenderImage` subclass that creates its texture
+     * lazily, like `RenderDrawSurface`), it falls back to filling the
+     * tightest available constraint.
      */
     class RenderImage : public RenderBox
     {

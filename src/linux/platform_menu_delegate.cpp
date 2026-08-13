@@ -6,25 +6,30 @@ namespace systems::leal::campello_widgets
     /**
      * @brief Linux implementation of PlatformMenuDelegate.
      *
-     * This is a stub implementation that does nothing. A full implementation
-     * would use GTK or Qt menu APIs to create a native menu bar on Linux.
-     * The implementation would depend on which toolkit the application uses.
+     * X11/Wayland have no native menu-bar concept (unlike NSMenu on macOS
+     * or HMENU on Windows), and there is no cross-desktop-environment
+     * native replacement short of adopting a whole toolkit (GTK/Qt) this
+     * project otherwise doesn't depend on. So this delegate does not talk
+     * to any native API — it just reports that fact via
+     * needsInWindowMenuBar(), and PlatformMenuBarView (a normal widget,
+     * placed explicitly in the widget tree by the app) renders the menu
+     * bar itself from the same PlatformMenu data, including keyboard
+     * accelerators. See platform_menu_bar_view.hpp/.cpp.
      */
     class LinuxPlatformMenuDelegate : public PlatformMenuDelegate
     {
     public:
         void setMenus(const std::vector<PlatformMenuRef>& /*menus*/) override
         {
-            // TODO: Implement using GTK or Qt menu API
-            // - Create menu bar (GtkMenuBar or QMenuBar)
-            // - Add menus and items
-            // - Register keyboard accelerators
+            // No native menu bar to update — PlatformMenuBarView reads the
+            // menu structure directly from PlatformMenuBar::menusOf().
         }
 
         void clearMenus() override
         {
-            // TODO: Remove custom menus and restore default
         }
+
+        bool needsInWindowMenuBar() const override { return true; }
     };
 
     void initializeLinuxPlatformMenuDelegate()

@@ -38,6 +38,13 @@ void main()
         alpha = 1.0 - smoothstep(-0.5, 0.5, d);
     }
 
+    // Fragments outside the shape (alpha == 0) must not reach the blend unit:
+    // non-srcOver Porter-Duff modes use blend factors that are independent of
+    // source alpha (e.g. clear/src/srcIn use dstFactor=0), so a blended-but-
+    // zero-coverage fragment would still clobber the destination across the
+    // whole bounding quad instead of just the SDF shape.
+    if (alpha <= 0.0) discard;
+
     // Premultiplied-alpha output, matching rect.frag convention.
     vec4 c    = u.color;
     out_color = vec4(c.rgb * c.a, c.a) * alpha;

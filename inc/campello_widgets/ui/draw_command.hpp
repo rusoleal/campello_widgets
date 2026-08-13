@@ -104,6 +104,9 @@ namespace systems::leal::campello_widgets
         Paint paint;   // For color filter, blend mode
     };
 
+    /** @brief Ends a compositing layer opened with SaveLayerCmd. */
+    struct SaveLayerEndCmd {};
+
     // ------------------------------------------------------------------
     // BackdropFilter commands
     // ------------------------------------------------------------------
@@ -330,6 +333,7 @@ namespace systems::leal::campello_widgets
         PushTransformCmd,
         PopTransformCmd,
         SaveLayerCmd,
+        SaveLayerEndCmd,
 
         // BackdropFilter (begin/end pair wrapping child commands)
         DrawBackdropFilterBeginCmd,

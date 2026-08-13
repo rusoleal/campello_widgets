@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <vector>
 #include <campello_widgets/ui/render_list_view.hpp>
@@ -249,6 +250,14 @@ namespace systems::leal::campello_widgets
         // single source of truth for that phase too.
         const float old_offset = scrollOffset();
         raw_offset_ += delta;
+        // Feed the wheel's own observed velocity into our tracker so onTick
+        // can hand off to app-driven momentum the moment the OS stops
+        // sending scroll events — see onTick()'s doc for why relying
+        // solely on the OS's own (often short) kinetic-scroll tail isn't
+        // enough. Position, not delta: the tracker fits a line through
+        // samples, so it needs the cumulative value.
+        if (std::strcmp(source, "wheel") == 0)
+            wheel_velocity_tracker_.addPosition(std::chrono::steady_clock::now(), raw_offset_);
         const float clamped = physics_->applyBoundaryConditions(raw_offset_, min_extent_, max_extent_);
 
         if (DebugFlags::printScrollTrace)
@@ -331,8 +340,10 @@ namespace systems::leal::campello_widgets
             pan_down_pos_  = event.position;
             device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
-            pan_velocity_  = 0.0f;
-            last_pan_time_ = std::chrono::steady_clock::now();
+            velocity_tracker_.reset();
+            velocity_tracker_.addPosition(
+                std::chrono::steady_clock::now(),
+                scroll_axis == Axis::vertical ? event.position.y : event.position.x);
             arena_entry_.reset();
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
@@ -385,11 +396,9 @@ namespace systems::leal::campello_widgets
             {
                 const float delta = is_v ? dy : dx;
                 applyScrollDelta(-delta);
-
-                const auto  now = std::chrono::steady_clock::now();
-                const float dt  = std::chrono::duration<float>(now - last_pan_time_).count();
-                if (dt > 1e-4f) pan_velocity_ = -delta / dt;
-                last_pan_time_ = now;
+                velocity_tracker_.addPosition(
+                    std::chrono::steady_clock::now(),
+                    is_v ? event.position.y : event.position.x);
             }
 
             pan_last_pos_ = event.position;
@@ -399,7 +408,10 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::up:
             pointer_down_ = false;
             if (panning_ && physics_->allowsMomentum())
-                velocity_px_s_ = pan_velocity_;
+                // Negated to match applyScrollDelta(-delta)'s sign
+                // convention in the move handler above — the tracker
+                // reports the finger's own raw velocity, not the content's.
+                velocity_px_s_ = -velocity_tracker_.getVelocity();
             panning_ = false;
             arena_entry_.reset();
             break;
@@ -449,6 +461,7 @@ namespace systems::leal::campello_widgets
                     last_scroll_event_ms_ = static_cast<uint64_t>(
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now().time_since_epoch()).count());
+                    wheel_momentum_pending_ = true;
                 }
                 d->signalResolver().registerHandler([this, delta] { applyScrollDelta(delta, "wheel"); }, dominant);
             }
@@ -499,6 +512,21 @@ namespace systems::leal::campello_widgets
                 FrameScheduler::scheduleFrame();
             return;
         }
+
+        // The active-scroll-window gate just closed for the first time
+        // since the last wheel event — the OS has stopped delivering
+        // trackpad/wheel scroll for this gesture. Hand off to our own
+        // momentum using the velocity we observed from its recent deltas,
+        // so the list keeps decelerating smoothly instead of stopping
+        // exactly wherever the platform's own (possibly short) kinetic
+        // tail happened to end.
+        if (wheel_momentum_pending_)
+        {
+            wheel_momentum_pending_ = false;
+            if (physics_->allowsMomentum())
+                velocity_px_s_ = wheel_velocity_tracker_.getVelocity();
+        }
+
         if (last_tick_ms_ == 0) { last_tick_ms_ = now_ms; return; }
 
         const float dt_s = static_cast<float>(now_ms - last_tick_ms_) / 1000.0f;
@@ -526,6 +554,11 @@ namespace systems::leal::campello_widgets
                 ? target : (target + eased_overscroll);
             applyScrollDelta(new_raw - raw_offset_, "spring");
             velocity_px_s_ = 0.0f;
+            // Frames are demand-driven on this platform (see the comment
+            // above on the trackpad-active branch) — nothing else asks for
+            // a follow-up frame once this one finishes painting, so the
+            // spring would freeze after a single step without this.
+            FrameScheduler::scheduleFrame();
             return;
         }
 
@@ -533,6 +566,12 @@ namespace systems::leal::campello_widgets
 
         applyScrollDelta(velocity_px_s_ * dt_s, "momentum");
         velocity_px_s_ = physics_->applyFriction(velocity_px_s_, dt_s);
+        // Same reasoning as the spring-back branch above: without
+        // self-requesting the next frame, momentum only ever applies once
+        // — whatever frame was already in flight when the pointer lifted —
+        // and then stops dead, looking like momentum isn't working at all.
+        if (std::abs(velocity_px_s_) >= kMinVelocity)
+            FrameScheduler::scheduleFrame();
     }
 
 

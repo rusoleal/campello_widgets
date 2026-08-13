@@ -40,6 +40,67 @@ namespace systems::leal::campello_widgets
         // reaches, on each axis, beyond a BackdropFilter's exact footprint.
         constexpr float kBlurMarginFactor = 2.5f;
         constexpr float kBlurMarginCap    = 12.0f;
+
+        // Builds the translated child DrawList used by applyClipShape(),
+        // applyShaderMask(), and applySaveLayer() to paint an offscreen
+        // child so its content lands at (0,0) in the child texture.
+        //
+        // A PushTransformCmd{translate(-dx,-dy)} alone is NOT enough: the
+        // main dispatch loop's PushClipRectCmd/PushClipRRectCmd/
+        // PushClipOvalCmd handlers assign `current_clip = c.rect` (or
+        // equivalent) directly, without applying `current_transform` —
+        // correct for the normal case, where Canvas::clipRect() etc. have
+        // already baked the active transform into the stored rect at
+        // capture time, so re-applying it at replay would double it. But
+        // that assumption breaks here: these commands were captured
+        // against the *original* canvas transform, before this function's
+        // synthetic offset existed, so their stored geometry is still in
+        // absolute canvas space. Replayed as-is, a clip nested inside this
+        // offscreen child (e.g. RenderImage's own clipRect for
+        // BoxFit.none/fitHeight, nested inside a ClipRRect ancestor) ends
+        // up clipping to a region entirely outside the child texture's
+        // small (0,0)-origin bounds — hiding the content completely rather
+        // than just cropping it, which is exactly what going through this
+        // path is supposed to produce for an oversized child.
+        //
+        // Manually shifting each clip command's own stored geometry by the
+        // same (-dx,-dy) here keeps it consistent with the synthetic
+        // transform. PushClipPathCmd is left untranslated — Path has no
+        // translate() yet — so a path-shaped clip nested inside one of
+        // these offscreen composites remains a known gap.
+        DrawList translateChildCommands(const DrawList& child_cmds, float dx, float dy)
+        {
+            DrawList translated;
+            translated.reserve(child_cmds.size() + 2);
+            translated.push_back(PushTransformCmd{
+                Matrix4::translate(vector_math::Vector3<float>(-dx, -dy, 0.0f))});
+
+            for (const auto& cc : child_cmds)
+            {
+                std::visit([&](auto arg) {
+                    using T = std::decay_t<decltype(arg)>;
+                    if constexpr (std::is_same_v<T, PushClipRectCmd>)
+                    {
+                        arg.rect.x -= dx;
+                        arg.rect.y -= dy;
+                    }
+                    else if constexpr (std::is_same_v<T, PushClipRRectCmd>)
+                    {
+                        arg.rrect.rect.x -= dx;
+                        arg.rrect.rect.y -= dy;
+                    }
+                    else if constexpr (std::is_same_v<T, PushClipOvalCmd>)
+                    {
+                        arg.rect.x -= dx;
+                        arg.rect.y -= dy;
+                    }
+                    translated.push_back(arg);
+                }, cc);
+            }
+
+            translated.push_back(PopTransformCmd{});
+            return translated;
+        }
     }
 
     Renderer::Renderer(
@@ -55,6 +116,20 @@ namespace systems::leal::campello_widgets
 
     Renderer::~Renderer()
     {
+        // Device::submit() is pipelined (kFramesInFlight-deep, doesn't
+        // block), so the last couple of submitted frames' command buffers
+        // may still be executing on the GPU here. The caches below
+        // (text_texture_cache_, clip_shape_gpu_cache_, ...) hold
+        // Texture/BindGroup shared_ptrs whose destructors free the
+        // underlying GPU handles immediately and unconditionally; freeing
+        // one still referenced by an in-flight command buffer is a
+        // validation error (and undefined behaviour without validation
+        // layers). Wait here, before any member below is torn down by the
+        // implicit reverse-declaration-order destruction that follows this
+        // body, so every one of those immediate frees is safe.
+        if (device_)
+            device_->waitForIdle();
+
         if (detail::currentRenderer().load(std::memory_order_acquire) == this)
             detail::currentRenderer().store(nullptr, std::memory_order_release);
     }
@@ -598,6 +673,11 @@ namespace systems::leal::campello_widgets
         DrawList              shader_mask_cmds;
         DrawShaderMaskBeginCmd shader_mask_info{Rect{}, LinearGradient{}};
 
+        // SaveLayer accumulation state.
+        bool                  in_save_layer  = false;
+        DrawList              save_layer_cmds;
+        SaveLayerCmd          save_layer_info{Rect{}, Paint{}};
+
         // ClipRRect/ClipOval accumulation state. Unlike ShaderMask, clip
         // pushes share a single generic PopClipRectCmd with plain
         // PushClipRectCmd, so the matching pop is found by tracking the
@@ -683,6 +763,31 @@ namespace systems::leal::campello_widgets
                     {
                         // Accumulate all commands (including nested begin/end).
                         shader_mask_cmds.push_back(c);
+                    }
+                    return;
+                }
+
+                // ── SaveLayer child accumulation ─────────────────────────
+                if (in_save_layer)
+                {
+                    if constexpr (std::is_same_v<T, SaveLayerEndCmd>)
+                    {
+                        in_save_layer = false;
+                        const void* rid  = nullptr;
+                        size_t      ridx = 0;
+                        if (!replay_region_stack.empty())
+                        {
+                            rid  = replay_region_stack.back().first;
+                            ridx = replay_region_stack.back().second++;
+                        }
+                        applySaveLayer(save_layer_info, save_layer_cmds,
+                                       rpe, target_view, viewport_width, viewport_height, dpr,
+                                       current_transform, current_clip, rid, ridx);
+                        save_layer_cmds.clear();
+                    }
+                    else
+                    {
+                        save_layer_cmds.push_back(c);
                     }
                     return;
                 }
@@ -793,6 +898,18 @@ namespace systems::leal::campello_widgets
                 {
                     timeDraw(line_stats, [&] { draw_backend_->drawLine(c, current_transform, current_clip, *rpe); });
                 }
+                else if constexpr (std::is_same_v<T, DrawPointsCmd>)
+                {
+                    timeDraw(line_stats, [&] { draw_backend_->drawPoints(c, current_transform, current_clip, *rpe); });
+                }
+                else if constexpr (std::is_same_v<T, DrawArcCmd>)
+                {
+                    timeDraw(circle_stats, [&] { draw_backend_->drawArc(c, current_transform, current_clip, *rpe); });
+                }
+                else if constexpr (std::is_same_v<T, DrawPathCmd>)
+                {
+                    timeDraw(circle_stats, [&] { draw_backend_->drawPath(c, current_transform, current_clip, *rpe); });
+                }
                 else if constexpr (std::is_same_v<T, PushTransformCmd>)
                 {
                     transform_stack.push_back(current_transform);
@@ -874,6 +991,15 @@ namespace systems::leal::campello_widgets
                 {
                     // Mismatched end — ignore.
                 }
+                else if constexpr (std::is_same_v<T, SaveLayerCmd>)
+                {
+                    in_save_layer  = true;
+                    save_layer_info = c;
+                }
+                else if constexpr (std::is_same_v<T, SaveLayerEndCmd>)
+                {
+                    // Mismatched end — ignore.
+                }
                 else if constexpr (std::is_same_v<T, DrawSurfaceUpdateBeginCmd>)
                 {
                     in_surface_update  = true;
@@ -907,8 +1033,8 @@ namespace systems::leal::campello_widgets
                     });
                 }
 
-                // SaveLayerCmd, DrawPathCmd, etc. are planned for a later
-                // phase and silently fall through for now.
+                // DrawPathCmd is dispatched above; any unhandled command
+                // types silently fall through.
 
             }, cmd);
         }
@@ -991,19 +1117,10 @@ namespace systems::leal::campello_widgets
         auto child_rpe = draw_backend_->beginOffscreenPass(child_tex, *frame_encoder_);
         if (child_rpe)
         {
-            // Translate child commands so they paint at (0,0) in the offscreen tex.
-            // The translation is in logical pixels; flushDrawList's DPR initial
-            // transform scales it to physical pixels automatically. Matrix4's
-            // translation components live at data[3]/data[7]/data[11] (last
-            // column of rows 0-2) — data[12]/data[13] are part of row 3 (the
-            // W-component coefficients), not X/Y translation.
-            Matrix4 offset_mat = Matrix4::translate(
-                vector_math::Vector3<float>(-cmd.bounds.x, -cmd.bounds.y, 0.0f));
-
-            DrawList translated;
-            translated.push_back(PushTransformCmd{offset_mat});
-            for (const auto& cc : child_cmds) translated.push_back(cc);
-            translated.push_back(PopTransformCmd{});
+            // Translate child commands so they paint at (0,0) in the offscreen
+            // tex — see translateChildCommands()'s doc for why this can't be
+            // a bare PushTransformCmd wrap.
+            DrawList translated = translateChildCommands(child_cmds, cmd.bounds.x, cmd.bounds.y);
 
             // See applyClipShape() for why the backend viewport must track
             // the offscreen texture's own resolution during this sub-pass —
@@ -1124,13 +1241,9 @@ namespace systems::leal::campello_widgets
         auto child_rpe = draw_backend_->beginOffscreenPass(child_tex, *frame_encoder_);
         if (child_rpe)
         {
-            Matrix4 offset_mat = Matrix4::translate(
-                vector_math::Vector3<float>(-bounds.x, -bounds.y, 0.0f));
-
-            DrawList translated;
-            translated.push_back(PushTransformCmd{offset_mat});
-            for (const auto& cc : child_cmds) translated.push_back(cc);
-            translated.push_back(PopTransformCmd{});
+            // See translateChildCommands()'s doc for why this can't be a
+            // bare PushTransformCmd wrap.
+            DrawList translated = translateChildCommands(child_cmds, bounds.x, bounds.y);
 
             draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
 
@@ -1339,6 +1452,84 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void Renderer::applySaveLayer(
+        const SaveLayerCmd&                                cmd,
+        const DrawList&                                    child_cmds,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
+        float dpr,
+        const Matrix4& transform,
+        const Rect&    clip,
+        const void*    replay_region_id,
+        size_t         replay_bracket_index)
+    {
+        if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
+
+        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        if (replay_region_id != nullptr)
+        {
+            auto it = save_layer_gpu_cache_.find(cache_key);
+            if (it != save_layer_gpu_cache_.end())
+            {
+                it->second.last_used_frame = frame_counter_;
+                draw_backend_->saveLayerComposite(
+                    it->second.texture, it->second.cmd, transform, clip, *rpe);
+                return;
+            }
+        }
+
+        if (!std::isfinite(cmd.bounds.width) || !std::isfinite(cmd.bounds.height) ||
+            cmd.bounds.width <= 0.0f || cmd.bounds.height <= 0.0f)
+            return;
+
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(cmd.bounds.width  * dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(cmd.bounds.height * dpr));
+        if (tw == 0 || th == 0) return;
+
+        auto child_tex = (replay_region_id != nullptr)
+            ? draw_backend_->createDedicatedOffscreenTexture(tw, th)
+            : draw_backend_->createOffscreenTexture(tw, th);
+        if (!child_tex) return;
+
+        rpe->end();
+
+        auto child_rpe = draw_backend_->beginOffscreenPass(child_tex, *frame_encoder_);
+        if (child_rpe)
+        {
+            // See translateChildCommands()'s doc for why this can't be a
+            // bare PushTransformCmd wrap.
+            DrawList translated = translateChildCommands(child_cmds, cmd.bounds.x, cmd.bounds.y);
+
+            draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
+
+            auto child_view = child_tex->createView(draw_backend_->offscreenPixelFormat(), 1);
+            flushDrawList(translated, child_rpe, child_view,
+                          static_cast<float>(tw), static_cast<float>(th), dpr,
+                          /*backdrop_pass=*/false);
+            child_rpe->end();
+
+            draw_backend_->setViewportSize(viewport_width, viewport_height);
+        }
+
+        rpe = restartRenderPass(target_view);
+
+        if (child_rpe)
+        {
+            draw_backend_->saveLayerComposite(child_tex, cmd, transform, clip, *rpe);
+
+            if (replay_region_id != nullptr)
+            {
+                SaveLayerGpuCacheEntry entry;
+                entry.texture         = child_tex;
+                entry.cmd             = cmd;
+                entry.last_used_frame = frame_counter_;
+                save_layer_gpu_cache_[cache_key] = std::move(entry);
+            }
+        }
+    }
+
     void Renderer::evictReplayCacheEntries(const void* region_id) noexcept
     {
         auto eraseByRegion = [&](auto& cache)
@@ -1354,6 +1545,7 @@ namespace systems::leal::campello_widgets
         eraseByRegion(clip_shape_gpu_cache_);
         eraseByRegion(shader_mask_gpu_cache_);
         eraseByRegion(shadow_gpu_cache_);
+        eraseByRegion(save_layer_gpu_cache_);
     }
 
     void Renderer::evictStaleGpuCaches()
@@ -1371,6 +1563,7 @@ namespace systems::leal::campello_widgets
         sweep(clip_shape_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(shader_mask_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(shadow_gpu_cache_, kClipShapeCacheMaxAgeFrames);
+        sweep(save_layer_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(text_texture_cache_, kTextTextureCacheMaxAgeFrames);
     }
 

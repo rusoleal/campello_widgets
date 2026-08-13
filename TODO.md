@@ -270,6 +270,58 @@ Drawing API for custom painters and shape rendering.
 
 ---
 
+## Phase 12b — Canvas API GPU Backend Implementation
+
+The public Canvas API records `DrawCommand`s, but several commands are either
+not dispatched by `Renderer::flushDrawList()` or not implemented by every
+`IDrawBackend`. Track per-backend status here.
+
+### Shared infrastructure
+- [x] Add `IDrawBackend::drawArc`
+- [x] Add `IDrawBackend::drawPath`
+- [x] Add `IDrawBackend::drawPoints`
+- [x] Add `IDrawBackend::saveLayerComposite` and `SaveLayerEndCmd`
+- [x] Dispatch `DrawArcCmd`, `DrawPointsCmd`, `DrawPathCmd` in `Renderer::flushDrawList()`
+- [x] Dispatch `SaveLayerCmd` / `SaveLayerEndCmd` in `Renderer::flushDrawList()`
+- [x] Extract shared path flattening/tessellation helpers into `src/gpu/path_tessellation.hpp/.cpp` (used by Vulkan, Metal, DirectX)
+
+### Metal
+- [x] `drawArc` — tessellated to triangles via `rect_pipeline_`
+- [x] `drawPath` — shared CPU flatten + ear-clip fill / quad stroke
+- [x] `drawPoints` — decomposed to circles/lines
+- [x] `saveLayer` — offscreen texture + opacity compositing
+- [x] `drawShaderMaskComposite`
+- [ ] `drawDRRect` (currently white-background hack)
+
+### Vulkan
+- [x] `drawLine` — line pipeline + shaders
+- [x] `drawArc` — tessellated to triangles
+- [x] `drawPath` — shared CPU flatten + ear-clip fill / quad stroke
+- [x] `drawPoints` — decomposed to circles/lines
+- [x] `drawShaderMaskComposite` — gradient LUT compositing
+- [x] `saveLayer` — offscreen texture + opacity compositing
+- [ ] `drawDRRect` (currently white-background hack)
+
+### DirectX 12
+- [x] `drawArc` — tessellated to triangles via `rect_pipeline_`
+- [x] `drawPath` — shared CPU flatten + ear-clip fill / quad stroke
+- [x] `drawPoints` — decomposed to circles/lines
+- [x] `saveLayer` — offscreen texture + opacity compositing
+- [x] `drawShaderMaskComposite` — gradient LUT compositing (new `shader_mask.hlsl`; run `build_dx12_shaders.bat` on Windows to regenerate embedded DXBC)
+- [ ] `drawDRRect` (currently white-background hack)
+
+### GPU-backed visual unit tests
+- [x] Refactor `GpuVisualRenderer` into backend-agnostic core (`tests/gpu_visual_renderer.cpp`) + platform-specific factory files (Metal, Vulkan, DirectX, stub)
+- [x] Vulkan `GpuVisualRenderer` backend for headless offscreen rendering on Linux/Android
+- [x] DirectX `GpuVisualRenderer` factory for Windows (HLSL placeholders must be regenerated before ShaderMask tests run)
+- [x] Shared DrawList replay loop handles `drawArc`/`drawPath`/`drawPoints` and offscreen composites (`saveLayer`, `clipRRect`/`clipOval`/`clipPath`, `shaderMask`)
+- [x] Focused Canvas API visual tests: `VisualFidelityCanvasApi.Arcs`, `.Paths`, `.Points`, `.Clipping`, `.PaintStyles`, `.SaveLayer`, `.DrawColor`, `.Skew`, `.PathArc`
+- [x] Matching Flutter `CustomPainter` golden generators in `flutter_fidelity_tester/test/visual_goldens_test.dart`
+- [x] Generate Flutter PNG goldens (`tests/visual_fidelity/flutter_goldens/`)
+- [x] Fix `Canvas::skew` matrix to match Flutter/Skia (`x' = x + sx*y, y' = y + sy*x`); was using `tan()` and swapped elements
+
+---
+
 ## Phase 13 — Pending Widgets (Flutter Gap Analysis)
 
 Widgets identified as missing after comparing against Flutter's widget catalog.
@@ -2194,5 +2246,5 @@ headless Metal renderer that renders a `DrawList` to an offscreen RGBA8 texture 
 
 Remaining work for full cross-platform coverage:
 - [x] Metal backend readback — `GpuVisualRenderer` offscreen → PNG (macOS)
-- [ ] Vulkan backend readback (`vkCmdCopyImageToBuffer`) for Android/Linux
+- [x] Vulkan backend readback (`vkCmdCopyImageToBuffer`) for Android/Linux
 - [ ] DirectX 12 backend readback (`CopyTextureRegion` into readback heap) for Windows

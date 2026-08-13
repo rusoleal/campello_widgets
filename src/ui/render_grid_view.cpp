@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <limits>
 #include <campello_widgets/ui/render_grid_view.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
@@ -249,6 +250,9 @@ namespace systems::leal::campello_widgets
         // back into itself.
         const float old_offset = scrollOffset();
         raw_offset_ += delta;
+        // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
+        if (std::strcmp(source, "wheel") == 0)
+            wheel_velocity_tracker_.addPosition(std::chrono::steady_clock::now(), raw_offset_);
         const float clamped = physics_->applyBoundaryConditions(raw_offset_, min_extent_, max_extent_);
 
         if (DebugFlags::printScrollTrace)
@@ -326,8 +330,8 @@ namespace systems::leal::campello_widgets
             pan_down_pos_  = event.position;
             device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
-            pan_velocity_  = 0.0f;
-            last_pan_time_ = std::chrono::steady_clock::now();
+            velocity_tracker_.reset();
+            velocity_tracker_.addPosition(std::chrono::steady_clock::now(), event.position.y);
             arena_entry_.reset();
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
@@ -371,11 +375,7 @@ namespace systems::leal::campello_widgets
             if (panning_)
             {
                 applyScrollDelta(-dy);
-
-                const auto  now = std::chrono::steady_clock::now();
-                const float dt  = std::chrono::duration<float>(now - last_pan_time_).count();
-                if (dt > 1e-4f) pan_velocity_ = -dy / dt;
-                last_pan_time_ = now;
+                velocity_tracker_.addPosition(std::chrono::steady_clock::now(), event.position.y);
             }
 
             pan_last_pos_ = event.position;
@@ -385,7 +385,7 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::up:
             pointer_down_ = false;
             if (panning_ && physics_->allowsMomentum())
-                velocity_px_s_ = pan_velocity_;
+                velocity_px_s_ = -velocity_tracker_.getVelocity();
             panning_ = false;
             arena_entry_.reset();
             break;
@@ -428,6 +428,7 @@ namespace systems::leal::campello_widgets
                     last_scroll_event_ms_ = static_cast<uint64_t>(
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now().time_since_epoch()).count());
+                    wheel_momentum_pending_ = true;
                 }
                 d->signalResolver().registerHandler([this, delta] { applyScrollDelta(delta, "wheel"); }, dominant);
             }
@@ -458,6 +459,15 @@ namespace systems::leal::campello_widgets
                 FrameScheduler::scheduleFrame();
             return;
         }
+
+        // See RenderListView::onTick()'s doc on wheel_momentum_pending_.
+        if (wheel_momentum_pending_)
+        {
+            wheel_momentum_pending_ = false;
+            if (physics_->allowsMomentum())
+                velocity_px_s_ = wheel_velocity_tracker_.getVelocity();
+        }
+
         if (last_tick_ms_ == 0) { last_tick_ms_ = now_ms; return; }
 
         const float dt_s = static_cast<float>(now_ms - last_tick_ms_) / 1000.0f;
@@ -485,6 +495,9 @@ namespace systems::leal::campello_widgets
                 ? target : (target + eased_overscroll);
             applyScrollDelta(new_raw - raw_offset_, "spring");
             velocity_px_s_ = 0.0f;
+            // See RenderListView::onTick()'s doc — nothing else asks for a
+            // follow-up frame once this one finishes painting.
+            FrameScheduler::scheduleFrame();
             return;
         }
 
@@ -492,6 +505,8 @@ namespace systems::leal::campello_widgets
 
         applyScrollDelta(velocity_px_s_ * dt_s, "momentum");
         velocity_px_s_ = physics_->applyFriction(velocity_px_s_, dt_s);
+        if (std::abs(velocity_px_s_) >= kMinVelocity)
+            FrameScheduler::scheduleFrame();
     }
 
 

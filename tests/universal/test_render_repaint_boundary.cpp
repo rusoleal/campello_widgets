@@ -165,7 +165,7 @@ TEST(RenderRepaintBoundary, CleanReplayKeepsClipRectAtCorrectAbsolutePosition)
     EXPECT_FLOAT_EQ(replayedClip->y, realOffset.y);
 }
 
-TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintForcesReRecordingAtNewOffset)
+TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintShiftsClipToNewOffset)
 {
     // Regression test for the bug where a Row/Column repositions a child
     // (e.g. on window resize) without calling markNeedsPaint() on it —
@@ -173,6 +173,11 @@ TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintForcesReRecordingAtNe
     // fresh offset regardless), but RenderRepaintBoundary's clean-replay
     // path used to trust the *old* cached offset, leaving the boundary
     // visually stuck at its old position, unclipped to its new bounds.
+    //
+    // PushClipRectCmd's stored rect is shifted by hand on reposition (see
+    // OffsetLayer::maybeReplay()'s shiftClipRects()), so this no longer
+    // needs a full re-record to land at the correct position — child's
+    // paintContent is still only invoked once.
     auto child = std::make_shared<CountingRenderBox>();
     auto clip  = std::make_shared<cw::RenderClipRect>();
     clip->setChild(child);
@@ -195,8 +200,8 @@ TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintForcesReRecordingAtNe
     cw::PaintContext ctx2(200.0f, 200.0f);
     boundary.paint(ctx2, secondOffset);
 
-    EXPECT_EQ(child->paintCount, 2)
-        << "an offset change must force a fresh recording, not a stale replay";
+    EXPECT_EQ(child->paintCount, 1)
+        << "a clip rect is cheaply repositionable — it must not force a fresh recording";
 
     auto findClipRect = [](const cw::DrawList& cmds) -> const cw::Rect* {
         for (const auto& cmd : cmds)
@@ -214,7 +219,7 @@ TEST(RenderRepaintBoundary, RepositionWithoutMarkNeedsPaintForcesReRecordingAtNe
     // A third paint at the same (second) offset should now replay cleanly.
     cw::PaintContext ctx3(200.0f, 200.0f);
     boundary.paint(ctx3, secondOffset);
-    EXPECT_EQ(child->paintCount, 2) << "unchanged offset should replay the cache again";
+    EXPECT_EQ(child->paintCount, 1) << "unchanged offset should replay the cache again";
 }
 
 TEST(RenderRepaintBoundary, RepositionWithClipFreeChildReplaysViaDeltaTranslateWithoutRewalkingChild)

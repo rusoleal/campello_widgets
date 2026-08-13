@@ -310,6 +310,7 @@ struct DrawCommandVisitor {
     void operator()(const cw::DrawImageCmd&) {}
     void operator()(const cw::PushClipPathCmd&) {}
     void operator()(const cw::SaveLayerCmd&) {}
+    void operator()(const cw::SaveLayerEndCmd&) {}
     void operator()(const cw::DrawBackdropFilterBeginCmd&) {}
     void operator()(const cw::DrawBackdropFilterEndCmd&) {}
     void operator()(const cw::DrawShaderMaskBeginCmd&) {}
@@ -687,10 +688,20 @@ cwt::ImageComparisonResult cwt::comparePngImages(
 
     for (int i = 0; i < totalPixels; ++i) {
         const int idx = i * 4;
-        int dr = std::abs((int)expData[idx]     - (int)actData[idx]);
-        int dg = std::abs((int)expData[idx + 1] - (int)actData[idx + 1]);
-        int db = std::abs((int)expData[idx + 2] - (int)actData[idx + 2]);
-        int da = std::abs((int)expData[idx + 3] - (int)actData[idx + 3]);
+
+        // Compare in premultiplied-alpha space so that transparent Flutter
+        // goldens (stored straight/unpremultiplied) and our GPU output (which
+        // is premultiplied) are evaluated on the same compositing footing.
+        auto premul = [](uint8_t c, uint8_t a) -> int {
+            return static_cast<int>(c) * static_cast<int>(a) / 255;
+        };
+
+        int ea = expData[idx + 3];
+        int aa = actData[idx + 3];
+        int dr = std::abs(premul(expData[idx],     ea) - premul(actData[idx],     aa));
+        int dg = std::abs(premul(expData[idx + 1], ea) - premul(actData[idx + 1], aa));
+        int db = std::abs(premul(expData[idx + 2], ea) - premul(actData[idx + 2], aa));
+        int da = std::abs(ea - aa);
         int maxDiff = std::max({dr, dg, db, da});
         if (maxDiff > maxChannelDiff) maxChannelDiff = maxDiff;
         if (maxDiff > tolerance) ++diffCount;

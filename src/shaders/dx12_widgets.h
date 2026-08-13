@@ -1348,4 +1348,16 @@ static const unsigned char kclip_shape_ps_cso[] = {
 
 static const unsigned int kclip_shape_ps_csoSize = 1576;
 
+// Placeholders for the ShaderMask pipeline. Run build_dx12_shaders.bat on
+// Windows to regenerate this header with real compiled DXBC for these entries.
+static const unsigned char kshader_mask_vs_cso[] = {
+};
+
+static const unsigned int kshader_mask_vs_csoSize = 0;
+
+static const unsigned char kshader_mask_ps_cso[] = {
+};
+
+static const unsigned int kshader_mask_ps_csoSize = 0;
+
 } // namespace systems::leal::campello_widgets::shaders

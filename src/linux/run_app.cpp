@@ -25,11 +25,21 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/XKBlib.h>
+#include <X11/Xresource.h>
 #include <X11/keysym.h>
+#include <X11/cursorfont.h>
 
 #include <dbus/dbus.h>
 
+// C interface installed by src/linux/platform_menu_delegate.cpp — must run
+// before the widget tree mounts so PlatformMenuBar::build()'s setMenus()
+// and PlatformMenuBarView's needsInWindowMenuBar() check reach the real
+// LinuxPlatformMenuDelegate instead of the default no-op.
+extern "C" void campello_widgets_initialize_linux_menu_delegate();
+
+#include <cctype>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <cstring>
@@ -47,9 +57,34 @@ namespace Widgets = ::systems::leal::campello_widgets;
 #ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
 namespace systems::leal::campello_widgets {
     int runAppWayland(const std::string& title, int width, int height,
-                      WidgetRef root_widget, bool resizable);
+                      WidgetRef root_widget, bool resizable,
+                      const std::string& app_id);
 }
 #endif
+
+// ---------------------------------------------------------------------------
+// Derives a default app_id from the window title when the caller doesn't
+// supply one explicitly — lowercased, non-alphanumerics collapsed to '-'.
+// Better than leaving the compositor with nothing, but callers that ship a
+// .desktop file should pass an app_id matching its basename explicitly.
+// ---------------------------------------------------------------------------
+static std::string defaultAppIdFromTitle(const std::string& title)
+{
+    std::string result;
+    result.reserve(title.size());
+    bool last_was_dash = false;
+    for (unsigned char c : title) {
+        if (std::isalnum(c)) {
+            result += static_cast<char>(std::tolower(c));
+            last_was_dash = false;
+        } else if (!last_was_dash && !result.empty()) {
+            result += '-';
+            last_was_dash = true;
+        }
+    }
+    while (!result.empty() && result.back() == '-') result.pop_back();
+    return result.empty() ? "campello-widgets-app" : result;
+}
 
 // ---------------------------------------------------------------------------
 // Internal state
@@ -57,6 +92,7 @@ namespace systems::leal::campello_widgets {
 namespace {
     Widgets::WidgetRef gRootWidget;
     std::string        gTitle;
+    std::string        gAppId;
     int                gWidth  = 800;
     int                gHeight = 600;
     bool               gResizable = true;
@@ -83,6 +119,7 @@ struct WindowState
     bool running = true;
     bool needs_redraw = true;
     bool mouse_pressed = false;
+    float display_scale = 1.0f;
     Widgets::MediaQueryData                     media_data;
     Widgets::WidgetRef                          user_root_widget;
 };
@@ -273,6 +310,56 @@ static void rebuildMediaQuery(WindowState* state)
 }
 
 // ---------------------------------------------------------------------------
+// HiDPI scale detection
+// ---------------------------------------------------------------------------
+// X11 has no automatic window-content scaling: unlike macOS/Windows, the
+// server never stretches a client's buffer to match the display's true
+// pixel density. A client that wants to look correct on a HiDPI screen must
+// size its own window in real (physical) pixels and report the physical/
+// logical ratio itself. The desktop-standard signal for that ratio is the
+// `Xft.dpi` X resource — every major desktop environment's settings daemon
+// publishes it (including for XWayland clients), so it's checked first.
+// RandR/core-protocol physical screen size (mm) is a last-resort fallback
+// for setups that never populate it.
+static float getX11DisplayScale(Display* display, int screen)
+{
+    bool  found = false;
+    float scale = 1.0f;
+
+    char* resource_string = XResourceManagerString(display);
+    if (resource_string) {
+        XrmDatabase db = XrmGetStringDatabase(resource_string);
+        if (db) {
+            char*    type = nullptr;
+            XrmValue value;
+            if (XrmGetResource(db, "Xft.dpi", "Xft.Dpi", &type, &value) && value.addr) {
+                float dpi = static_cast<float>(std::atof(value.addr));
+                if (dpi > 0.0f) {
+                    scale = dpi / 96.0f;
+                    found = true;
+                }
+            }
+            XrmDestroyDatabase(db);
+        }
+    }
+
+    if (!found) {
+        int width_px = DisplayWidth(display, screen);
+        int width_mm = DisplayWidthMM(display, screen);
+        if (width_px > 0 && width_mm > 0) {
+            float dpi = static_cast<float>(width_px) * 25.4f / static_cast<float>(width_mm);
+            // Snap to the nearest quarter step — matches desktop-environment
+            // scale presets (1.0, 1.25, 1.5, ...) and smooths out imprecise
+            // EDID physical-size reporting that would otherwise produce
+            // odd-looking float scales from this fallback path.
+            scale = std::round((dpi / 96.0f) * 4.0f) / 4.0f;
+        }
+    }
+
+    return scale < 1.0f ? 1.0f : scale;
+}
+
+// ---------------------------------------------------------------------------
 // X11 keycode translation
 // ---------------------------------------------------------------------------
 
@@ -407,17 +494,21 @@ static void updateImeCursorPosition(WindowState* state)
 
     if (rect[2] <= 0.0f || rect[3] <= 0.0f) return;
 
-    // Convert from client coordinates to screen coordinates
+    // Convert from client coordinates to screen coordinates. `rect` is in
+    // logical pixels (RenderBox tree space); the X11 window is sized in
+    // physical pixels, so scale up before translating.
     Window root;
     int x_root, y_root;
     XTranslateCoordinates(state->display, state->window,
         DefaultRootWindow(state->display),
-        static_cast<int>(rect[0]), static_cast<int>(rect[1] + rect[3]),
+        static_cast<int>(rect[0] * state->display_scale),
+        static_cast<int>((rect[1] + rect[3]) * state->display_scale),
         &x_root, &y_root, &root);
 
     state->ibus_ime->setCursorLocation(
         x_root, y_root,
-        static_cast<int>(rect[2]), static_cast<int>(rect[3]));
+        static_cast<int>(rect[2] * state->display_scale),
+        static_cast<int>(rect[3] * state->display_scale));
 }
 
 // ---------------------------------------------------------------------------
@@ -433,8 +524,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
                 gHeight = ev.xconfigure.height;
                 Widgets::MediaQueryData newData = state->media_data;
                 newData.logical_size = Widgets::Size{
-                    static_cast<float>(ev.xconfigure.width),
-                    static_cast<float>(ev.xconfigure.height) };
+                    static_cast<float>(ev.xconfigure.width)  / state->display_scale,
+                    static_cast<float>(ev.xconfigure.height) / state->display_scale };
                 if (newData != state->media_data) {
                     state->media_data = newData;
                     rebuildMediaQuery(state);
@@ -465,7 +556,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::down;
             e.pointer_id = 0;
-            e.position = { static_cast<float>(x), static_cast<float>(y) };
+            e.position = { static_cast<float>(x) / state->display_scale,
+                           static_cast<float>(y) / state->display_scale };
             e.pressure = 1.0f;
             state->dispatcher->handlePointerEvent(e);
             state->mouse_pressed = true;
@@ -483,7 +575,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::up;
             e.pointer_id = 0;
-            e.position = { static_cast<float>(x), static_cast<float>(y) };
+            e.position = { static_cast<float>(x) / state->display_scale,
+                           static_cast<float>(y) / state->display_scale };
             e.pressure = 0.0f;
             state->dispatcher->handlePointerEvent(e);
             state->mouse_pressed = false;
@@ -498,7 +591,8 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::move;
             e.pointer_id = 0;
-            e.position = { static_cast<float>(x), static_cast<float>(y) };
+            e.position = { static_cast<float>(x) / state->display_scale,
+                           static_cast<float>(y) / state->display_scale };
             e.pressure = state->mouse_pressed ? 1.0f : 0.0f;
             state->dispatcher->handlePointerEvent(e);
             break;
@@ -633,13 +727,20 @@ namespace systems::leal::campello_widgets
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget)
 {
-    return runApp(title, width, height, std::move(root_widget), true);
+    return runApp(title, width, height, std::move(root_widget), true, defaultAppIdFromTitle(title));
 }
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget, bool resizable)
 {
+    return runApp(title, width, height, std::move(root_widget), resizable, defaultAppIdFromTitle(title));
+}
+
+int runApp(const std::string& title, int width, int height, WidgetRef root_widget, bool resizable,
+           const std::string& app_id)
+{
     gRootWidget = std::move(root_widget);
     gTitle      = title;
+    gAppId      = app_id;
     gWidth      = width;
     gHeight     = height;
     gResizable  = resizable;
@@ -651,7 +752,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     if (wayland_display && wayland_display[0] != '\0') {
 #ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
         std::cerr << "[Linux] Wayland detected (" << wayland_display << "), trying Wayland backend.\n";
-        int result = runAppWayland(title, width, height, gRootWidget, resizable);
+        int result = runAppWayland(title, width, height, gRootWidget, resizable, gAppId);
         if (result != 2) return result; // 2 = GPU init failed, fall back to X11
         std::cerr << "[Linux] Wayland GPU init failed; falling back to X11 (XWayland).\n";
 #else
@@ -673,6 +774,16 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Window root = RootWindow(display, screen);
 
     // -----------------------------------------------------------------------
+    // Detect HiDPI scale and size the window in physical pixels
+    // -----------------------------------------------------------------------
+    const float x11_scale = getX11DisplayScale(display, screen);
+    if (x11_scale != 1.0f) {
+        std::cerr << "[Linux] Display scale: " << x11_scale << "x\n";
+    }
+    const int phys_width  = static_cast<int>(std::lround(width  * x11_scale));
+    const int phys_height = static_cast<int>(std::lround(height * x11_scale));
+
+    // -----------------------------------------------------------------------
     // Create X11 window
     // -----------------------------------------------------------------------
     XSetWindowAttributes swa = {};
@@ -683,11 +794,21 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
     Window window = XCreateWindow(
         display, root,
-        0, 0, static_cast<unsigned int>(width), static_cast<unsigned int>(height), 0,
+        0, 0, static_cast<unsigned int>(phys_width), static_cast<unsigned int>(phys_height), 0,
         CopyFromParent, InputOutput, CopyFromParent,
         CWEventMask, &swa);
 
     XStoreName(display, window, gTitle.c_str());
+
+    // WM_CLASS — lets window managers/desktop shells match this window to an
+    // installed .desktop file for the taskbar/alt-tab icon and name.
+    {
+        XClassHint* class_hint = XAllocClassHint();
+        class_hint->res_name  = const_cast<char*>(gAppId.c_str());
+        class_hint->res_class = const_cast<char*>(gAppId.c_str());
+        XSetClassHint(display, window, class_hint);
+        XFree(class_hint);
+    }
 
     // Register WM_DELETE_WINDOW protocol
     Atom wm_delete = XInternAtom(display, "WM_DELETE_WINDOW", False);
@@ -695,6 +816,45 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
     XMapWindow(display, window);
     XFlush(display);
+
+    // -----------------------------------------------------------------------
+    // Cursor shapes + register the cursor-change handler
+    // -----------------------------------------------------------------------
+    // Without this, MouseRegion/TextField/etc. cursor changes are silent
+    // no-ops on X11 (setSystemCursor() just calls into a null handler — see
+    // system_mouse_cursor.cpp) and every widget shows the window's default
+    // inherited cursor regardless of what's actually under the pointer.
+    struct X11Cursors {
+        Cursor arrow      = 0;
+        Cursor pointer    = 0;
+        Cursor text       = 0;
+        Cursor forbidden  = 0;
+        Cursor resize_ns  = 0;
+        Cursor resize_ew  = 0;
+    } x11_cursors;
+    x11_cursors.arrow     = XCreateFontCursor(display, XC_left_ptr);
+    x11_cursors.pointer   = XCreateFontCursor(display, XC_hand2);
+    x11_cursors.text      = XCreateFontCursor(display, XC_xterm);
+    x11_cursors.forbidden = XCreateFontCursor(display, XC_X_cursor);
+    x11_cursors.resize_ns = XCreateFontCursor(display, XC_sb_v_double_arrow);
+    x11_cursors.resize_ew = XCreateFontCursor(display, XC_sb_h_double_arrow);
+
+    // Captured by value: these are X server resource IDs (opaque XIDs), not
+    // pointers into this stack frame, so they stay valid for the lifetime
+    // of `display` regardless of x11_cursors's own scope.
+    Widgets::registerCursorHandler([display, window, x11_cursors](Widgets::SystemMouseCursor c) {
+        Cursor cur = x11_cursors.arrow;
+        switch (c) {
+            case Widgets::SystemMouseCursor::pointer:   cur = x11_cursors.pointer;   break;
+            case Widgets::SystemMouseCursor::text:      cur = x11_cursors.text;      break;
+            case Widgets::SystemMouseCursor::forbidden: cur = x11_cursors.forbidden; break;
+            case Widgets::SystemMouseCursor::resize_ns: cur = x11_cursors.resize_ns; break;
+            case Widgets::SystemMouseCursor::resize_ew: cur = x11_cursors.resize_ew; break;
+            default: break;
+        }
+        XDefineCursor(display, window, cur);
+        XFlush(display);
+    });
 
     // -----------------------------------------------------------------------
     // Create GPU device
@@ -724,6 +884,13 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.window  = window;
     state.screen  = screen;
     state.device  = device;
+    state.display_scale = x11_scale;
+
+    // Window was created at physical-pixel size; keep gWidth/gHeight (which
+    // feed buildFrame() and the swapchain query) in sync with that, not the
+    // caller's originally-requested logical size.
+    gWidth  = phys_width;
+    gHeight = phys_height;
 
     // -----------------------------------------------------------------------
     // Create dispatcher and focus manager before mounting
@@ -780,8 +947,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // Wrap root widget with MediaQuery and mount
     // -----------------------------------------------------------------------
     Widgets::MediaQueryData mediaData;
-    // X11 doesn't have a built-in DPR concept; use 1.0 as default
-    mediaData.device_pixel_ratio = 1.0f;
+    mediaData.device_pixel_ratio = x11_scale;
     mediaData.platform_brightness = getSystemBrightness();
     mediaData.logical_size = Widgets::Size{
         static_cast<float>(width),
@@ -793,6 +959,8 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
     // Bind the UI thread before any widget tree mutation.
     Widgets::ThreadChecker::instance().bindToCurrentThread();
+
+    campello_widgets_initialize_linux_menu_delegate();
 
     state.root_element = wrappedRoot->createElement();
     state.root_element->mount(nullptr);
@@ -824,6 +992,12 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     state.renderer = std::make_shared<Widgets::Renderer>(
         device, render_box, bgColor);
     state.renderer->setDrawBackend(std::move(backendOwned));
+    // Renderer::device_pixel_ratio_ is distinct from MediaQueryData's copy —
+    // it's what buildFrame() actually divides the physical viewport by to
+    // get logical layout constraints. Without this, layout sizes everything
+    // against the full physical viewport as if DPR were 1, shrinking every
+    // fixed-size widget to roughly 1/scale of its intended on-screen size.
+    state.renderer->setDevicePixelRatio(x11_scale);
 
     state.raster_thread = std::make_unique<Widgets::RasterThread>(
         [renderer = state.renderer](const Widgets::FramePackage& pkg) {
@@ -876,12 +1050,37 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
 
+    // Drop the handler before freeing the cursors/closing the display it
+    // captured — nothing should call setSystemCursor() after this point,
+    // but leaving it registered would dangle otherwise.
+    Widgets::registerCursorHandler(nullptr);
+    XFreeCursor(display, x11_cursors.arrow);
+    XFreeCursor(display, x11_cursors.pointer);
+    XFreeCursor(display, x11_cursors.text);
+    XFreeCursor(display, x11_cursors.forbidden);
+    XFreeCursor(display, x11_cursors.resize_ns);
+    XFreeCursor(display, x11_cursors.resize_ew);
+
+    // Unmount element / render-object tree before tearing down GPU resources.
+    state.root_element.reset();
+
     // Stop the raster thread before releasing the renderer — stop() blocks
     // until any in-flight rasterFrame() call completes and joins the thread,
     // so no raster work can ever observe a half-destroyed Renderer/Device.
     state.raster_thread.reset();
 
     state.renderer.reset();
+
+    // Release everything else that can hold GPU-backed textures before the
+    // device is destroyed. render_box is a local variable that would otherwise
+    // outlive state.device; state.dispatcher holds a ref to it via setRoot().
+    // OffsetLayer caches DrawLists that contain DrawImageCmd with
+    // shared_ptr<Texture> — those textures call vkFreeMemory in their dtor.
+    render_box.reset();
+    state.dispatcher.reset();
+    state.focus_manager.reset();
+    Widgets::ImageCache::instance().clear();
+
     state.device.reset();
 
     XDestroyWindow(display, window);

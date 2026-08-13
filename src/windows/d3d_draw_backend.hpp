@@ -96,6 +96,24 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawArc(
+        const DrawArcCmd&                cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawPath(
+        const DrawPathCmd&               cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawPoints(
+        const DrawPointsCmd&             cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     std::shared_ptr<campello_gpu::Texture> rasterizeText(
         const TextSpan& span, float dpr,
         uint32_t& out_width, uint32_t& out_height) override;
@@ -158,6 +176,20 @@ public:
         const Rect&                             clip,
         campello_gpu::RenderPassEncoder&        encoder) override;
 
+    void saveLayerComposite(
+        std::shared_ptr<campello_gpu::Texture> child_tex,
+        const SaveLayerCmd&                     cmd,
+        const Matrix4&                          transform,
+        const Rect&                             clip,
+        campello_gpu::RenderPassEncoder&        encoder) override;
+
+    void drawShaderMaskComposite(
+        std::shared_ptr<campello_gpu::Texture> child_tex,
+        const DrawShaderMaskBeginCmd&           cmd,
+        const Matrix4&                          transform,
+        const Rect&                             clip,
+        campello_gpu::RenderPassEncoder&        encoder) override;
+
     void setViewport(float w, float h) noexcept override
     {
         setViewportSize(w, h);
@@ -170,6 +202,7 @@ public:
         quad_vertex_pool_.beginFrame();
         blur_uniform_pool_.beginFrame();
         clip_shape_uniform_pool_.beginFrame();
+        shader_mask_uniform_pool_.beginFrame();
         offscreen_texture_pool_.beginFrame();
         offscreen_texture_pool_.evictStale(frame_counter_);
         blur_texture_pool_.beginFrame();
@@ -210,9 +243,21 @@ private:
     // (widgets.metal's QuadVertexIn doc comment) for the full rationale.
     struct ProjectedCorner { float x, y, w, u, v; };
 
+    // Same layout used by drawFilledVertices(); defined in the header so
+    // callers (and the Windows visual-test factory) can build the vertex
+    // vector without depending on the .cpp implementation.
+    struct RectVertex { float x, y, w; };
+
     void drawFilledQuad(
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
+        const Color& color,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Variable-length triangle batch for drawArc / drawPath. `verts` uses the
+    // same RectVertex layout as drawFilledQuad; `count` must be a multiple of 3.
+    void drawFilledVertices(
+        const std::vector<RectVertex>& verts,
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
@@ -251,6 +296,11 @@ private:
         bool  horizontal,
         campello_gpu::CommandEncoder& encoder,
         std::shared_ptr<campello_gpu::BindGroup> src_bind_group);
+
+    // Build a 256×1 RGBA LUT texture from gradient colors/stops.
+    std::shared_ptr<campello_gpu::Texture> buildGradientLUT(
+        const std::vector<Color>& colors,
+        const std::vector<float>& stops);
 
     // ------------------------------------------------------------------
     // Plain vertex-buffer pool — real per-vertex (x, y, w[, u, v]) data for
@@ -437,6 +487,7 @@ private:
     UniformBindGroupPool quad_uniform_pool_;
     UniformBindGroupPool blur_uniform_pool_;
     UniformBindGroupPool clip_shape_uniform_pool_;
+    UniformBindGroupPool shader_mask_uniform_pool_;
 
     // Real per-vertex position(+uv) data for the rect/quad pipelines —
     // separate from the uniform pools above (see VertexBufferPool's doc
@@ -456,6 +507,7 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>   quad_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   blur_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   clip_shape_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>   shader_mask_pipeline_;
 
     std::shared_ptr<campello_gpu::BindGroupLayout>  rect_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  shape_bgl_;
@@ -467,6 +519,8 @@ private:
     // quad_tex_bgl_ — same texture@0/sampler@1 structure, no need for
     // additional identical layouts.
     std::shared_ptr<campello_gpu::BindGroupLayout>  clip_shape_uniform_bgl_;  // uniform@0 (bind group 0)
+    std::shared_ptr<campello_gpu::BindGroupLayout>  shader_mask_uniform_bgl_; // uniform@0 (bind group 0)
+    std::shared_ptr<campello_gpu::BindGroupLayout>  shader_mask_bgl_;         // child@0, lut@1, sampler@2 (bind group 1)
 
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;
 

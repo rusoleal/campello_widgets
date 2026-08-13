@@ -2,6 +2,11 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|windows)/.*")
+# src/testing/ is fidelity-testing infrastructure (captureToPng, GpuVisualRenderer
+# callers) that depends on GpuVisualRenderer's implementation, which lives in
+# tests/ and is only compiled into campello_widgets_tests — linking it into the
+# shipped library leaves it with unresolved symbols for any non-test executable.
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 
 add_library(campello_widgets SHARED ${CAMPELLO_WIDGETS_SOURCES})
 
@@ -16,8 +21,8 @@ target_include_directories(campello_widgets
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LINUX_DEPS REQUIRED x11 dbus-1 freetype2 harfbuzz fontconfig)
 
-# Optional Wayland support (wayland-client + xkbcommon + libdecor for decorations)
-pkg_check_modules(WAYLAND_DEPS wayland-client xkbcommon)
+# Optional Wayland support (wayland-client + wayland-cursor + xkbcommon + libdecor for decorations)
+pkg_check_modules(WAYLAND_DEPS wayland-client wayland-cursor xkbcommon)
 if(WAYLAND_DEPS_FOUND)
     pkg_check_modules(LIBDECOR libdecor-0)
     if(LIBDECOR_FOUND)

@@ -501,7 +501,19 @@
       "Bash(cmake -S . -B build/darwin-debug-test -DBUILD_TESTS=ON -DCMAKE_BUILD_TYPE=Debug)",
       "Bash(export LC_NUMERIC=C)",
       "Bash(sort -k1,1)",
-      "WebFetch(domain:productionresultssa10.blob.core.windows.net)"
+      "WebFetch(domain:productionresultssa10.blob.core.windows.net)",
+      "Bash(cmake --build build/linux-release --config Release --target campello_widgets_gallery)",
+      "Bash(cmake -S . -B build/linux-release -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON)",
+      "Bash(DISPLAY=:0 WAYLAND_DISPLAY=wayland-0 ./build/linux-release/campello_widgets_gallery)",
+      "Bash(kill -SIGTERM 63110)",
+      "Bash(echo \"EXIT=$?\")",
+      "Bash(wait 63110)",
+      "Bash(echo \"PROCESS_EXIT=$?\")",
+      "Bash(WAYLAND_DISPLAY=wayland-0 ./build/linux-release/campello_widgets_gallery)",
+      "Bash(DISPLAY=:0 xdotool search *)",
+      "Bash(kill -9 63411)",
+      "Bash(glslangValidator --version)",
+      "Bash(glslangValidator -V shaders/vulkan/quad_aa.vert -o shaders/vulkan/quad_aa.vert.spv)"
     ]
   }
 }

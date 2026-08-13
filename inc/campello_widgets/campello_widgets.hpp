@@ -180,6 +180,7 @@
 #include <campello_widgets/widgets/platform_menu.hpp>
 #include <campello_widgets/widgets/platform_menu_delegate.hpp>
 #include <campello_widgets/widgets/platform_menu_bar.hpp>
+#include <campello_widgets/widgets/platform_menu_bar_view.hpp>
 
 // Phase 13 — Decoration
 #include <campello_widgets/ui/box_shadow.hpp>

@@ -40,7 +40,7 @@ namespace systems::leal::campello_widgets
         void stopPolling();
         void checkFuture();
 
-        std::future<ImageLoadResult> load_future_;
+        std::shared_future<ImageLoadResult> load_future_;
         ImageLoadResult current_result_;
         bool is_loading_ = false;
         bool done_ = false;

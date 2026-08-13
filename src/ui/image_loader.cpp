@@ -67,17 +67,18 @@ namespace systems::leal::campello_widgets
         while (!task_queue_.empty()) {
             auto task = task_queue_.front();
             task_queue_.pop();
-            
+
             ImageLoadResult result;
             result.status = ImageLoadStatus::failed;
             result.error_message = "Loader shut down";
             task->promise.set_value(std::move(result));
+            in_flight_.erase(task->cache_key);
         }
-        
+
         pending_count_ = 0;
     }
 
-    std::future<ImageLoadResult> ImageLoader::loadAsync(
+    std::shared_future<ImageLoadResult> ImageLoader::loadAsync(
         ImageProviderRef provider,
         const ImageConfiguration& config)
     {
@@ -86,24 +87,40 @@ namespace systems::leal::campello_widgets
             initialize();
         }
 
-        auto task = std::make_shared<Task>();
-        task->cache_key = provider->cacheKey();
-        task->provider = provider;
-        task->config = config;
+        const std::string cache_key = provider->cacheKey();
 
         // Check cache first
-        if (auto cached = ImageCache::instance().get(task->cache_key)) {
+        if (auto cached = ImageCache::instance().get(cache_key)) {
             ImageLoadResult result;
             result.status = ImageLoadStatus::completed;
             result.image = cached;
-            task->promise.set_value(std::move(result));
-            return task->promise.get_future();
+            std::promise<ImageLoadResult> promise;
+            std::shared_future<ImageLoadResult> future = promise.get_future().share();
+            promise.set_value(std::move(result));
+            return future;
         }
-
-        std::future<ImageLoadResult> future = task->promise.get_future();
 
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);
+            // Someone else is already loading this exact image — join
+            // their load instead of starting a redundant decode + GPU
+            // upload. See in_flight_'s doc comment.
+            auto it = in_flight_.find(cache_key);
+            if (it != in_flight_.end()) {
+                return it->second;
+            }
+        }
+
+        auto task = std::make_shared<Task>();
+        task->cache_key = cache_key;
+        task->provider = provider;
+        task->config = config;
+
+        std::shared_future<ImageLoadResult> future = task->promise.get_future().share();
+
+        {
+            std::lock_guard<std::mutex> lock(queue_mutex_);
+            in_flight_[cache_key] = future;
             task_queue_.push(task);
             pending_count_++;
         }
@@ -205,11 +222,25 @@ namespace systems::leal::campello_widgets
                 result.status = ImageLoadStatus::failed;
                 result.error_message = "Cancelled";
                 task->promise.set_value(std::move(result));
+                {
+                    std::lock_guard<std::mutex> lock(queue_mutex_);
+                    in_flight_.erase(task->cache_key);
+                }
                 continue;
             }
 
             auto result = executeTask(*task);
             task->promise.set_value(std::move(result));
+            {
+                // Remove now that the future holds a settled result — a
+                // later, non-overlapping loadAsync() for this same key
+                // should re-check ImageCache rather than join a future
+                // that's already done (harmless either way, but this
+                // keeps the map from growing with every distinct image
+                // ever loaded for the app's whole lifetime).
+                std::lock_guard<std::mutex> lock(queue_mutex_);
+                in_flight_.erase(task->cache_key);
+            }
         }
     }
 

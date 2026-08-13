@@ -64,4 +64,31 @@ namespace systems::leal::campello_widgets
         WidgetRef          root_widget,
         bool               resizable);
 
+    /**
+     * @brief Full Linux entry point, including the window's application ID.
+     *
+     * @p app_id is the identity the window advertises to the compositor/window
+     * manager — `xdg_toplevel.set_app_id()` on Wayland (via libdecor), `WM_CLASS`
+     * on X11. Desktop shells (GNOME Shell, KDE Plasma, etc.) use it to match the
+     * running window to an installed `.desktop` file for the taskbar/alt-tab
+     * icon and name; without it, most compositors fall back to a generic
+     * "unknown application" icon. It should match the basename of that
+     * `.desktop` file, e.g. `"my-app"` for `my-app.desktop`.
+     *
+     * @param title        Window title bar text (UTF-8).
+     * @param width        Initial window width.
+     * @param height       Initial window height.
+     * @param root_widget  Root widget of the application.
+     * @param resizable    Whether the window can be resized.
+     * @param app_id       Application ID for compositor/WM identification.
+     * @return Exit code.
+     */
+    int runApp(
+        const std::string& title,
+        int                width,
+        int                height,
+        WidgetRef          root_widget,
+        bool               resizable,
+        const std::string& app_id);
+
 } // namespace systems::leal::campello_widgets

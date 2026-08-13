@@ -4,6 +4,8 @@
 #include <campello_widgets/ui/box_constraints.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
+#include <chrono>
+#include <thread>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -237,6 +239,85 @@ TEST(RenderListView, PanGestureScrolls)
     cw::PointerEvent up;
     up.kind = cw::PointerEventKind::up;
     dispatcher.handlePointerEvent(up);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+// Regresses a bug where release velocity was computed from only the last
+// two pointer-move samples (delta / dt since the previous move). That
+// estimate is fragile — platform event delivery can batch several
+// pointer-move callbacks together with near-zero wall-clock time between
+// them, and ordinary human deceleration right before lifting a finger can
+// leave the very last sample-to-sample delta small even after a fast drag
+// — either way making the list stop dead on release instead of coasting
+// with decaying momentum. RenderListView now fits a line through recent
+// (time, position) samples via VelocityTracker instead.
+TEST(RenderListView, MomentumContinuesAfterRelease)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 100;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    lv.attach();
+
+    auto nowMs = [] {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    };
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 190.0f};
+    dispatcher.handlePointerEvent(down);
+
+    // Fast, steady drag upward (reveals later items) — 40px every 10ms real
+    // elapsed time (~4000 px/s), well above the momentum threshold. Once
+    // the pointer is captured on down, subsequent moves route via the
+    // cached hit path regardless of position, so drifting past the
+    // viewport's own bounds here is fine.
+    cw::PointerEvent move;
+    move.kind = cw::PointerEventKind::move;
+    float y = 190.0f;
+    for (int i = 1; i <= 5; i++)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        y -= 40.0f;
+        move.position = {0.0f, y};
+        dispatcher.handlePointerEvent(move);
+    }
+    // Final sample right before release: a near-zero delta, matching either
+    // natural human deceleration as a finger lifts or a platform batching
+    // several move callbacks together with negligible time between them —
+    // both leave the *previous* implementation's single-sample delta/dt
+    // estimate reporting ~0 velocity despite the real, fast drag above.
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    y -= 0.2f;
+    move.position = {0.0f, y};
+    dispatcher.handlePointerEvent(move);
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    const int index_at_release = lv.firstVisibleIndex();
+
+    // The first tick after release only primes onTick()'s internal
+    // last_tick_ms_ clock (there's no prior tick to measure dt against);
+    // subsequent ticks are where momentum actually applies.
+    dispatcher.tick(nowMs());
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    dispatcher.tick(nowMs());
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    dispatcher.tick(nowMs());
+
+    EXPECT_GT(lv.firstVisibleIndex(), index_at_release)
+        << "list should keep scrolling under momentum after release, not stop immediately";
 
     lv.detach();
     cw::PointerDispatcher::setActiveDispatcher(nullptr);

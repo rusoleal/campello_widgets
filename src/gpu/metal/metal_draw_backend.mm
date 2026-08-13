@@ -1,4 +1,5 @@
 #import "metal_draw_backend.hpp"
+#include "gpu/path_tessellation.hpp"
 
 #include <iostream>
 
@@ -83,12 +84,6 @@ struct alignas(16) RectUniforms {
     float _pad[2];
 };
 
-// Real per-vertex data for the rect pipeline — see drawFilledQuad(). Not
-// `alignas(16)`: tightly-packed vertex-attribute element, not a uniform.
-struct RectVertex {
-    float x, y, w;
-};
-
 struct alignas(16) QuadUniforms {
     float viewport[2];  // width, height (pixels)
     float opacity;      // [0, 1] — scales all pixel channels
@@ -157,7 +152,7 @@ MetalDrawBackend::MetalDrawBackend(
         desc.vertex.entryPoint = "rectVertex";
 
         // Real per-vertex position(+w) data — see RectVertex's doc comment
-        // above and RectVertexIn's in widgets.metal. Bound to slot 0 via
+        // in metal_draw_backend.hpp and RectVertexIn's in widgets.metal. Bound to slot 0 via
         // setVertexBuffer(0, ...); RectUniforms (color/viewport) moves to
         // slot 1 (see drawFilledQuad()).
         GPU::VertexAttribute rectPosAttr{};
@@ -595,6 +590,33 @@ void MetalDrawBackend::drawFilledRect(
         color, encoder);
 }
 
+void MetalDrawBackend::drawFilledVertices(
+    const std::vector<RectVertex>& verts,
+    const Color& color,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_pipeline_ || verts.empty()) return;
+
+    auto vbuf = rect_vertex_pool_.acquire(*device_, verts.size() * sizeof(RectVertex), verts.data());
+    if (!vbuf) return;
+
+    RectUniforms u{};
+    u.color[0]    = color.r;
+    u.color[1]    = color.g;
+    u.color[2]    = color.b;
+    u.color[3]    = color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    auto ubuf = rect_uniform_pool_.acquire(*device_, sizeof(RectUniforms), &u);
+    if (!ubuf) return;
+
+    encoder.setPipeline(rect_pipeline_);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
+    encoder.draw(static_cast<uint32_t>(verts.size()));
+}
+
 void MetalDrawBackend::drawRect(
     const DrawRectCmd&    cmd,
     const Matrix4&        transform,
@@ -788,6 +810,238 @@ void MetalDrawBackend::drawLine(
     encoder.setPipeline(line_pipeline_);
     encoder.setVertexBuffer(0, ubuf);
     encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// drawArc — tessellate to triangles and draw via rect_pipeline_
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawArc(
+    const DrawArcCmd&       cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    const float cx = cmd.rect.x + cmd.rect.width * 0.5f;
+    const float cy = cmd.rect.y + cmd.rect.height * 0.5f;
+    const float rx = cmd.rect.width * 0.5f;
+    const float ry = cmd.rect.height * 0.5f;
+    if (rx <= 0.0f || ry <= 0.0f) return;
+
+    const float abs_sweep = std::abs(cmd.sweep_angle);
+    const int   segments  = std::max(3, static_cast<int>(abs_sweep * 20.0f));
+
+    std::vector<RectVertex> verts;
+    verts.reserve(static_cast<size_t>(segments) * 6);
+
+    const bool is_stroke = (cmd.paint.style == PaintStyle::stroke);
+    const float stroke_w = std::max(1.0f, cmd.paint.stroke_width);
+
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    const float pixel_stroke = stroke_w * scale;
+
+    for (int i = 0; i < segments; ++i)
+    {
+        const float t0 = cmd.start_angle + cmd.sweep_angle * (float(i) / float(segments));
+        const float t1 = cmd.start_angle + cmd.sweep_angle * (float(i + 1) / float(segments));
+
+        if (cmd.use_center)
+        {
+            const vm::Vector4<float> p_center = transform * vm::Vector4<float>(cx, cy, 0.0f, 1.0f);
+            const vm::Vector4<float> p0 = transform * vm::Vector4<float>(cx + rx * std::cos(t0), cy + ry * std::sin(t0), 0.0f, 1.0f);
+            const vm::Vector4<float> p1 = transform * vm::Vector4<float>(cx + rx * std::cos(t1), cy + ry * std::sin(t1), 0.0f, 1.0f);
+
+            verts.push_back({p_center.x(), p_center.y(), p_center.w()});
+            verts.push_back({p0.x(), p0.y(), p0.w()});
+            verts.push_back({p1.x(), p1.y(), p1.w()});
+        }
+        else
+        {
+            const auto eval = [&](float t, float r) -> vm::Vector4<float> {
+                const float ox = cx + rx * std::cos(t);
+                const float oy = cy + ry * std::sin(t);
+                float nx = std::cos(t) / rx;
+                float ny = std::sin(t) / ry;
+                float nlen = std::sqrt(nx * nx + ny * ny);
+                if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; }
+                return transform * vm::Vector4<float>(ox - r * nx, oy - r * ny, 0.0f, 1.0f);
+            };
+
+            const float inner_r = is_stroke ? pixel_stroke : 0.0f;
+
+            const auto p00 = eval(t0, 0.0f);
+            const auto p01 = eval(t0, inner_r);
+            const auto p10 = eval(t1, 0.0f);
+            const auto p11 = eval(t1, inner_r);
+
+            verts.push_back({p01.x(), p01.y(), p01.w()});
+            verts.push_back({p00.x(), p00.y(), p00.w()});
+            verts.push_back({p11.x(), p11.y(), p11.w()});
+            verts.push_back({p11.x(), p11.y(), p11.w()});
+            verts.push_back({p00.x(), p00.y(), p00.w()});
+            verts.push_back({p10.x(), p10.y(), p10.w()});
+        }
+    }
+
+    if (!verts.empty())
+        drawFilledVertices(verts, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawPath — CPU tessellation to triangles, drawn via rect_pipeline_
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawPath(
+    const DrawPathCmd&      cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_pipeline_) return;
+
+    auto contours = buildPathContours(cmd.path);
+    if (contours.empty()) return;
+
+    std::vector<RectVertex> verts;
+
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+
+    if (cmd.paint.style == PaintStyle::stroke)
+    {
+        float half_sw = std::max(0.5f, cmd.paint.stroke_width * scale * 0.5f);
+        for (const auto& contour : contours)
+        {
+            for (size_t i = 0; i + 1 < contour.size(); ++i)
+            {
+                const auto& a = contour[i];
+                const auto& b = contour[i + 1];
+                float dx = b.x - a.x;
+                float dy = b.y - a.y;
+                float len = std::sqrt(dx * dx + dy * dy);
+                if (len < 1e-4f) continue;
+                float nx = -dy / len * half_sw;
+                float ny =  dx / len * half_sw;
+
+                auto p00 = transform * vm::Vector4<float>(a.x + nx, a.y + ny, 0.0f, 1.0f);
+                auto p01 = transform * vm::Vector4<float>(a.x - nx, a.y - ny, 0.0f, 1.0f);
+                auto p10 = transform * vm::Vector4<float>(b.x + nx, b.y + ny, 0.0f, 1.0f);
+                auto p11 = transform * vm::Vector4<float>(b.x - nx, b.y - ny, 0.0f, 1.0f);
+
+                verts.push_back({p01.x(), p01.y(), p01.w()});
+                verts.push_back({p00.x(), p00.y(), p00.w()});
+                verts.push_back({p11.x(), p11.y(), p11.w()});
+                verts.push_back({p11.x(), p11.y(), p11.w()});
+                verts.push_back({p00.x(), p00.y(), p00.w()});
+                verts.push_back({p10.x(), p10.y(), p10.w()});
+            }
+        }
+    }
+    else
+    {
+        std::vector<PathTessVertex> triangles;
+        for (const auto& contour : contours)
+            triangulateContour(contour, triangles);
+
+        verts.reserve(triangles.size());
+        for (const auto& v : triangles)
+        {
+            auto p = transform * vm::Vector4<float>(v.x, v.y, 0.0f, 1.0f);
+            verts.push_back({p.x(), p.y(), p.w()});
+        }
+    }
+
+    if (verts.empty()) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    drawFilledVertices(verts, cmd.paint.color, encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawPoints — decompose to circles/lines using existing pipelines
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawPoints(
+    const DrawPointsCmd&    cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (cmd.points.empty()) return;
+
+    switch (cmd.mode)
+    {
+        case PointMode::points:
+        {
+            const float radius = std::max(1.0f, cmd.paint.stroke_width * 0.5f);
+            Paint p = cmd.paint;
+            p.style = PaintStyle::fill;
+            for (const auto& pt : cmd.points)
+            {
+                DrawCircleCmd circle{pt, radius, p};
+                drawCircle(circle, transform, clip, encoder);
+            }
+            break;
+        }
+        case PointMode::lines:
+        {
+            Paint p = cmd.paint;
+            p.style = PaintStyle::stroke;
+            for (size_t i = 0; i + 1 < cmd.points.size(); i += 2)
+            {
+                DrawLineCmd line{cmd.points[i], cmd.points[i + 1], p};
+                drawLine(line, transform, clip, encoder);
+            }
+            break;
+        }
+        case PointMode::polygon:
+        {
+            if (cmd.points.size() < 2) break;
+            Paint p = cmd.paint;
+            p.style = PaintStyle::stroke;
+            for (size_t i = 0; i + 1 < cmd.points.size(); ++i)
+            {
+                DrawLineCmd line{cmd.points[i], cmd.points[i + 1], p};
+                drawLine(line, transform, clip, encoder);
+            }
+            DrawLineCmd close{cmd.points.back(), cmd.points.front(), p};
+            drawLine(close, transform, clip, encoder);
+            break;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// saveLayerComposite — draw the offscreen child texture modulated by opacity
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::saveLayerComposite(
+    std::shared_ptr<GPU::Texture> child_tex,
+    const SaveLayerCmd&           cmd,
+    const Matrix4&                transform,
+    const Rect&                   clip,
+    GPU::RenderPassEncoder&       encoder)
+{
+    if (!child_tex) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.bounds.left(),  cmd.bounds.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.bounds.right(), cmd.bounds.bottom(), 0.0f, 1.0f);
+
+    drawTexturedQuad(
+        child_tex,
+        ProjectedCorner{c00.x(), c00.y(), c00.w(), 0.0f, 0.0f},
+        ProjectedCorner{c10.x(), c10.y(), c10.w(), 1.0f, 0.0f},
+        ProjectedCorner{c01.x(), c01.y(), c01.w(), 0.0f, 1.0f},
+        ProjectedCorner{c11.x(), c11.y(), c11.w(), 1.0f, 1.0f},
+        cmd.paint.color.a,
+        encoder);
 }
 
 // ---------------------------------------------------------------------------

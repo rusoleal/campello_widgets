@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/render_tree_view.hpp>
 #include <campello_widgets/ui/scroll_controller.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/rect.hpp>
 
 namespace systems::leal::campello_widgets
@@ -398,9 +399,10 @@ namespace systems::leal::campello_widgets
             device_kind_ = event.device_kind;
             velocity_x_ = 0.0f;
             velocity_y_ = 0.0f;
-            pan_velocity_x_ = 0.0f;
-            pan_velocity_y_ = 0.0f;
-            last_pan_time_ = std::chrono::steady_clock::now();
+            velocity_tracker_x_.reset();
+            velocity_tracker_y_.reset();
+            velocity_tracker_x_.addPosition(std::chrono::steady_clock::now(), event.position.x);
+            velocity_tracker_y_.addPosition(std::chrono::steady_clock::now(), event.position.y);
             arena_entry_.reset();
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
@@ -447,14 +449,9 @@ namespace systems::leal::campello_widgets
             {
                 applyScrollDelta(-dx, -dy);
 
-                auto now = std::chrono::steady_clock::now();
-                float dt = std::chrono::duration<float>(now - last_pan_time_).count();
-                if (dt > 1e-4f)
-                {
-                    pan_velocity_x_ = -dx / dt;
-                    pan_velocity_y_ = -dy / dt;
-                }
-                last_pan_time_ = now;
+                const auto now = std::chrono::steady_clock::now();
+                velocity_tracker_x_.addPosition(now, event.position.x);
+                velocity_tracker_y_.addPosition(now, event.position.y);
             }
 
             pan_last_pos_ = event.position;
@@ -465,8 +462,8 @@ namespace systems::leal::campello_widgets
             pointer_down_ = false;
             if (panning_ && physics_->allowsMomentum())
             {
-                velocity_x_ = pan_velocity_x_;
-                velocity_y_ = pan_velocity_y_;
+                velocity_x_ = -velocity_tracker_x_.getVelocity();
+                velocity_y_ = -velocity_tracker_y_.getVelocity();
             }
             panning_ = false;
             arena_entry_.reset();
@@ -479,11 +476,18 @@ namespace systems::leal::campello_widgets
             break;
 
         case PointerEventKind::scroll:
+        {
             applyScrollDelta(event.scroll_delta_x, event.scroll_delta_y);
+            const auto now = std::chrono::steady_clock::now();
+            // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
+            wheel_velocity_tracker_x_.addPosition(now, scrollX());
+            wheel_velocity_tracker_y_.addPosition(now, scrollY());
+            wheel_momentum_pending_ = true;
             last_scroll_event_ms_ = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
+                    now.time_since_epoch()).count());
             break;
+        }
         }
     }
 
@@ -509,7 +513,34 @@ namespace systems::leal::campello_widgets
     void RenderTreeView::onTick(uint64_t now_ms)
     {
         if (panning_) { last_tick_ms_ = now_ms; return; }
-        if (now_ms - last_scroll_event_ms_ < kScrollActiveWindowMs) { last_tick_ms_ = now_ms; return; }
+        if (now_ms - last_scroll_event_ms_ < kScrollActiveWindowMs)
+        {
+            last_tick_ms_ = now_ms;
+            // Frames are demand-driven on this platform — a frame is only
+            // built when something requests one. Without self-requesting
+            // the next frame here, spring-back/momentum only ever applies
+            // once (whatever frame was already in flight) and then freezes
+            // instead of animating. See RenderListView::onTick()'s doc for
+            // the full explanation (must call FrameScheduler::scheduleFrame()
+            // directly, not markNeedsPaint(), which no-ops mid-frame).
+            const bool overscrolled = scrollX() < min_scroll_x_ || scrollX() > max_scroll_x_ ||
+                                       scrollY() < min_scroll_y_ || scrollY() > max_scroll_y_;
+            if (overscrolled || std::abs(velocity_x_) >= kMinVelocity || std::abs(velocity_y_) >= kMinVelocity)
+                FrameScheduler::scheduleFrame();
+            return;
+        }
+
+        // See RenderListView::onTick()'s doc on wheel_momentum_pending_.
+        if (wheel_momentum_pending_)
+        {
+            wheel_momentum_pending_ = false;
+            if (physics_->allowsMomentum())
+            {
+                velocity_x_ = wheel_velocity_tracker_x_.getVelocity();
+                velocity_y_ = wheel_velocity_tracker_y_.getVelocity();
+            }
+        }
+
         if (last_tick_ms_ == 0) { last_tick_ms_ = now_ms; return; }
 
         float dt_s = static_cast<float>(now_ms - last_tick_ms_) / 1000.0f;
@@ -572,6 +603,14 @@ namespace systems::leal::campello_widgets
         if (needs_update)
         {
             applyScrollDelta(delta_x, delta_y);
+            // See the doc above on the trackpad-active branch — nothing
+            // else asks for a follow-up frame once this one finishes
+            // painting, so schedule the next tick ourselves whenever
+            // there's still motion left to animate.
+            if (std::abs(velocity_x_) >= kMinVelocity || std::abs(velocity_y_) >= kMinVelocity ||
+                scrollX() < min_scroll_x_ || scrollX() > max_scroll_x_ ||
+                scrollY() < min_scroll_y_ || scrollY() > max_scroll_y_)
+                FrameScheduler::scheduleFrame();
         }
     }
 
