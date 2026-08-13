@@ -1478,12 +1478,52 @@ static cw::WidgetRef buildSection(int idx)
     }
 }
 
-class GalleryShell;
+// Bridges the PlatformMenuBar's "View" menu (built once, outside the
+// widget tree, in buildGalleryApp()) to GalleryShellState's private
+// selected_ tab index — the same controller-object pattern this framework
+// already uses for TextEditingController / ScrollController / etc.
+class GalleryNavController
+{
+public:
+    std::function<void(int)> on_navigate;
+
+    void navigateTo(int index)
+    {
+        if (on_navigate) on_navigate(index);
+    }
+};
+
+// Defined ahead of GalleryShellState (rather than forward-declared, as the
+// other Section/SectionState pairs in this file do) because
+// GalleryShellState::initState()/dispose() read widget().controller, which
+// needs GalleryShell complete at that point. createState()'s body is
+// defined out-of-line after GalleryShellState instead, to break the
+// resulting mutual dependency the other way around.
+class GalleryShell : public cw::StatefulWidget {
+public:
+    std::shared_ptr<GalleryNavController> controller;
+
+    std::unique_ptr<cw::StateBase> createState() const override;
+};
 
 class GalleryShellState : public cw::State<GalleryShell>
 {
 public:
-    void initState() override { selected_ = 0; }
+    void initState() override
+    {
+        selected_ = 0;
+        if (auto& controller = widget().controller) {
+            controller->on_navigate = [this](int i) {
+                setState([this, i] { selected_ = i; });
+            };
+        }
+    }
+
+    void dispose() override
+    {
+        if (auto& controller = widget().controller)
+            controller->on_navigate = nullptr;
+    }
 
     cw::WidgetRef build(cw::BuildContext&) override
     {
@@ -1505,9 +1545,16 @@ public:
                 auto root = cw::mw<cw::Row>(
                     cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
                     cw::WidgetList{ buildSidebar(collapsed), divider, content });
+                // PlatformMenuBarView is a no-op on macOS/Windows (the
+                // PlatformMenuBar ancestor already drives a native menu bar
+                // there) and renders the real in-window menu bar on Linux —
+                // see platform_menu_bar_view.hpp.
+                auto with_menu_bar = cw::mw<cw::Column>(
+                    cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+                    cw::WidgetList{ cw::PlatformMenuBarView::create(), cw::mw<cw::Expanded>(root) });
                 auto bg = std::make_shared<cw::Container>();
                 bg->color = cw::Color::fromRGB(0.97f, 0.97f, 0.99f);
-                bg->child = root;
+                bg->child = with_menu_bar;
                 return bg;
             });
         return lb;
@@ -1637,11 +1684,10 @@ private:
     int hovered_  = -1; ///< Index of the sidebar nav item currently under the pointer, or -1.
 };
 
-class GalleryShell : public cw::StatefulWidget {
-public:
-    std::unique_ptr<cw::StateBase> createState() const override
-    { return std::make_unique<GalleryShellState>(); }
-};
+std::unique_ptr<cw::StateBase> GalleryShell::createState() const
+{
+    return std::make_unique<GalleryShellState>();
+}
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -1686,9 +1732,29 @@ namespace systems::leal::campello_widgets
             return false;
         });
 
+        // "View" menu — jumps to each gallery tab, with Cmd/Ctrl+1..9,0
+        // shortcuts (1-indexed section order; the 10th section, Draw, gets
+        // the wrap-around "0"). On macOS/Windows this becomes a real native
+        // menu; on Linux, PlatformMenuBarView (docked above the sidebar in
+        // GalleryShellState::build()) renders it in-window and these
+        // shortcuts are wired through FocusManager's global key handler.
+        auto nav_controller = std::make_shared<GalleryNavController>();
+        std::vector<PlatformMenuItemRef> view_items;
+        view_items.reserve(kSectionNames.size());
+        for (int i = 0; i < static_cast<int>(kSectionNames.size()); ++i) {
+            const std::string shortcut = "Ctrl+" + std::to_string((i + 1) % 10);
+            view_items.push_back(PlatformMenuItemLabel::create(
+                kSectionNames[static_cast<size_t>(i)], shortcut,
+                [nav_controller, i]() { nav_controller->navigateTo(i); }));
+        }
+        auto view_menu = PlatformMenu::create("View", std::move(view_items));
+
         auto shell = std::make_shared<GalleryShell>();
+        shell->controller = nav_controller;
         auto entry = std::make_shared<OverlayEntry>(shell);
-        return std::make_shared<Overlay>(
+        auto overlay = std::make_shared<Overlay>(
             std::vector<std::shared_ptr<OverlayEntry>>{ entry });
+
+        return PlatformMenuBar::create({ view_menu }, overlay);
     }
 }

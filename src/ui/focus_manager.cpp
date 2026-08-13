@@ -26,6 +26,12 @@ namespace systems::leal::campello_widgets
         s_global_key_handler_ = std::move(handler);
     }
 
+    std::function<bool(const KeyEvent&)> FocusManager::globalKeyHandler()
+    {
+        std::lock_guard<std::mutex> lock(s_global_handler_mutex_);
+        return s_global_key_handler_;
+    }
+
     // -------------------------------------------------------------------------
 
     void FocusManager::registerNode(FocusNode* node)

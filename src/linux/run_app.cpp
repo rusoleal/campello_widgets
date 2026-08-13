@@ -31,6 +31,12 @@
 
 #include <dbus/dbus.h>
 
+// C interface installed by src/linux/platform_menu_delegate.cpp — must run
+// before the widget tree mounts so PlatformMenuBar::build()'s setMenus()
+// and PlatformMenuBarView's needsInWindowMenuBar() check reach the real
+// LinuxPlatformMenuDelegate instead of the default no-op.
+extern "C" void campello_widgets_initialize_linux_menu_delegate();
+
 #include <chrono>
 #include <cmath>
 #include <memory>
@@ -909,6 +915,8 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
     // Bind the UI thread before any widget tree mutation.
     Widgets::ThreadChecker::instance().bindToCurrentThread();
+
+    campello_widgets_initialize_linux_menu_delegate();
 
     state.root_element = wrappedRoot->createElement();
     state.root_element->mount(nullptr);

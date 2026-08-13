@@ -37,6 +37,12 @@
 #include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon.h>
 
+// C interface installed by src/linux/platform_menu_delegate.cpp — must run
+// before the widget tree mounts so PlatformMenuBar::build()'s setMenus()
+// and PlatformMenuBarView's needsInWindowMenuBar() check reach the real
+// LinuxPlatformMenuDelegate instead of the default no-op.
+extern "C" void campello_widgets_initialize_linux_menu_delegate();
+
 #include <sys/mman.h>
 #include <poll.h>
 #include <unistd.h>
@@ -1012,6 +1018,8 @@ int runAppWayland(const std::string& title, int width, int height,
 
     // Bind the UI thread before any widget tree mutation.
     Widgets::ThreadChecker::instance().bindToCurrentThread();
+
+    campello_widgets_initialize_linux_menu_delegate();
 
     std::cerr << "[Linux/Wayland] Mounting widget tree\n";
     state.root_element = wrappedRoot->createElement();

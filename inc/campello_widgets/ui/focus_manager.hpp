@@ -106,6 +106,20 @@ namespace systems::leal::campello_widgets
          */
         static void setGlobalKeyHandler(std::function<bool(const KeyEvent&)> handler);
 
+        /**
+         * @brief Returns the currently installed global key handler, or an
+         * empty std::function if none is set.
+         *
+         * Lets a second caller compose with whatever handler is already
+         * installed — save this before calling setGlobalKeyHandler(),
+         * chain to it from the new handler, and restore it on teardown —
+         * instead of silently clobbering it. See PlatformMenuBarView for
+         * an example: it needs the single global-handler slot for menu
+         * accelerators without breaking an app's own pre-existing handler
+         * (e.g. dev-only shortcuts registered before the menu bar mounts).
+         */
+        static std::function<bool(const KeyEvent&)> globalKeyHandler();
+
     private:
         FocusNode*              current_focus_ = nullptr;
         std::vector<FocusNode*> focus_order_;

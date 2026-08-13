@@ -370,12 +370,69 @@ TEST(PlatformMenuDelegateDefault, NoOpImplementationDoesNotCrash)
 {
     // Reset to default implementation
     cw::PlatformMenuDelegate::setInstance(nullptr);
-    
+
     auto delegate = cw::PlatformMenuDelegate::instance();
     ASSERT_NE(delegate, nullptr);
-    
+
     // These should not crash even with no implementation
     std::vector<cw::PlatformMenuRef> menus;
     delegate->setMenus(menus);
     delegate->clearMenus();
+}
+
+// ---------------------------------------------------------------------------
+// PlatformMenuDelegate::needsInWindowMenuBar()
+// ---------------------------------------------------------------------------
+
+TEST(PlatformMenuDelegateDefault, NeedsInWindowMenuBarDefaultsToFalse)
+{
+    // MockPlatformMenuDelegate doesn't override needsInWindowMenuBar(), so it
+    // should inherit the base's default of false (native rendering assumed).
+    MockPlatformMenuDelegate mock;
+    EXPECT_FALSE(mock.needsInWindowMenuBar());
+
+    cw::NoOpPlatformMenuDelegate no_op;
+    EXPECT_FALSE(no_op.needsInWindowMenuBar());
+}
+
+namespace
+{
+    class InWindowMenuDelegate : public cw::PlatformMenuDelegate
+    {
+    public:
+        void setMenus(const std::vector<cw::PlatformMenuRef>&) override {}
+        void clearMenus() override {}
+        bool needsInWindowMenuBar() const override { return true; }
+    };
+}
+
+TEST(PlatformMenuDelegateDefault, NeedsInWindowMenuBarCanBeOverridden)
+{
+    InWindowMenuDelegate delegate;
+    EXPECT_TRUE(delegate.needsInWindowMenuBar());
+}
+
+// ---------------------------------------------------------------------------
+// detail::PlatformMenuScope (internal InheritedWidget backing menusOf())
+// ---------------------------------------------------------------------------
+
+TEST(PlatformMenuScope, UpdateShouldNotifyWhenMenusChange)
+{
+    auto menus1 = std::vector<cw::PlatformMenuRef>{cw::PlatformMenu::create("File")};
+    auto menus2 = std::vector<cw::PlatformMenuRef>{cw::PlatformMenu::create("Edit")};
+
+    cw::detail::PlatformMenuScope scope1(menus1, nullptr);
+    cw::detail::PlatformMenuScope scope2(menus2, nullptr);
+
+    EXPECT_TRUE(scope1.updateShouldNotify(scope2));
+}
+
+TEST(PlatformMenuScope, UpdateShouldNotNotifyWhenMenusSame)
+{
+    auto menus = std::vector<cw::PlatformMenuRef>{cw::PlatformMenu::create("File")};
+
+    cw::detail::PlatformMenuScope scope1(menus, nullptr);
+    cw::detail::PlatformMenuScope scope2(menus, nullptr);
+
+    EXPECT_FALSE(scope1.updateShouldNotify(scope2));
 }

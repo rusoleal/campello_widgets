@@ -72,6 +72,18 @@ namespace systems::leal::campello_widgets
         virtual void clearMenus() = 0;
 
         /**
+         * @brief Whether the platform has no native menu bar to draw into.
+         *
+         * Delegates that already put menus on a real OS menu bar (macOS,
+         * Windows) return false — nothing else needs to render. Platforms
+         * without an OS-level equivalent (Linux, where X11/Wayland have no
+         * native menu-bar concept) return true, telling PlatformMenuBarView
+         * to render the menu itself, in the widget tree, using the same
+         * menu data.
+         */
+        virtual bool needsInWindowMenuBar() const { return false; }
+
+        /**
          * @brief Invokes a callback by its ID.
          *
          * Called by platform-specific code when a menu item is selected.

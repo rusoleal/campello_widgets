@@ -9,8 +9,17 @@ namespace systems::leal::campello_widgets
         // Update the platform menu bar with our menus
         PlatformMenuDelegate::instance()->setMenus(menus);
 
-        // Return the child - this widget has no visual representation
-        return child;
+        // Wrap the child in an InheritedWidget so PlatformMenuBarView (or
+        // any other descendant) can recover the menu structure via
+        // menusOf(), regardless of whether the platform renders it
+        // natively or needs it drawn in the widget tree.
+        return std::make_shared<detail::PlatformMenuScope>(menus, child);
+    }
+
+    const std::vector<PlatformMenuRef>* PlatformMenuBar::menusOf(BuildContext& context)
+    {
+        const auto* scope = context.dependOnInheritedWidgetOfExactType<detail::PlatformMenuScope>();
+        return scope ? &scope->menus : nullptr;
     }
 
     std::shared_ptr<PlatformMenuBar> PlatformMenuBar::create(WidgetRef child)
