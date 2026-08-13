@@ -11,6 +11,8 @@
 #include <condition_variable>
 #include <atomic>
 #include <functional>
+#include <unordered_map>
+#include <string>
 
 namespace systems::leal::campello_widgets
 {
@@ -60,11 +62,17 @@ namespace systems::leal::campello_widgets
 
         /**
          * @brief Asynchronously load an image from a provider.
-         * 
+         *
          * Returns a future that will be resolved when the image is loaded.
          * The image is first checked in the cache, then loaded asynchronously.
+         *
+         * If another call for the same provider's cache key is already in
+         * flight, this joins that same load instead of starting a redundant
+         * decode + GPU upload — see in_flight_'s doc comment. A shared_future
+         * (not future) is what makes that joining possible: multiple callers
+         * can each hold and .get() their own copy of it.
          */
-        std::future<ImageLoadResult> loadAsync(
+        std::shared_future<ImageLoadResult> loadAsync(
             ImageProviderRef provider,
             const ImageConfiguration& config);
 
@@ -129,6 +137,17 @@ namespace systems::leal::campello_widgets
 
         std::vector<std::thread> threads_;
         std::queue<std::shared_ptr<Task>> task_queue_;
+        // Cache key -> the shared_future already outstanding for it.
+        // loadAsync() consults this before queuing a new Task so that
+        // several ImageWidgets mounted in the same frame for the same
+        // picture (same provider cache key) share one decode + one GPU
+        // texture instead of each independently loading their own —
+        // guarded by queue_mutex_, same as task_queue_. Entries are
+        // removed once their task settles (see workerLoop()/shutdown()),
+        // so a later, non-overlapping load for the same key starts fresh
+        // and re-checks ImageCache rather than reusing a stale future
+        // forever.
+        std::unordered_map<std::string, std::shared_future<ImageLoadResult>> in_flight_;
         mutable std::mutex queue_mutex_;
         std::condition_variable condition_;
         std::atomic<bool> shutdown_{false};
