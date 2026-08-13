@@ -27,6 +27,7 @@
 #include <X11/XKBlib.h>
 #include <X11/Xresource.h>
 #include <X11/keysym.h>
+#include <X11/cursorfont.h>
 
 #include <dbus/dbus.h>
 
@@ -767,6 +768,45 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     XFlush(display);
 
     // -----------------------------------------------------------------------
+    // Cursor shapes + register the cursor-change handler
+    // -----------------------------------------------------------------------
+    // Without this, MouseRegion/TextField/etc. cursor changes are silent
+    // no-ops on X11 (setSystemCursor() just calls into a null handler — see
+    // system_mouse_cursor.cpp) and every widget shows the window's default
+    // inherited cursor regardless of what's actually under the pointer.
+    struct X11Cursors {
+        Cursor arrow      = 0;
+        Cursor pointer    = 0;
+        Cursor text       = 0;
+        Cursor forbidden  = 0;
+        Cursor resize_ns  = 0;
+        Cursor resize_ew  = 0;
+    } x11_cursors;
+    x11_cursors.arrow     = XCreateFontCursor(display, XC_left_ptr);
+    x11_cursors.pointer   = XCreateFontCursor(display, XC_hand2);
+    x11_cursors.text      = XCreateFontCursor(display, XC_xterm);
+    x11_cursors.forbidden = XCreateFontCursor(display, XC_X_cursor);
+    x11_cursors.resize_ns = XCreateFontCursor(display, XC_sb_v_double_arrow);
+    x11_cursors.resize_ew = XCreateFontCursor(display, XC_sb_h_double_arrow);
+
+    // Captured by value: these are X server resource IDs (opaque XIDs), not
+    // pointers into this stack frame, so they stay valid for the lifetime
+    // of `display` regardless of x11_cursors's own scope.
+    Widgets::registerCursorHandler([display, window, x11_cursors](Widgets::SystemMouseCursor c) {
+        Cursor cur = x11_cursors.arrow;
+        switch (c) {
+            case Widgets::SystemMouseCursor::pointer:   cur = x11_cursors.pointer;   break;
+            case Widgets::SystemMouseCursor::text:      cur = x11_cursors.text;      break;
+            case Widgets::SystemMouseCursor::forbidden: cur = x11_cursors.forbidden; break;
+            case Widgets::SystemMouseCursor::resize_ns: cur = x11_cursors.resize_ns; break;
+            case Widgets::SystemMouseCursor::resize_ew: cur = x11_cursors.resize_ew; break;
+            default: break;
+        }
+        XDefineCursor(display, window, cur);
+        XFlush(display);
+    });
+
+    // -----------------------------------------------------------------------
     // Create GPU device
     // -----------------------------------------------------------------------
     GPU::LinuxSurfaceInfo surfaceInfo{};
@@ -957,6 +997,17 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     Widgets::FocusManager::setActiveManager(nullptr);
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
+
+    // Drop the handler before freeing the cursors/closing the display it
+    // captured — nothing should call setSystemCursor() after this point,
+    // but leaving it registered would dangle otherwise.
+    Widgets::registerCursorHandler(nullptr);
+    XFreeCursor(display, x11_cursors.arrow);
+    XFreeCursor(display, x11_cursors.pointer);
+    XFreeCursor(display, x11_cursors.text);
+    XFreeCursor(display, x11_cursors.forbidden);
+    XFreeCursor(display, x11_cursors.resize_ns);
+    XFreeCursor(display, x11_cursors.resize_ew);
 
     // Unmount element / render-object tree before tearing down GPU resources.
     state.root_element.reset();

@@ -21,8 +21,8 @@ target_include_directories(campello_widgets
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LINUX_DEPS REQUIRED x11 dbus-1 freetype2 harfbuzz fontconfig)
 
-# Optional Wayland support (wayland-client + xkbcommon + libdecor for decorations)
-pkg_check_modules(WAYLAND_DEPS wayland-client xkbcommon)
+# Optional Wayland support (wayland-client + wayland-cursor + xkbcommon + libdecor for decorations)
+pkg_check_modules(WAYLAND_DEPS wayland-client wayland-cursor xkbcommon)
 if(WAYLAND_DEPS_FOUND)
     pkg_check_modules(LIBDECOR libdecor-0)
     if(LIBDECOR_FOUND)

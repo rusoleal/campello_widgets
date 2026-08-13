@@ -34,6 +34,7 @@
 #include "../gpu/vulkan/vulkan_draw_backend.hpp"
 
 #include <wayland-client.h>
+#include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon.h>
 
 #include <sys/mman.h>
@@ -221,8 +222,17 @@ struct WaylandWindowState
     struct wl_seat*       seat         = nullptr;
     struct wl_pointer*    pointer      = nullptr;
     struct wl_keyboard*   keyboard     = nullptr;
+    struct wl_shm*        shm          = nullptr;
     struct libdecor*                        libdecor_ctx         = nullptr;
     struct libdecor_frame*                  decor_frame          = nullptr;
+
+    // Cursor shape support — see the "Cursor theme + surface" block in
+    // runAppWayland() for why this exists at all (short version: without
+    // it, libdecor's own resize/drag cursor from the window border gets
+    // stuck forever once the pointer moves into the content surface).
+    struct wl_cursor_theme* cursor_theme      = nullptr;
+    struct wl_surface*      cursor_surface    = nullptr;
+    uint32_t                pointer_enter_serial = 0;
 
     struct xkb_context*   xkb_ctx      = nullptr;
     struct xkb_keymap*    xkb_keymap   = nullptr;
@@ -313,6 +323,9 @@ static void registry_global(void* data, struct wl_registry* registry,
     } else if (std::strcmp(interface, wl_seat_interface.name) == 0) {
         state->seat = static_cast<struct wl_seat*>(
             wl_registry_bind(registry, name, &wl_seat_interface, 7));
+    } else if (std::strcmp(interface, wl_shm_interface.name) == 0) {
+        state->shm = static_cast<struct wl_shm*>(
+            wl_registry_bind(registry, name, &wl_shm_interface, 1));
     } else if (std::strcmp(interface, wl_output_interface.name) == 0) {
         // wl_output.scale was added in version 2; clamp to whatever the
         // compositor actually advertises so we don't request an unsupported
@@ -402,14 +415,89 @@ static const struct libdecor_frame_interface libdecor_frame_iface = {
     nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
 };
 
+// --- Cursor shape helpers ---
+
+// Tries the CSS cursor-shape name first (what modern cursor themes index
+// by), falling back to the legacy Xcursor name older/minimal themes may
+// only define.
+static struct wl_cursor* loadThemeCursor(
+    struct wl_cursor_theme* theme, const char* css_name, const char* legacy_name)
+{
+    struct wl_cursor* c = wl_cursor_theme_get_cursor(theme, css_name);
+    if (!c && legacy_name) c = wl_cursor_theme_get_cursor(theme, legacy_name);
+    return c;
+}
+
+static void waylandSetCursor(WaylandWindowState* state, Widgets::SystemMouseCursor cursor)
+{
+    if (!state->pointer || !state->cursor_theme || !state->cursor_surface) return;
+
+    const char* css_name    = "default";
+    const char* legacy_name = "left_ptr";
+    switch (cursor) {
+        case Widgets::SystemMouseCursor::pointer:
+            css_name = "pointer"; legacy_name = "hand2"; break;
+        case Widgets::SystemMouseCursor::text:
+            css_name = "text"; legacy_name = "xterm"; break;
+        case Widgets::SystemMouseCursor::forbidden:
+            css_name = "not-allowed"; legacy_name = "crossed_circle"; break;
+        case Widgets::SystemMouseCursor::resize_ns:
+            css_name = "ns-resize"; legacy_name = "sb_v_double_arrow"; break;
+        case Widgets::SystemMouseCursor::resize_ew:
+            css_name = "ew-resize"; legacy_name = "sb_h_double_arrow"; break;
+        default:
+            break;
+    }
+
+    struct wl_cursor* wl_cur = loadThemeCursor(state->cursor_theme, css_name, legacy_name);
+    if (!wl_cur || wl_cur->image_count == 0) return;
+
+    struct wl_cursor_image* image  = wl_cur->images[0];
+    struct wl_buffer*       buffer = wl_cursor_image_get_buffer(image);
+    if (!buffer) return;
+
+    wl_surface_attach(state->cursor_surface, buffer, 0, 0);
+    // Damaging the whole surface (rather than computing the exact
+    // scaled/logical rect) is the standard simplification for cursor
+    // surfaces — they're tiny, so there's no real cost to it.
+    wl_surface_damage(state->cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
+    wl_surface_commit(state->cursor_surface);
+
+    // Hotspot must be in surface-local (logical) coordinates; the theme
+    // was loaded at a physical-pixel size (see runAppWayland()), so divide
+    // back out by the same scale set via wl_surface_set_buffer_scale().
+    const int32_t hotspot_x = static_cast<int32_t>(image->hotspot_x) / state->output_scale;
+    const int32_t hotspot_y = static_cast<int32_t>(image->hotspot_y) / state->output_scale;
+    wl_pointer_set_cursor(state->pointer, state->pointer_enter_serial,
+        state->cursor_surface, hotspot_x, hotspot_y);
+}
+
 // --- wl_pointer ---
 static void pointer_enter(void* data, struct wl_pointer* pointer,
                           uint32_t serial, struct wl_surface* surface,
                           wl_fixed_t sx, wl_fixed_t sy)
 {
     auto* state = static_cast<WaylandWindowState*>(data);
+    state->pointer_enter_serial = serial;
     state->last_pointer_x = static_cast<float>(wl_fixed_to_double(sx));
     state->last_pointer_y = static_cast<float>(wl_fixed_to_double(sy));
+
+    // Reclaim the cursor immediately rather than waiting for the pointer
+    // to move — otherwise whatever libdecor left set on its own resize/
+    // drag border stays visible until the pointer first crosses a
+    // MouseRegion boundary inside the content (see waylandSetCursor()'s
+    // registration in runAppWayland() for the full story). Also drives
+    // hit-testing right away so hover-dependent state is correct on entry.
+    waylandSetCursor(state, Widgets::SystemMouseCursor::arrow);
+
+    if (state->dispatcher) {
+        Widgets::PointerEvent e;
+        e.kind       = Widgets::PointerEventKind::move;
+        e.pointer_id = 0;
+        e.position   = { state->last_pointer_x, state->last_pointer_y };
+        e.pressure   = state->mouse_pressed ? 1.0f : 0.0f;
+        state->dispatcher->handlePointerEvent(e);
+    }
 }
 
 static void pointer_leave(void* data, struct wl_pointer* pointer,
@@ -812,6 +900,36 @@ int runAppWayland(const std::string& title, int width, int height,
     }
 
     // -------------------------------------------------------------------------
+    // Cursor theme + surface, and register the cursor-change handler
+    // -------------------------------------------------------------------------
+    // Without this, MouseRegion/TextField/etc. cursor changes are silent
+    // no-ops on Wayland (setSystemCursor() just calls into a null handler —
+    // see system_mouse_cursor.cpp), and — because libdecor manages its own
+    // cursor for the window's title bar/resize border, and the Wayland
+    // protocol has no automatic reset when the pointer crosses from a
+    // decoration into the content surface — whatever resize/drag cursor
+    // libdecor last set while the pointer crossed the border simply
+    // persists forever once inside, with nothing to ever change it.
+    if (state.shm && state.pointer) {
+        state.cursor_theme = wl_cursor_theme_load(nullptr, 24 * state.output_scale, state.shm);
+        if (state.cursor_theme) {
+            state.cursor_surface = wl_compositor_create_surface(state.compositor);
+            if (state.cursor_surface) {
+                wl_surface_set_buffer_scale(state.cursor_surface, state.output_scale);
+                Widgets::registerCursorHandler([&state](Widgets::SystemMouseCursor c) {
+                    waylandSetCursor(&state, c);
+                });
+            } else {
+                std::cerr << "[Linux/Wayland] Failed to create cursor surface; cursor shape changes disabled.\n";
+            }
+        } else {
+            std::cerr << "[Linux/Wayland] Failed to load cursor theme; cursor shape changes disabled.\n";
+        }
+    } else {
+        std::cerr << "[Linux/Wayland] wl_shm or wl_pointer unavailable; cursor shape changes disabled.\n";
+    }
+
+    // -------------------------------------------------------------------------
     // Create GPU device (Wayland surface)
     // -------------------------------------------------------------------------
     GPU::LinuxSurfaceInfo surfaceInfo{};
@@ -824,6 +942,11 @@ int runAppWayland(const std::string& title, int width, int height,
     auto device = GPU::Device::createDefaultDevice(&surfaceInfo);
     if (!device) {
         std::cerr << "[Linux/Wayland] Failed to create campello_gpu device; will fall back to X11.\n";
+        // The registered handler (if any) captured &state by reference —
+        // clear it before state goes out of scope, or X11's fallback path
+        // could observe a dangling handler for the brief window before it
+        // installs its own.
+        Widgets::registerCursorHandler(nullptr);
         wl_display_disconnect(display);
         return 2; // sentinel: GPU init failed, caller should retry with X11
     }
@@ -1056,6 +1179,10 @@ int runAppWayland(const std::string& title, int width, int height,
     Widgets::TextInputManager::setActiveManager(nullptr);
     Widgets::TickerScheduler::setActive(nullptr);
 
+    // Captured &state by reference — must be cleared before state's
+    // Wayland objects below start getting torn down.
+    Widgets::registerCursorHandler(nullptr);
+
     // Unmount the element / render-object tree while managers are still reachable
     // (RenderTextField::detach() checks activeDispatcher(), etc.).
     state.root_element.reset();
@@ -1088,6 +1215,8 @@ int runAppWayland(const std::string& title, int width, int height,
     if (state.xkb_keymap) xkb_keymap_unref(state.xkb_keymap);
     if (state.xkb_ctx)    xkb_context_unref(state.xkb_ctx);
 
+    if (state.cursor_surface) wl_surface_destroy(state.cursor_surface);
+    if (state.cursor_theme)   wl_cursor_theme_destroy(state.cursor_theme);
     if (state.keyboard)     wl_keyboard_release(state.keyboard);
     if (state.pointer)      wl_pointer_release(state.pointer);
     // wl_seat version ≥5 requires the release request (not just proxy destroy).
