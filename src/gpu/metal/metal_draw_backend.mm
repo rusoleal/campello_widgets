@@ -84,12 +84,6 @@ struct alignas(16) RectUniforms {
     float _pad[2];
 };
 
-// Real per-vertex data for the rect pipeline — see drawFilledQuad(). Not
-// `alignas(16)`: tightly-packed vertex-attribute element, not a uniform.
-struct RectVertex {
-    float x, y, w;
-};
-
 struct alignas(16) QuadUniforms {
     float viewport[2];  // width, height (pixels)
     float opacity;      // [0, 1] — scales all pixel channels
@@ -158,7 +152,7 @@ MetalDrawBackend::MetalDrawBackend(
         desc.vertex.entryPoint = "rectVertex";
 
         // Real per-vertex position(+w) data — see RectVertex's doc comment
-        // above and RectVertexIn's in widgets.metal. Bound to slot 0 via
+        // in metal_draw_backend.hpp and RectVertexIn's in widgets.metal. Bound to slot 0 via
         // setVertexBuffer(0, ...); RectUniforms (color/viewport) moves to
         // slot 1 (see drawFilledQuad()).
         GPU::VertexAttribute rectPosAttr{};

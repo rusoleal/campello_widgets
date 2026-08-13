@@ -27,6 +27,13 @@ namespace systems::leal::campello_gpu
 namespace systems::leal::campello_widgets
 {
 
+// Real per-vertex data for the rect pipeline — see drawFilledQuad()/
+// drawFilledVertices() below. Not `alignas(16)`: tightly-packed
+// vertex-attribute element, not a uniform.
+struct RectVertex {
+    float x, y, w;
+};
+
 // ---------------------------------------------------------------------------
 // MetalDrawBackend
 //
