@@ -233,6 +233,27 @@ namespace systems::leal::campello_widgets
             return Size{ char_width * static_cast<float>(span.text.size()), line_height };
         }
 
+        /**
+         * @brief Measures the tight glyph-ink vertical bounds of a text
+         * span, relative to the top-left of `measureText()`'s typographic
+         * box.
+         *
+         * `y` is the offset from the typographic box's top down to the
+         * ink's top; `height` is the ink's own tight height. Only used by
+         * `RenderText` when `TextStyle::tight_vertical_bounds` is set — see
+         * that field's doc comment for why. The default implementation
+         * returns the full typographic box unchanged (`y=0`, `height` =
+         * `measureText()`'s height) — i.e. no tightening — so backends
+         * without a native tight-bounds query (anything but Metal, for
+         * now) degrade gracefully to the untightened box instead of
+         * miscomputing an offset from a guess.
+         */
+        virtual Rect measureTextInkBounds(const TextSpan& span) const
+        {
+            const Size s = measureText(span);
+            return Rect{0.0f, 0.0f, s.width, s.height};
+        }
+
         // ------------------------------------------------------------------
         // Offscreen / compositing support (BackdropFilter, ShaderMask)
         // ------------------------------------------------------------------

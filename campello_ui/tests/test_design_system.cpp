@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include <campello_widgets/ui/campello_design_system.hpp>
+#include <campello_ui/campello_design_system.hpp>
 #include <campello_widgets/widgets/button.hpp>
 #include <campello_widgets/widgets/card.hpp>
 #include <campello_widgets/widgets/checkbox.hpp>
@@ -337,6 +337,126 @@ TEST(CampelloDesignSystem, BuildTabBarReturnsWidget)
 
     auto w = ds.buildTabBar(cfg);
     EXPECT_NE(w, nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Wave-1 components (chip, segmented button, bottom sheet, badge, icon button)
+// ---------------------------------------------------------------------------
+
+TEST(CampelloDesignSystem, BuildChipReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    ChipConfig cfg;
+    cfg.label = std::make_shared<Text>("Filter");
+    cfg.selected = true;
+
+    auto w = ds.buildChip(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildSegmentedButtonReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    SegmentedConfig cfg;
+    cfg.segments = {
+        {std::make_shared<Text>("Day"), nullptr},
+        {std::make_shared<Text>("Week"), nullptr},
+    };
+    cfg.selected_index = 0;
+
+    auto w = ds.buildSegmentedButton(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildBottomSheetReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    BottomSheetConfig cfg;
+    cfg.child = std::make_shared<Text>("Sheet content");
+
+    auto w = ds.buildBottomSheet(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildBadgeReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    BadgeConfig cfg;
+    cfg.child = std::make_shared<Text>("icon");
+    cfg.label = "3";
+
+    auto w = ds.buildBadge(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildIconButtonReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    IconButtonConfig cfg;
+    cfg.icon = std::make_shared<Text>("icon");
+    cfg.on_pressed = [] {};
+
+    auto w = ds.buildIconButton(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildStepperReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+    StepperConfig cfg;
+    cfg.value = 2;
+    cfg.on_changed = [](int) {};
+    EXPECT_NE(ds.buildStepper(cfg), nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildRatingIndicatorReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+    RatingConfig cfg;
+    cfg.value = 3;
+    cfg.max = 5;
+    EXPECT_NE(ds.buildRatingIndicator(cfg), nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildActionSheetReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+    ActionSheetConfig cfg;
+    cfg.actions = {{"Share", [] {}, false}};
+    cfg.on_cancel = [] {};
+    EXPECT_NE(ds.buildActionSheet(cfg), nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildSearchFieldReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+    SearchFieldConfig cfg;
+    cfg.value = "hello";
+    cfg.on_clear = [] {};
+    EXPECT_NE(ds.buildSearchField(cfg), nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildDatePickerReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+    DatePickerConfig cfg;
+    cfg.label = "Aug 14, 2026";
+    cfg.on_tap = [] {};
+    EXPECT_NE(ds.buildDatePicker(cfg), nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildTimePickerReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+    TimePickerConfig cfg;
+    cfg.label = "10:30 AM";
+    cfg.on_tap = [] {};
+    EXPECT_NE(ds.buildTimePicker(cfg), nullptr);
 }
 
 // ---------------------------------------------------------------------------

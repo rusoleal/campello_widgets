@@ -34,6 +34,16 @@ struct RectVertex {
     float x, y, w;
 };
 
+// Per-vertex data for the liquid glass pipeline — see drawBackdropFilter()'s
+// liquidGlass branch below. `uv` is the backdrop-texture sample coordinate
+// (screen-space, like QuadVertex's); `lu`/`lv` is a plain 0..1 local
+// parametrization of the widget's own rect, used by the shader to evaluate
+// the rounded-rect SDF in a rotation-safe local space instead of screen
+// space — see widgets.metal's Liquid Glass pipeline doc comment.
+struct LiquidGlassVertex {
+    float x, y, w, u, v, lu, lv;
+};
+
 // ---------------------------------------------------------------------------
 // MetalDrawBackend
 //
@@ -127,6 +137,7 @@ public:
         campello_gpu::RenderPassEncoder& encoder) override;
 
     Size measureText(const TextSpan& span) const override;
+    Rect measureTextInkBounds(const TextSpan& span) const override;
 
     // ------------------------------------------------------------------
     // Offscreen / compositing (BackdropFilter + ShaderMask)
@@ -197,6 +208,8 @@ public:
         rect_vertex_pool_.beginFrame();
         clip_shape_uniform_pool_.beginFrame();
         shader_mask_uniform_pool_.beginFrame();
+        liquid_glass_uniform_pool_.beginFrame();
+        liquid_glass_vertex_pool_.beginFrame();
         offscreen_texture_pool_.beginFrame();
         offscreen_texture_pool_.evictStale(frame_counter_);
     }
@@ -434,6 +447,15 @@ private:
     // Same as clip_shape_uniform_pool_ above, for drawShaderMaskComposite().
     UniformBufferPool shader_mask_uniform_pool_;
 
+    // LiquidGlassUniforms pool — small, fixed-size, same reasoning as
+    // clip_shape_uniform_pool_/shader_mask_uniform_pool_ above.
+    UniformBufferPool liquid_glass_uniform_pool_;
+
+    // Separate pool for the liquid glass pipeline's per-vertex data
+    // (LiquidGlassVertex arrays), for the same reason quad_vertex_pool_ is
+    // separate from quad_uniform_pool_ — see that field's doc comment.
+    UniformBufferPool liquid_glass_vertex_pool_;
+
     OffscreenTexturePool offscreen_texture_pool_;
 
     std::shared_ptr<campello_gpu::Device>         device_;
@@ -449,6 +471,11 @@ private:
 
     // Blur pipeline (reuses quad_bgl_ for texture+sampler binding).
     std::shared_ptr<campello_gpu::RenderPipeline>  blur_pipeline_;
+
+    // Liquid Glass pipeline (also reuses quad_bgl_/quad_sampler_ — same
+    // texture@0 + sampler@1 binding shape, just a different fragment
+    // shader and its own vertex layout with the extra local_uv attribute).
+    std::shared_ptr<campello_gpu::RenderPipeline>  liquid_glass_pipeline_;
 
     // ShaderMask pipeline (child tex + LUT tex + sampler).
     std::shared_ptr<campello_gpu::RenderPipeline>  shader_mask_pipeline_;

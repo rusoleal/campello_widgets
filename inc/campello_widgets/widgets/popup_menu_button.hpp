@@ -2,9 +2,11 @@
 
 #include <campello_widgets/widgets/stateful_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -49,6 +51,14 @@ namespace systems::leal::campello_widgets
         std::optional<Color>           popup_color;
         float                          border_radius = 8.0f;
         float                          elevation     = 8.0f;
+
+        /**
+         * @brief When set, the popup renders as a frosted/liquid-glass
+         * panel — the backdrop behind it is filtered per `*backdrop_filter`
+         * and `popup_color` (if set) is used as the glass tint instead of a
+         * flat fill. See `ImageFilter::liquidGlass()`.
+         */
+        std::optional<ImageFilter>     backdrop_filter;
 
         PopupMenuButton() = default;
         explicit PopupMenuButton(std::vector<PopupMenuItem> itms)

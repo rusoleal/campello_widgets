@@ -5,13 +5,16 @@
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/row.hpp>
-#include <campello_widgets/widgets/container.hpp>
+#include <campello_widgets/widgets/decorated_box.hpp>
+#include <campello_widgets/widgets/backdrop_filter.hpp>
 #include <campello_widgets/widgets/text.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/theme.hpp>
+#include <campello_widgets/ui/box_decoration.hpp>
+#include <campello_widgets/ui/box_shadow.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
 #include <algorithm>
@@ -27,17 +30,53 @@ namespace systems::leal::campello_widgets
     {
         if (!child) return nullptr;
 
-        // Container with background, padding, and rounded corners
-        auto container = std::make_shared<Container>();
-        container->child = child;
-        container->color = background_color.value_or(Theme::tokensOf(context)->colors.surface);
-        // Note: border_radius and elevation would need Container decoration support
-        // For now, just use the basic container
+        const Color bg = background_color.value_or(Theme::tokensOf(context)->colors.surface);
+
+        WidgetRef surface;
+        if (backdrop_filter.has_value()) {
+            // Liquid-glass panel: the shadow needs its own DecoratedBox (a
+            // flat fill there would occlude the frosted content), so it
+            // wraps a BackdropFilter directly — see
+            // CupertinoDesignSystem::buildCard()'s identical composition,
+            // including why no ClipRRect wraps the filter.
+            auto bf    = std::make_shared<BackdropFilter>();
+            bf->filter = *backdrop_filter;
+            bf->child  = child;
+
+            BoxDecoration shadow_deco;
+            shadow_deco.border_radius = border_radius;
+            if (elevation > 0.0f) {
+                shadow_deco.box_shadow = {BoxShadow{
+                    Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.25f),
+                    Offset{0.0f, elevation * 0.25f},
+                    elevation
+                }};
+            }
+            auto shadowed = std::make_shared<DecoratedBox>();
+            shadowed->decoration = shadow_deco;
+            shadowed->child      = bf;
+            surface = shadowed;
+        } else {
+            BoxDecoration deco;
+            deco.color         = bg;
+            deco.border_radius = border_radius;
+            if (elevation > 0.0f) {
+                deco.box_shadow = {BoxShadow{
+                    Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.25f),
+                    Offset{0.0f, elevation * 0.25f},
+                    elevation
+                }};
+            }
+            auto decorated = std::make_shared<DecoratedBox>();
+            decorated->decoration = deco;
+            decorated->child      = child;
+            surface = decorated;
+        }
 
         // Constrain width
         auto constrained = std::make_shared<SizedBox>();
         constrained->width = max_width;
-        constrained->child = container;
+        constrained->child = surface;
 
         return constrained;
     }

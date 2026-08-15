@@ -32,9 +32,19 @@ ios.cmake
 android.cmake
 windows.cmake
 linux.cmake
+campello_ui/            # DesignSystem impl: campello_editor's bespoke style (CampelloDesignSystem)
+  inc/campello_ui/
+  src/
+  tests/
+campello_material/      # DesignSystem impl: Material Design 3 (see TODO.md Phase 16)
+  inc/campello_material/
+  src/
+campello_cupertino/     # DesignSystem impl: Apple HIG / Cupertino (see TODO.md Phase 16)
+  inc/campello_cupertino/
+  src/
 ```
 
-New files must follow this layout exactly. Public API goes in `inc/campello_widgets/`, implementation in `src/`.
+New files must follow this layout exactly. Public API goes in `inc/campello_widgets/`, implementation in `src/`. `campello_widgets` core has no concrete visual style of its own — `campello_ui`/`campello_material`/`campello_cupertino` are sibling libraries that implement `DesignSystem` (`inc/campello_widgets/ui/design_system.hpp`) and link against core, never the other way around.
 
 ## Build
 
@@ -126,7 +136,7 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 - Headers use `#pragma once`.
 - Implementations `#include` their own header first, then dependencies.
 
-## Phase Status (as of 2026-07-24)
+## Phase Status (as of 2026-08-14)
 
 | Phase | Status |
 |---|---|
@@ -141,3 +151,5 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 | 9 — Scrolling | Complete |
 | 10 — Platform Integration | Partial (macOS, iOS, Android, Windows, Linux all done; platform channel/FFI abstraction pending) |
 | 11 — Developer Experience | Complete (headless GPU visual tests via `GpuVisualRenderer` now landed) |
+| 15 — Design System | Complete (`DesignSystem` abstract interface + `Theme` propagation; see `TODO.md`) |
+| 16 — Design System Decoupling | In Progress (M0–M8 done: `campello_ui`/`campello_material`/`campello_cupertino` split out as sibling libraries with 35 builders each, MD3 container color roles, wave-3 components wired into `examples/gallery`; see `TODO.md`) |

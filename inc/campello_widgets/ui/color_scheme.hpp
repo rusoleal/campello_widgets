@@ -20,8 +20,16 @@ namespace systems::leal::campello_widgets
     {
         Color primary;
         Color on_primary;
+        Color primary_container;    ///< Tonal fill for selected/emphasized elements (MD3: primaryContainer) — e.g. FAB, selected icon buttons.
+        Color on_primary_container;
         Color secondary;
         Color on_secondary;
+        Color secondary_container;  ///< Tonal fill for selected states with less emphasis than primary (MD3: secondaryContainer) — e.g. selected chips, nav indicator pills.
+        Color on_secondary_container;
+        Color tertiary;             ///< A third accent, distinct from primary/secondary (MD3: tertiary) — for complementary emphasis, not a priority ranking.
+        Color on_tertiary;
+        Color tertiary_container;
+        Color on_tertiary_container;
         Color surface;
         Color on_surface;
         Color surface_variant;
@@ -30,6 +38,8 @@ namespace systems::leal::campello_widgets
         Color on_background;
         Color error;
         Color on_error;
+        Color error_container;
+        Color on_error_container;
         Color success;
         Color on_success;
         Color warning;

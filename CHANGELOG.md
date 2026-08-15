@@ -7,6 +7,358 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`CupertinoDesignSystem::liquidGlass()`** — the first wiring of the
+  Liquid Glass rendering primitive into an actual `DesignSystem`. New
+  `CupertinoMaterial` enum (`classic`/`liquidGlass`) selects the style,
+  same class/library as before (no new widget types, no new sibling
+  library) via a `material` parameter on the existing constructor
+  (defaults to `classic`, so all existing call sites are unaffected) and
+  a `liquidGlass(bool dark = false)` factory parallel to `light()`/
+  `dark()`. Wired into `buildCard()` (elevated priority only — `filled`/
+  `outlined` stay classic, matching real HIG's flat grouped-list surfaces)
+  and `buildPrimaryActionButton()` so far; `Dialog`/`BottomSheet`/
+  `NavigationBar`/`AppBar` need either a core widget change (`Dialog`
+  paints its own background with no filter hook) or asymmetric
+  corner-radius shader support (edge-flush surfaces need rounding on only
+  some corners) — both out of scope for this pass, see `TODO.md`.
+  `examples/gallery`'s design-system switcher gained a 4th "Glass" segment
+  and a new Card + PrimaryActionButton demo row to exercise it.
+
+- **`ImageFilter::liquidGlass()`** — a first-party Apple Liquid Glass
+  rendering primitive on the Metal backend, applied via the existing
+  `BackdropFilter` widget. Refracts, saturates, tints, and adds a specular
+  rim highlight to the (pre-blurred) content behind it, shaped to a
+  rounded rect via a signed-distance-field (SDF) evaluated per pixel —
+  corners fall out of the SDF formula for free, no shape-specific
+  branching. `ImageFilter` gained a `kind` field (`gaussianBlur` default /
+  `liquidGlass`) rather than becoming a `std::variant`, specifically so
+  backends without a real `liquidGlass` implementation (everything but
+  Metal, for now) degrade gracefully to plain frosted blur instead of
+  failing to compile. New Metal shader pipeline in
+  `shaders/metal/widgets.metal` (`liquidGlassVertex`/`liquidGlassFragment`,
+  reusing `shapeFragment`'s existing rounded-rect SDF math). Demoed
+  side-by-side with the existing frosted-glass example in
+  `examples/gallery`'s Clipping & FX tab. See `TODO.md` for the full
+  design rationale (why not a separate `campello_glass` library, why not
+  generic custom-shader loading) and known v1 simplifications (fixed
+  light direction, Metal-only, no `DesignSystem`/`campello_cupertino`
+  integration yet).
+
+- **`examples/gallery`'s sidebar and all 9 remaining tabs now follow
+  `Theme::of(ctx)`** — previously only the Controls tab was theme-reactive;
+  switching dark mode or the UI/MD3/iOS design-system switcher had no
+  visible effect anywhere else, including the sidebar hosting the switcher
+  itself. Backgrounds, cards, captions, and body text across Layout, Text
+  & Input, Lists, Animations, Gestures, Clipping & FX, Keyboard, Images,
+  and Draw now read theme color roles instead of hardcoded literals; the
+  now-unused `kContent` constant was removed. The illustrative accent
+  palette (`kBlue`/`kGreen`/`kOrange`/... used for demo variety in avatars,
+  chips, transition boxes) is deliberately unchanged, as is `DrawSection`'s
+  canvas background (stays paper-white regardless of theme, like a real
+  drawing app). Fixed a latent dangling-reference risk while doing this:
+  several `ListView`/`GridView`/`DragTarget`/`LayoutBuilder` callbacks in
+  the gallery are invoked by the framework on later frames after the
+  `build()` that constructed them returns — these now capture the theme's
+  `ColorScheme` by value instead of by reference.
+
+- **`DesignSystem` gains 5 new components (wave 3): `ExpansionTile`,
+  `ToggleButtons`, `Banner`, `NavigationRail`, `DataTable`** — 35
+  pure-virtual builders total, implemented across all 4 concrete systems
+  (`NullDesignSystem`, `campello_ui`, `campello_material`, `campello_cupertino`).
+  `NavigationRail` reuses `MaterialDesignSystem::buildNavigationBar`'s
+  `secondary_container` pill-indicator convention for its selected item;
+  `campello_cupertino` documents where HIG has no direct equivalent
+  (`NavigationRail`'s closest relative is the split-view sidebar,
+  `DataTable`'s is a grouped `UITableView`) and falls back pragmatically.
+  Wired into `examples/gallery`'s `ControlsSection` with live state
+  (expand/collapse, per-item toggle selection, active rail tab, dismissible
+  banner), reactive to the sidebar's UI/MD3/iOS design-system switcher.
+  Contract test suite extended with 5 new default-config assertions, 2 new
+  disabled-state assertions, and 4 new structural-content tests. 690/690
+  tests green (up from 674).
+
+- **`ColorScheme` gains `tertiary`/`on_tertiary` and 4 container role pairs**
+  (`primary_container`, `secondary_container`, `tertiary_container`,
+  `error_container`, each with an `on_` pair) — 10 new fields, additive and
+  backward-compatible. Closes part of the parity gap against real MD3
+  (which has ~30 color roles to our previous 23). `campello_material` uses
+  the real, publicly documented MD3 baseline palette values (seed
+  `#6750A4`); `campello_ui` gets a coral/terracotta tertiary; `campello_cupertino`
+  uses `systemPink` as its tertiary (HIG's usual third accent) with literal
+  tint values instead of runtime `withOpacity()`; `NullDesignSystem` gets
+  flat neutral grays.
+
+### Fixed
+
+- **Liquid Glass card showed stale/reflected content from elsewhere on the
+  page while scrolling** — `buildCard()`'s liquid-glass branch was the
+  first place in this codebase wrapping `BackdropFilter` inside
+  `ClipRRect`, and `ClipRRect` is itself an independent `OffsetLayer`
+  cache boundary. This framework already has a specific safeguard against
+  stale `BackdropFilter` caching during scroll
+  (`PictureLayer::hasBackdropFilter()` — see its doc comment for the
+  matching "blur sampling a stale, frozen backdrop" symptom it was built
+  to prevent), but it had only ever been exercised against a *direct*
+  `BackdropFilter`, not one nested inside a second, separate caching
+  boundary. Fixed by removing the `ClipRRect` — it was never load-bearing:
+  `ImageFilter::liquidGlass()`'s shader already self-shapes to the rounded
+  rect via its own SDF+alpha, so the extra clip was only guarding against
+  child content overflowing the corners, a minor cosmetic edge case not
+  worth the untested nested-caching interaction. User-diagnosed (correctly
+  identified it as stale/misindexed backdrop sampling) via scroll testing.
+
+- **`buildPrimaryActionButton()` (FAB) had backwards `Align`/`SizedBox`
+  nesting in all three concrete `DesignSystem`s** (`campello_ui`,
+  `campello_material`, `campello_cupertino`) — a pre-existing bug, not new
+  this session, just never previously exercised in a real layout (only
+  unit-tested for non-null return). `Align(center, SizedBox::square(56,
+  content))` sizes the *outer* `Align` to fill whatever bounded space its
+  parent gives it and only positions the already-56×56 box within that —
+  it doesn't pin the button to 56×56 itself, so inside a `Row`'s flex
+  layout the FAB could expand to claim most of the available space,
+  starving sibling `Expanded` children. Found via the gallery's new Card +
+  PrimaryActionButton demo row, which rendered as a squished card sliver
+  next to a giant stretched FAB pill in *every* design-system kind. Fixed
+  by swapping the nesting — `SizedBox::square(56, Align(center, content))`
+  — in all three systems identically.
+
+- **Gallery's UI/MD3/iOS theme switcher was unreadable in dark mode** —
+  `buildThemeFooter()`'s segment labels ("UI"/"MD3"/"iOS") were built with
+  `Text("UI")` and no explicit color, defaulting to plain black.
+  `buildSegmentedButton()` doesn't recolor caller-supplied labels, so this
+  was invisible-to-low-contrast against the dark unselected track
+  (`colors.surface_variant`) once dark mode made that background genuinely
+  dark. Each design system also fills its *selected* segment with a
+  different role (Campello: `primary`, Material: `secondary_container`,
+  Cupertino: `surface` as a floating pill), so no single fixed color would
+  have contrasted correctly against all three anyway — the fix picks the
+  matching `on_X` role per the active design-system kind and per
+  selected/unselected state.
+
+- **Raster-thread `SIGBUS` in `campello_gpu::Buffer::upload()` under heavy
+  widget churn** — `MetalDrawBackend::UniformBufferPool::acquire()`
+  (`src/gpu/metal/metal_draw_backend.mm`) reused a ring-slot GPU buffer via
+  `upload()` on every cache hit without checking it was actually large
+  enough for the new request. `rect_vertex_pool_` is shared between
+  `drawFilledQuad()`'s fixed 6-vertex draws and `drawFilledVertices()`'s
+  variable-length arc/path vertex arrays, so a slot sized for a small draw
+  could get overflowed by a later larger one — an out-of-bounds GPU buffer
+  write. Now reallocates the slot when `buffers[idx]->getLength() < size`
+  instead of blindly reusing an undersized buffer. Previously logged as a
+  known, deferred issue in `TODO.md`; root-caused and fixed this session.
+
+- **Three MD3 builders were approximating a container color with
+  `withOpacity(primary, 0.15–0.18)` because no container role existed** —
+  now use the real MD3-specified role: `MaterialDesignSystem::buildPrimaryActionButton`
+  (FAB) now uses `primaryContainer` instead of a solid `primary` fill (a
+  real spec detail — Material 3's default FAB is *not* primary-colored);
+  `buildChip`'s selected state and `buildSegmentedButton`'s selected
+  segment now use `secondaryContainer`/`onSecondaryContainer`;
+  `buildNavigationBar`'s active-item indicator pill likewise. `campello_ui`
+  and `campello_cupertino`'s `buildChip`/`buildIconButton` selected states
+  now read `primary_container` instead of computing an inline tint per
+  call site.
+
+- **Design system decoupling** (TODO.md Phase 16) — following Flutter 3.47's
+  split of Material/Cupertino into standalone packages, `campello_widgets`
+  core now ships with zero baked-in visual style. Three new sibling
+  libraries each implement the existing `DesignSystem` abstract interface
+  (`inc/campello_widgets/ui/design_system.hpp`), linking against
+  `campello_widgets` and never the reverse:
+  - **`campello_ui`** — the existing bespoke "warm teal" `CampelloDesignSystem`
+    (unchanged visually), relocated out of core; `campello_editor`'s design.
+  - **`campello_material`** — new `MaterialDesignSystem`, MD3-authentic:
+    baseline tonal palette (seed `#6750A4`), MD3 type scale, MD3 shape scale
+    (4/8/12/16/28dp), stadium-shaped filled buttons, a 16dp-radius FAB
+    (MD3's real departure from Material 2's circular FAB), and a
+    connected-button-group `SegmentedButton` with a stadium outer border.
+  - **`campello_cupertino`** — new `CupertinoDesignSystem`, HIG-authentic:
+    iOS system colors, Dynamic Type sizes, filled/tinted/plain/destructive
+    button styles at a 14pt corner, `UISwitch`'s real green active track
+    with an always-white thumb, a `UIAlertController`-style narrow
+    (270pt) dialog with centered text and divided action buttons, and
+    `UISegmentedControl`'s real sliding-white-pill `SegmentedButton`.
+  - `NullDesignSystem` (new, in core) — a flat, unstyled fallback; it's
+    `Theme::of()`'s no-`Theme`-found default now that core can no longer
+    depend on `campello_ui`.
+- **`DesignSystem` interface expanded from 19 to 30 components**, in two
+  waves, implemented across all four concrete systems in lockstep (no
+  partial implementations): `Chip`, `SegmentedButton`, `BottomSheet`,
+  `Badge`, `IconButton` (wave 1); `Stepper`, `RatingIndicator`,
+  `ActionSheet`, `SearchField`, `DatePicker`, `TimePicker` (wave 2 — date/
+  time pickers are tappable trigger fields, not calendar/wheel widgets,
+  matching how `Dialog`/`BottomSheet`/`PopupMenuButton` already separate
+  chrome from presentation).
+- **`examples/macos_showcase`'s Theme tab** rebuilt into a live design-system
+  gallery: a 3-way switcher (`campello_ui`/`campello_material`/
+  `campello_cupertino`, built with the new `SegmentedButton`) plus the
+  existing light/dark toggle, exercising all 30 `DesignSystem` builders via
+  `Theme::of(ctx)`.
+- **Parameterized abstract-contract test suite**
+  (`tests/design_system_contract/`) — the same assertions (all 30 builders
+  return non-null, token scales are internally consistent, `on_X` colors
+  differ from their base `X`) run against all four concrete `DesignSystem`
+  implementations through the abstract base pointer.
+
+### Known Issues
+
+- **`SIGSEGV` in Metal's `presentDrawable:` completion handler under heavy
+  widget churn** — found via the gallery's tab-switch + design-system-switch
+  stress test, distinct from the `UniformBufferPool` `SIGBUS` fixed above
+  (different subsystem, different stack: Metal itself calling
+  `presentWithOptions:` on an already-deallocated `CAMetalDrawable` from its
+  own internal completion queue). Investigated: the drawable's retain/
+  release accounting across `run_app.mm` and `campello_gpu`'s
+  `Device::scheduleNextPresent()`/`submit()` balances correctly by
+  inspection, matching Apple's documented `presentDrawable:` contract — no
+  proven code defect found (unlike the `UniformBufferPool` bug, which had a
+  self-documented broken invariant). `RasterThread`'s depth-1 pipelining
+  (UI thread can request a new `currentDrawable` while the previous frame
+  is still presenting) is a plausible contributing factor under rapid
+  churn, not a confirmed cause. Reproduced once on a 2018 Intel Mac mini
+  (UHD 630); has not reproduced since. Postponed at the user's direction —
+  pinning it down needs live Metal tooling (`NSZombieEnabled`/
+  `MTL_DEBUG_LAYER`, see `TODO.md`), not further static analysis.
+
+### Fixed
+
+- **`InheritedElement::notifyDependents()` could call `markNeedsBuild()` on
+  an already-destroyed `Element`** — a heap-use-after-free, found by the
+  design-system switcher above (the first scenario where an `InheritedWidget`
+  changes value in the same rebuild pass that also unmounts structurally
+  different widgets elsewhere in the tree; toggling light/dark alone never
+  unmounted anything, so this was unreachable before). `dependents_` was
+  only ever cleared when the `InheritedElement` itself unmounted, never when
+  an individual dependent did. Not reproducible under a plain debugger
+  (classic use-after-free timing sensitivity); reproduced deterministically
+  under AddressSanitizer. Fixed in `src/widgets/inherited_element.cpp` by
+  pruning stale entries via the framework's existing `Element::isAlive()`
+  liveness registry before calling `markNeedsBuild()`.
+
+### Known Issues
+
+- **Raster-thread `SIGBUS` in `campello_gpu::Buffer::upload()` under heavy
+  widget churn** — found via the same stress test as the fix above, but
+  confirmed distinct from it (still reproduces after that fix). Needs a
+  specific sequence (switch tabs away and back, then switch design system
+  repeatedly) to reproduce; lives in `campello_gpu`'s buffer pool /
+  raster-thread synchronization, not in `campello_widgets`' Element tree.
+  See `TODO.md`'s `## Backlog / Future` for the full repro steps and stack
+  trace; not yet fixed.
+
+### Added
+
+- **Liquid Glass rollout completed for `CupertinoDesignSystem::liquidGlass()`**
+  — `PopupMenuButton`, `DropdownButton`, `Dialog`, `ActionSheet`, and
+  `Tooltip` all now render as frosted glass panels in Glass mode, joining
+  `Card`/`PrimaryActionButton` from the initial wiring. `PopupMenuButton`/
+  `DropdownButton`/`Dialog`/`Tooltip` each gained a `backdrop_filter`
+  (`std::optional<ImageFilter>`) field on the core widget itself (they own
+  their own overlay/dismiss lifecycle, unlike `Card`, so the design system
+  can't hand-roll the composition the way it does there); `ActionSheet`
+  needed no core change, composing entirely inside
+  `CupertinoDesignSystem::buildActionSheet()`. All five use the same
+  shadow-`DecoratedBox`-wrapping-`BackdropFilter` composition established
+  by `Card` — no `ClipRRect`, now a *confirmed* (not just suspected)
+  incompatibility, see Fixed below. Every glass-wired surface has a new
+  demo in `examples/gallery`'s Controls tab. See `TODO.md`'s Liquid Glass
+  entry for the full per-widget history.
+- **`TextStyle::tight_vertical_bounds`** — opt-in (default off, no-op on
+  multi-line text), sizes/positions a single-line `Text` by its tight
+  glyph-ink bounds instead of the full typographic
+  `ascent + descent + leading` box, so centering a short UI label (button
+  text, ...) centers on the visible ink rather than font-metric padding
+  the string doesn't use. Backed by a new
+  `IDrawBackend::measureTextInkBounds()` (default: untightened box,
+  graceful fallback for backends without a native tight-bounds query;
+  implemented for Metal via CoreText's `CTLineGetBoundsWithOptions
+  (kCTLineBoundsUseGlyphPathBounds)`). Enabled in `examples/gallery`'s
+  `ts()` text-style helper.
+
+### Fixed
+
+- **`OffsetLayer::record()` never evicted its own stale GPU replay-cache
+  entries on a second full record** — `Renderer::evictReplayCacheEntries()`
+  was only ever called from `OffsetLayer`'s destructor (guarding against a
+  *different* instance reusing a freed address), not when the *same*
+  instance records fresh content after an earlier record. Any node whose
+  `OffsetLayer` records more than once in its lifetime (e.g. a `Card`
+  settling from an intermediate layout into its final position) could
+  leave a stale cached shadow/clip-shape/shader-mask/save-layer GPU
+  composite — keyed only by `(pointer, encounter-order index)`, with no
+  way to detect the underlying picture changed — sitting around for a
+  future identity-replay to reuse unquestioningly. Visible as a hard-
+  edged, unblurred shadow frozen at an early frame's position while the
+  card itself repainted correctly. Fixed by calling
+  `evictReplayCacheEntries(this)` unconditionally at the start of
+  `record()`, not just in the destructor.
+- **`ClipRRect` wrapping a `BackdropFilter` reads content from the wrong
+  part of the screen** — confirmed, not just avoided: `Renderer::
+  applyClipShape()` renders a `ClipRRect`'s subtree into a separate,
+  small, locally-offset offscreen texture via a nested `flushDrawList()`
+  pass; a `BackdropFilter` inside that subtree samples the single
+  full-window backdrop capture using UVs computed for that local viewport,
+  not the real on-screen position, so it shows whatever's near the
+  window's origin instead of what's actually behind it. This is also the
+  real explanation for the earlier "reflecting toggle buttons while
+  scrolling" bug (previously attributed, incompletely, to an untested
+  caching interaction) — `buildCard()`'s existing lack of `ClipRRect` was
+  already the correct fix, for the correct reason, confirmed by reading
+  `applyClipShape()` directly. Documented as permanent in
+  `buildCard()`'s doc comment so it isn't re-attempted blind.
+- **`RenderGestureDetector::globalOffset()` ignored ambient scroll
+  transforms** — used by `DropdownButton`/`PopupMenuButton` to anchor
+  their overlay menu to the trigger button's on-screen position, computed
+  purely from the paint-time logical `offset` (pre-scroll tree position);
+  a scroll view's delta is applied separately, only as an ambient
+  `Canvas::translate()` at paint time. Any trigger inside a
+  `SingleChildScrollView` reported its pre-scroll position, so the menu
+  opened progressively more mis-positioned the further the list had
+  scrolled. Fixed by projecting through `Canvas::currentTransform()`
+  (`projectedBounds()`), matching the same pattern already used by
+  `RenderBackdropFilter`/`OffsetLayer` for this exact class of bug.
+- **`PopupMenuButton`'s menu always opened at the screen's top-right**,
+  never actually anchored to its trigger (hardcoded
+  `Align(Alignment::topRight())`) — unlike `DropdownButton`, which was
+  already anchor-aware. Gave it the same `GlobalKey` + positioner
+  mechanism `DropdownButton` uses.
+- **`Dialog::border_radius`/`elevation` were dead fields** — `Dialog::
+  build()` was a bare `Container` with only `background_color` applied; the
+  other two fields, set by every design system, were silently ignored (the
+  code even said so in a comment). Now composes a real `DecoratedBox` with
+  rounded corners and a shadow.
+- **`CupertinoDesignSystem::buildDialog()`'s 1–2-action row could render as
+  a near-full-window blank sheet with no visible buttons** — three
+  compounding, pre-existing bugs, only ever exercised once `Dialog`'s
+  dead-field gap above was fixed: (1) `Align(Alignment::center(), ...)`
+  without `height_factor` fills all available height rather than
+  shrink-wrapping to its child — fine under a bounded parent, but
+  `showDialog()`'s `Center` only loosens the incoming constraints rather
+  than bounding them, so the dialog's title/content `Align`s claimed
+  nearly the whole window height before the actions row was ever reached;
+  (2) the actions row's `cross_axis_alignment::stretch` (needed so the
+  vertical divider between two side-by-side actions spans the row) then
+  inherited that same huge loose budget as its own reported height; (3)
+  the first fix for (2) — a fixed 44pt row height, with each action
+  `Center`-wrapped for horizontal alignment — manufactured artificial
+  slack space around the (naturally shorter) buttons, and a small residual
+  text-baseline offset became visible specifically *within that slack*,
+  initially misdiagnosed as a text-rendering problem (see the ink-bounds
+  entry above, a real improvement but not what fixed this). Correctly
+  root-caused by comparing against `MaterialDesignSystem`'s action row,
+  which has never shown this — no `stretch`, no artificial height, so no
+  slack for anything to be visible within. Final fix: dropped `stretch`
+  and the fixed height entirely, `cross_axis_alignment::center` instead
+  (row sizes to its tallest child), each action `Center`-wrapped with
+  `height_factor = 1.0` (horizontal-only centering, without reinheriting
+  bug 2's loose bound), and an explicit fixed height on the divider (which
+  has no natural height of its own once `stretch` isn't sizing it).
+  `CupertinoDesignSystem::buildActionSheet()` had the identical
+  `Align`-without-`height_factor` hazard in its title/action labels;
+  fixed proactively before it could manifest there too.
+
 ## [0.7.0] - 2026-08-13
 
 ### Added

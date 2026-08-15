@@ -4,6 +4,7 @@
 #include <vector>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/text_span.hpp>
+#include <campello_widgets/ui/rect.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -39,6 +40,17 @@ namespace systems::leal::campello_widgets
         TextSpan             span_;
         std::vector<std::string> lines_;
         float                line_height_ = 0.0f;
+
+        /**
+         * @brief Set in performLayout() when span_.style.tight_vertical_bounds
+         * is active for this (single-line) paint — the ink's offset from
+         * the typographic box's top, and its tight height. Consumed by
+         * performPaint() to reposition the (unchanged, typographic-sized)
+         * rendered glyph texture so it lands correctly within the tighter
+         * size_ this class reports. See TextStyle::tight_vertical_bounds.
+         */
+        bool  tight_bounds_active_ = false;
+        float tight_bounds_top_offset_ = 0.0f;
     };
 
 } // namespace systems::leal::campello_widgets

@@ -1,5 +1,5 @@
 #include <campello_widgets/widgets/theme.hpp>
-#include <campello_widgets/ui/campello_design_system.hpp>
+#include <campello_widgets/ui/null_design_system.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -10,7 +10,7 @@ namespace systems::leal::campello_widgets
         if (widget && widget->design_system) {
             return widget->design_system.get();
         }
-        static const auto default_ds = std::make_shared<CampelloDesignSystem>();
+        static const auto default_ds = std::make_shared<NullDesignSystem>();
         return default_ds.get();
     }
 

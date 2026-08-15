@@ -7,41 +7,19 @@
 #include <campello_widgets/widgets/list_tile.hpp>
 #include <campello_widgets/widgets/progress_indicator.hpp>
 #include <campello_widgets/widgets/text.hpp>
-#include <campello_widgets/ui/campello_design_system.hpp>
+#include <campello_widgets/ui/null_design_system.hpp>
 
 using namespace systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
-// Token differences
+// Theme::of() fallback
 // ---------------------------------------------------------------------------
 
-TEST(Theme, LightAndDarkTokensDiffer)
+TEST(Theme, FallbackIsLightNullDesignSystem)
 {
-    auto light = CampelloDesignSystem::light();
-    auto dark  = CampelloDesignSystem::dark();
-
-    EXPECT_EQ(light.tokens().brightness, Brightness::light);
-    EXPECT_EQ(dark.tokens().brightness, Brightness::dark);
-
-    // Primary colors should differ
-    EXPECT_NE(light.tokens().colors.primary.r, dark.tokens().colors.primary.r);
-}
-
-TEST(Theme, LightAndDarkSurfaceColorsDiffer)
-{
-    auto light = CampelloDesignSystem::light();
-    auto dark  = CampelloDesignSystem::dark();
-
-    // Light surface should be light; dark surface should be dark
-    EXPECT_GT(light.tokens().colors.surface.r, 0.5f);
-    EXPECT_LT(dark.tokens().colors.surface.r, 0.5f);
-}
-
-TEST(Theme, FallbackTokensAreLight)
-{
-    // The static fallback used by Theme::of() when no Theme is present
-    // should be a light CampelloDesignSystem.
-    auto fallback = CampelloDesignSystem();
+    // The static fallback used by Theme::of() when no Theme ancestor is
+    // present should be a light NullDesignSystem — see src/widgets/theme.cpp.
+    auto fallback = NullDesignSystem();
     EXPECT_EQ(fallback.tokens().brightness, Brightness::light);
 }
 
@@ -51,7 +29,7 @@ TEST(Theme, FallbackTokensAreLight)
 
 TEST(Theme, CanCreateThemeWithDesignSystem)
 {
-    auto ds = std::make_shared<CampelloDesignSystem>(CampelloDesignSystem::dark());
+    auto ds = std::make_shared<NullDesignSystem>();
     auto child = std::make_shared<Text>("Hello");
     auto theme = std::make_shared<Theme>(ds, child);
 
@@ -62,8 +40,8 @@ TEST(Theme, CanCreateThemeWithDesignSystem)
 
 TEST(Theme, UpdateShouldNotifyWhenDesignSystemChanges)
 {
-    auto ds1 = std::make_shared<CampelloDesignSystem>(CampelloDesignSystem::light());
-    auto ds2 = std::make_shared<CampelloDesignSystem>(CampelloDesignSystem::dark());
+    auto ds1 = std::make_shared<NullDesignSystem>();
+    auto ds2 = std::make_shared<NullDesignSystem>();
 
     auto theme1 = std::make_shared<Theme>(ds1, nullptr);
     auto theme2 = std::make_shared<Theme>(ds2, nullptr);
@@ -74,7 +52,7 @@ TEST(Theme, UpdateShouldNotifyWhenDesignSystemChanges)
 
 TEST(Theme, UpdateShouldNotNotifyWhenDesignSystemSame)
 {
-    auto ds = std::make_shared<CampelloDesignSystem>(CampelloDesignSystem::light());
+    auto ds = std::make_shared<NullDesignSystem>();
 
     auto theme1 = std::make_shared<Theme>(ds, nullptr);
     auto theme2 = std::make_shared<Theme>(ds, nullptr);
@@ -133,59 +111,15 @@ TEST(Theme, ProgressIndicatorBuildsWithDefaultConfig)
 
 TEST(Theme, TextStyleOfReturnsValidPointer)
 {
-    auto ds = std::make_shared<CampelloDesignSystem>(CampelloDesignSystem::light());
+    auto ds = std::make_shared<NullDesignSystem>();
     auto theme = std::make_shared<Theme>(ds, nullptr);
 
     // textStyleOf requires a real BuildContext, so we test the helper directly
     const auto& tokens = ds->tokens();
     const auto& style = textStyleForRole(tokens.typography, TextRole::title_large);
     EXPECT_EQ(style.font_size, 22.0f);
-    EXPECT_EQ(style.font_weight, FontWeight::bold);
 
     const auto& body = textStyleForRole(tokens.typography, TextRole::body_medium);
     EXPECT_EQ(body.font_size, 14.0f);
     EXPECT_EQ(body.font_weight, FontWeight::normal);
-}
-
-TEST(Theme, LightAndDarkTypographyColorsDiffer)
-{
-    auto light = CampelloDesignSystem::light();
-    auto dark  = CampelloDesignSystem::dark();
-
-    const auto& light_title = textStyleForRole(light.tokens().typography, TextRole::title_large);
-    const auto& dark_title  = textStyleForRole(dark.tokens().typography, TextRole::title_large);
-
-    // Light mode text should be dark; dark mode text should be light
-    EXPECT_LT(light_title.color.r, 0.5f);
-    EXPECT_GT(dark_title.color.r, 0.5f);
-}
-
-// ---------------------------------------------------------------------------
-// CampelloDesignSystem builder coverage
-// ---------------------------------------------------------------------------
-
-TEST(Theme, CampelloDesignSystemBuildsAllWidgets)
-{
-    auto ds = CampelloDesignSystem::light();
-
-    // Each builder should return a non-null widget
-    EXPECT_NE(ds.buildButton(ButtonConfig{}), nullptr);
-    EXPECT_NE(ds.buildSwitch(SwitchConfig{}), nullptr);
-    EXPECT_NE(ds.buildCheckbox(CheckboxConfig{}), nullptr);
-    EXPECT_NE(ds.buildRadio(RadioConfig{}), nullptr);
-    EXPECT_NE(ds.buildSlider(SliderConfig{}), nullptr);
-    EXPECT_NE(ds.buildTextField(TextFieldConfig{}), nullptr);
-    EXPECT_NE(ds.buildCard(CardConfig{}), nullptr);
-    EXPECT_NE(ds.buildProgressIndicator(ProgressConfig{}), nullptr);
-    EXPECT_NE(ds.buildTooltip(TooltipConfig{}), nullptr);
-    EXPECT_NE(ds.buildListTile(ListTileConfig{}), nullptr);
-    EXPECT_NE(ds.buildDivider(DividerConfig{}), nullptr);
-    EXPECT_NE(ds.buildAppBar(AppBarConfig{}), nullptr);
-    EXPECT_NE(ds.buildNavigationBar(NavigationBarConfig{}), nullptr);
-    EXPECT_NE(ds.buildDialog(DialogConfig{}), nullptr);
-    EXPECT_NE(ds.buildSnackBar(SnackBarConfig{}), nullptr);
-    EXPECT_NE(ds.buildPopupMenuButton(PopupMenuConfig{}), nullptr);
-    EXPECT_NE(ds.buildDropdownButton(DropdownConfig{}), nullptr);
-    EXPECT_NE(ds.buildPrimaryActionButton(PrimaryActionConfig{}), nullptr);
-    EXPECT_NE(ds.buildTabBar(TabBarConfig{}), nullptr);
 }

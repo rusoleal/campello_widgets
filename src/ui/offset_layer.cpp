@@ -86,16 +86,20 @@ namespace systems::leal::campello_widgets
             return false;
         }
 
-        // A backdrop filter's noteBackdropFilter() side effect must run
-        // every frame this content paints, dirty or not, moved or not — see
-        // the class doc comment. Never replay; always force a fresh record.
-        if (picture_.hasBackdropFilter())
-            return false;
-
         Canvas& canvas = context.canvas();
 
         if (offset == recorded_offset_)
         {
+            // A backdrop filter's noteBackdropFilter() side effect must run
+            // every frame this content paints, dirty or not, moved or not —
+            // see the class doc comment. Never replay; always force a fresh
+            // record. Nothing about this frame's on-screen bounds actually
+            // changed (offset is unchanged), so this is *not* reported as
+            // dirty — see the reposition branch below for the case where it
+            // must be.
+            if (picture_.hasBackdropFilter())
+                return false;
+
             // Bracket the replay with CacheReplayBeginCmd/EndCmd, carrying
             // this OffsetLayer's own address as an opaque identity —
             // Renderer::flushDrawList() uses it to recognize that any
@@ -113,10 +117,23 @@ namespace systems::leal::campello_widgets
         }
 
         // Offset changed — content visibly moved either way (safe delta
-        // translate below, or a forced full re-record for unsafe geometry),
-        // so both the vacated and the newly-occupied screen region changed.
+        // translate below, or a forced full re-record for unsafe geometry
+        // or a backdrop filter), so both the vacated and the
+        // newly-occupied screen region changed. This must be reported
+        // *before* the hasBackdropFilter()/hasUnsafeGeometry() early-outs
+        // below: a moving BackdropFilter's old and new regions are exactly
+        // what buildFrame() needs to know are dirty in order to decide the
+        // backdrop capture can't be skipped this frame — skip the report
+        // and the capture goes stale at the old scroll position while the
+        // filter itself keeps painting (freshly, every frame) at the new
+        // one.
         noteDirty(recorded_offset_, "reposition-old");
         noteDirty(offset, "reposition-new");
+
+        // A backdrop filter forces a full re-record on every repaint (see
+        // the identity-branch comment above) — moving is no exception.
+        if (picture_.hasBackdropFilter())
+            return false;
 
         if (picture_.hasUnsafeGeometry())
             return false;
@@ -153,6 +170,25 @@ namespace systems::leal::campello_widgets
     void OffsetLayer::record(PaintContext& context, const Offset& offset,
                               const std::function<void()>& paintContent)
     {
+        // A fresh record replaces picture_'s content outright, but any GPU
+        // replay-cache entries (shadow/clip-shape/shader-mask/save-layer
+        // textures) from a *previous* record are still sitting in the
+        // Renderer's caches, keyed by (this pointer, bracket_index) — see
+        // Renderer::evictReplayCacheEntries()'s doc. Those indices are
+        // assigned purely by encounter-order within a replay, so if this
+        // object records more than once in its lifetime (e.g. its content
+        // shifted position between two genuinely-dirty repaints), the next
+        // identity-replay of the new picture would silently reuse the OLD
+        // record's cached texture/bounds under the same key — a real bug
+        // found via a Card's box-shadow rendering at a stale position after
+        // its container settled from an intermediate layout into its final
+        // one. Evicting unconditionally here (not just in the destructor,
+        // which only guards against address reuse across different
+        // OffsetLayer instances) keeps that cache honest across repeated
+        // records of the same instance too.
+        if (auto* renderer = detail::currentRenderer().load(std::memory_order_acquire))
+            renderer->evictReplayCacheEntries(this);
+
         picture_.record(context, paintContent);
         recorded_offset_ = offset;
         has_recorded_     = true;

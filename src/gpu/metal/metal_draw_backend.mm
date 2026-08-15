@@ -232,6 +232,57 @@ MetalDrawBackend::MetalDrawBackend(
         quad_pipeline_ = device_->createRenderPipeline(desc);
     }
 
+    // --- Liquid Glass pipeline — premultiplied-alpha blend ---
+    {
+        GPU::VertexAttribute lgPosAttr{};
+        lgPosAttr.componentType  = GPU::ComponentType::ctFloat;
+        lgPosAttr.accessorType   = GPU::AccessorType::acVec3;
+        lgPosAttr.offset         = offsetof(LiquidGlassVertex, x);
+        lgPosAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute lgUvAttr{};
+        lgUvAttr.componentType  = GPU::ComponentType::ctFloat;
+        lgUvAttr.accessorType   = GPU::AccessorType::acVec2;
+        lgUvAttr.offset         = offsetof(LiquidGlassVertex, u);
+        lgUvAttr.shaderLocation = 1;
+
+        GPU::VertexAttribute lgLocalUvAttr{};
+        lgLocalUvAttr.componentType  = GPU::ComponentType::ctFloat;
+        lgLocalUvAttr.accessorType   = GPU::AccessorType::acVec2;
+        lgLocalUvAttr.offset         = offsetof(LiquidGlassVertex, lu);
+        lgLocalUvAttr.shaderLocation = 2;
+
+        GPU::VertexLayout lgLayout{};
+        lgLayout.arrayStride = sizeof(LiquidGlassVertex);
+        lgLayout.attributes  = {lgPosAttr, lgUvAttr, lgLocalUvAttr};
+        lgLayout.stepMode    = GPU::StepMode::vertex;
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "liquidGlassVertex";
+        desc.vertex.buffers    = {lgLayout};
+
+        GPU::ColorState lgCs{};
+        lgCs.format    = pixel_format;
+        lgCs.writeMask = GPU::ColorWrite::all;
+        lgCs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "liquidGlassFragment";
+        frag.targets.push_back(lgCs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        liquid_glass_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
     // --- Shape pipeline (SDF circle/oval/rrect) — premultiplied-alpha blend ---
     {
         GPU::ColorState cs{};
@@ -529,6 +580,17 @@ std::shared_ptr<GPU::Buffer> MetalDrawBackend::UniformBufferPool::acquire(
 
     if (idx >= buffers.size())
         buffers.push_back(device.createBuffer(size, GPU::BufferUsage::vertex, const_cast<void*>(data)));
+    else if (buffers[idx]->getLength() < size)
+        // A ring slot's buffer was allocated for an earlier, smaller
+        // request — reusing it via upload() would memcpy past its actual
+        // GPU allocation (SIGBUS). Pools are shared across call sites with
+        // varying sizes (e.g. rect_vertex_pool_ backs both the fixed
+        // 6-vertex drawFilledQuad() and the variable-length
+        // drawFilledVertices() used by drawArc/drawPath), so a slot's
+        // required size isn't guaranteed constant across frames even
+        // within one pool instance. Replace it with a large-enough buffer
+        // instead of assuming the old one still fits.
+        buffers[idx] = device.createBuffer(size, GPU::BufferUsage::vertex, const_cast<void*>(data));
     else
         buffers[idx]->upload(0, size, const_cast<void*>(data));
 
@@ -1093,6 +1155,82 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
 }
 
 // ---------------------------------------------------------------------------
+// measureTextInkBounds — tight glyph-path bounds, for single-line UI labels
+// that want to center on the visible ink rather than the full typographic
+// ascent+descent+leading box. See TextStyle::tight_vertical_bounds's doc.
+//
+// `span` must carry the same (already dpr-scaled) font_size RenderText
+// passes to rasterizeText() at paint time — not the layout-time logical
+// size — because the offset computed here has to land the ink exactly
+// where rasterizeText()/drawTextTexture() actually draw it, and that
+// pipeline rounds to physical pixels (ceil()) and bakes in a small
+// raster/composite padding. Deriving this offset from logical (unscaled)
+// metrics and only converting the *result* to logical afterwards was
+// tried first and left a several-pixel residual — the two pixel-rounding
+// steps don't commute with a later divide-by-dpr, so this mirrors
+// rasterizeText()'s exact physical-pixel arithmetic instead of
+// approximating it.
+// ---------------------------------------------------------------------------
+
+systems::leal::campello_widgets::Rect MetalDrawBackend::measureTextInkBounds(const TextSpan& span) const
+{
+    if (span.text.empty())
+        return Rect{0.0f, 0.0f, 0.0f, 0.0f};
+
+    @autoreleasepool {
+        NSString *nsText = [NSString stringWithUTF8String:span.text.c_str()];
+        if (!nsText || nsText.length == 0)
+            return Rect{0.0f, 0.0f, 0.0f, 0.0f};
+
+        const float fontSize = span.style.font_size > 0.0f ? span.style.font_size : 14.0f;
+
+        NSString *family = span.style.font_family.empty()
+                           ? @"Helvetica Neue"
+                           : [NSString stringWithUTF8String:span.style.font_family.c_str()];
+
+        CTFontRef ctFont = CreateStyledCTFont(
+            family, (CGFloat)fontSize, span.style.font_weight, span.style.italic);
+        if (!ctFont)
+            return Rect{0.0f, 0.0f, 0.0f, 0.0f};
+
+        NSDictionary *attrs = @{ (__bridge NSString*)kCTFontAttributeName: (__bridge id)ctFont };
+        CFRelease(ctFont);
+
+        NSAttributedString *attrStr =
+            [[NSAttributedString alloc] initWithString:nsText attributes:attrs];
+
+        CTLineRef line = CTLineCreateWithAttributedString(
+            (__bridge CFAttributedStringRef)attrStr);
+
+        CGFloat ascent, descent, leading;
+        CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+
+        // Tight glyph-outline bounds, in the line's own coordinate space
+        // (origin at the text position, i.e. baseline; y+ is up, matching
+        // Quartz convention) — excludes the ascent/leading space reserved
+        // for glyphs this particular string doesn't contain.
+        CGRect inkRect = CTLineGetBoundsWithOptions(line, kCTLineBoundsUseGlyphPathBounds);
+        CFRelease(line);
+
+        // Exactly rasterizeText()'s own arithmetic (texH, baseline-from-
+        // bottom) plus drawTextTexture()'s -1px composite shift, so the
+        // baseline position computed here is guaranteed consistent with
+        // where that pipeline actually draws it — see rasterizeText()'s
+        // texH/fontDescent and drawTextTexture()'s y0 = t_origin.y - 1.
+        const CGFloat fontDescent      = fabs(descent);
+        const CGFloat texH             = ceil(ascent + descent + leading) + 2.0;
+        const CGFloat baselineFromTop  = (texH - (fontDescent + 1.0)) - 1.0;
+        const CGFloat inkTopAboveBase  = inkRect.origin.y + inkRect.size.height;
+        const CGFloat inkTopFromTop    = baselineFromTop - inkTopAboveBase;
+
+        return Rect{
+            (float)inkRect.origin.x, (float)inkTopFromTop,
+            (float)inkRect.size.width, (float)inkRect.size.height
+        };
+    }
+}
+
+// ---------------------------------------------------------------------------
 // rasterizeText — CoreText glyph rasterization only, no caching (Renderer's
 // text_texture_cache_ owns that — see its doc comment).
 // ---------------------------------------------------------------------------
@@ -1352,6 +1490,17 @@ struct alignas(16) BlurUniforms {
     float horizontal;    // 1.0 = H pass, 0.0 = V pass
     float tex_size[2];   // source texture width, height
     float _pad[2];
+};
+
+// Mirrors widgets.metal's LiquidGlassUniforms field-for-field.
+struct alignas(16) LiquidGlassUniforms {
+    float viewport[2];
+    float size[2];
+    float tint[4];
+    float corner_radius;
+    float refraction_strength;
+    float specular_intensity;
+    float _pad;
 };
 
 struct alignas(16) ShaderMaskUniforms {
@@ -1618,6 +1767,56 @@ void MetalDrawBackend::drawBackdropFilter(
     const auto uv10 = uv(c10);
     const auto uv01 = uv(c01);
     const auto uv11 = uv(c11);
+
+    if (cmd.filter.kind == ImageFilterKind::liquidGlass &&
+        liquid_glass_pipeline_ && quad_bgl_ && quad_sampler_)
+    {
+        GPU::BindGroupDescriptor bgDesc{};
+        bgDesc.layout  = quad_bgl_;
+        bgDesc.entries = {
+            GPU::BindGroupEntryDescriptor{0, blurred_source},
+            GPU::BindGroupEntryDescriptor{1, quad_sampler_},
+        };
+        auto bindGroup = device_->createBindGroup(bgDesc);
+        if (!bindGroup) return;
+
+        // local_uv is a plain 0..1 parametrization of the widget's own
+        // rect — see LiquidGlassVertex's doc comment — matching
+        // kQuadCorners' winding order: (00,10,01), (01,10,11).
+        const LiquidGlassVertex verts[6] = {
+            {c00.x(), c00.y(), c00.w(), uv00.x(), uv00.y(), 0.0f, 0.0f},
+            {c10.x(), c10.y(), c10.w(), uv10.x(), uv10.y(), 1.0f, 0.0f},
+            {c01.x(), c01.y(), c01.w(), uv01.x(), uv01.y(), 0.0f, 1.0f},
+            {c01.x(), c01.y(), c01.w(), uv01.x(), uv01.y(), 0.0f, 1.0f},
+            {c10.x(), c10.y(), c10.w(), uv10.x(), uv10.y(), 1.0f, 0.0f},
+            {c11.x(), c11.y(), c11.w(), uv11.x(), uv11.y(), 1.0f, 1.0f},
+        };
+        auto vbuf = liquid_glass_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+        if (!vbuf) return;
+
+        LiquidGlassUniforms u{};
+        u.viewport[0]            = vp_w_;
+        u.viewport[1]            = vp_h_;
+        u.size[0]                = cmd.bounds.width;
+        u.size[1]                = cmd.bounds.height;
+        u.tint[0]                = cmd.filter.tint.r;
+        u.tint[1]                = cmd.filter.tint.g;
+        u.tint[2]                = cmd.filter.tint.b;
+        u.tint[3]                = cmd.filter.tint.a;
+        u.corner_radius          = cmd.filter.corner_radius;
+        u.refraction_strength    = cmd.filter.refraction_strength;
+        u.specular_intensity     = cmd.filter.specular_intensity;
+
+        auto ubuf = liquid_glass_uniform_pool_.acquire(*device_, sizeof(LiquidGlassUniforms), &u);
+        if (!ubuf) return;
+
+        encoder.setPipeline(liquid_glass_pipeline_);
+        encoder.setBindGroup(0, bindGroup);
+        encoder.setVertexBuffer(0, vbuf);
+        encoder.setVertexBuffer(1, ubuf);
+        encoder.draw(6);
+        return;
+    }
 
     drawTexturedQuad(
         blurred_source,

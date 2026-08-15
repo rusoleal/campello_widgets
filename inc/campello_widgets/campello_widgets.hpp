@@ -23,7 +23,7 @@
 #include <campello_widgets/ui/color_scheme.hpp>
 #include <campello_widgets/ui/design_tokens.hpp>
 #include <campello_widgets/ui/design_system.hpp>
-#include <campello_widgets/ui/campello_design_system.hpp>
+#include <campello_widgets/ui/null_design_system.hpp>
 
 // Layout
 #include <campello_widgets/ui/size.hpp>

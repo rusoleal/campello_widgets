@@ -204,6 +204,178 @@ namespace systems::leal::campello_widgets
         std::function<void(int)> on_tap;
     };
 
+    enum class ChipPriority
+    {
+        assist,
+        filter,
+        input,
+        suggestion,
+    };
+
+    struct ChipConfig
+    {
+        WidgetRef label;
+        WidgetRef leading_icon;
+        bool selected = false;
+        bool enabled = true;
+        ChipPriority priority = ChipPriority::assist;
+        std::function<void()> on_selected;
+        std::function<void()> on_deleted; ///< present -> shows a trailing delete affordance
+    };
+
+    struct SegmentedConfig
+    {
+        struct Segment
+        {
+            WidgetRef label;
+            WidgetRef icon;
+        };
+        std::vector<Segment> segments;
+        int selected_index = 0;
+        std::function<void(int)> on_changed;
+        bool enabled = true;
+    };
+
+    struct BottomSheetConfig
+    {
+        WidgetRef child;
+        bool show_drag_handle = true;
+    };
+
+    struct BadgeConfig
+    {
+        WidgetRef child;
+        std::optional<std::string> label; ///< nullopt -> small dot badge
+    };
+
+    struct IconButtonConfig
+    {
+        WidgetRef icon;
+        std::function<void()> on_pressed;
+        bool enabled = true;
+        bool selected = false; ///< toggled/filled state, e.g. MD3 icon-button toggle
+    };
+
+    struct StepperConfig
+    {
+        int value = 0;
+        int min = 0;
+        int max = 100;
+        int step = 1;
+        std::function<void(int)> on_changed;
+        bool enabled = true;
+    };
+
+    struct RatingConfig
+    {
+        int value = 0;
+        int max = 5;
+        std::function<void(int)> on_changed; ///< null -> read-only display
+        bool enabled = true;
+    };
+
+    struct ActionSheetConfig
+    {
+        struct Action
+        {
+            std::string label;
+            std::function<void()> on_selected;
+            bool destructive = false;
+        };
+        WidgetRef title; ///< optional
+        std::vector<Action> actions;
+        std::function<void()> on_cancel; ///< present -> shows a Cancel action
+    };
+
+    struct SearchFieldConfig
+    {
+        std::string placeholder = "Search";
+        std::string value;
+        std::function<void(std::string)> on_changed;
+        std::function<void()> on_clear; ///< shown as a trailing affordance when value is non-empty
+        bool enabled = true;
+    };
+
+    /**
+     * @brief A tappable field that displays a formatted date and opens a
+     * picker on tap.
+     *
+     * Like Dialog/BottomSheet/PopupMenuButton, this builds visual chrome
+     * only — it does not own calendar layout or picker presentation, which
+     * stays the caller's responsibility (e.g. via an OverlayEntry).
+     */
+    struct DatePickerConfig
+    {
+        std::string label; ///< formatted date text, e.g. "Aug 14, 2026"
+        std::function<void()> on_tap;
+        bool enabled = true;
+    };
+
+    /** @brief Same trigger-field model as DatePickerConfig, for time values. */
+    struct TimePickerConfig
+    {
+        std::string label; ///< formatted time text, e.g. "10:30 AM"
+        std::function<void()> on_tap;
+        bool enabled = true;
+    };
+
+    struct ExpansionTileConfig
+    {
+        WidgetRef title;
+        WidgetRef subtitle;
+        WidgetRef leading;
+        WidgetRef children_content; ///< shown when expanded; caller composes (e.g. a Column)
+        bool expanded = false;
+        std::function<void(bool)> on_expansion_changed;
+        bool enabled = true;
+    };
+
+    struct ToggleButtonsConfig
+    {
+        struct Item
+        {
+            WidgetRef label;
+            WidgetRef icon;
+            bool selected = false;
+        };
+        std::vector<Item> items;
+        std::function<void(int)> on_pressed; ///< index tapped; caller updates items[i].selected before the next build
+        bool enabled = true;
+    };
+
+    struct BannerConfig
+    {
+        WidgetRef content;
+        WidgetRef leading;
+        std::vector<WidgetRef> actions;
+    };
+
+    struct NavigationRailConfig
+    {
+        struct Item
+        {
+            WidgetRef icon;
+            std::string label;
+        };
+        std::vector<Item> items;
+        int selected_index = 0;
+        std::function<void(int)> on_tap;
+        bool extended = false; ///< show labels beside icons, vs. the default icon-only compact rail
+    };
+
+    /**
+     * @brief A basic, read-only data table: header + rows.
+     *
+     * Deliberately scoped down — no sorting, pagination, or per-cell
+     * editing — matching how DatePickerConfig/TimePickerConfig scope down
+     * to trigger fields rather than full calendar/wheel widgets.
+     */
+    struct DataTableConfig
+    {
+        std::vector<std::string> columns;
+        std::vector<std::vector<WidgetRef>> rows; ///< each row's size must match columns.size()
+    };
+
     // -----------------------------------------------------------------------
     // Typography roles
     // -----------------------------------------------------------------------
@@ -302,6 +474,22 @@ namespace systems::leal::campello_widgets
         virtual WidgetRef buildDropdownButton(const DropdownConfig&) const = 0;
         virtual WidgetRef buildPrimaryActionButton(const PrimaryActionConfig&) const = 0;
         virtual WidgetRef buildTabBar(const TabBarConfig&) const = 0;
+        virtual WidgetRef buildChip(const ChipConfig&) const = 0;
+        virtual WidgetRef buildSegmentedButton(const SegmentedConfig&) const = 0;
+        virtual WidgetRef buildBottomSheet(const BottomSheetConfig&) const = 0;
+        virtual WidgetRef buildBadge(const BadgeConfig&) const = 0;
+        virtual WidgetRef buildIconButton(const IconButtonConfig&) const = 0;
+        virtual WidgetRef buildStepper(const StepperConfig&) const = 0;
+        virtual WidgetRef buildRatingIndicator(const RatingConfig&) const = 0;
+        virtual WidgetRef buildActionSheet(const ActionSheetConfig&) const = 0;
+        virtual WidgetRef buildSearchField(const SearchFieldConfig&) const = 0;
+        virtual WidgetRef buildDatePicker(const DatePickerConfig&) const = 0;
+        virtual WidgetRef buildTimePicker(const TimePickerConfig&) const = 0;
+        virtual WidgetRef buildExpansionTile(const ExpansionTileConfig&) const = 0;
+        virtual WidgetRef buildToggleButtons(const ToggleButtonsConfig&) const = 0;
+        virtual WidgetRef buildBanner(const BannerConfig&) const = 0;
+        virtual WidgetRef buildNavigationRail(const NavigationRailConfig&) const = 0;
+        virtual WidgetRef buildDataTable(const DataTableConfig&) const = 0;
     };
 
 } // namespace systems::leal::campello_widgets

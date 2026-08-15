@@ -58,8 +58,25 @@ namespace systems::leal::campello_widgets
 
     void InheritedElement::notifyDependents()
     {
-        for (Element* dep : dependents_)
+        // A dependent can be unmounted (and destroyed) by ordinary tree
+        // reconciliation earlier in the very same rebuild pass that also
+        // touches this InheritedElement — e.g. a structurally different
+        // subtree swapped in elsewhere under the same setState() — without
+        // ever being removed from dependents_ (only InheritedElement's own
+        // unmount() clears the set; unmounting a single dependent doesn't).
+        // Prune stale entries lazily via the framework's liveness registry
+        // rather than calling markNeedsBuild() on a dangling pointer.
+        for (auto it = dependents_.begin(); it != dependents_.end();)
+        {
+            Element* dep = *it;
+            if (!Element::isAlive(dep))
+            {
+                it = dependents_.erase(it);
+                continue;
+            }
             dep->markNeedsBuild();
+            ++it;
+        }
     }
 
 } // namespace systems::leal::campello_widgets

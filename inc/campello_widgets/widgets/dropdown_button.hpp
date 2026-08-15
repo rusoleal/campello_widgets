@@ -16,8 +16,10 @@
 #include <campello_widgets/widgets/opacity.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
+#include <campello_widgets/widgets/backdrop_filter.hpp>
 #include <campello_widgets/ui/box_decoration.hpp>
 #include <campello_widgets/ui/box_shadow.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
 #include <campello_widgets/ui/text_style.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
@@ -106,6 +108,13 @@ namespace systems::leal::campello_widgets
         std::optional<Color>             dropdown_color;
         float                            border_radius = 8.0f;
         float                            elevation      = 8.0f;
+
+        /**
+         * @brief When set, the dropdown menu renders as a frosted/liquid-
+         * glass panel — see `PopupMenuButton::backdrop_filter`'s doc for the
+         * same mechanism.
+         */
+        std::optional<ImageFilter>       backdrop_filter;
 
         DropdownButton() = default;
         explicit DropdownButton(std::vector<DropdownMenuItem<T>> itms)
@@ -257,20 +266,44 @@ namespace systems::leal::campello_widgets
                 col->cross_axis_alignment = CrossAxisAlignment::start;
                 col->children = std::move(item_widgets);
 
-                BoxDecoration menu_deco;
-                menu_deco.color         = dropdown_bg;
-                menu_deco.border_radius = w.border_radius;
-                if (w.elevation > 0.0f) {
-                    menu_deco.box_shadow = {BoxShadow{
-                        Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
-                        Offset{0.0f, w.elevation * 0.5f},
-                        w.elevation * 2.0f
-                    }};
-                }
+                WidgetRef menu_box;
+                if (w.backdrop_filter.has_value()) {
+                    // See PopupMenuButton::open()'s identical composition
+                    // for why the shadow needs its own DecoratedBox wrapping
+                    // the BackdropFilter rather than a flat fill.
+                    auto bf    = std::make_shared<BackdropFilter>();
+                    bf->filter = *w.backdrop_filter;
+                    bf->child  = col;
 
-                auto menu_box = std::make_shared<DecoratedBox>();
-                menu_box->decoration = menu_deco;
-                menu_box->child      = col;
+                    BoxDecoration shadow_deco;
+                    shadow_deco.border_radius = w.border_radius;
+                    if (w.elevation > 0.0f) {
+                        shadow_deco.box_shadow = {BoxShadow{
+                            Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
+                            Offset{0.0f, w.elevation * 0.5f},
+                            w.elevation * 2.0f
+                        }};
+                    }
+                    auto shadowed        = std::make_shared<DecoratedBox>();
+                    shadowed->decoration = shadow_deco;
+                    shadowed->child      = bf;
+                    menu_box = shadowed;
+                } else {
+                    BoxDecoration menu_deco;
+                    menu_deco.color         = dropdown_bg;
+                    menu_deco.border_radius = w.border_radius;
+                    if (w.elevation > 0.0f) {
+                        menu_deco.box_shadow = {BoxShadow{
+                            Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
+                            Offset{0.0f, w.elevation * 0.5f},
+                            w.elevation * 2.0f
+                        }};
+                    }
+                    auto decorated_box        = std::make_shared<DecoratedBox>();
+                    decorated_box->decoration = menu_deco;
+                    decorated_box->child      = col;
+                    menu_box = decorated_box;
+                }
 
                 // Anchor the menu to the button, left edges aligned — like
                 // Flutter's real DropdownButton, not centered on screen.

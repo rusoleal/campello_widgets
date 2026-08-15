@@ -94,7 +94,32 @@ namespace systems::leal::campello_widgets
         }
 
         const float total_height = line_height_ * static_cast<float>(lines_.size());
-        size_ = constraints_.constrain(Size{max_line_width, total_height});
+
+        // Only meaningful (and only implemented) for a single computed
+        // line — see TextStyle::tight_vertical_bounds's doc for why this
+        // doesn't apply to multi-line text.
+        tight_bounds_active_ = span_.style.tight_vertical_bounds && lines_.size() == 1;
+        if (tight_bounds_active_)
+        {
+            IDrawBackend* backend = RenderObject::activeBackend();
+            // Query with the same dpr-scaled font_size performPaint() will
+            // actually rasterize at, then convert the result back to
+            // logical pixels — see measureTextInkBounds()'s doc for why
+            // this has to mirror rasterizeText()'s physical-pixel rounding
+            // rather than working in logical units throughout.
+            const float dpr = activeDevicePixelRatio();
+            TextStyle scaled_style = span_.style;
+            scaled_style.font_size *= dpr;
+            const Rect ink_px = backend
+                ? backend->measureTextInkBounds(TextSpan{lines_[0], scaled_style})
+                : Rect{0.0f, 0.0f, max_line_width * dpr, line_height_ * dpr};
+            tight_bounds_top_offset_ = ink_px.y / dpr;
+            size_ = constraints_.constrain(Size{max_line_width, ink_px.height / dpr});
+        }
+        else
+        {
+            size_ = constraints_.constrain(Size{max_line_width, total_height});
+        }
     }
 
     void RenderText::performPaint(PaintContext& context, const Offset& offset)
@@ -104,6 +129,18 @@ namespace systems::leal::campello_widgets
         const float dpr = activeDevicePixelRatio();
         TextStyle scaled_style = span_.style;
         scaled_style.font_size *= dpr;
+
+        if (tight_bounds_active_)
+        {
+            // The rendered texture is still the full typographic box
+            // (rasterizeText() is unchanged) — shift it up so the ink,
+            // not the typographic top, lands at `offset` (this class's
+            // own reported size_ now tightly wraps just the ink; see
+            // performLayout()).
+            const Offset line_offset{offset.x, offset.y - tight_bounds_top_offset_};
+            context.canvas().drawText(TextSpan{lines_[0], scaled_style}, line_offset);
+            return;
+        }
 
         for (std::size_t i = 0; i < lines_.size(); ++i) {
             const Offset line_offset{offset.x, offset.y + line_height_ * static_cast<float>(i)};

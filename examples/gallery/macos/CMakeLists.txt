@@ -25,6 +25,9 @@ target_include_directories(campello_widgets_gallery PRIVATE ${CMAKE_CURRENT_SOUR
 
 target_link_libraries(campello_widgets_gallery
     campello_widgets
+    campello_ui
+    campello_material
+    campello_cupertino
     "-framework Cocoa"
     "-framework Metal"
     "-framework MetalKit"

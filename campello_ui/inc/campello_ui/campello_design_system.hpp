@@ -46,6 +46,22 @@ namespace systems::leal::campello_widgets
         WidgetRef buildDropdownButton(const DropdownConfig&) const override;
         WidgetRef buildPrimaryActionButton(const PrimaryActionConfig&) const override;
         WidgetRef buildTabBar(const TabBarConfig&) const override;
+        WidgetRef buildChip(const ChipConfig&) const override;
+        WidgetRef buildSegmentedButton(const SegmentedConfig&) const override;
+        WidgetRef buildBottomSheet(const BottomSheetConfig&) const override;
+        WidgetRef buildBadge(const BadgeConfig&) const override;
+        WidgetRef buildIconButton(const IconButtonConfig&) const override;
+        WidgetRef buildStepper(const StepperConfig&) const override;
+        WidgetRef buildRatingIndicator(const RatingConfig&) const override;
+        WidgetRef buildActionSheet(const ActionSheetConfig&) const override;
+        WidgetRef buildSearchField(const SearchFieldConfig&) const override;
+        WidgetRef buildDatePicker(const DatePickerConfig&) const override;
+        WidgetRef buildTimePicker(const TimePickerConfig&) const override;
+        WidgetRef buildExpansionTile(const ExpansionTileConfig&) const override;
+        WidgetRef buildToggleButtons(const ToggleButtonsConfig&) const override;
+        WidgetRef buildBanner(const BannerConfig&) const override;
+        WidgetRef buildNavigationRail(const NavigationRailConfig&) const override;
+        WidgetRef buildDataTable(const DataTableConfig&) const override;
 
     private:
         DesignTokens tokens_;

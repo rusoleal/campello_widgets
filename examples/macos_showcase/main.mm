@@ -1,5 +1,8 @@
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/macos/run_app.hpp>
+#include <campello_ui/campello_design_system.hpp>
+#include <campello_material/material_design_system.hpp>
+#include <campello_cupertino/cupertino_design_system.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/debug_overlay_panel.hpp>
 
@@ -1371,6 +1374,8 @@ class ThemeDemo : public cw::StatefulWidget
 {
 public:
     std::function<void()> on_toggle_theme;
+    std::function<void(int)> on_change_design_system; ///< 0=Campello, 1=Material, 2=Cupertino
+    int design_system_index = 0;
 
     std::unique_ptr<cw::StateBase> createState() const override;
 };
@@ -1380,95 +1385,237 @@ class ThemeDemoState : public cw::State<ThemeDemo>
 public:
     bool switch_on_ = false;
     bool checkbox_checked_ = false;
+    bool radio_selected_ = false;
+    bool chip_selected_ = true;
+    bool icon_selected_ = false;
+    float slider_value_ = 0.5f;
+    int stepper_value_ = 3;
+    int rating_value_ = 3;
+    std::string search_value_;
 
     cw::WidgetRef build(cw::BuildContext& ctx) override
     {
         const auto& w = widget();
+        const auto* ds = cw::Theme::of(ctx);
         const auto* ts = cw::Theme::textStyleOf(ctx, cw::TextRole::title_large);
         const auto* body = cw::Theme::textStyleOf(ctx, cw::TextRole::body_medium);
-        const auto* label = cw::Theme::textStyleOf(ctx, cw::TextRole::label_medium);
         const auto* title_medium = cw::Theme::textStyleOf(ctx, cw::TextRole::title_medium);
 
+        auto sectionHeading = [&](const std::string& text) -> cw::WidgetRef {
+            return cw::mw<cw::Padding>(
+                cw::EdgeInsets::only(0.0f, 20.0f, 0.0f, 8.0f),
+                cw::mw<cw::Text>(text, title_medium ? *title_medium : cw::TextStyle{}.withFontSize(16.0f).bold()));
+        };
+
         auto heading = cw::mw<cw::Text>(
-            "Adaptive Widgets",
+            "Design System Gallery",
             ts ? *ts : cw::TextStyle{}.withFontSize(20.0f).bold());
 
         auto sub = cw::mw<cw::Text>(
-            "These widgets change appearance based on the active DesignSystem.",
+            "Every control below is built by the active DesignSystem — switch it live.",
             body ? *body : cw::TextStyle{}.withFontSize(12.0f));
 
-        // Button row
-        auto btn_primary = cw::mw<cw::Button>(
-            cw::mw<cw::Text>("Primary"),
-            [](){});
+        // --- Design system switcher (dogfoods buildSegmentedButton, M3) ---
+        cw::SegmentedConfig seg_cfg;
+        seg_cfg.segments = {
+            {cw::mw<cw::Text>("Campello"), nullptr},
+            {cw::mw<cw::Text>("Material"), nullptr},
+            {cw::mw<cw::Text>("Cupertino"), nullptr},
+        };
+        seg_cfg.selected_index = w.design_system_index;
+        seg_cfg.on_changed = w.on_change_design_system;
+        auto switcher = ds->buildSegmentedButton(seg_cfg);
+
+        auto toggle_btn = cw::mw<cw::Button>(cw::mw<cw::Text>("Toggle Dark Mode"), w.on_toggle_theme);
+        toggle_btn->priority = cw::ButtonPriority::primary;
+
+        // --- Buttons ---
+        auto btn_primary = cw::mw<cw::Button>(cw::mw<cw::Text>("Primary"), [](){});
         btn_primary->priority = cw::ButtonPriority::primary;
-
-        auto btn_secondary = cw::mw<cw::Button>(
-            cw::mw<cw::Text>("Secondary"),
-            [](){});
+        auto btn_secondary = cw::mw<cw::Button>(cw::mw<cw::Text>("Secondary"), [](){});
         btn_secondary->priority = cw::ButtonPriority::secondary;
-
-        auto btn_danger = cw::mw<cw::Button>(
-            cw::mw<cw::Text>("Danger"),
-            [](){});
+        auto btn_tertiary = cw::mw<cw::Button>(cw::mw<cw::Text>("Tertiary"), [](){});
+        btn_tertiary->priority = cw::ButtonPriority::tertiary;
+        auto btn_danger = cw::mw<cw::Button>(cw::mw<cw::Text>("Danger"), [](){});
         btn_danger->priority = cw::ButtonPriority::danger;
-
         auto btn_row = cw::mw<cw::Row>(
-            cw::MainAxisAlignment::start,
-            cw::CrossAxisAlignment::center,
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
             cw::WidgetList{
-                btn_primary,
-                cw::SizedBox::from_width(12.0f),
-                btn_secondary,
-                cw::SizedBox::from_width(12.0f),
+                btn_primary, cw::SizedBox::from_width(12.0f),
+                btn_secondary, cw::SizedBox::from_width(12.0f),
+                btn_tertiary, cw::SizedBox::from_width(12.0f),
                 btn_danger,
             });
 
-        // Card demo
+        // --- Card ---
         auto card_content = cw::mw<cw::Column>(
-            cw::MainAxisAlignment::start,
-            cw::CrossAxisAlignment::start,
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
             cw::WidgetList{
                 cw::mw<cw::Text>("Card Title",
                     title_medium ? *title_medium : cw::TextStyle{}.withFontSize(16.0f).bold()),
                 cw::mw<cw::Padding>(
                     cw::EdgeInsets::only(0.0f, 4.0f, 0.0f, 0.0f),
-                    cw::mw<cw::Text>("This card's colors come from the design system tokens.",
+                    cw::mw<cw::Text>("This card's colors and shape come from the design system.",
                         body ? *body : cw::TextStyle{}.withFontSize(12.0f))),
             });
         auto card = cw::mw<cw::Card>(card_content);
         card->priority = cw::CardPriority::elevated;
 
-        // Switch + Checkbox row
-        auto sw = cw::mw<cw::Switch>(switch_on_, [this](bool v) {
-            setState([this, v]() { switch_on_ = v; });
-        });
+        // --- Selection controls: Switch, Checkbox, Radio, Slider ---
+        cw::SwitchConfig sw_cfg;
+        sw_cfg.value = switch_on_;
+        sw_cfg.on_changed = [this](bool v) { setState([this, v] { switch_on_ = v; }); };
+        auto sw = ds->buildSwitch(sw_cfg);
 
-        auto cb = cw::mw<cw::Checkbox>(checkbox_checked_, [this](bool v) {
-            setState([this, v]() { checkbox_checked_ = v; });
-        });
+        cw::CheckboxConfig cb_cfg;
+        cb_cfg.value = checkbox_checked_;
+        cb_cfg.on_changed = [this](bool v) { setState([this, v] { checkbox_checked_ = v; }); };
+        auto cb = ds->buildCheckbox(cb_cfg);
+
+        cw::RadioConfig radio_cfg;
+        radio_cfg.selected = radio_selected_;
+        radio_cfg.on_selected = [this] { setState([this] { radio_selected_ = !radio_selected_; }); };
+        auto radio = ds->buildRadio(radio_cfg);
 
         auto controls_row = cw::mw<cw::Row>(
-            cw::MainAxisAlignment::start,
-            cw::CrossAxisAlignment::center,
-            cw::WidgetList{
-                cw::mw<cw::Text>("Switch:", label ? *label : cw::TextStyle{}.withFontSize(14.0f)),
-                cw::SizedBox::from_width(8.0f),
-                sw,
-                cw::SizedBox::from_width(24.0f),
-                cw::mw<cw::Text>("Checkbox:", label ? *label : cw::TextStyle{}.withFontSize(14.0f)),
-                cw::SizedBox::from_width(8.0f),
-                cb,
-            });
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{sw, cw::SizedBox::from_width(20.0f), cb, cw::SizedBox::from_width(20.0f), radio});
 
-        // Divider
-        auto div = cw::mw<cw::Divider>();
+        cw::SliderConfig slider_cfg;
+        slider_cfg.value = slider_value_;
+        slider_cfg.on_changed = [this](float v) { setState([this, v] { slider_value_ = v; }); };
+        auto slider = ds->buildSlider(slider_cfg);
 
-        // Typography scale demo
-        auto typography_heading = cw::mw<cw::Text>(
-            "Typography Scale",
-            ts ? *ts : cw::TextStyle{}.withFontSize(20.0f).bold());
+        // --- Text input: TextField, SearchField ---
+        cw::TextFieldConfig tf_cfg;
+        tf_cfg.placeholder = "Type something…";
+        auto text_field = ds->buildTextField(tf_cfg);
 
+        cw::SearchFieldConfig search_cfg;
+        search_cfg.value = search_value_;
+        search_cfg.on_changed = [this](std::string v) { setState([this, v] { search_value_ = v; }); };
+        search_cfg.on_clear = [this] { setState([this] { search_value_.clear(); }); };
+        auto search_field = ds->buildSearchField(search_cfg);
+
+        // --- Progress indicators ---
+        cw::ProgressConfig prog_circular_cfg;
+        prog_circular_cfg.type = cw::ProgressType::circular;
+        prog_circular_cfg.value = 0.7f;
+        auto prog_circular = ds->buildProgressIndicator(prog_circular_cfg);
+
+        cw::ProgressConfig prog_linear_cfg;
+        prog_linear_cfg.type = cw::ProgressType::linear;
+        prog_linear_cfg.value = 0.4f;
+        auto prog_linear = ds->buildProgressIndicator(prog_linear_cfg);
+
+        auto progress_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{prog_circular, cw::SizedBox::from_width(20.0f),
+                cw::mw<cw::Expanded>(prog_linear)});
+
+        // --- Chips, Badge, IconButton (M3) ---
+        cw::ChipConfig chip_cfg;
+        chip_cfg.label = cw::mw<cw::Text>("Filter");
+        chip_cfg.selected = chip_selected_;
+        chip_cfg.on_selected = [this] { setState([this] { chip_selected_ = !chip_selected_; }); };
+        auto chip = ds->buildChip(chip_cfg);
+
+        cw::BadgeConfig badge_cfg;
+        badge_cfg.child = cw::mw<cw::Text>("Inbox");
+        badge_cfg.label = std::string("3");
+        auto badge = ds->buildBadge(badge_cfg);
+
+        cw::IconButtonConfig icon_btn_cfg;
+        icon_btn_cfg.icon = cw::mw<cw::Text>("*");
+        icon_btn_cfg.selected = icon_selected_;
+        icon_btn_cfg.on_pressed = [this] { setState([this] { icon_selected_ = !icon_selected_; }); };
+        auto icon_btn = ds->buildIconButton(icon_btn_cfg);
+
+        auto chips_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{chip, cw::SizedBox::from_width(20.0f), badge, cw::SizedBox::from_width(20.0f), icon_btn});
+
+        // --- Stepper, RatingIndicator (M4) ---
+        cw::StepperConfig stepper_cfg;
+        stepper_cfg.value = stepper_value_;
+        stepper_cfg.min = 0;
+        stepper_cfg.max = 10;
+        stepper_cfg.on_changed = [this](int v) { setState([this, v] { stepper_value_ = v; }); };
+        auto stepper = ds->buildStepper(stepper_cfg);
+
+        cw::RatingConfig rating_cfg;
+        rating_cfg.value = rating_value_;
+        rating_cfg.max = 5;
+        rating_cfg.on_changed = [this](int v) { setState([this, v] { rating_value_ = v; }); };
+        auto rating = ds->buildRatingIndicator(rating_cfg);
+
+        auto stepper_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{stepper, cw::SizedBox::from_width(24.0f), rating});
+
+        // --- DatePicker / TimePicker (M4) ---
+        cw::DatePickerConfig date_cfg;
+        date_cfg.label = "Aug 14, 2026";
+        date_cfg.on_tap = [](){};
+        auto date_field = ds->buildDatePicker(date_cfg);
+
+        cw::TimePickerConfig time_cfg;
+        time_cfg.label = "10:30 AM";
+        time_cfg.on_tap = [](){};
+        auto time_field = ds->buildTimePicker(time_cfg);
+
+        auto pickers_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{date_field, cw::SizedBox::from_width(20.0f), time_field});
+
+        // --- Overlays: Dialog, SnackBar (via the framework's showDialog/showSnackBar) ---
+        auto show_dialog_btn = cw::mw<cw::Button>(cw::mw<cw::Text>("Show Dialog"), [ds] {
+            auto entry_holder = std::make_shared<std::shared_ptr<cw::OverlayEntry>>();
+            cw::DialogConfig dcfg;
+            dcfg.title = cw::mw<cw::Text>("Delete item?");
+            dcfg.content = cw::mw<cw::Text>("This action cannot be undone.");
+            auto cancel_btn = cw::mw<cw::Button>(cw::mw<cw::Text>("Cancel"),
+                [entry_holder] { cw::hideDialog(*entry_holder); });
+            cancel_btn->priority = cw::ButtonPriority::tertiary;
+            auto confirm_btn = cw::mw<cw::Button>(cw::mw<cw::Text>("Delete"),
+                [entry_holder] { cw::hideDialog(*entry_holder); });
+            confirm_btn->priority = cw::ButtonPriority::danger;
+            dcfg.actions = {cancel_btn, confirm_btn};
+            *entry_holder = cw::showDialog(ds->buildDialog(dcfg));
+        });
+        show_dialog_btn->priority = cw::ButtonPriority::secondary;
+
+        auto show_snackbar_btn = cw::mw<cw::Button>(cw::mw<cw::Text>("Show Snack Bar"), [ds] {
+            cw::SnackBarConfig scfg;
+            scfg.message = "Item deleted";
+            scfg.action_label = std::string("UNDO");
+            scfg.on_action = [](){};
+            cw::showSnackBar(ds->buildSnackBar(scfg));
+        });
+        show_snackbar_btn->priority = cw::ButtonPriority::tertiary;
+
+        auto overlays_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{show_dialog_btn, cw::SizedBox::from_width(12.0f), show_snackbar_btn});
+
+        // --- ActionSheet / BottomSheet: no show-helper exists yet for
+        // these (unlike Dialog/SnackBar), so shown as static previews.
+        cw::ActionSheetConfig sheet_cfg;
+        sheet_cfg.title = cw::mw<cw::Text>("Photo Options");
+        sheet_cfg.actions = {
+            {"Share", [](){}, false},
+            {"Delete", [](){}, true},
+        };
+        sheet_cfg.on_cancel = [](){};
+        auto action_sheet_preview = ds->buildActionSheet(sheet_cfg);
+
+        cw::BottomSheetConfig bsheet_cfg;
+        bsheet_cfg.child = cw::mw<cw::Padding>(
+            cw::EdgeInsets::all(20.0f),
+            cw::mw<cw::Text>("Bottom sheet content goes here.", body ? *body : cw::TextStyle{}));
+        auto bottom_sheet_preview = ds->buildBottomSheet(bsheet_cfg);
+
+        // --- Typography scale ---
         auto makeTypeDemo = [&](const std::string& name, cw::TextRole role) -> cw::WidgetRef {
             const auto* style = cw::Theme::textStyleOf(ctx, role);
             return cw::mw<cw::Text>(name, style ? *style : cw::TextStyle{});
@@ -1485,17 +1632,6 @@ public:
                 makeTypeDemo("Label Large", cw::TextRole::label_large),
             });
 
-        // Dark mode toggle button
-        auto toggle_btn = cw::mw<cw::Button>(
-            cw::mw<cw::Text>("Toggle Dark Mode"),
-            w.on_toggle_theme);
-        toggle_btn->priority = cw::ButtonPriority::primary;
-
-        auto toggle_row = cw::mw<cw::Row>(
-            cw::MainAxisAlignment::center,
-            cw::CrossAxisAlignment::center,
-            cw::WidgetList{ toggle_btn });
-
         return cw::mw<cw::SingleChildScrollView>(
             cw::mw<cw::Padding>(
                 cw::EdgeInsets::all(24.0f),
@@ -1505,13 +1641,47 @@ public:
                     cw::WidgetList{
                         heading,
                         cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 4.0f, 0.0f, 16.0f), sub),
+                        switcher,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 12.0f, 0.0f, 0.0f), toggle_btn),
+
+                        sectionHeading("Buttons"),
                         btn_row,
-                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 16.0f, 0.0f, 16.0f), card),
+
+                        sectionHeading("Card"),
+                        card,
+
+                        sectionHeading("Selection Controls"),
                         controls_row,
-                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 16.0f, 0.0f, 16.0f), div),
-                        typography_heading,
-                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 8.0f, 0.0f, 16.0f), type_col),
-                        toggle_row,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 12.0f, 0.0f, 0.0f), slider),
+
+                        sectionHeading("Text Input"),
+                        text_field,
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 12.0f, 0.0f, 0.0f), search_field),
+
+                        sectionHeading("Progress"),
+                        progress_row,
+
+                        sectionHeading("Chips, Badge & Icon Button"),
+                        chips_row,
+
+                        sectionHeading("Stepper & Rating"),
+                        stepper_row,
+
+                        sectionHeading("Date & Time Pickers"),
+                        pickers_row,
+
+                        sectionHeading("Overlays"),
+                        overlays_row,
+
+                        sectionHeading("Action Sheet (preview)"),
+                        action_sheet_preview,
+
+                        sectionHeading("Bottom Sheet (preview)"),
+                        bottom_sheet_preview,
+
+                        cw::mw<cw::Padding>(cw::EdgeInsets::only(0.0f, 16.0f, 0.0f, 16.0f), cw::mw<cw::Divider>()),
+                        sectionHeading("Typography Scale"),
+                        type_col,
                     })));
     }
 };
@@ -1531,15 +1701,39 @@ public:
     std::unique_ptr<cw::StateBase> createState() const override;
 };
 
+enum class DesignSystemKind
+{
+    campello_ui,
+    material,
+    cupertino,
+};
+
 class ShowcaseAppState : public cw::State<ShowcaseApp>
 {
 public:
     std::shared_ptr<const cw::DesignSystem> ds_;
+    DesignSystemKind kind_ = DesignSystemKind::campello_ui;
     bool follow_system_ = true;
+
+    static std::shared_ptr<const cw::DesignSystem> makeDesignSystem(DesignSystemKind kind, bool dark)
+    {
+        switch (kind) {
+            case DesignSystemKind::material:
+                return std::make_shared<cw::MaterialDesignSystem>(
+                    dark ? cw::MaterialDesignSystem::dark() : cw::MaterialDesignSystem::light());
+            case DesignSystemKind::cupertino:
+                return std::make_shared<cw::CupertinoDesignSystem>(
+                    dark ? cw::CupertinoDesignSystem::dark() : cw::CupertinoDesignSystem::light());
+            case DesignSystemKind::campello_ui:
+            default:
+                return std::make_shared<cw::CampelloDesignSystem>(
+                    dark ? cw::CampelloDesignSystem::dark() : cw::CampelloDesignSystem::light());
+        }
+    }
 
     void initState() override
     {
-        ds_ = std::make_shared<cw::CampelloDesignSystem>(cw::CampelloDesignSystem::light());
+        ds_ = makeDesignSystem(kind_, /*dark=*/false);
     }
 
     void toggleTheme()
@@ -1547,9 +1741,16 @@ public:
         setState([this]() {
             follow_system_ = false; // User override — stop following system
             bool is_dark = (ds_->tokens().brightness == cw::Brightness::dark);
-            ds_ = std::make_shared<cw::CampelloDesignSystem>(
-                is_dark ? cw::CampelloDesignSystem::light()
-                        : cw::CampelloDesignSystem::dark());
+            ds_ = makeDesignSystem(kind_, !is_dark);
+        });
+    }
+
+    void setDesignSystemKind(int index)
+    {
+        setState([this, index]() {
+            kind_ = static_cast<DesignSystemKind>(index);
+            bool is_dark = (ds_->tokens().brightness == cw::Brightness::dark);
+            ds_ = makeDesignSystem(kind_, is_dark);
         });
     }
 
@@ -1562,9 +1763,7 @@ public:
                 bool want_dark = (media->platform_brightness == cw::Brightness::dark);
                 bool is_dark = (ds_->tokens().brightness == cw::Brightness::dark);
                 if (want_dark != is_dark) {
-                    ds_ = std::make_shared<cw::CampelloDesignSystem>(
-                        want_dark ? cw::CampelloDesignSystem::dark()
-                                  : cw::CampelloDesignSystem::light());
+                    ds_ = makeDesignSystem(kind_, want_dark);
                 }
             }
         }
@@ -1589,6 +1788,8 @@ public:
                 [&]() -> cw::WidgetRef {
                     auto theme_demo = std::make_shared<ThemeDemo>();
                     theme_demo->on_toggle_theme = [this]() { toggleTheme(); };
+                    theme_demo->on_change_design_system = [this](int index) { setDesignSystemKind(index); };
+                    theme_demo->design_system_index = static_cast<int>(kind_);
 
                     auto tabView = std::make_shared<cw::TabBarView>(std::vector<cw::WidgetRef>{
                         theme_demo,

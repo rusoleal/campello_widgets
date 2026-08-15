@@ -3,6 +3,7 @@
 #include <campello_widgets/widgets/stateful_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
 
 #include <string>
 #include <campello_widgets/diagnostics/debug_assert.hpp>
@@ -36,6 +37,13 @@ namespace systems::leal::campello_widgets
         float      border_radius = 8.0f;
         EdgeInsets padding          = EdgeInsets::symmetric(8.0f, 4.0f);
         float      font_size        = 12.0f;
+
+        /**
+         * @brief When set, the tooltip bubble renders as a frosted/liquid-
+         * glass panel — see `PopupMenuButton::backdrop_filter`'s doc for
+         * the same mechanism.
+         */
+        std::optional<ImageFilter> backdrop_filter;
 
         Tooltip() = default;
         explicit Tooltip(std::string msg, WidgetRef c)

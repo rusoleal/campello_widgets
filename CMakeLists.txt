@@ -13,6 +13,9 @@ option(BUILD_INTEGRATION_TESTS "Build platform-specific integration tests"   OFF
 option(BUILD_EXAMPLES         "Build example applications"                    OFF)
 option(ENABLE_UNITY_BUILD     "Enable Unity Build for faster compilation"     ON)
 option(CAMPELLO_GPU_VALIDATION "Enable Vulkan validation layers (debug only)" OFF)
+option(BUILD_MATERIAL  "Build the campello_material design system library"  ON)
+option(BUILD_CUPERTINO "Build the campello_cupertino design system library" ON)
+option(BUILD_UI        "Build the campello_ui design system library"       ON)
 
 if(BUILD_INTEGRATION_TESTS)
     set(BUILD_TESTS ON)
@@ -67,6 +70,31 @@ if(BUILD_TESTS)
     include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/googletest.cmake)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# ---------------------------------------------------------------------------
+# Design system libraries — campello_ui / campello_material / campello_cupertino
+#
+# Each is a standalone DesignSystem implementation (see
+# inc/campello_widgets/ui/design_system.hpp) that links against
+# campello_widgets, never the other way around. Placed after the BUILD_TESTS
+# block above so GTest::gtest_main already exists for campello_ui's own
+# test target. See TODO.md Phase 16.
+# ---------------------------------------------------------------------------
+if(BUILD_UI)
+    add_subdirectory(campello_ui)
+endif()
+if(BUILD_MATERIAL)
+    add_subdirectory(campello_material)
+endif()
+if(BUILD_CUPERTINO)
+    add_subdirectory(campello_cupertino)
+endif()
+
+# Cross-cutting abstract-contract suite (needs all three design systems
+# defined above plus BUILD_TESTS' GTest, hence the extra guards).
+if(BUILD_TESTS AND BUILD_UI AND BUILD_MATERIAL AND BUILD_CUPERTINO)
+    add_subdirectory(tests/design_system_contract)
 endif()
 
 # ---------------------------------------------------------------------------

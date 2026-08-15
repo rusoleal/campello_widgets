@@ -6,6 +6,7 @@
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/decorated_box.hpp>
+#include <campello_widgets/widgets/backdrop_filter.hpp>
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/positioned.hpp>
 #include <campello_widgets/widgets/stack.hpp>
@@ -68,13 +69,31 @@ namespace systems::leal::campello_widgets
             padded->padding    = w.padding;
             padded->child      = label;
 
-            BoxDecoration deco;
-            deco.color         = bg;
-            deco.border_radius = w.border_radius;
+            WidgetRef bubble;
+            if (w.backdrop_filter.has_value()) {
+                // See PopupMenuButton::open()'s identical composition for
+                // why the shadow needs its own DecoratedBox wrapping the
+                // BackdropFilter rather than a flat fill.
+                auto bf    = std::make_shared<BackdropFilter>();
+                bf->filter = *w.backdrop_filter;
+                bf->child  = padded;
 
-            auto bubble        = std::make_shared<DecoratedBox>();
-            bubble->decoration = deco;
-            bubble->child      = padded;
+                BoxDecoration shadow_deco;
+                shadow_deco.border_radius = w.border_radius;
+                auto shadowed        = std::make_shared<DecoratedBox>();
+                shadowed->decoration = shadow_deco;
+                shadowed->child      = bf;
+                bubble = shadowed;
+            } else {
+                BoxDecoration deco;
+                deco.color         = bg;
+                deco.border_radius = w.border_radius;
+
+                auto decorated_bubble  = std::make_shared<DecoratedBox>();
+                decorated_bubble->decoration = deco;
+                decorated_bubble->child      = padded;
+                bubble = decorated_bubble;
+            }
 
             // Position: centred near the top of the screen
             auto aligned      = std::make_shared<Align>();

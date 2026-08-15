@@ -3,6 +3,7 @@
 #include <campello_widgets/widgets/stateless_widget.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
+#include <campello_widgets/ui/image_filter.hpp>
 #include <functional>
 #include <optional>
 #include <string>
@@ -55,6 +56,14 @@ namespace systems::leal::campello_widgets
 
         /** @brief Maximum width. */
         float max_width = 560.0f;
+
+        /**
+         * @brief When set, the dialog surface renders as a frosted/liquid-
+         * glass panel — see `PopupMenuButton::backdrop_filter`'s doc for the
+         * same mechanism. `background_color` (if set) becomes the glass
+         * tint instead of a flat fill.
+         */
+        std::optional<ImageFilter> backdrop_filter;
 
         Dialog() = default;
         explicit Dialog(WidgetRef c) : child(std::move(c)) {}

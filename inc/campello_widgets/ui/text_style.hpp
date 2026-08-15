@@ -53,6 +53,25 @@ namespace systems::leal::campello_widgets
         /** @brief Whether text is italic. */
         bool italic = false;
 
+        /**
+         * @brief Size/position a single-line span by its tight glyph-ink
+         * bounds instead of the full typographic ascent+descent+leading
+         * box.
+         *
+         * The typographic box is correct for continuous/multi-line text,
+         * where consistent baseline-to-baseline spacing matters — but for
+         * a short single-line UI label (button text, chip text, ...), the
+         * extra ascent/leading space reserved for glyphs the label doesn't
+         * actually contain (accented capitals, descenders) makes the box's
+         * geometric center sit visibly below the glyph ink's true visual
+         * center, so vertically centering the box (e.g. a button's
+         * Padding/Center) leaves the text looking low. See
+         * RenderText::performLayout()'s doc for the mechanism. No effect
+         * on multi-line text (RenderText only applies this for a single
+         * computed line).
+         */
+        bool tight_vertical_bounds = false;
+
         // Phase 5 stub — weight, italic, letter-spacing will be added
         // when font atlas rendering is implemented.
 
@@ -64,6 +83,7 @@ namespace systems::leal::campello_widgets
         TextStyle& withFontFamily(std::string family) { font_family = std::move(family); return *this; }
         TextStyle& bold() { font_weight = FontWeight::bold; return *this; }
         TextStyle& withItalic(bool i = true) { italic = i; return *this; }
+        TextStyle& withTightVerticalBounds(bool t = true) { tight_vertical_bounds = t; return *this; }
 
         /**
          * @brief Merges another style into this one, keeping non-default values.
@@ -78,6 +98,7 @@ namespace systems::leal::campello_widgets
             if (!child.font_family.empty()) result.font_family = child.font_family;
             if (child.font_weight != FontWeight::normal) result.font_weight = child.font_weight;
             if (child.italic) result.italic = child.italic;
+            if (child.tight_vertical_bounds) result.tight_vertical_bounds = child.tight_vertical_bounds;
             return result;
         }
     };

@@ -531,6 +531,352 @@ runApp(make_shared<Theme>(Theme{
 
 ---
 
+## Phase 16 — Desacoplamiento de Design Systems
+
+Siguiendo el precedente de Flutter 3.47 (`material_ui`/`cupertino_ui` 1.0.0 como
+paquetes standalone), separar los design systems concretos de campello_widgets
+core en librerías independientes: `campello_material` (Material Design 3),
+`campello_cupertino` (Apple HIG) y `campello_ui` (el estilo bespoke "warm teal"
+de `campello_editor`, antes `CampelloDesignSystem` en core). El framework core
+(`campello_widgets`) queda sin ningún estilo visual propio, igual que
+`WidgetsApp` en Flutter sin `MaterialApp`/`CupertinoApp` encima.
+
+### Arquitectura
+
+```
+campello_widgets/   — DesignSystem abstracto (sin cambios) + NullDesignSystem
+                       (fallback plano/sin estilo de Theme::of())
+campello_ui/        — CampelloDesignSystem (reubicado desde core)
+campello_material/  — nueva implementación, estilo Material Design 3
+campello_cupertino/ — nueva implementación, estilo Apple HIG
+```
+
+Las tres son targets CMake hermanos en este mismo repo (no repos separados),
+cada una enlazando `campello_widgets` — nunca al revés.
+
+### Hitos
+
+- [x] **M0 — Fundación**: `NullDesignSystem` en core; reubicación de
+  `CampelloDesignSystem` + sus tests a `campello_ui/`; scaffolding CMake de
+  `campello_material/`, `campello_cupertino/`, `campello_ui/`; `Theme::of()`
+  ahora usa `NullDesignSystem` como fallback; `examples/macos_showcase`
+  actualizado para enlazar `campello_ui` explícitamente.
+- [x] **M1 — campello_material, ola core**: `MaterialDesignSystem` implementa
+  los 19 builders con estilo MD3 real — paleta tonal baseline (seed
+  `#6750A4`) en `light()`/`dark()`, escala tipográfica MD3 (tamaños +
+  pesos Regular/Medium), shape scale MD3 (4/8/12/16/28dp), elevation MD3
+  (0/1/3/6/8/12dp, ya coincidía con el default de `ElevationTokens`).
+  Decisiones de fidelidad MD3 notables: botón filled totalmente redondeado
+  (stadium), FAB con esquina 16dp — no circular, como en MD3 real — divider
+  usa `outline_variant` (no `outline`), diálogo con esquina 28dp, menús/
+  snackbar con esquina 4dp, indicador de tab 3dp, y el ítem seleccionado de
+  `NavigationBar` recibe una píldora tonal detrás del icono. Tests en
+  `campello_material/tests/test_material_design_system.cpp` (12 casos).
+- [x] **M2 — campello_cupertino, ola core**: `CupertinoDesignSystem`
+  implementa los 19 builders con estilo HIG real — colores de sistema iOS
+  (`systemBlue` `#007AFF`/`#0A84FF` dark, `systemGreen`, `systemRed`,
+  escala `systemGray`), Dynamic Type mapeado sobre los 15 roles de
+  `TypographyScale`, shape scale iOS (6/8/10/14/20pt — deliberadamente
+  distinta de la escala MD3), y elevación mucho más plana (iOS evita las
+  sombras tipo Material casi por completo). Decisiones de fidelidad HIG
+  notables: botones filled/tinted/plain/destructive con esquina 14pt (no
+  stadium), `UISwitch` con su color real — pista verde (`success`) en
+  activo, no `primary` — y pulgar siempre blanco; diálogo estilo
+  `UIAlertController`: ancho fijo 270pt, texto centrado, botones de acción
+  separados por líneas finas (fila para ≤2 acciones, columna para 3+, en
+  vez del row alineado a la derecha de Material); `NavigationBar` con el
+  ítem seleccionado marcado solo por color de tinte, sin píldora indicadora
+  (a diferencia de la píldora tonal de MD3); slider con pista fina de 4pt
+  (opuesto a los 16pt de Material); alturas de fila de lista iOS (44/60pt
+  vs 56/72pt de Material). Sin equivalente HIG directo para FAB — fallback
+  documentado a botón circular plano. Tests en
+  `campello_cupertino/tests/test_cupertino_design_system.cpp` (12 casos).
+- [x] **M3 — Expansión de interfaz, ola 1**: `DesignSystem` gana 5 métodos
+  nuevos — `buildChip`, `buildSegmentedButton`, `buildBottomSheet`,
+  `buildBadge`, `buildIconButton` (más sus Config structs, todos
+  appearance-free como los 19 existentes). FAB ya estaba cubierto por
+  `buildPrimaryActionButton` desde M1/M2, así que se excluyó de esta ola;
+  "menús" se refinó a `IconButton` durante la implementación al no
+  encontrar un caso de uso distinto de `PopupMenuButton`/`DropdownButton`
+  que justificara una tercera abstracción de menú. Implementado en las
+  **cuatro** implementaciones concretas que existen hoy (no solo tres) —
+  `NullDesignSystem` en core también debe implementar la interfaz completa
+  para seguir compilando. Elecciones de fidelidad notables: en
+  `campello_material`, `SegmentedButton` es un grupo de botones conectados
+  con borde stadium exterior (el patrón real de MD3) mientras que en
+  `campello_cupertino` es una pista gris con una píldora blanca flotante
+  tras el segmento seleccionado (el patrón real de `UISegmentedControl`) —
+  dos implementaciones visualmente muy distintas de la misma interfaz
+  abstracta, la prueba más clara hasta ahora de que la capa de
+  `DesignSystem` cumple su propósito. `Chip` usa el shape token Small
+  (8dp) en MD3; `BottomSheet` usa Extra Large (28dp) en MD3 y 20pt en
+  Cupertino con grabber. Tests añadidos en las 4 suites (12 casos nuevos
+  en total).
+- [x] **M4 — Expansión de interfaz, ola 2**: `DesignSystem` gana 6 métodos
+  más — `buildStepper`, `buildRatingIndicator`, `buildActionSheet`,
+  `buildSearchField`, `buildDatePicker`, `buildTimePicker` ("date/time
+  pickers" se separó en dos builders distintos, ya que MD3 y HIG los tratan
+  como componentes independientes). `DatePickerConfig`/`TimePickerConfig`
+  se definieron deliberadamente como *campos disparadores* (texto
+  formateado + `on_tap`) en vez de calendarios/ruedas completos — mismo
+  nivel de abstracción que `Dialog`/`BottomSheet`/`PopupMenuButton`, que
+  tampoco poseen la lógica de presentación modal. Implementado en las
+  cuatro implementaciones concretas. Elecciones de fidelidad notables:
+  `campello_cupertino`'s `Stepper` es el hogar real de `UIStepper` — un
+  único control de dos segmentos `[-][+]` sin display de valor propio
+  (el control real de iOS no lo tiene), mientras que `campello_material`
+  sí muestra el valor entre dos botones tonales (MD3 no tiene stepper de
+  catálogo, así que no hay una convención real que romper). `ActionSheet`
+  es el segundo gran contraste tras `Dialog`: en Cupertino es el patrón
+  clásico de iOS — tarjeta de acciones + hueco + tarjeta *separada* solo
+  para "Cancel" — mientras que en MD3 el cancelar (si se pide) es una fila
+  más dentro de la misma lista, porque MD3 no tiene la convención de botón
+  Cancel desprendido. `SearchField` es pill (`radius_full`) en MD3 (su
+  propio shape token "Search") y rect redondeado (`radius_md`, no pill) en
+  Cupertino. `RatingIndicator` usa `warning` (dorado/naranja) para las
+  estrellas llenas en Cupertino, no el color de acento de la app —
+  coincide con el color real de las estrellas de reseña de la App Store.
+  Tests añadidos en las 4 suites (13 casos nuevos).
+- [x] **M5 — Adaptive switching + gallery**: en vez de reconstruir
+  `examples/gallery` (1760 líneas de widgets estructurales hardcodeados, sin
+  relación con `Theme`) por completo — riesgo alto para el beneficio real —
+  se extendió el Theme tab ya existente de `examples/macos_showcase`
+  (`ThemeDemo`/`ShowcaseAppState`) con un selector de 3 vías (`campello_ui`/
+  `campello_material`/`campello_cupertino`, vía un `SegmentedButton` real —
+  dogfooding M3) más el toggle claro/oscuro ya existente, materializando el
+  escenario "Material → Cupertino → LiquidGlass" que el doc comment de
+  `theme.hpp` ya anticipaba. El tab ahora ejercita las 30 builders del
+  catálogo completo (los 19 originales + los 11 de M3/M4) a través de
+  `Theme::of(ctx)`, no solo los 7 widgets adaptativos de siempre. `examples/
+  gallery` quedó como backlog aparte en su momento — **completado después**
+  (mismo día): shell (`GalleryShellState`) ahora posee `ds_`/`kind_` igual
+  que `ShowcaseAppState`, envuelve su árbol en `Theme`, y el footer del
+  sidebar suma el mismo selector de 3 vías (`SegmentedButton`, etiquetas
+  cortas "UI"/"MD3"/"iOS" por el ancho de 200px) + toggle claro/oscuro
+  (`IconButton`) — colapsa a solo el toggle en modo icono-only (64px, sin
+  sitio para el switcher completo). De las 10 secciones de la gallery, se
+  adaptó `ControlsSection` en profundidad (Checkbox/Switch/Slider/
+  DropdownButton vía `ds->buildXxx()`; `RadioGroup` se mantiene tal cual
+  porque `buildRadio()` es un toggle standalone sin wiring de grupo, pero
+  sus colores de acento ahora salen de `tokens.colors`) — es la única
+  sección cuyo aspecto cambia en vivo al cambiar de design system. Las
+  otras 9 (Layout/Text/Lists/Animations/Gestures/Clipping/Keyboard/Images/
+  Draw) conservan su paleta `kBlue`/`kGreen`/... y fondo `kContent` fijos a
+  propósito — esa paleta es codificación categórica ilustrativa por sección
+  de demo, no una decisión de design system. `card()`/`subheading()`
+  ganaron parámetros de color opcionales (mismo default que antes, cero
+  cambio de comportamiento en las otras 9 secciones) para soportar esto sin
+  tocar sus call sites. `examples/gallery/macos/CMakeLists.txt` enlaza
+  ahora `campello_ui`/`campello_material`/`campello_cupertino` (las otras
+  plataformas — iOS/Linux/Windows/Android — necesitan el mismo añadido de
+  3 líneas si se compilan ahí; no verificado en esta sesión, solo macOS).
+  **Bonus real**: este selector fue la primera cosa en la historia del
+  repo en cambiar el *tipo concreto* de `DesignSystem` en caliente (antes
+  solo se alternaba claro/oscuro del mismo tipo), lo cual expuso dos bugs
+  reales de la plataforma bajo el estrés — ver las entradas "Bug:
+  `InheritedElement::notifyDependents()`..." (encontrado y arreglado) y
+  "Known issue: raster-thread `SIGBUS`..." (documentado, pendiente) más
+  abajo en `## Backlog / Future`.
+- [x] **M6 — Hardening 1.0.0**: suite de tests de contrato abstracto
+  parametrizada (`tests/design_system_contract/`, nuevo target CMake
+  añadido tras las tres librerías en el `CMakeLists.txt` raíz porque
+  `tests/CMakeLists.txt` se procesa antes de que existan) — 10 aserciones
+  ejecutadas contra las cuatro implementaciones concretas (`Null`,
+  `campello_ui`, `campello_material`, `campello_cupertino`) vía el puntero
+  base abstracto: cobertura de los 30 builders con config por defecto,
+  variantes deshabilitadas, config con contenido real, y consistencia
+  interna de tokens (shape/elevation/spacing no decrecientes, tipografía
+  descendente por tier, colores "on_X" distintos de su base X) — 40 casos
+  en total, 100% verde. Entradas de CHANGELOG añadidas en `[Unreleased]`
+  (Added/Fixed/Known Issues, cubriendo M0-M6 completo incluyendo el bug de
+  `InheritedElement` y el `SIGBUS` pendiente).
+  **Versiones objetivo decididas, tags aún no creados** (a petición del
+  usuario — solo se registran los números, el tageo real queda para
+  cuando decida hacerlo): `campello_ui` → `v1.0.0` (reubicación de código
+  ya maduro, comportamiento visual sin cambios); `campello_material` /
+  `campello_cupertino` → `v0.1.0` (nuevas esta sesión, catálogo MD3/HIG
+  aún expandiéndose más allá de los 30 componentes actuales — `1.0.0`
+  sería prematuro en términos semver).
+- [x] **M7 — Fidelidad de color: roles `tertiary` + container** (pedido
+  explícito del usuario tras una auditoría de paridad contra los paquetes
+  reales `material_ui`/`cupertino_ui` de Flutter — brecha identificada: MD3
+  real tiene ~30 roles de color con `primaryContainer`/`secondaryContainer`/
+  `tertiaryContainer`/`errorContainer` + rol `tertiary` propio; nuestro
+  `ColorScheme` solo tenía 23, sin ninguno de estos). `ColorScheme` gana 10
+  campos nuevos (`tertiary`/`on_tertiary` + 4 pares container/on_container),
+  aditivos y retrocompatibles. Poblados con valores reales en las 4
+  implementaciones:
+  - `campello_material`: paleta baseline MD3 real y pública (seed
+    `#6750A4`) — los mismos valores documentados que Google publica para
+    ese seed, no inventados.
+  - `campello_ui`: tertiary coral/terracota complementando el teal+ámbar
+    existente; containers como tintes tonales de cada acento.
+  - `campello_cupertino`: `systemPink` como tertiary (el "tercer acento"
+    habitual de HIG junto a blue/indigo); containers como tintes literales
+    en vez de `withOpacity()` en tiempo de ejecución.
+  - `NullDesignSystem`: grises planos distintos, consistente con su
+    ausencia de opinión visual.
+
+  **Corrigió 3 aproximaciones reales** que usaban `withOpacity(primary, X)`
+  como sustituto de un rol container inexistente — ahora usan el rol MD3
+  correcto documentado, no una aproximación:
+  - `MaterialDesignSystem::buildPrimaryActionButton` (FAB): el FAB por
+    defecto de MD3 usa `primaryContainer`, no `primary` sólido — detalle
+    real de la spec, fácil de pasar por alto sin el rol dedicado.
+  - `MaterialDesignSystem::buildChip` (seleccionado) y `buildSegmentedButton`
+    (segmento seleccionado): MD3 real usa `secondaryContainer`/
+    `onSecondaryContainer`, no un tinte de `primary`.
+  - `MaterialDesignSystem::buildNavigationBar` (píldora del ítem
+    seleccionado): ídem, `secondaryContainer` — el doc comment del código
+    ya anticipaba esta actualización pendiente desde M1.
+  - `campello_ui`/`campello_cupertino`: `buildChip`/`buildIconButton`
+    (estado seleccionado) migrados de `withOpacity(primary, 0.15f)` inline
+    a `c.primary_container`, una única fuente de verdad por tema en vez de
+    matemática de opacidad repetida en cada call site.
+
+  Tests: 2 aserciones nuevas en la suite de contrato parametrizada (`on_X
+  != X` y `X != X_container` para los 4 nuevos roles × 4 implementaciones,
+  8 casos) + 2 tests específicos de fidelidad en `campello_material`
+  (`FabUsesPrimaryContainerNotPlainPrimary`, `SelectedChipUsesSecondaryContainer`)
+  que castean el árbol de widgets devuelto y comparan el color exacto —
+  fallarían de verdad si la corrección se revirtiera. 674/674 tests verdes.
+
+- [x] **M8 — Componentes wave 3: `ExpansionTile`, `ToggleButtons`, `Banner`,
+  `NavigationRail`, `DataTable`** (pedido explícito del usuario tras M7:
+  "go to next components. We must focus (for testing purposes) on gallery
+  example" — 5 componentes elegidos por ser tap-based, sin necesitar nueva
+  ingeniería de drag/hit-testing como habría requerido un `RangeSlider`).
+  `DesignSystem` gana 5 nuevos `Config` structs + pure-virtual builders
+  (35 en total), implementados en las 4 concretas:
+  - `ExpansionTileConfig`: header tappable (leading/title/subtitle +
+    glyph de estado) + `children_content` mostrado solo si `expanded`;
+    Cupertino usa el idioma de indicador de disclosure (`>`/`v`, sin
+    rotación real — no hay transform wireado en este config) con hairline
+    tras el header, Material aproxima el chevron rotatorio igual por la
+    misma razón, campello_ui resalta el header con `surface_variant`
+    cuando está expandido.
+  - `ToggleButtonsConfig`: grupo de botones independientemente
+    seleccionables (a diferencia de `SegmentedButtonConfig`, que es
+    single-select) — Material usa `secondary_container` para el
+    seleccionado (mismo rol que `Chip`/`SegmentedButton`), Cupertino usa
+    el idioma de `UIButton` `.tinted` (fill `primary` sólido + borde
+    `primary`), campello_ui usa `primary_container` con borde `outline`.
+  - `BannerConfig`: leading + content + acciones, con divisor inferior;
+    Material lo pone sobre `surface` plano (distinguido solo por el
+    divisor, no por tinte — real detalle de spec), Cupertino/campello_ui
+    usan `surface_variant`.
+  - `NavigationRailConfig`: variante vertical de `NavigationBarConfig`,
+    con flag `extended` (iconos+labels vs. solo iconos). Material reusa
+    el mismo idioma de píldora `secondary_container` tras el ítem
+    seleccionado que `buildNavigationBar`; Cupertino documenta
+    explícitamente que iOS/iPadOS no tiene equivalente directo (el pariente
+    más cercano es el sidebar de split-view, un paradigma de navegación
+    completo, no un componente) y cae a un fallback pragmático tintado.
+  - `DataTableConfig`: tabla de solo lectura, deliberadamente sin sorting/
+    paginación/edición por celda — mismo criterio de scope-down que
+    `DatePickerConfig`/`TimePickerConfig`. Cupertino documenta que no hay
+    tabla de datos nativa en iOS (grouped `UITableView` es fila-de-celdas,
+    no columnar) y cae al idioma de lista agrupada con hairlines.
+
+  Tests: contract suite ampliada (`AllBuildersReturnNonNullForDefaultConfig`
+  cubre los 5 nuevos; `DisabledControlsStillReturnWidgets` cubre
+  `ExpansionTile`/`ToggleButtons`; 4 tests nuevos de contenido estructural
+  — `ExpansionTileExpandedWithChildrenContentBuildsWidget`,
+  `ToggleButtonsWithMultipleItemsBuildsWidget`,
+  `NavigationRailWithItemsBuildsWidget`, `DataTableWithColumnsAndRowsBuildsWidget`).
+  690/690 tests verdes (subida desde 674).
+
+  **Gallery** (requisito explícito, no opcional): los 5 nuevos wired en
+  `examples/gallery`'s `ControlsSection` — cada uno con estado propio
+  (expand/collapse, selección de toggles, tab activo del rail, banner
+  dismissible) reactivo al switcher UI/MD3/iOS de la sidebar, verificado
+  con build+run real de `campello_widgets_gallery.app`.
+
+- [x] **M9 — Extender reactividad de tema al sidebar y las 9 pestañas
+  restantes de la gallery** (pedido explícito del usuario tras revisar la
+  M8: "why layout tab and the left tabs and title dont change after
+  switching theme or dark mode?" → "Extend it to both — sidebar and all
+  the tabs"). Hasta este punto solo `ControlsSection` leía
+  `Theme::of(ctx)`; el resto de la gallery — incluido el propio sidebar
+  que aloja el switcher — usaba colores hardcodeados (`Color::white()`,
+  grises fijos, `kContent`), por lo que cambiar de modo oscuro o de
+  UI/MD3/iOS solo se reflejaba visualmente en la pestaña Controls.
+  - **Sidebar** (`buildSidebar()`/`buildNavItem()`/`buildThemeFooter()`/
+    `GalleryShellState::build()`): título, fondo, ítem activo/hover,
+    barra de acento, divisores y el propio fondo raíz de la ventana ahora
+    leen `ds_->tokens().colors` en vez de literales.
+  - **Las 9 pestañas restantes** (Layout, Text & Input, Lists, Animations,
+    Gestures, Clipping & FX, Keyboard, Images, Draw): cada `build()` gana
+    `const auto* ds = cw::Theme::of(ctx); const auto& colors = ...`;
+    fondos (antes la constante `kContent`, ahora eliminada por quedar sin
+    usos), fondos de `card()`, `subheading()`, texto de cuerpo/subtítulo y
+    fills de chrome neutro (paneles inertes, franjas de captura de drag,
+    etc.) migrados a roles de tema (`colors.surface`,
+    `colors.surface_variant`, `colors.on_surface`,
+    `colors.on_surface_variant`, `colors.primary`/`on_primary`,
+    `colors.primary_container`/`on_primary_container`). La paleta
+    ilustrativa (`kBlue`/`kGreen`/`kOrange`/`kPurple`/`kTeal`/`kRed`/
+    `kAmber`) se mantiene deliberadamente sin cambios — son acentos de
+    demostración (avatares, chips de ejemplo, cajas de transición), no
+    colores de superficie, y su texto ya usa blanco por contraste
+    independientemente del tema.
+  - **`DrawSection`** es la única excepción intencional: el lienzo de
+    dibujo (`DrawSurface::background_color`) se mantiene blanco papel fijo
+    incluso en modo oscuro — igual que una app de dibujo real, donde el
+    lienzo es su propio "papel" en vez de seguir el chrome circundante;
+    solo la barra de herramientas alrededor sigue el tema.
+  - **`GesturesSection`**: refactor de `zone_color_`/`text_color_` para
+    admitir tema — antes se inicializaban a grises fijos en `initState()`
+    (que no tiene acceso a `BuildContext`); ahora un flag
+    `has_interacted_` decide en `build()` entre el color de tema
+    (`colors.surface_variant`/`on_surface_variant`, antes de cualquier
+    gesto) y el último color de feedback de gesto disparado por el
+    usuario (acentos ilustrativos, sin cambios).
+  - **Bug evitado durante el refactor**: varios `ListView`/`GridView`/
+    `DragTarget`/`LayoutBuilder` de la gallery usan callbacks
+    (`builder`/`on_...`) que el framework invoca en frames posteriores,
+    después de que el `build()` que los construyó ya haya retornado.
+    Capturar `colors` por referencia (`[&colors]`) en esos callbacks
+    habría dejado una referencia colgante a una variable de pila ya
+    destruida — se capturó por valor (`[colors]`, copiando el struct
+    `ColorScheme`) en cada uno de esos casos en su lugar; los lambdas de
+    construcción síncrona dentro del mismo `build()` (p. ej. `mkTab`,
+    `mkCb`) sí pueden seguir capturando por referencia con seguridad.
+  - **Bug encontrado tras el sweep (usuario, 2026-08-14): el propio
+    switcher UI/MD3/iOS era ilegible en modo oscuro.** `buildThemeFooter()`
+    construía los labels de los segmentos (`"UI"`/`"MD3"`/`"iOS"`) con
+    `Text("UI")` sin color explícito — `TextStyle`'s default es negro
+    liso. `buildSegmentedButton()` no recolorea el `WidgetRef` que recibe,
+    así que en modo oscuro el segmento no-seleccionado (fondo
+    `colors.surface_variant`, ahora genuinamente oscuro) quedaba con texto
+    negro sobre fondo casi negro. Tampoco existe un único color "seguro"
+    universal: cada design system rellena su segmento seleccionado con un
+    rol distinto (Campello: `primary`, Material: `secondary_container`,
+    Cupertino: `surface` como píldora flotante), y el segmento
+    no-seleccionado muestra un fondo distinto en cada uno también
+    (Campello/Cupertino: track `surface_variant`; Material: sin relleno
+    propio, muestra el `surface` del sidebar detrás). Arreglado eligiendo
+    el rol `on_X` correcto según `kind_` activo y el estado
+    seleccionado/no-seleccionado de cada segmento, en vez de un color
+    fijo.
+
+**Paridad conocida, no abordada esta sesión**: `RangeSlider`, sistema de
+menús anidados completo, `CupertinoContextMenu`/`CupertinoPullDownButton`,
+pickers reales tipo calendario/rueda (los actuales son solo trigger
+fields — ver doc comment de `DatePickerConfig`), el efecto de "ink"
+ripple/splash de Material (una capa de renderizado+gesto, no un widget), y
+los 5 tiers de `surfaceContainer` (`Lowest`→`Highest`) de MD3 — éste último
+deliberadamente fuera de alcance (roles `tertiary`+container eran lo pedido
+explícitamente en M7; los tiers de superficie son un salto de fidelidad
+aparte).
+
+**Límite de alcance**: "fidelidad completa" se refiere al catálogo de
+componentes *actual y publicado* de MD3 y Apple HIG — no un objetivo móvil.
+Cualquier componente descubierto después de M4 se añade como ítem normal de
+backlog, no bloquea declarar 1.0.0.
+
+---
+
 ## Backlog / Future
 
 - Accessibility (semantic tree, screen reader support)
@@ -539,6 +885,39 @@ runApp(make_shared<Theme>(Theme{
 - [x] Dialog / overlay / modal system
 - [x] Drag-and-drop (`Draggable` + `DragTarget`)
 - [x] **Gesture arena (Flutter-equivalent gesture arbitration)** — see dedicated section below
+- [ ] **Video playback widget** (requested 2026-08-15, not started) — a
+      `VideoPlayer`/`VideoPlayerController` pair (Flutter-shaped API: a
+      controller owns decode/playback state — `play()`/`pause()`/`seekTo()`/
+      `position`/`duration`/a value-listenable for frame updates — and the
+      widget just displays whatever frame the controller currently has,
+      matching `AnimationController`'s existing split between "drives state"
+      and "renders it"). No decode/demux capability exists anywhere in this
+      codebase today (`campello_image` handles *still* images only — PNG/
+      JPEG/WebP), so this needs, per platform:
+        - **macOS/iOS**: AVFoundation (`AVPlayer` + `AVPlayerItemVideoOutput`,
+          or `AVPlayerItemVideoOutput.copyPixelBuffer` into a `CVPixelBuffer`)
+          — decode is hardware-accelerated and free; the real work is getting
+          each decoded frame into a `campello_gpu` texture without a CPU
+          round-trip, likely via `CVMetalTextureCache` (zero-copy
+          `CVPixelBuffer` → `MTLTexture`, the standard AVFoundation-to-Metal
+          bridge) rather than reading pixels back to the CPU and re-uploading.
+        - **Android**: `MediaCodec`/`ExoPlayer` decoding into a `Surface`
+          backed by a Vulkan-importable buffer (`AHardwareBuffer` +
+          `VK_ANDROID_external_memory_android_hardware_buffer`), same
+          zero-copy goal as the AVFoundation path.
+        - **Windows**: Media Foundation (`IMFSourceReader` or
+          `MediaPlayer`/`MediaEngine`) decoding into a D3D12 shared texture.
+        - **Linux**: GStreamer (`playbin` + an `appsink`, or a Vulkan-video-
+          capable decode path) is the natural fit given no equivalent to
+          AVFoundation/Media Foundation exists there.
+      Each of these is its own multi-day integration (new native platform
+      code per target, a new `campello_gpu` texture-import path per backend
+      if zero-copy is wanted, audio track sync/mixing, and a `DesignSystem`-
+      level `buildVideoPlayerControls()` for the scrubber/play-pause chrome
+      matching the "Card + FAB uses `ds->build...()`" precedent elsewhere in
+      the gallery) — no design decisions made yet on shared-vs-per-platform
+      architecture; this entry exists to track the request, not to scope the
+      implementation.
 - [x] **Performance overlay: add a real FPS counter** (found 2026-07-24,
       done 2026-07-25) — new `Renderer::present_fps_sampler_`/
       `recordPresentSample()` measures the wall-clock cadence between
@@ -2234,6 +2613,889 @@ gallery.
 4. JNI bridge calls `TextEditingController::{beginComposing,updateComposingText,commitComposing}`
 5. Update `AndroidManifest.xml` + CMake/build system to compile Java sources
 6. Estimated effort: 2–3 days
+
+---
+
+### Bug: `InheritedElement::notifyDependents()` called `markNeedsBuild()` on a dangling `Element*` (2026-08-14, user-reported, fixed)
+
+Found while building Phase 16 M5's live design-system switcher — the first
+scenario in this codebase's history where an `InheritedWidget`'s value
+changes (`Theme`, switching `campello_ui`/`campello_material`/
+`campello_cupertino`) in the *same* rebuild pass where structurally
+different widgets get unmounted elsewhere in the tree. Every earlier use of
+`Theme` (light/dark toggling) only ever changed prop values on the *same*
+concrete widget types throughout the tree, so no dependent element was ever
+unmounted as a side effect of a `Theme` change — this bug was unreachable
+until M5 gave `Theme` a reason to swap widget types wholesale.
+
+**Root cause**: `InheritedElement::dependents_` (`std::unordered_set<Element*>`,
+raw pointers) is only ever cleared in `InheritedElement::unmount()` — i.e.
+when the `InheritedElement` itself (here, `Theme`) goes away. Nothing
+removes an individual *dependent* from that set when the dependent itself
+is unmounted for an unrelated reason (e.g. its widget type changed during
+ordinary reconciliation elsewhere in the same `buildFrame()` pass). The very
+next time `notifyDependents()` ran, it called `dep->markNeedsBuild()` on a
+pointer to an already-destroyed `Element` — confirmed via AddressSanitizer
+as a textbook heap-use-after-free (`element.cpp:89`, freed moments earlier
+by `MultiChildRenderObjectElement::unmount()` during the same rebuild).
+Crash was **not reproducible under a plain debugger** (lldb attach or
+`lldb -o run`, tried both fresh-launch and a scripted auto-switch) — a
+classic use-after-free heisenbug signature, since debugger overhead
+perturbs allocator timing enough to usually avoid the freed-memory-still-
+looks-valid window. ASan (`-fsanitize=address`, fresh `cmake` config in
+`build/darwin-asan/`) reproduced it deterministically on the first try.
+
+**Fix**: `InheritedElement::notifyDependents()` (`src/widgets/inherited_element.cpp`)
+now prunes stale entries lazily using the framework's *existing* liveness
+registry (`Element::isAlive()` / the static `Element::s_alive_` set) before
+calling `markNeedsBuild()`, instead of trusting every raw pointer in
+`dependents_` to still be valid. No new bookkeeping structures added — this
+reuses a mechanism that already existed for exactly this class of problem,
+just wasn't applied here. Full regression suite (624/624) still green.
+
+**Known imprecision, accepted**: `isAlive()` checks address liveness only,
+not identity — if a freed `Element` slot gets reused by an unrelated new
+`Element` before the next `notifyDependents()` call, that unrelated element
+could spuriously receive one extra `markNeedsBuild()`. Harmless (an extra
+rebuild, not a correctness or memory-safety issue) and consistent with how
+`isAlive()` is already used elsewhere in this codebase. A stricter fix
+would have `Element` track its own inherited-dependencies and explicitly
+deregister on `unmount()`, touching the base `Element`/every subclass's
+unmount path — bigger, more invasive, not justified by what's actually a
+cosmetic residual risk.
+
+### Fixed: raster-thread `SIGBUS` in `campello_gpu::Buffer::upload()` under heavy widget churn (2026-08-14, user-reported; root-caused and fixed 2026-08-14)
+
+Found via the same M5 design-system-switcher stress test, but is a
+**separate** bug from the one above — confirmed distinct via ASan (the
+`InheritedElement` fix above did not resolve this one). Recurred later in
+`examples/gallery` once its tab-switching + theme-switching also produced
+heavy widget churn (M9), which is what led to root-causing it.
+
+**Root cause**: `MetalDrawBackend::UniformBufferPool::acquire()`
+(`src/gpu/metal/metal_draw_backend.mm`) reused a ring-slot's GPU buffer via
+`Buffer::upload()` on every cache hit without ever checking whether the
+existing buffer was even large enough for the new request. The pool's own
+doc comment (`metal_draw_backend.hpp:413-419`) already documented the
+invariant this depends on — "every `acquire()` against one pool instance
+uses the same size" — as the reason `rect_vertex_pool_` was split into its
+own instance, separate from `quad_vertex_pool_`. But that invariant was
+never actually true for `rect_vertex_pool_` itself: it's shared between
+`drawFilledQuad()` (always exactly 6 `RectVertex`, fixed size) and
+`drawFilledVertices()` (a variable-length `std::vector<RectVertex>`, sized
+by segment count — used by `drawArc`, `drawPath`, etc.). Whenever a frame's
+draw sequence reused a ring slot whose buffer had been sized for an
+earlier, smaller draw (e.g. a plain rect) with a larger one (e.g. a
+many-segment arc), `upload()`'s `memcpy` wrote past the GPU buffer's actual
+allocation — an out-of-bounds write into unmapped/protected memory, which
+is exactly the `SIGBUS`/"invalid protections for user data write" seen in
+both the original ASan report and a later real (non-ASan) crash from the
+gallery.
+
+**Fix**: `acquire()` now checks `buffers[idx]->getLength() < size` before
+reusing a slot; if the existing buffer is too small, it allocates a fresh,
+large-enough buffer for that slot instead of blindly reusing the old one.
+`Buffer::getLength()` was already a real, cross-platform part of
+`campello_gpu`'s public `Buffer` interface — no `campello_gpu` change
+needed, the fix is entirely in `campello_widgets`. This makes the pool
+safe for genuinely variable-sized reuse (removing the "same size only"
+assumption entirely) rather than only patching the specific
+`rect_vertex_pool_` call sites that happened to trigger it.
+
+Verified: 449/449 universal tests green after the fix; the same
+gallery-based tab-switch + design-system-switch stress test that produced
+the crash (now with `examples/gallery`, since M9 wired the switcher up
+there too) no longer crashes.
+
+<details>
+<summary>Original investigation notes (kept for context)</summary>
+
+**Repro** (needs the full sequence, a single design-system switch is not
+enough): open the Theme tab, switch away to any other tab (Counter/List/
+etc.), switch back to the Theme tab, then switch design system
+(`campello_ui`/`campello_material`/`campello_cupertino`) a few times in a
+row. Crashes on the raster thread (`T5` in the ASan report), not the UI
+thread.
+
+**Stack** (top frames, from `build/darwin-asan/`):
+```
+AddressSanitizer: BUS on unknown address (WRITE)
+#0 _platform_memmove$VARIANT$Haswell
+#1 __asan_memcpy
+#2 systems::leal::campello_gpu::Buffer::upload(...)                          buffer.cpp:36
+#3 MetalDrawBackend::UniformBufferPool::acquire(Device&, ...)                metal_draw_backend.mm:533
+#4 MetalDrawBackend::drawFilledVertices(...)                                 metal_draw_backend.mm:600
+#5 MetalDrawBackend::drawArc(...)                                            metal_draw_backend.mm:891
+#6 Renderer::flushDrawList(...)                                              renderer.cpp:907
+```
+A GPU-buffer write to what ASan calls "a high value address" — consistent
+with `UniformBufferPool` handing out (or `Buffer::upload()` writing into) a
+buffer that's been freed/reused while still in flight, on the raster
+thread, under the kind of frame-to-frame churn that tab-switch-then-design-
+switch produces (many widgets replaced across several frames in quick
+succession). `Buffer::upload()` lives in `campello_gpu` (a separate pinned
+dependency, see `dependencies/campello_gpu.cmake`) — this is GPU-backend/
+raster-thread synchronization territory, not `campello_widgets` Element-tree
+territory like the bug above, and deserves its own dedicated investigation
+session rather than blocking M5. To reproduce: configure a
+fresh build dir with `-DCMAKE_CXX_FLAGS="-fsanitize=address
+-fno-omit-frame-pointer -g" -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address"
+-DCMAKE_SHARED_LINKER_FLAGS="-fsanitize=address" -DENABLE_UNITY_BUILD=OFF`,
+build `campello_widgets_showcase`, run it directly (not via `open`, so
+stderr is visible), and follow the repro steps above.
+
+</details>
+
+### Known issue: `SIGSEGV` in Metal's `presentDrawable:` completion handler under heavy widget churn (2026-08-14, user-reported, not yet fixed — postponed)
+
+Found via `examples/gallery`'s tab-switch + design-system-switch stress
+test, same repro pattern as the `UniformBufferPool` bug above but a
+**distinct, unrelated** crash (different subsystem, different stack) —
+surfaced immediately after that fix landed, so it was masked/less frequent
+before, not caused by it.
+
+**Stack** (top frames, from a real — not ASan — crash report):
+```
+EXC_BAD_ACCESS (SIGSEGV) KERN_INVALID_ADDRESS
+Crashed Thread: com.Metal.CompletionQueueDispatch
+#0 objc_msgSend                                            (selector: presentWithOptions:)
+#1 __45-[_MTLCommandBuffer presentDrawable:options:]_block_invoke
+#2 MTLDispatchListApply
+#3 -[_MTLCommandBuffer didScheduleWithStartTime:endTime:error:]
+#4 ioAccelCommandQueueBlockFenceCallback
+```
+Metal's own internal "drawable scheduled" completion handler calling
+`presentWithOptions:` on a `CAMetalDrawable` that reads as fully unmapped
+memory (`KERN_INVALID_ADDRESS`, not just a protection fault) — i.e. Metal
+is trying to present a drawable that's already been deallocated.
+
+**Investigated, not resolved.** Traced the drawable's retain/release
+accounting by hand across the two places that touch it:
+- `src/macos/run_app.mm`'s `drawInMTKView:` — `CFBridgingRetain()`s
+  `view.currentDrawable`, tied to the `FramePackage`'s lifetime
+  (`package->retained_drawable`), released via `CFBridgingRelease()` when
+  the `FramePackage` is destroyed (right after the raster thread's
+  `raster_fn_(pkg)` call returns — i.e. right after CPU-side `commit()`
+  returns, not after the GPU has actually finished presenting).
+- `campello_gpu`'s `Device::scheduleNextPresent()`/`Device::submit()`
+  (`src/metal/device.cpp`) — a second, independent retain/release pair
+  around the same drawable, tightly coupled to `presentDrawable()` +
+  `commit()`.
+
+Both pairs balance correctly by inspection; no double-release or leak
+found. This matches Apple's documented contract (`presentDrawable:`
+itself retains the drawable until presentation completes), so the code as
+written *should* be safe — but `RasterThread`'s own doc comment
+(`inc/campello_widgets/ui/raster_thread.hpp`) confirms this is a depth-1
+pipeline: the UI thread can begin building and requesting a *new*
+`currentDrawable` for frame N+1 while frame N is still being
+raster/submitted/presented on the raster thread. Under the kind of rapid
+widget churn the gallery's tab+theme switching produces, that's exactly
+the condition under which `CAMetalLayer`'s drawable pool comes under the
+most pressure — a plausible contributing factor, not a proven cause.
+
+Reproduced once on a 2018 Intel Mac mini (Intel UHD 630, two displays
+attached, macOS 15.7.7) and has not reproduced since on the same machine
+under the same repro steps — genuinely timing-sensitive, and possibly
+influenced by Intel's integrated-GPU Metal driver specifically (Intel has
+a history of edge cases here that don't necessarily reproduce on Apple
+Silicon). **User's call: postponed rather than chased further for now.**
+
+**Recurred, same session, same machine (2026-08-14, later)** — identical
+stack trace frame-for-frame, this time under "scroll the Controls tab
+several times, switching themes" (during Liquid Glass scroll-staleness
+verification — unrelated to that fix; confirmed the same crash signature,
+not a new one). Consistent with the "rapid widget churn" contributing
+factor already suspected above — scrolling + repeated theme/design-system
+switching is exactly that kind of churn. Still postponed per the user's
+standing decision; noted here only as an additional data point for
+whenever this gets picked back up with the Zombie/`MTL_DEBUG_LAYER`
+tooling below.
+
+**To pick this back up**: static analysis has been exhausted here (unlike
+the `UniformBufferPool` bug above, no violated invariant was found in the
+code); needs live Metal tooling. Recipe handed to the user:
+```bash
+NSZombieEnabled=YES MTL_DEBUG_LAYER=1 MTL_DEBUG_LAYER_ERROR_MODE=nslog \
+  build/darwin-debug/examples/gallery/macos/campello_widgets_gallery.app/Contents/MacOS/campello_widgets_gallery
+```
+run directly from Terminal (not via `open`, which strips stderr and env
+vars), then repeat the tab-switch + theme-switch repro. Zombie mode turns
+a use-after-free into a `message sent to deallocated instance` log line
+naming the exact object instead of a bare crash; `MTL_DEBUG_LAYER`
+separately validates Metal API usage. Add `MallocStackLogging=1` to get
+`malloc_history <pid> <address>` alloc/retain/release history for the
+zombie'd object.
+
+---
+
+## Liquid Glass — v1 rendering primitive (Metal), 2026-08-14
+
+User-initiated exploration of Apple's "Liquid Glass" material (iOS/macOS
+26+), following the same `theme.hpp` doc comment that anticipates it
+("Material → Cupertino → LiquidGlass"). Researched Flutter's ecosystem
+approach first (no first-party support yet — see
+[flutter/flutter#170310](https://github.com/flutter/flutter/issues/170310);
+community packages split between a pure-Dart/Impeller-shader approximation
+and native-platform-view embedding). Decided against both a separate
+`campello_glass` library and generic custom-shader loading (`ImageFilter::
+shader()`) for the reasons below, and shipped a first-party, built-in
+`ImageFilter::liquidGlass()` rendering primitive on the Metal backend.
+
+**Why not a separate library**: Liquid Glass is Apple's own evolution of
+Cupertino, not a distinct design philosophy — same navigation idioms, same
+component catalog, same iOS-specific behaviors. A `campello_cupertino`
+style flag (`CupertinoDesignSystem::liquidGlass()`, parallel to the
+existing `light()`/`dark()`) is the planned integration point for a later
+session; this entry covers only the rendering primitive underneath it.
+
+**Why not generic custom-shader loading**: weighed against `ImageFilter::
+liquidGlass()` on easy/secure/portable —
+- *Easy*: a built-in filter is bounded, known-shape work (same pattern as
+  `ImageFilter::blur()`); generic shader loading means solving cross-
+  platform shader portability itself (`campello_gpu` spans MSL/SPIR-V/
+  HLSL/WGSL) — building a mini cross-platform shading language + transpiler
+  is its own multi-year project (see Slang, `naga`, Flutter's `impellerc`).
+- *Secure*: a built-in filter has zero new runtime attack surface (shader
+  source lives in our own trusted, offline-compiled codebase). Generic
+  shader loading's risk depends entirely on trust of the shader's origin —
+  fine for developer-authored/build-time-compiled shaders, a real concern
+  (GPU driver shader-compiler crashes, "shader bomb" DoS) the moment source
+  could come from anywhere less trusted.
+- *Portable*: a built-in filter is portable by construction (we author and
+  tune it per backend); generic shader loading's portability *is* the open
+  problem.
+- Matches an existing precedent already in the codebase: `Shader` (used by
+  `ShaderMask`) is already `std::variant<LinearGradient, RadialGradient>` —
+  a tagged union of named, engine-authored effects — with its own doc
+  comment explicitly listing "custom shader" last among future additions.
+  `ImageFilter` grows the same way.
+
+**Why `ImageFilter` stayed a plain struct with a `kind` field, not a
+`std::variant`** (unlike `Shader` above): a backend that hasn't implemented
+`liquidGlass` yet can still do something reasonable by just reading
+`sigma_x`/`sigma_y` and blurring — those fields mean the same thing (the
+frosted base layer glass refracts) for both kinds. A `std::variant` would
+force every backend to explicitly handle or reject the new alternative
+before it even compiles, breaking Vulkan/DirectX/WebGPU immediately for a
+feature they don't need to support yet. Non-Metal backends need **zero
+changes** and get graceful degradation (plain frosted blur, not broken
+output) for free.
+
+**How the shader knows the shape** (the actual technical question that
+drove the design): a signed distance field (SDF), not explicit corner
+bookkeeping. `sdRoundedBox(p, half_size, radius)` — Inigo Quilez's
+canonical rounded-rect formula, already present in this codebase as the
+core of `shapeFragment`'s rounded-rect branch, factored out into a shared
+helper — returns the signed distance to the shape's edge at any point.
+Corners fall out of the formula for free; no shape-specific branching
+anywhere in the fragment shader. A central-difference gradient of that SDF
+gives a per-pixel fake surface normal, which drives both the refraction
+(offsets the backdrop-texture UV sample) and the specular highlight (a
+Blinn-Phong-style term). `corner_radius` alone — clamped to
+`min(width,height)/2` at evaluation time — covers rect → rounded-rect →
+capsule/pill → circle, matching every shape actually used across the
+`DesignSystem` builder catalog; no separate shape-type enum needed for v1.
+Genuinely arbitrary/path-based shapes would need a precomputed SDF texture
+instead of a closed-form formula — explicitly out of scope.
+
+**What shipped**:
+- `inc/campello_widgets/ui/image_filter.hpp` — `ImageFilterKind`
+  (`gaussianBlur`/`liquidGlass`), new fields (`corner_radius`, `tint`,
+  `refraction_strength`, `specular_intensity`), `ImageFilter::liquidGlass()`
+  factory, `operator==`/`!=` (defaulted, C++20).
+- `inc/campello_widgets/ui/render_backdrop_filter.hpp` — `setFilter()`'s
+  dirty-check now uses the new `operator!=` instead of only comparing
+  `sigma_x`/`sigma_y`, so liquid-glass-specific field changes correctly
+  trigger repaint.
+- `shaders/metal/widgets.metal` — new `liquidGlassVertex`/
+  `liquidGlassFragment` pipeline. `LiquidGlassUniforms` is forwarded to the
+  fragment stage as `[[flat]]` vertex-output varyings, not a second buffer
+  binding — this engine's `RenderPassEncoder` only exposes
+  `setVertexBuffer()`, no `setFragmentBuffer()` (confirmed by checking
+  `campello_gpu`'s Metal implementation; caught before it even reached a
+  build, by grepping for the method rather than assuming it existed).
+  Mirrors `shapeFragment`/`ShapeVertOut`'s existing flat-varying pattern.
+- `src/gpu/metal/metal_draw_backend.hpp`/`.mm` — `LiquidGlassVertex` CPU
+  vertex struct (adds a `local_uv` attribute — a plain 0..1 quad
+  parametrization, generated per-corner on the CPU side — alongside the
+  existing screen-space `posw`/backdrop-sample `uv`, so the SDF is
+  evaluated in the widget's own local space and stays correct under a
+  rotated/perspective ambient transform, not screen space). Own
+  `UniformBufferPool` pair (`liquid_glass_uniform_pool_`/
+  `_vertex_pool_`), per the established one-pool-per-distinct-size rule
+  from the earlier `UniformBufferPool` SIGBUS fix. `drawBackdropFilter()`
+  branches on `cmd.filter.kind`, reusing `quad_bgl_`/`quad_sampler_` (same
+  texture@0 + sampler@1 binding shape as blur/textured-quad) for the new
+  pipeline's bind group.
+- `examples/gallery`'s Clipping & FX tab — a second "LIQUID GLASS" demo
+  card next to the existing frosted-glass one, same striped backdrop, for
+  a direct side-by-side comparison.
+
+**Verified**: `shaders/metal/widgets.metal` compiles cleanly via
+`build_metal_shaders.sh` (macOS/iOS/iOS-simulator .metallib variants, all
+three), `campello_widgets` + gallery build clean, 449/449 universal tests
+green, gallery launches without crashing.
+
+**Bug found on first real visual check (user screenshot, not caught by any
+of the above)**: the panel rendered as colorful per-pixel static/noise
+with a hard diagonal seam, regenerating *differently* on every frame — the
+signature of reading undefined GPU memory, not a deterministic math
+mistake. Root cause: `liquidGlassFragment` called `discard_fragment()`
+early (for pixels outside the rounded-rect shape) and *later* called
+`tex.sample()`, which uses an implicit derivative to pick a mip level.
+Combining a divergent `discard_fragment()` with a later implicit-derivative
+sample in the same shader is a well-known GPU hazard — when neighboring
+pixels in the same 2×2 shading quad take different discard paths, the
+derivative Metal needs can read undefined values. None of this file's
+other fragment shaders (`shapeFragment`, `blurFragment`, `quadFragment`)
+combine the two, which is why the hazard was novel to this shader and not
+caught by matching an existing pattern closely enough. Fixed by removing
+the early discard entirely — it was redundant anyway, since the shape's
+own edge-antialiasing `alpha = 1 - smoothstep(-1, 1, d)` already reaches
+exactly 0 at the same boundary (`d > 1`), matching `shapeFragment`'s
+existing alpha-only shaping with no discard. Also added explicit UV
+clamping on the backdrop sample (`clamp(..., 0.0, 1.0)`) as independent
+hardening, matching `blurFragment`'s existing clamp. Re-verified: shader
+recompiles clean, `campello_widgets` + gallery rebuild clean, 449/449
+tests still green. **Visually re-confirmed by the user (screenshot)**: the
+corruption/noise/diagonal seam is gone; the panel now shows a clean
+rounded-rect shape, visibly more saturated/tinted stripes than the plain
+frosted panel next to it, and a specular glow band along the bottom edge
+(physically consistent with the fixed light direction pointing mostly
+up — for a short, wide panel that concentrates the highlight along the
+whole bottom edge rather than a tight corner catch-light; a reasonable,
+if broad, v1 result worth tuning later, not a bug).
+
+**Tuning pass (same session, user-requested — "feeling near precise to
+real iOS/macOS Liquid Glass")**: real Liquid Glass concentrates its
+distortion in a narrow bevel right at the edge (interior stays essentially
+undistorted), catches a thin bright highlight *all the way around* the
+boundary rather than a hard directional spot that goes dark on one side,
+and has a subtle chromatic-fringe "prism" cue at the refracting edge that
+plain blur can never produce. Retuned `liquidGlassFragment`:
+- `refractBand`/`rimBand` now scale off `corner_radius` (clamped to a
+  sane range) instead of one fixed 18px width — proportionate on both a
+  small chip and a large card, rather than swallowing a small control's
+  whole interior.
+- Added a second, much thinner `rimBand` for the bright edge-glint,
+  separate from the wider `refractBand` used for the lensing distortion.
+- Added chromatic aberration: R/B channels sample with a small extra
+  offset along the same refraction direction as G, scaled by
+  `refract_amt` — same 3-texture-read technique classic glass/prism
+  shaders use.
+- Rim highlight remapped from a hard `pow(dot(...), 8.0)` (zero on the
+  side facing away from the light) to a soft, always-positive
+  `light_bias = dot(normal, -light_dir) * 0.5 + 0.5` blended toward white
+  via `mix()` rather than added — reads as glass catching ambient light
+  around its whole edge, brighter toward one side, not a point reflection.
+- Saturation boost pulled back slightly (1.35 → 1.25) now that chromatic
+  aberration adds edge richness on its own.
+
+Verified: shader recompiles clean, gallery rebuilds clean, 449/449 tests
+still green, and the user confirmed via screenshot that it now reads as
+a distinct glass material (clean rounded pill shape, thin bright rim
+tracing the full boundary, clean saturated interior) rather than a tinted
+blur — a clear improvement over the pre-tuning result.
+
+**Deliberate v1 simplifications, not bugs**:
+- Specular light direction is fixed, not reactive to device motion/content
+  (real Liquid Glass is dynamic here).
+- Only the Metal backend has a real implementation; Vulkan/DirectX/WebGPU
+  fall back to plain Gaussian blur (via `sigma_x`/`sigma_y`) until each
+  gets its own pass — a deliberate, graceful degradation per the
+  `ImageFilter` design above, not a placeholder to fix urgently.
+- Shape is corner-radius-only (rect/rounded-rect/pill/circle); no
+  arbitrary-path SDF support.
+
+**`CupertinoDesignSystem` wiring — started, same session (user: "start
+wiring to cupertinodesignsystem")**: added the style-flag plumbing
+proposed earlier — `CupertinoMaterial` enum (`classic`/`liquidGlass`),
+a `material` parameter on `CupertinoDesignSystem`'s constructor (default
+`classic`, so every existing call site is unaffected), and a new
+`CupertinoDesignSystem::liquidGlass(bool dark = false)` factory parallel
+to `light()`/`dark()` — same class, same library, no new widget types, per
+the "same library, style flag" decision from the original design
+discussion.
+
+Wired two builders so far, both fully-rounded floating surfaces that fit
+the shader's uniform-corner-radius shape model cleanly:
+- `buildCard()` — only for `CardPriority::elevated` (a floating panel in
+  real HIG); `filled`/`outlined` stay classic/flat even in glass mode,
+  since those are grouped-list-style flat surfaces in real HIG, not
+  floating glass — matching Apple's actual usage rather than applying
+  glass indiscriminately everywhere. Composed as
+  `DecoratedBox(shadow only) > BackdropFilter(liquidGlass)` — no `ClipRRect`
+  in the composition; see "`ClipRRect` + `BackdropFilter` confirmed
+  incompatible" below for why that's permanent, not an oversight.
+- `buildPrimaryActionButton()` (FAB) — `corner_radius = diameter/2`
+  degenerates the shader's rounded-rect SDF into a perfect circle (see
+  the shape section above), so no separate `ClipOval` is needed.
+
+**Why `buildDialog()`/`buildBottomSheet()`/`buildNavigationBar()`/
+`buildAppBar()` are deliberately skipped for now**: `Dialog` is its own
+dedicated widget that paints `background_color` internally — it has no
+backdrop-filter hook to swap in, so glass-ing it would mean either
+bypassing the widget entirely (risking losing whatever modal-positioning
+logic it owns) or adding a `background_filter` field to the core `Dialog`
+widget itself, a bigger, more invasive change than this pass's scope.
+NavigationBar/AppBar/BottomSheet are flush with a screen edge and need
+*asymmetric* corner rounding (e.g. round top corners only) — the current
+shader only supports one uniform `corner_radius` on all four corners, so
+they'd render visibly wrong (fully rounded) if wired up as-is.
+
+Demoed in `examples/gallery`: the sidebar's design-system switcher gained
+a 4th "Glass" segment (`GalleryDesignSystemKind::cupertino_glass`), and
+Controls gained a new "CARD + PRIMARY ACTION BUTTON" row calling
+`ds->buildCard()`/`ds->buildPrimaryActionButton()` directly (the gallery's
+other cards all use a local `card()` helper, not the `DesignSystem`
+builder — this is the only place in the gallery exercising the real
+`buildCard()` codepath). Every other switcher position renders this row
+exactly as before (flat/solid) — only "Glass" changes it.
+
+Verified: `campello_cupertino`/`campello_widgets`/gallery all rebuild
+clean, 449/449 + 17/17 tests green.
+
+**Still not done** (tracked as future work): `BottomSheet`/`NavigationBar`/
+`AppBar` background-filter hooks — these need *asymmetric* corner-radius
+shader support (e.g. round top corners only), which the shader doesn't have
+yet, so they'd render visibly wrong (fully rounded) if wired up as-is;
+`ActionSheet`/`Tooltip` are both now done — see below — closing out the
+original glass-surface list; per-widget opt-in granularity matching
+SwiftUI's `.glassEffect()`
+(currently this is an all-or-nothing style flag per `CupertinoDesignSystem`
+instance, not a per-component override); Vulkan/DirectX/WebGPU real
+implementations. `Dialog`'s background-filter hook — listed here as blocked
+in the original wiring pass — turned out not to need a core widget change
+after all; see "`Dialog` wiring" below, done in a later session.
+`PopupMenuButton`/`DropdownButton` are also done — see the same entry.
+
+### Bug found via the wiring above: `buildPrimaryActionButton()` had backwards `Align`/`SizedBox` nesting in *all three* concrete DesignSystems (2026-08-14, pre-existing, fixed)
+
+The gallery's new Card + PrimaryActionButton demo row (added to exercise
+the Liquid Glass wiring above) rendered as a tiny sliver of card text next
+to a FAB stretched into a giant pill spanning most of the row — in
+*every* design-system kind, not just `cupertino_glass`. That ruled out
+anything Liquid-Glass-specific and pointed at `buildPrimaryActionButton()`
+itself, which had never actually been rendered in a real layout before
+(not used in `examples/macos_showcase` either — only unit-tested for
+non-null return, which doesn't catch a sizing bug).
+
+**Root cause**: `campello_ui`, `campello_material`, and `campello_cupertino`
+all independently wrote the same backwards composition:
+```cpp
+auto sized    = SizedBox::square(diameter, content);
+auto centered = std::make_shared<Align>(Alignment::center(), sized);
+```
+`Align` sizes *itself* to fill whatever bounded space its own parent
+gives it (correct, standard `Align` semantics — useful for centering
+content within an already-explicitly-sized parent) and only positions its
+*child* within that area. Wrapping an *already-56×56* `SizedBox` in an
+outer `Align` doesn't pin anything to 56×56 — the whole `Align` (and
+everything inside it) expands to fill its own ambient parent instead.
+Inside a `Row`'s non-flex layout pass with a loose-but-large cross-axis
+constraint (the demo row's context), that meant the FAB's `Align` greedily
+claimed most of the row's width in the first pass, leaving almost nothing
+for the `Expanded` card in the second pass — explaining *both* visual
+symptoms (huge FAB, squished card) as one single root cause.
+
+**Fix**: swap the nesting so `Align` centers `content` first, and
+`SizedBox` wraps the result last — `SizedBox::square(diameter,
+Align(center, content))` — pinning the *whole* button to 56×56
+regardless of ambient constraints, with the icon/label centered inside
+that fixed box. Applied identically to all three design systems (same
+bug, same fix, no reason to leave two of them broken once the third was
+diagnosed). `campello_cupertino`'s two branches (`liquidGlass`/`classic`)
+both updated to reference the corrected `sized` widget instead of the old
+`centered`.
+
+Verified: `campello_ui`/`campello_material`/`campello_cupertino`/
+`campello_widgets`/gallery all rebuild clean; full suite green — 449
+(`campello_widgets`) + 39 (`campello_ui`) + 19 (`campello_material`) + 17
+(`campello_cupertino`) + 64 (`design_system_contract`) tests, all passing.
+
+### Second bug found on visual re-confirmation: stale/reflected backdrop content while scrolling the glass card (2026-08-14, user-diagnosed, fixed)
+
+With the sizing bug above fixed, the user's screenshots showed the glass
+card rendering correctly at rest, but reported (their own diagnosis,
+confirmed correct in spirit): scrolling the Controls page made the card
+briefly show blue/gray smudges matching the *Toggle Buttons* section
+scrolling past above it — content from a different part of the page
+"reflected" into the glass card.
+
+**Investigated**: this framework already has a specific, previously-built
+safeguard for exactly this class of bug —
+`PictureLayer::hasBackdropFilter()` — whose doc comment describes the
+*exact* symptom: "BackdropFilter inside a scroll doesn't respect
+offset... blur sampling a stale, frozen backdrop," caused by
+`OffsetLayer`'s cache-replay optimization skipping
+`RenderBackdropFilter::performPaint()`'s `noteBackdropFilter()` side
+effect on a frame where only position changed. The fix already in place
+for that: a recording containing `DrawBackdropFilterBeginCmd` is *never*
+replayed, forcing `performPaint()` (and thus a fresh backdrop capture) to
+run every visible frame.
+
+That safeguard should hold for a *direct* `BackdropFilter`. But
+`buildCard()`'s liquid-glass branch was the first place in this codebase
+wrapping `BackdropFilter` inside `ClipRRect` — and `ClipRRect` is *itself*
+a second, independent `OffsetLayer` caching boundary (`RenderClipRRect`
+has its own `offset_layer_`). The existing safeguard has only ever been
+exercised against a direct `BackdropFilter`; nesting it inside a second,
+separate cache boundary is untested interaction between two caching
+layers that were never designed/tested together.
+
+**Fix**: removed the `ClipRRect` wrapping entirely rather than chase the
+exact interaction through the caching internals — it was never load-
+bearing for correctness in the first place. `ImageFilter::liquidGlass()`'s
+shader already self-shapes to the rounded rect via its own SDF+alpha (see
+the shape section above); `ClipRRect` was only there to clip
+caller-supplied child content that might overflow the rounded corners, a
+minor cosmetic concern for realistic card content (a text label), not
+worth the risk of an untested nested-caching interaction. `buildCard()`'s
+glass branch now passes the `BackdropFilter` straight to the shadow
+`DecoratedBox`, no intermediate clip.
+
+Verified: `campello_cupertino` rebuilds clean, 17/17 + 64/64 (contract
+suite) tests still green.
+
+**Update, later session (2026-08-15)**: the user's visual re-confirmation
+of this fix was interrupted by an unrelated Metal drawable-presentation
+crash recurrence (see that section above) and never independently
+completed. Investigating a *different* reported bug (shadow position drift
+on the same card, unrelated to `ClipRRect`/backdrop staleness — see
+"Shadow position drift" below) turned up a real, separate, previously-
+unknown cache-eviction bug in `OffsetLayer::record()`, which briefly looked
+like it might have been the *actual* root cause of this scrolling-artifact
+bug all along, making the `ClipRRect` removal above a coincidental
+workaround rather than a real fix. Re-adding `ClipRRect` to test that
+theory (now that the cache-eviction bug was fixed) produced a *worse*,
+clearly-new symptom (blurred content from the wrong part of the window,
+not just stale/reflected content) — see "`ClipRRect` + `BackdropFilter`
+confirmed incompatible" below. So: the cache-eviction bug was real but
+unrelated to this one; `ClipRRect` removal was never a workaround for the
+wrong bug, and stays removed for a *third*, independently-confirmed reason.
+
+### Shadow position drift during scroll (2026-08-15, found via a new user report, fixed)
+
+User report, initially on the same glass card as the bugs above: "the card
+in controls tab, has some visual issues when switching themes and
+scrolling... the shadow changes when scrolling vertically... a big and
+random offset." Static-screenshot follow-up on a *classic* (non-glass) card
+narrowed it further: a hard-edged, unblurred gray rectangle sitting at a
+stale position, mostly occluded by the (correctly-positioned) card
+in front of it wherever the two overlapped — reproduces in every design
+system, nothing Liquid-Glass-specific about it.
+
+**Root cause**: `Renderer::evictReplayCacheEntries(region_id)`
+(`src/ui/renderer.cpp`) drops any cached shadow/clip-shape/shader-mask/
+save-layer GPU composite keyed by an `OffsetLayer`'s address — but it was
+only ever called from `OffsetLayer::~OffsetLayer()`. `OffsetLayer::record()`
+(a *fresh* full record, as opposed to a cached replay) never called it. Any
+`OffsetLayer` that records more than once in its lifetime (e.g. a `Card`'s
+container settling from an intermediate layout into its final position
+across the first couple of frames) leaves the *first* record's cached
+shadow texture/bounds sitting in `Renderer::shadow_gpu_cache_` under a key
+— `(this OffsetLayer pointer, encounter-order bracket_index)` — that the
+*second* record's future identity-replay will reuse unquestioningly, since
+that cache lookup has no way to know the underlying picture changed between
+records. The stale entry's `bounds` (captured from the first, since-
+superseded record) is what gets composited forever after — a shadow frozen
+at wherever the card was on an early frame, while the card's own fill/
+border repaint correctly at its final position every frame.
+
+**Fix**: `OffsetLayer::record()` now calls `renderer->evictReplayCacheEntries(this)`
+before recording, unconditionally — not just in the destructor, which only
+guarded against a *different* `OffsetLayer` instance reusing a freed
+address, not the same instance re-recording fresh content.
+
+Verified: full `darwin-debug` rebuild clean, 690/690 tests green. **User
+visually confirmed** (screenshot) both a static re-check and after
+scrolling — shadow stays correctly pinned to the card.
+
+### `ClipRRect` + `BackdropFilter` confirmed incompatible (2026-08-15, found while re-testing the fix above)
+
+With the cache-eviction bug above fixed, it seemed plausible the *original*
+"reflecting toggle buttons while scrolling" bug (the reason `ClipRRect` was
+removed from `buildCard()`'s glass branch in the first place — see that
+entry above) might have been the *same* underlying cache bug all along,
+making the `ClipRRect` removal a coincidental, no-longer-necessary
+workaround. Re-added `ClipRRect` around `buildCard()`'s `BackdropFilter` to
+test that theory.
+
+**Result: a new, worse, clearly-distinct symptom** — the glass card started
+showing blurred content from the top-left of the *window*, unrelated to
+what was actually behind the card, regardless of scroll position (reproduced
+at rest, not just while scrolling).
+
+**Root cause**: `Renderer::applyClipShape()` (`src/ui/renderer.cpp`) renders
+a `ClipRRect`'s subtree into a *separate*, small offscreen texture, content
+translated so the clip region's own top-left becomes local `(0,0)`, then
+runs a *nested* `flushDrawList()` against that tiny local viewport — a
+different, smaller coordinate space than the main frame's. A
+`BackdropFilter` inside that nested subtree composites by sampling
+`blurred_backdrop_tex_` — the single, full-window backdrop capture — using
+UV coordinates computed for *that* local, small viewport, not the card's
+real on-screen position. So it samples near the local viewport's own
+origin, which (mapped back through the outer clip's tiny offset) lands near
+the *window's* origin rather than the region actually behind the card.
+
+**This finally explains the original "reflecting toggle buttons" bug too**,
+correctly this time: `ClipRRect` wrapping a `BackdropFilter` was never a
+caching problem — it was always this UV-space mismatch. The earlier
+`ClipRRect` removal (in the "stale/reflected backdrop" entry above) was the
+right fix for the right reason from the start; this session's detour
+through the cache-eviction bug was a real, independent finding, just not
+the explanation for *that* particular symptom.
+
+**Fix**: reverted the re-added `ClipRRect` immediately. `buildCard()`'s
+doc comment updated to state this as a *confirmed* incompatibility (backed
+by reading `applyClipShape()`), not a suspected/untested one — explicitly
+warning against re-attempting this without first teaching
+`BackdropFilter`'s compositing to account for an enclosing clip's local
+viewport offset.
+
+Verified: rebuild clean, 690/690 tests green. **User visually confirmed**
+the glass card is back to normal (no top-of-window blur bleed).
+
+### `PopupMenuButton`/`DropdownButton` Liquid Glass wiring (2026-08-15)
+
+Continued the glass rollout (see `CupertinoDesignSystem` wiring above) to
+both overlay-based menu widgets. Unlike `Card`/`PrimaryActionButton`
+(pure "compose and return" builders with no widget-owned lifecycle), these
+are genuine `StatefulWidget`s that own their own overlay/dismiss/gesture
+plumbing — bypassing them to hand-roll glass compositions in the design
+system, the way `buildCard()` does, would mean reimplementing all of that.
+Instead, extended the *core* widgets themselves:
+- `PopupMenuButton::backdrop_filter` / `DropdownButton<T>::backdrop_filter`
+  — new `std::optional<ImageFilter>` fields. When set, each widget's own
+  `open()` swaps its flat `DecoratedBox` fill for the same
+  `DecoratedBox(shadow only) > BackdropFilter` composition `buildCard()`
+  uses (no `ClipRRect`, per the confirmed incompatibility above) instead of
+  a plain colored fill.
+- `CupertinoDesignSystem::buildPopupMenuButton()`/`buildDropdownButton()`
+  set `backdrop_filter = ImageFilter::liquidGlass(...)` only when
+  `material_ == CupertinoMaterial::liquidGlass`; classic mode is unaffected.
+
+Added a "POPUP MENU BUTTON" demo row to the gallery's Controls tab (the
+existing `DropdownButton` demo already exercises `ds->buildDropdownButton()`
+and needed no gallery change).
+
+Verified: rebuild clean, 690/690 tests green.
+
+### `RenderGestureDetector`'s anchor position ignored scroll offset (2026-08-15, pre-existing, found via the wiring above)
+
+Testing the new glass menus surfaced two *pre-existing*, unrelated-to-glass
+bugs in both `DropdownButton` and `PopupMenuButton`'s overlay-anchoring —
+confirmed present in every theme, not just Glass, since scroll position
+doesn't depend on the active `DesignSystem`.
+
+**Bug 1 — wrong vertical menu position after scrolling**: both widgets
+locate their trigger button's on-screen position via
+`RenderGestureDetector::globalOffset()`, set in `performPaint()`. That
+method computed `global_offset_` purely from the paint-time `offset`
+parameter (minus the safe-area inset) — but `offset` is the node's
+*logical*, pre-scroll tree position; a scroll view's own scroll delta is
+applied separately, only as an ambient `Canvas::translate()`
+(`PushTransformCmd`) at paint time, never touching `offset` itself (see
+`projectedBounds()`'s doc, already used for exactly this reason elsewhere —
+`RenderBackdropFilter::performPaint()`, `OffsetLayer::maybeReplay()`). Any
+trigger button inside a `SingleChildScrollView` therefore reported its
+*pre-scroll* position, and the menu opened at an offset proportional to
+however far the list had scrolled.
+
+**Fix**: `globalOffset()` now projects through `ctx.canvas().currentTransform()`
+(via `projectedBounds()`) before storing, matching the established pattern.
+
+Verified: rebuild clean, 690/690 tests green.
+
+### `PopupMenuButton` always opened top-right of the screen (2026-08-15, pre-existing, found via the wiring above)
+
+**Bug 2** from the same testing pass: unlike `DropdownButton` (which
+correctly anchors to its trigger via `RenderDropdownMenuPositioner`),
+`PopupMenuButton`'s menu was hardcoded to `Align(Alignment::topRight())` —
+never actually anchored to the button at all.
+
+**Fix**: gave `PopupMenuButton` the same anchoring mechanism as
+`DropdownButton` — a `GlobalKey` on the trigger `GestureDetector`, and a
+local `detail::PopupMenuPositionerWidget` backed by the same
+`RenderDropdownMenuPositioner` core render object (kept local to
+`popup_menu_button.cpp` rather than sharing `dropdown_button.hpp`'s
+private `detail::DropdownMenuPositionerWidget`, to avoid a naming-only
+cross-widget coupling — same render object underneath either way, since
+it was already generic, not actually `DropdownButton`-specific despite the
+name).
+
+Verified: rebuild clean, 690/690 tests green.
+
+### `Dialog` wiring, and three compounding pre-existing layout bugs it uncovered (2026-08-15)
+
+Continued the glass rollout to `Dialog` — deliberately skipped in the
+original wiring pass (see "Still not done" above) over concern it would
+need a core widget change. Turned out `Dialog::build()` already had a
+*worse*, unrelated, pre-existing gap: `border_radius`/`elevation` were
+dead fields, silently ignored — the implementation was a bare `Container`
+with only `background_color`, with a code comment admitting as much
+("would need Container decoration support — for now, just use the basic
+container"). Fixed that first (now composes a real `DecoratedBox` with
+rounded corners + shadow, same pattern as `buildCard()`), then added
+`Dialog::backdrop_filter` (same mechanism as `PopupMenuButton`/
+`DropdownButton` above — no core-widget-change blocker after all), and
+wired it in `CupertinoDesignSystem::buildDialog()`.
+
+This — for the first time ever fully exercising `CupertinoDesignSystem::
+buildDialog()`'s ≤2-action row end-to-end — surfaced **three separate,
+compounding, pre-existing bugs**, each masking the next until fixed:
+
+1. **`Align` without `height_factor` swallows the whole loose vertical
+   budget.** `buildDialog()`'s title/content wrap in `Align(Alignment::
+   center(), ...)` with no `height_factor` set — `Align` sizes itself to
+   `constraints_.max_height` when no factor is given (correct, standard
+   semantics — see the earlier `buildPrimaryActionButton()` `Align`/
+   `SizedBox` bug for the same class of mistake), which is fine under a
+   *bounded* parent but not here: `showDialog()`'s `Center` only *loosens*
+   the incoming constraints, it doesn't bound them, so the dialog's title
+   `Align` claimed nearly the entire window height on its own, before the
+   Column ever reached the actions row. **Fix**: `height_factor = 1.0f` on
+   both, so each shrink-wraps to its child's natural height while still
+   centering horizontally.
+2. **The action row's `cross_axis_alignment::stretch` inherited that same
+   huge loose budget.** A `Row`'s cross axis is height; `stretch` makes a
+   `Row` report its *own* height as whatever `max_height` its parent hands
+   it (correct `RenderFlex` behavior — matches Flutter's own documented
+   `CrossAxisAlignment.stretch`), which was fine as *positioning* logic but
+   catastrophic given the huge loose bound from bug 1's parent chain. First
+   fix attempt: a fixed 44pt height (`UIAlertAction`'s real HIG row height)
+   wrapping the row, with each action `Center`-wrapped inside its
+   `Expanded` for horizontal centering.
+3. **Centering within *manufactured* slack space exposed a small residual
+   text-positioning offset.** With bugs 1–2 fixed, button text still sat
+   visibly low within its cell. Spent real effort chasing this as a text-
+   metrics problem (see the ink-bounds entry below) before the user's own
+   observation reframed it correctly: `MaterialDesignSystem`'s dialog
+   action row (no `stretch`, no artificial fixed height — the row simply
+   sizes to its tallest child) never showed this, in the *same* build,
+   with the *same* text-rendering pipeline. The bug wasn't text rendering —
+   it was that bug 2's fixed-44pt-height wrapper manufactured slack space
+   around buttons that were naturally shorter, and centering *within
+   manufactured slack* is exactly where any small residual offset becomes
+   visible; zero slack (Material's approach) leaves nothing for such an
+   offset to be visible within. **Fix**: dropped `stretch` and the fixed-
+   height wrapper entirely; `cross_axis_alignment::center` instead (row
+   sizes to its tallest child, matching Material's proven approach), each
+   action `Center`-wrapped with `height_factor = 1.0f` (shrink-wraps to the
+   button's natural height — required, since a factor-less `Center` here
+   would reinherit the row's own loose `max_cross` and reintroduce bug 2 at
+   the per-button level) for horizontal-only centering. The vertical
+   hairline divider between the two actions — previously sized "for free"
+   by `stretch` — needed an explicit fixed height (`24.0f`, a reasonable
+   approximation; `cfg.actions[i]` is an opaque caller-supplied `WidgetRef`,
+   so `buildDialog()` has no way to query its true height ahead of layout).
+
+Added a "Show Dialog" demo (delete-confirmation alert) to the gallery's
+Controls tab.
+
+Verified at each step: rebuild clean, 690/690 tests green throughout.
+**User visually confirmed**, iterating through all three bugs plus the
+horizontal-centering regression bug 3's final fix briefly introduced
+(losing `Center` entirely when first removing `stretch`, before re-adding
+it correctly with `height_factor = 1.0f`) — final state confirmed
+"perfect" on both axes, in both classic iOS and Glass.
+
+### Ink-bounds text metrics for single-line UI labels (2026-08-15, real improvement, not the fix for bug 3 above)
+
+Built while investigating bug 3 above, before the user's Material-vs-
+Cupertino comparison reframed the actual cause. Kept — it's a genuine,
+correctly-scoped improvement, just not what fixed that particular bug.
+
+`RenderText` sizes/positions text using the full typographic
+`ascent + descent + leading` box (correct for continuous/multi-line
+paragraph flow, where consistent baseline-to-baseline spacing matters).
+For a short single-line UI label (button text, ...), that box reserves
+ascent/leading space for glyphs the string doesn't actually contain
+(accented capitals, descenders), so its geometric center sits measurably
+below the glyph ink's true visual center — centering the *box* leaves text
+looking low wherever there's real slack for that to be visible in.
+
+**Added**: `TextStyle::tight_vertical_bounds` (opt-in, default `false`,
+no-op unless the text lays out to exactly one line) — when set,
+`RenderText` sizes itself from a new `IDrawBackend::measureTextInkBounds()`
+tight glyph-path bounding box instead of the typographic one. Default
+backend implementation returns the untightened box unchanged (safe
+fallback for backends without a native query); implemented for Metal via
+CoreText's `CTLineGetBoundsWithOptions(kCTLineBoundsUseGlyphPathBounds)`.
+`performPaint()` still rasterizes/draws exactly the same (unchanged)
+typographic-sized glyph texture — only its position shifts, by the
+computed ink-top offset, so the ink lands inside the now-tighter reported
+size instead of the full typographic box. The offset calculation had to be
+redone once to mirror `rasterizeText()`'s *exact* physical-pixel arithmetic
+(its `ceil()` rounding and ±1px raster/composite padding) rather than an
+independent logical-space approximation — the two roundings don't commute
+with a later divide-by-DPR, and the approximation left a several-pixel
+residual. Applied in `examples/gallery`'s `ts()` helper (the one function
+that builds every `TextStyle` in the demo) — the design systems themselves
+can't set this, since `ButtonConfig::label`/`DialogConfig::title`/etc. are
+caller-supplied, opaque `WidgetRef`s, not `Text` widgets the design system
+constructs itself.
+
+Verified: rebuild clean, 690/690 tests green.
+
+### `ActionSheet` Liquid Glass wiring (2026-08-15)
+
+Continued the glass rollout to `buildActionSheet()`. Unlike `PopupMenuButton`/
+`DropdownButton`/`Dialog`, this builder owns no widget lifecycle at all — it
+just composes and returns a `WidgetRef` (the caller is responsible for
+presenting it in an `Overlay`, same as `buildCard()`), so no core-widget
+field was needed; the glass composition lives entirely inside
+`CupertinoDesignSystem::buildActionSheet()`.
+
+- Factored the actions-card/cancel-card decoration into a shared
+  `makeSheetCard()` lambda: classic mode keeps the existing flat
+  `DecoratedBox(color=surface)`; glass mode swaps to the same shadow-
+  `DecoratedBox`-wrapping-`BackdropFilter` composition used everywhere else
+  in this rollout (no `ClipRRect`).
+- Proactively fixed the same `Align`-without-`height_factor` hazard the
+  `Dialog` saga above uncovered — `buildActionSheet()`'s title and every
+  action label center via `Align(Alignment::center(), text)` with no
+  `height_factor`, the exact pattern that caused bug 1 in the `Dialog`
+  entry above. Added `height_factor = 1.0f` to all of them before this
+  bug had a chance to manifest here too, rather than waiting to trip over
+  it again.
+- Added a "Show Action Sheet" demo (Take Photo / Choose from Library /
+  Delete Photo, with a destructive-styled Delete + Cancel) to the
+  gallery's Controls tab. `ActionSheet` has no `showDialog()`-equivalent
+  core helper, so the demo presents it by hand: a dismiss `ModalBarrier`
+  plus a bottom-`Align`ed sheet, matching real iOS placement (bottom-
+  anchored, not centered).
+
+Verified: rebuild clean, 690/690 tests green.
+
+### `Tooltip` Liquid Glass wiring (2026-08-15) — closes the original glass-surface rollout
+
+Continued the glass rollout to `buildTooltip()`. Like `PopupMenuButton`/
+`DropdownButton`, `Tooltip` is a genuine `StatefulWidget` owning its own
+overlay/dismiss-timer lifecycle (`TooltipState::showTooltip()`/
+`dismissTooltip()`), so — same reasoning as those two — extended the core
+widget itself rather than hand-rolling the composition in the design
+system: `Tooltip::backdrop_filter` (`std::optional<ImageFilter>`), and
+`TooltipState::showTooltip()` swaps its flat `DecoratedBox` bubble for the
+same shadow-`DecoratedBox`-wrapping-`BackdropFilter` composition used
+throughout this rollout when set. Unlike `Dialog`, `Tooltip`'s existing
+`border_radius`/`background_color` were already correctly applied (no
+dead-field gap to fix first). `CupertinoDesignSystem::buildTooltip()` sets
+`backdrop_filter` only in `CupertinoMaterial::liquidGlass` mode.
+
+Added a "Long-press me" tooltip target (`ds->buildTooltip()`) to the
+gallery's Controls tab.
+
+Verified: rebuild clean, 690/690 tests green.
+
+This closes out every surface from the original Liquid Glass rollout plan
+(`Card`, `PrimaryActionButton`, `PopupMenuButton`, `DropdownButton`,
+`Dialog`, `ActionSheet`, `Tooltip`). Remaining glass work is now only the
+items still blocked on real prerequisites: `BottomSheet`/`NavigationBar`/
+`AppBar` (asymmetric corner-radius shader support), per-widget
+`.glassEffect()`-style opt-in granularity, and Vulkan/DirectX/WebGPU real
+implementations — see "Still not done" above.
 
 ---
 

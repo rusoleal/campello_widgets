@@ -23,6 +23,9 @@ set_target_properties(campello_widgets_showcase PROPERTIES
 
 target_link_libraries(campello_widgets_showcase
     campello_widgets
+    campello_ui
+    campello_material
+    campello_cupertino
     "-framework Cocoa"
     "-framework Metal"
     "-framework MetalKit"

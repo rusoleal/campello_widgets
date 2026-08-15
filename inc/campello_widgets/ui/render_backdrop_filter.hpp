@@ -28,8 +28,7 @@ namespace systems::leal::campello_widgets
 
         void setFilter(const ImageFilter& filter) noexcept
         {
-            if (filter_.sigma_x != filter.sigma_x ||
-                filter_.sigma_y != filter.sigma_y)
+            if (filter_ != filter)
             {
                 filter_ = filter;
                 markNeedsPaint();
