@@ -3525,12 +3525,14 @@ what this session could build, run, and visually verify). `AVPlayer` +
 texture format, `bgra8unorm`, with no color-space conversion). `AVPlayer`
 owns playback timing *and* audio output automatically — audio isn't extra
 work here, it's inherent to using `AVPlayer` rather than a bare
-`AVAssetReader`. **Explicitly out of scope**: iOS/Android/Windows/Linux;
-zero-copy import; a formal cross-platform decoder interface (one concrete
-macOS implementation behind a platform-neutral header, matching how
-`HttpClient`'s header is implemented only in `src/macos/http_client.mm`
-today — no `IVideoDecoder` abstraction invented speculatively); a
-`DesignSystem`-level playback-controls builder; looping/subtitles/multiple
+`AVAssetReader`. **Explicitly out of scope**: Android/Windows/Linux; a real
+iOS UI demo (the controller itself became iOS-portable the same day — see
+the follow-up entry below — but no iOS example app exists in this repo to
+exercise it visually); zero-copy import; a formal cross-platform decoder
+interface (one concrete implementation behind a platform-neutral header,
+matching how `HttpClient`'s header is implemented only in
+`src/macos/http_client.mm` today — no `IVideoDecoder` abstraction invented
+speculatively); a `DesignSystem`-level playback-controls builder; looping/subtitles/multiple
 tracks; buffering-state reporting.
 
 **What shipped**:
@@ -3610,6 +3612,69 @@ nothing here is meaningfully testable without a real AVFoundation decode +
 GPU device, matching how `RenderDrawSurface`/image loading also have no
 dedicated unit tests, only the gallery as a live check); gallery launches
 without crashing.
+
+### Follow-up, same day: end-of-playback bug, full-size overlay UI, iOS build portability
+
+**Bug (user-found, live-tested)**: nothing in `onTick()` ever detected
+playback reaching the end of the item — `playing_` stayed `true` forever
+(Play/Pause button stuck), and the ticker kept calling `FrameScheduler::
+scheduleFrame()` every tick indefinitely with nothing new to show
+(continuous, pointless redraws). **Fix**: a block-based
+`AVPlayerItemDidPlayToEndTimeNotification` observer (registered on the
+main queue in `setSource()`, removed in the destructor before the raw
+`this` it captures could dangle) that pauses, seeks back to `CMTimeZero`,
+resets `playing_`/`position_ms_`, and unsubscribes the ticker. Chosen over
+polling `player.currentTime` against `duration_ms_` each tick (imprecise,
+and `onTick()` already has enough responsibilities) — this is the one
+piece of `VideoPlayerController` that's genuinely event-driven rather than
+poll-based, and deliberately so.
+
+**UX, at the user's request**: moved the demo out of the Controls tab into
+its own top-level "Video" tab (`kSectionNames`/`kSectionIcons`/
+`buildSection()` — picks up the sidebar, collapsed-icon rail, and View
+menu automatically, no separate wiring needed), then reworked it to fill
+the tab (`Stack` + `StackFit::expand`, `BoxFit::cover`) with Play/Pause +
+position overlaid at the bottom via `Align(bottomCenter)`. The overlay
+panel goes through `ds->buildCard()` (elevated priority) rather than a
+plain container — deliberately, at the user's request: this makes the
+Video tab double as a glass-over-real-content check, since it's the first
+place in the gallery a glass panel sits over genuinely moving/busy content
+instead of the static striped test pattern in Clipping & FX.
+
+**iOS build portability**: `src/macos/video_player_controller.mm` moved to
+`src/avfoundation/video_player_controller.mm` — `AVPlayer`/
+`AVPlayerItemVideoOutput`/`CVPixelBuffer`/`CMTime` are identical APIs on
+iOS, no AppKit-specific code was in this file to begin with, so the exact
+same implementation is iOS-portable unchanged. The move works because of
+how `macos.cmake`/`ios.cmake`'s source globs are actually structured: each
+recursively globs `src/*.mm` and then *excludes* the other platforms'
+*named* directories (`macos.cmake` excludes `android|ios|windows|linux`;
+`ios.cmake` excludes `android|macos|windows|linux`) — neither list
+mentions `avfoundation`, so a new, neutrally-named directory is
+automatically included by both without editing either file.
+Android/Linux/Windows needed no changes at all despite also having
+per-platform exclude lists: their `file(GLOB_RECURSE ...)` calls only glob
+`src/*.cpp` to begin with, never `*.mm`, so an Objective-C++ file in any
+directory is structurally invisible to those builds regardless of naming.
+Added `AVFoundation`/`CoreMedia`/`CoreVideo` to `ios.cmake`'s linked
+frameworks (`macos.cmake` already had them). No iOS example/gallery app
+exists in this repo to visually verify playback on iOS — out of scope for
+this step, which only establishes that the same controller code compiles
+correctly there; a real iOS UI demo is separate, later work.
+
+Verified: `cmake -S . -B build/darwin-debug` reconfigure + rebuild clean
+(confirms the move didn't break macOS); `build/ios-sim` and
+`build/ios-device` (both pre-existing, already-configured build
+directories from earlier project history) rebuild `campello_widgets`
+clean — `** BUILD SUCCEEDED **`, with `video_player_controller.o` present
+in both output trees, for both the simulator and device architectures.
+`build/darwin-debug-test` (the separate config `test.sh` uses) needed its
+own manual reconfigure too, for the same stale-glob reason as the other
+two — CMake's `file(GLOB_RECURSE ...)` result is cached at configure time,
+not re-evaluated on every build, so *every* build directory referencing a
+moved/renamed/added source file needs a fresh `cmake -S . -B <dir>` after
+the fact, not just the one being actively worked in. 690/690 tests still
+green afterward.
 
 ---
 
