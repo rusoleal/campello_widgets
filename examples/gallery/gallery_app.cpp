@@ -1803,11 +1803,104 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// 11. VIDEO — VideoPlayerController/VideoPlayer, macOS/AVFoundation first
+// slice (see TODO.md's Video playback entry). Its own top-level tab rather
+// than a Controls subsection — moved out at the user's request once the
+// demo proved out.
+// ---------------------------------------------------------------------------
+class VideoSection;
+
+class VideoSectionState : public cw::State<VideoSection>
+{
+public:
+    void initState() override
+    {
+        video_ctrl_ = std::make_shared<cw::VideoPlayerController>();
+        video_ctrl_->setSource(std::string(CAMPELLO_GALLERY_ASSETS_DIR) + "/sample_video.mp4");
+        // Position/duration/ready/play-state all flow through this one
+        // listener — matches AnimationController's addListener()
+        // convention elsewhere in this file. Fires on the main thread
+        // (VideoPlayerController's ticker subscription runs there), so
+        // setState() here is safe without any cross-thread marshaling.
+        video_ctrl_->addListener([this] { setState([] {}); });
+    }
+
+    cw::WidgetRef build(cw::BuildContext& ctx) override
+    {
+        const auto* ds     = cw::Theme::of(ctx);
+        const auto& colors = ds->tokens().colors;
+
+        // CPU-decode + CPU-copy-per-frame, not zero-copy; audio isn't
+        // exercised by this specific demo clip (a synthetic, silent test
+        // pattern — see examples/gallery/assets/sample_video.mp4), though
+        // AVPlayer would play it automatically if the source had an audio
+        // track.
+        cw::ButtonConfig play_cfg;
+        const bool playing = video_ctrl_->isPlaying();
+        play_cfg.label      = cw::mw<cw::Text>(playing ? "Pause" : "Play",
+                                                 ts(14.0f, colors.on_primary));
+        play_cfg.priority   = cw::ButtonPriority::primary;
+        play_cfg.on_pressed = [this, playing] {
+            if (playing) video_ctrl_->pause(); else video_ctrl_->play();
+        };
+        auto play_btn = ds->buildButton(play_cfg);
+
+        std::ostringstream pos_stream;
+        pos_stream << std::fixed << std::setprecision(1)
+                    << (video_ctrl_->positionMs() / 1000.0) << "s / "
+                    << (video_ctrl_->durationMs() / 1000.0) << "s"
+                    << (video_ctrl_->isReady() ? "" : "  (loading…)");
+        auto pos_label = cw::mw<cw::Text>(pos_stream.str(), ts(13.0f, colors.on_surface_variant));
+
+        auto controls_row = cw::mw<cw::Row>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{ play_btn, hspace(12.0f), pos_label });
+
+        // Full-bleed video, edge to edge — BoxFit::cover rather than
+        // contain (the small Controls-tab demo's choice), since this tab
+        // exists to fill the available space, not letterbox within it.
+        auto surface = std::make_shared<cw::Container>();
+        surface->color = cw::Color::fromRGB(0.0f, 0.0f, 0.0f);
+        surface->child = cw::VideoPlayer::create(video_ctrl_, cw::BoxFit::cover);
+
+        // The controls bar goes through ds->buildCard() (elevated —
+        // Liquid Glass in Glass mode, same as the Controls tab's own Card
+        // demo) rather than a plain Container, specifically so this tab
+        // doubles as a glass-over-real-content check: the striped test
+        // pattern in Clipping & FX is static, but a playing video behind
+        // the glass panel is genuinely moving, busy content — a much
+        // better way to see the refraction/blur actually working across
+        // every theme, not just Glass.
+        cw::CardConfig control_card_cfg;
+        control_card_cfg.child   = controls_row;
+        control_card_cfg.padding = cw::EdgeInsets::symmetric(20.0f, 14.0f);
+        auto control_card = ds->buildCard(control_card_cfg);
+
+        auto overlay = cw::mw<cw::Padding>(cw::EdgeInsets::only(20.0f, 0.0f, 20.0f, 20.0f),
+            std::make_shared<cw::Align>(cw::Alignment::bottomCenter(), control_card));
+
+        auto stack = cw::Stack::create(cw::WidgetList{ surface, overlay });
+        stack->fit = cw::StackFit::expand;
+        return stack;
+    }
+
+private:
+    std::shared_ptr<cw::VideoPlayerController> video_ctrl_;
+};
+
+class VideoSection : public cw::StatefulWidget {
+public:
+    std::unique_ptr<cw::StateBase> createState() const override
+    { return std::make_unique<VideoSectionState>(); }
+};
+
+// ---------------------------------------------------------------------------
 // Gallery Shell — left sidebar nav + section content
 // ---------------------------------------------------------------------------
 static const std::vector<std::string> kSectionNames = {
     "Layout", "Controls", "Text & Input", "Lists",
     "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images", "Draw",
+    "Video",
 };
 
 // One glyph per section, shown alone when the sidebar collapses to
@@ -1816,6 +1909,7 @@ static const std::vector<std::string> kSectionNames = {
 static const std::vector<std::string> kSectionIcons = {
     "▦", "⚙", "Aa", "☰",
     "▶", "✋", "✂", "⌨", "\U0001F5BC", "✏",
+    "\U0001F3AC",
 };
 
 // Below this total window width the sidebar collapses to icon-only.
@@ -1836,6 +1930,7 @@ static cw::WidgetRef buildSection(int idx)
         case 7: return std::make_shared<KeyboardSection>();
         case 8: return std::make_shared<ImagesSection>();
         case 9: return std::make_shared<DrawSection>();
+        case 10: return std::make_shared<VideoSection>();
         default: return std::make_shared<LayoutSection>();
     }
 }

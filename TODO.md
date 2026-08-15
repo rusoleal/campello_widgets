@@ -885,39 +885,13 @@ backlog, no bloquea declarar 1.0.0.
 - [x] Dialog / overlay / modal system
 - [x] Drag-and-drop (`Draggable` + `DragTarget`)
 - [x] **Gesture arena (Flutter-equivalent gesture arbitration)** — see dedicated section below
-- [ ] **Video playback widget** (requested 2026-08-15, not started) — a
-      `VideoPlayer`/`VideoPlayerController` pair (Flutter-shaped API: a
-      controller owns decode/playback state — `play()`/`pause()`/`seekTo()`/
-      `position`/`duration`/a value-listenable for frame updates — and the
-      widget just displays whatever frame the controller currently has,
-      matching `AnimationController`'s existing split between "drives state"
-      and "renders it"). No decode/demux capability exists anywhere in this
-      codebase today (`campello_image` handles *still* images only — PNG/
-      JPEG/WebP), so this needs, per platform:
-        - **macOS/iOS**: AVFoundation (`AVPlayer` + `AVPlayerItemVideoOutput`,
-          or `AVPlayerItemVideoOutput.copyPixelBuffer` into a `CVPixelBuffer`)
-          — decode is hardware-accelerated and free; the real work is getting
-          each decoded frame into a `campello_gpu` texture without a CPU
-          round-trip, likely via `CVMetalTextureCache` (zero-copy
-          `CVPixelBuffer` → `MTLTexture`, the standard AVFoundation-to-Metal
-          bridge) rather than reading pixels back to the CPU and re-uploading.
-        - **Android**: `MediaCodec`/`ExoPlayer` decoding into a `Surface`
-          backed by a Vulkan-importable buffer (`AHardwareBuffer` +
-          `VK_ANDROID_external_memory_android_hardware_buffer`), same
-          zero-copy goal as the AVFoundation path.
-        - **Windows**: Media Foundation (`IMFSourceReader` or
-          `MediaPlayer`/`MediaEngine`) decoding into a D3D12 shared texture.
-        - **Linux**: GStreamer (`playbin` + an `appsink`, or a Vulkan-video-
-          capable decode path) is the natural fit given no equivalent to
-          AVFoundation/Media Foundation exists there.
-      Each of these is its own multi-day integration (new native platform
-      code per target, a new `campello_gpu` texture-import path per backend
-      if zero-copy is wanted, audio track sync/mixing, and a `DesignSystem`-
-      level `buildVideoPlayerControls()` for the scrubber/play-pause chrome
-      matching the "Card + FAB uses `ds->build...()`" precedent elsewhere in
-      the gallery) — no design decisions made yet on shared-vs-per-platform
-      architecture; this entry exists to track the request, not to scope the
-      implementation.
+- [~] **Video playback widget** (requested 2026-08-15) — macOS first slice
+      done same day (see the dedicated section below); Android/Windows/Linux
+      backends, zero-copy texture import, and `DesignSystem`-level playback
+      controls chrome remain, deliberately deferred — see that section's
+      "explicitly out of scope" note for why, and TODO.md's own git history
+      for the original, broader per-platform scoping this entry started
+      from.
 - [x] **Performance overlay: add a real FPS counter** (found 2026-07-24,
       done 2026-07-25) — new `Renderer::present_fps_sampler_`/
       `recordPresentSample()` measures the wall-clock cadence between
@@ -2812,6 +2786,20 @@ standing decision; noted here only as an additional data point for
 whenever this gets picked back up with the Zombie/`MTL_DEBUG_LAYER`
 tooling below.
 
+**Recurred a third time, later session, same machine (2026-08-15)** —
+identical stack trace frame-for-frame again (`objc_msgSend` →
+`-[_MTLCommandBuffer presentDrawable:options:]_block_invoke` →
+`MTLDispatchListApply` → `-[_MTLCommandBuffer didScheduleWithStartTime:
+endTime:error:]` → `ioAccelCommandQueueBlockFenceCallback`, on
+`com.Metal.CompletionQueueDispatch`), this time under "move the mouse over
+the sidebar tabs" in the gallery (hover-driven repaint churn across
+sections — including the new Video tab, but the crash is identical to
+recurrences that predate that tab entirely, so not video-specific). A
+third independent data point for the same "rapid widget churn puts
+pressure on `CAMetalLayer`'s drawable pool" suspicion above — tab-hover
+repaints are exactly that kind of churn too. Still postponed per the
+user's standing decision; not investigated further this session.
+
 **To pick this back up**: static analysis has been exhausted here (unlike
 the `UniformBufferPool` bug above, no violated invariant was found in the
 code); needs live Metal tooling. Recipe handed to the user:
@@ -3496,6 +3484,132 @@ items still blocked on real prerequisites: `BottomSheet`/`NavigationBar`/
 `AppBar` (asymmetric corner-radius shader support), per-widget
 `.glassEffect()`-style opt-in granularity, and Vulkan/DirectX/WebGPU real
 implementations — see "Still not done" above.
+
+---
+
+## Video playback — macOS/AVFoundation first slice, 2026-08-15
+
+Requested, then explored via three architectural proposals (Flutter's
+official per-platform-native-decode `video_player`, the community
+`media_kit` model of one bundled decode library — `libmpv` — everywhere,
+and a staged "one real platform first" approach). User chose staged. Two
+facts, found by reading this codebase rather than assumed, narrowed the
+first slice further than the proposal itself did:
+
+1. **`campello_gpu::Texture` is CPU-upload-only** — `Device::createTexture()`
+   + `Texture::upload()` is the only way to get pixel data onto a texture
+   (`campello_gpu/inc/campello_gpu/texture.hpp`). No "wrap an existing
+   native handle" API exists, so true zero-copy import (`CVPixelBuffer` →
+   `CVMetalTextureCache` → `MTLTexture`) isn't possible without extending
+   `campello_gpu` itself — a separate repo, pinned by `GIT_TAG` (see the
+   `campello_gpu_dependency_pin` memory note). Out of scope for this slice;
+   real follow-up work once there's something working to motivate it.
+2. **The render primitive already existed** — `RenderImage`
+   (`inc/campello_widgets/ui/render_image.hpp`) paints an arbitrary
+   `campello_gpu::Texture`; `RenderDrawSurface`
+   (`inc/campello_widgets/ui/render_draw_surface.hpp`) is an existing
+   `RenderImage` subclass that owns one persistent texture for its whole
+   lifetime, refreshed incrementally. Its pattern — call `setTexture()`
+   *once* to establish the texture (its identity-check no-ops on an
+   unchanged `shared_ptr`), then call the inherited `markNeedsPaint()`
+   directly after every later in-place `upload()` — is exactly what
+   `RenderVideoPlayer` reuses below, not a new `RenderImage` API.
+
+So: CPU-decode (AVFoundation) → CPU-copy each frame into a reused texture
+via the existing `upload()`, not zero-copy. A deliberate limitation of this
+slice, not an oversight.
+
+**Scope**: macOS only (not iOS — staging applied one level deeper: macOS is
+what this session could build, run, and visually verify). `AVPlayer` +
+`AVPlayerItemVideoOutput`, configured for BGRA output (matches the offscreen
+texture format, `bgra8unorm`, with no color-space conversion). `AVPlayer`
+owns playback timing *and* audio output automatically — audio isn't extra
+work here, it's inherent to using `AVPlayer` rather than a bare
+`AVAssetReader`. **Explicitly out of scope**: iOS/Android/Windows/Linux;
+zero-copy import; a formal cross-platform decoder interface (one concrete
+macOS implementation behind a platform-neutral header, matching how
+`HttpClient`'s header is implemented only in `src/macos/http_client.mm`
+today — no `IVideoDecoder` abstraction invented speculatively); a
+`DesignSystem`-level playback-controls builder; looping/subtitles/multiple
+tracks; buffering-state reporting.
+
+**What shipped**:
+- `inc/campello_widgets/ui/video_player_controller.hpp` — platform-neutral
+  `VideoPlayerController`. Shape combines two existing precedents:
+  `ScrollController`'s detached-controller model (`hasClients()`, `attach()`/
+  `detach()` called by the render object on mount/unmount) and
+  `AnimationController`'s `addListener()`/`removeListener()` shape. Diverges
+  from `ScrollController` in one place: `attach(RenderVideoPlayer*)` stores
+  an actual pointer rather than just a bool, because this controller
+  *pushes* frames into the render object (via its own ticker subscription)
+  rather than the render object pulling state each paint the way a scroll
+  view reads `ScrollController::offset()`. Native player state
+  (`AVPlayer`/`AVPlayerItemVideoOutput`) is hidden behind a `struct Impl;`
+  pImpl — not a backend interface with virtual dispatch (there's only ever
+  one concrete implementation linked in, chosen by which platform
+  directory's `.mm` actually compiles), just enough to keep Objective-C
+  types out of the shared header.
+- `src/macos/video_player_controller.mm` — the actual implementation.
+  `setSource()` builds an `AVURLAsset`/`AVPlayerItem`, attaches an
+  `AVPlayerItemVideoOutput` requesting `kCVPixelFormatType_32BGRA`, and
+  starts a `TickerScheduler` subscription (reusing the same async-decode-to-
+  main-thread bridge `ImageWidgetState::checkFuture()` already established
+  for image loading — poll on the main thread each tick, rather than
+  bridging an Objective-C KVO/notification callback into C++). The tick
+  callback: polls `AVPlayerItem.status` until `ReadyToPlay` (capturing
+  duration once), and while playing, pulls the current frame via
+  `hasNewPixelBufferForItemTime:`/`copyPixelBufferForItemTime:`, copies it
+  into a tightly-packed buffer if `CVPixelBufferGetBytesPerRow()` has
+  alignment padding beyond `width * 4` (a real, easy-to-miss gap between
+  what `CVPixelBuffer` guarantees and what `Texture::upload()` expects —
+  found by reading `Texture::upload()`'s signature, which takes no stride
+  parameter), and calls `RenderVideoPlayer::uploadFrame()` +
+  `markNeedsPaint()`. Unsubscribes once ready-and-paused (nothing left to
+  poll for) or once the source is cleared; `play()` re-subscribes in case
+  it's called before a still-loading source becomes ready.
+- `inc/campello_widgets/ui/render_video_player.hpp` /
+  `src/ui/render_video_player.cpp` — `RenderVideoPlayer : public RenderImage`.
+  `uploadFrame()` allocates its texture via
+  `RenderObject::activeBackend()->createDedicatedOffscreenTexture()` — the
+  same non-pooled-texture primitive `RenderDrawSurface::ensureSurface()`
+  uses for its own persistent canvas, not `campello_gpu::Device::
+  createTexture()` directly (found by reading `RenderDrawSurface`'s actual
+  implementation, not just its header, before assuming the raw `Device`
+  API was the right entry point).
+- `inc/campello_widgets/widgets/video_player.hpp` /
+  `src/widgets/video_player.cpp` — `VideoPlayer : public RenderObjectWidget`
+  (not `StatefulWidget` — no Element-tree state needed, same reasoning as
+  `DrawSurface`: playback state lives in the externally-owned controller,
+  and `RenderVideoPlayer` repaints itself directly on each tick).
+- `macos.cmake` — added `AVFoundation`/`CoreMedia`/`CoreVideo` to the linked
+  system frameworks (no new `dependencies/*.cmake` needed — first-party
+  Apple frameworks).
+- `examples/gallery/assets/sample_video.mp4` — a synthetic, silent,
+  6-second/480×270/H.264 test clip (animated color + a bouncing circle +
+  an on-screen timestamp), generated locally via `opencv-python`'s
+  AVFoundation-backed `VideoWriter` (confirmed via its own log output:
+  `OpenCV: AVF: waiting to write video data`) rather than fetched from an
+  external source — guarantees the encode is something this exact
+  AVFoundation playback path can decode, and needed no ffmpeg (not
+  installed in this environment). Has no audio track, so this specific demo
+  doesn't exercise the "`AVPlayer` plays audio automatically" claim above —
+  a real, disclosed gap in *this test asset*, not the implementation.
+  `examples/gallery/macos/CMakeLists.txt` resolves its path via a compile-
+  time `CAMPELLO_GALLERY_ASSETS_DIR` definition (the gallery runs directly
+  out of the build tree, never redistributed, so this is simpler and just
+  as reliable as bundling into the `.app`'s `Resources/` — no `NSBundle`
+  lookup needed from `gallery_app.cpp`, which is portable C++, not
+  Objective-C++).
+- Gallery: a new "VIDEO PLAYER" demo in the Controls tab — Play/Pause
+  button, a live position/duration label, and the video surface itself
+  (`VideoPlayer` widget on a black `Container`, `BoxFit::contain`).
+
+**Verified**: `campello_widgets` (with the new `.mm`/frameworks) and the
+gallery both rebuild clean; 690/690 tests still green (no new unit tests —
+nothing here is meaningfully testable without a real AVFoundation decode +
+GPU device, matching how `RenderDrawSurface`/image loading also have no
+dedicated unit tests, only the gallery as a live check); gallery launches
+without crashing.
 
 ---
 

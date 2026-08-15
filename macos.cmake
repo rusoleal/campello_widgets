@@ -33,6 +33,9 @@ target_link_libraries(campello_widgets
         "-framework Foundation"
         "-framework CFNetwork"
         "-framework CoreFoundation"
+        "-framework AVFoundation"
+        "-framework CoreMedia"
+        "-framework CoreVideo"
 )
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)

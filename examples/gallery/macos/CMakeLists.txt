@@ -23,6 +23,14 @@ set_target_properties(campello_widgets_gallery PROPERTIES
 
 target_include_directories(campello_widgets_gallery PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
+# Dev-only: the gallery runs directly out of the build tree (never
+# redistributed), so a compile-time absolute path to examples/gallery/assets/
+# is simpler and just as reliable as bundling sample_video.mp4 into the
+# .app's Resources — no NSBundle lookup needed from gallery_app.cpp, which
+# is portable C++, not Objective-C++.
+target_compile_definitions(campello_widgets_gallery PRIVATE
+    CAMPELLO_GALLERY_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets")
+
 target_link_libraries(campello_widgets_gallery
     campello_widgets
     campello_ui

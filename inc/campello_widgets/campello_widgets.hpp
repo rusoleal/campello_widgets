@@ -57,6 +57,9 @@
 #include <campello_widgets/ui/render_image.hpp>
 #include <campello_widgets/widgets/draw_surface.hpp>
 #include <campello_widgets/ui/render_draw_surface.hpp>
+#include <campello_widgets/ui/video_player_controller.hpp>
+#include <campello_widgets/ui/render_video_player.hpp>
+#include <campello_widgets/widgets/video_player.hpp>
 #include <campello_widgets/widgets/raw_custom_paint.hpp>
 #include <campello_widgets/ui/render_custom_paint.hpp>
 
