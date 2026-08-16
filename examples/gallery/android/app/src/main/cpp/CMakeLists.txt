@@ -20,6 +20,9 @@ target_include_directories(campello_gallery PRIVATE
 
 target_link_libraries(campello_gallery
     campello_widgets
+    campello_ui
+    campello_material
+    campello_cupertino
     android
     log
 )

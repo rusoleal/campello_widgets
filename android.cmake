@@ -51,6 +51,7 @@ target_link_libraries(campello_widgets
         campello_image
         android
         log
+        mediandk
 )
 
 target_compile_options(campello_widgets PRIVATE -Wall -Wextra)

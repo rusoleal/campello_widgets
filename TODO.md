@@ -3750,6 +3750,266 @@ macOS). `build/ios-device` also rebuilds `campello_widgets_gallery`
 clean (not launched — no physical device connected). macOS: full rebuild
 + 690/690 tests green throughout, gallery relaunches without crashing.
 
+### Follow-up: BoxFit correction, and Android backend (2026-08-16)
+
+**Bug (user-found on iOS, but universal)**: the full-tab rework above left
+the video surface on `BoxFit::cover` (crop-to-fill, no letterboxing) — fine
+on the wider macOS window, but on a narrow portrait phone screen showing a
+480×270 landscape clip, most of the frame gets cropped away. **Fix**:
+switched to `BoxFit::contain` (letterboxed, full frame always visible,
+aspect ratio preserved) in `VideoSectionState::build()` — not iOS-specific,
+just far more visually extreme there than on macOS's wider window; the
+underlying `BoxFit` handling in `RenderImage` is identical on both
+platforms.
+
+**Android backend** — third platform, following the same staged approach:
+get one real implementation working before touching Windows/Linux.
+
+- **`src/android/video_player_controller.cpp`** (new) — implements every
+  method `video_player_controller.hpp` declares, same as the AVFoundation
+  `.mm` does, fully native (no JNI, no custom `Activity` subclass): the
+  Android NDK ships `NdkMediaExtractor.h`/`NdkMediaCodec.h`/
+  `NdkImageReader.h` backed by `libmediandk.so`, found by checking the
+  installed NDK (28.2.13676358) directly rather than assuming JNI was
+  required — `src/android/android_text_rasterizer.hpp`/`.cpp`'s JNI bridge
+  (the only other precedent in this codebase for calling into Android
+  platform APIs) turned out not to be the right model here, and
+  `src/android/http_client.cpp` turned out to be a stub only, not a usable
+  JNI precedent either. Pipeline: `AMediaExtractor` demuxes →
+  `AMediaCodec` decodes in Surface mode (not byte-buffer mode — avoids
+  negotiating `COLOR_FormatYUV420Flexible` directly with the codec, which
+  is unreliable across devices) into an `AImageReader`'s `ANativeWindow` →
+  a dedicated decode-ahead `std::thread` paces itself against each frame's
+  presentation timestamp (no audio clock to sync to — this slice is
+  video-only, matching the silent sample clip) and converts each
+  `AImageReader`-acquired `AImage`'s YUV_420_888 planes to tightly-packed
+  BGRA8 (manual BT.601 conversion — Android has no equivalent of
+  AVFoundation's `AVPlayerItemVideoOutput` pull API) into a mutex-guarded
+  "latest frame" slot. `onTick()` (main thread, `TickerScheduler`-driven,
+  same shape as the AVFoundation backend) only ever picks up whatever the
+  decode thread already produced — no decode work happens on the main
+  thread. `seekTo()` is nearest-keyframe, not frame-exact (an explicit
+  scope reduction, same as noted for the AVFoundation backend's own seek
+  precision never being made frame-exact). `VideoPlayerController::Impl`
+  (the private nested struct the shared header declares) is kept as a thin
+  `std::unique_ptr` wrapper around a separate, non-nested
+  `AndroidVideoState` struct — found necessary only after a first attempt
+  didn't compile: the free-function decode thread needs to touch the same
+  fields `onTick()`/`play()`/etc. do, but a private nested class is only
+  accessible to `VideoPlayerController`'s own member functions, not to an
+  arbitrary function in the same translation unit.
+- **`android.cmake`** — added `mediandk` to `campello_widgets`'s linked
+  libraries (NDK media headers are already on the include path via the
+  Android toolchain file; no new include dirs needed).
+- **`examples/gallery/android/app/src/main/cpp/CMakeLists.txt`** — same
+  staleness gap iOS's had before its fix: never linked
+  `campello_ui`/`campello_material`/`campello_cupertino`. Fixed.
+- **`examples/gallery/android/app/src/main/assets/sample_video.mp4`** (new)
+  + `main.cpp` — copies the bundled APK asset to
+  `app->activity->internalDataPath` once at startup via
+  `AAssetManager_open`/`AAsset_read`, then calls the existing
+  `cw::setSampleVideoPath()` with that real path — same indirection iOS
+  uses (`NSBundle` resolution there vs. an asset-manager byte-copy here),
+  keeping `gallery_app.cpp` and `VideoPlayerController::setSource()`
+  both platform-agnostic (a plain filesystem path, nothing
+  Android-specific leaks into either).
+
+**Tooling, found by checking rather than assuming**: `adb`/`emulator`
+aren't on `PATH` in this environment but do exist under
+`~/Library/Android/sdk/{platform-tools,emulator}`, with two working x86_64
+AVDs already configured (`campello_gpu_test`, `campello_nn_test`,
+android-34). No system `java`/`gradle`, but Android Studio's bundled JBR
+provides a working JDK 21. The project had no `gradlew` wrapper checked
+in — generated one (`gradle wrapper --gradle-version 8.13`, run in a
+throwaway directory with only a bare `settings.gradle.kts`, since running
+it directly inside the project evaluates the Android Gradle Plugin as a
+side effect of the `wrapper` task, and the system `gradle` installed via
+`brew` is 9.7.0 — incompatible with this project's pinned AGP 8.11.0,
+which relies on a Gradle internal API 9.6+ removed) — then copied the
+generated `gradlew`/`gradlew.bat`/`gradle-wrapper.jar` in, matching the
+project's own already-correct `gradle-wrapper.properties` (already pinned
+to 8.13). `./gradlew assembleDebug` (`JAVA_HOME` pointed at Android
+Studio's JBR) then built clean.
+
+**Verified — real device, not just compiled**: standalone NDK/CMake
+compile check first (configured and built `campello_widgets` directly
+against the NDK toolchain file, `-DANDROID_ABI=x86_64
+-DANDROID_PLATFORM=android-33` matching the gallery's real `minSdk`, no
+Gradle/emulator involved — confirms the new backend links clean against
+`libmediandk` with fast iteration), then the full path: `./gradlew
+assembleDebug` → booted `campello_gpu_test` → `adb install` → launched via
+`monkey` → `adb shell input tap` to reach the new 🎬 Video tab (unlike
+iOS's `simctl`, `adb` supports real touch injection, so this went further
+than the iOS verification could) → `adb exec-out screencap -p`.
+**Two real, on-device-only bugs found and fixed, neither caught by the
+compile check**:
+1. `AMediaExtractor_setDataSource()` takes a URI and is really meant for
+   network sources — both a bare absolute path and a `file://`-prefixed
+   one silently failed at runtime (logged via `__android_log_print`,
+   caught by grepping `adb logcat`) despite the target file demonstrably
+   existing on-device at the right size. Switched to
+   `AMediaExtractor_setDataSourceFd()` (open the file with POSIX `open()`,
+   pass the fd + `fstat()`-derived size, close the fd immediately after —
+   same ownership contract as the Java `MediaExtractor.setDataSource
+   (FileDescriptor)` this mirrors) — the documented, reliable way to open
+   a local file.
+2. My own tap coordinates were wrong on the first two attempts (visually
+   misjudging where the bottom-anchored controls card actually sits on a
+   1080×2400 portrait screen) — not a real bug, but confirms it's worth
+   cropping/measuring a screenshot precisely rather than eyeballing
+   coordinates before tapping.
+
+Once both were fixed: the sample clip played back correctly on-screen
+(confirmed across two screenshots a few seconds apart — different decoded
+frames, the position label advancing from `0.0s` to `2.4s`, FPS counter
+reading real values), Play/Pause toggled correctly, and — confirmed
+incidentally, not deliberately tested — end-of-stream detection and reset
+also worked: a later screenshot caught the clip having looped back to
+`0.0s / 6.0s` with the button back to "Play", with no separate action
+taken to trigger it.
+
+### Follow-up: intermittent decode-glitch investigation (2026-08-16)
+
+**User-reported, live-tested**: occasional frames showed a corrupted
+region — described as "TV static"/signal-glitch-like — always as a
+horizontal split with the top portion correct and the bottom portion
+showing flat, wrong content, roughly (not exactly) at frame-center height.
+
+Root-caused by direct evidence rather than guessing:
+1. Added a one-shot temporary dump of the raw `Y`/`U`/`V` plane bytes
+   straight out of `AImage_getPlaneData()` (before any of this codebase's
+   own conversion math touches them) to internal storage, pulled via `adb`,
+   reconstructed with numpy/PIL on the host. Metadata was clean
+   (`y_row_stride=480` = exactly `width`, `u/v_row_stride=240` = exactly
+   `width/2`, all pixel strides 1 — tightly-packed planar I420, no padding
+   surprises to misread). But the **raw Y plane itself** was flat zero
+   (never written) for the corrupted region — proof the corruption exists
+   in the decoded output before it ever reaches this codebase's code, not
+   in `convertYuv420ToBgra()`'s indexing or `RenderVideoPlayer::
+   uploadFrame()`'s texture upload.
+2. Hypothesized an async-render race (`AMediaCodec_releaseOutputBuffer(...,
+   render=true)` returns before the frame is actually guaranteed to have
+   landed in the `AImageReader`'s queue) and fixed it properly —
+   `AImageReader_setImageListener()` (the documented, race-free way to
+   know a buffer is genuinely ready, firing on the reader's own dedicated
+   thread) instead of calling `AImageReader_acquireLatestImage()`
+   immediately after render. Also added return-code checking on every
+   `AImage_getPlane*()` call (skip the frame rather than read through a
+   null/stale pointer on failure — a real gap, independently worth fixing)
+   and bumped `AImageReader_new()`'s `maxImages` from 2 (the documented
+   bare minimum) to 4 for slack.
+3. Retested live after the fix: **the corruption still occurs**, same
+   visual signature, similar frequency. Rules out the render/ImageReader
+   synchronization race as the (sole) cause.
+4. Checked `adb logcat` during playback: the decoder in use is
+   `c2.goldfish.h264.decoder` — the Android **emulator's own** software
+   Codec2 component (not a generic software AVC decoder; "goldfish" is
+   specifically the emulator's internal codename), and its setup logs show
+   `BAD_INDEX` warnings while negotiating the output Surface's consumer
+   usage flags (`Codec2Client: setOutputSurface -- failed to set consumer
+   usage (6/BAD_INDEX)`) — right at the exact step (Surface-backed output
+   buffer configuration) this bug lives in.
+
+**Working conclusion, not yet fully confirmed**: this looks like a bug in
+the Android Studio emulator's own `goldfish` software H.264 decoder /
+Surface output plumbing, not a bug in this codebase's decode pipeline —
+directly answering the user's "maybe we're using the wrong decoder"
+question: this codebase never selects a decoder itself
+(`AMediaCodec_createDecoderByType(mime)` just asks the platform for
+whatever it has for `video/avc`), and on this AVD, with no hardware video
+decode available, `c2.goldfish.h264.decoder` is the *only* one the
+platform has to offer. The mitigations above (plane-query error checking,
+`maxImages=4`, real `AImageReader_setImageListener` synchronization) are
+kept regardless — they're correct, standard practice for this API
+independent of whether they fully explain the glitch, and reduce one real
+class of bug (reading through a failed/stale plane query) even if they
+didn't fully eliminate what's seen live.
+
+**Resolved by testing on a real device** (a Redmi Note 10 / `sweet_eea`,
+Android 13, connected mid-session), which turned out to reveal a second,
+more fundamental problem than the emulator one above — not confirm it was
+emulator-only.
+
+On real hardware the decoder is `OMX.qcom.video.decoder.avc` (a genuine
+Qualcomm hardware decoder, not the emulator's software one), but the
+player showed a permanently **black** screen. Root-caused with the same
+"add logging, don't guess" approach as the emulator investigation:
+`AImage_getPlaneData()` returned `AMEDIA_OK` for the Y plane (valid
+pointer) but **null pointers for the U/V planes**, every single frame —
+confirmed via added temporary per-call logging, not assumed. `adb logcat`
+explained why: `NdkImageReader: acquireImageLocked: Overriding buffer
+format YUV_420_888 to 0x7fa30c06` — `0x7FA30C06` is Qualcomm's
+`HAL_PIXEL_FORMAT_NV12_UBWC`, a tiled/compressed buffer layout, not linear
+YUV. Tried `AImageReader_newWithUsage()` with an explicit
+`AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN` to force a linear buffer — the
+vendor decoder ignored it. Tried a grayscale (Y-only) fallback next, on
+the theory that luma alone might still be linearly readable even if
+chroma wasn't — live-tested, and the result was structured tile-pattern
+noise, not a monochrome image: visual proof that even the "linear" Y
+pointer was actually still pointing into UBWC-tiled memory. Conclusion:
+on this hardware, the Surface + `AImageReader` CPU-read path cannot
+reliably deliver linear pixel data at all, for either plane — not a bug
+fixable by adjusting how the planes are read.
+
+**Real architecture change made, at the user's direction**: switched
+`VideoPlayerController`'s Android backend from Surface-backed decode
+(`AMediaCodec_configure(..., window, ...)` + `AImageReader` consuming its
+output) to **byte-buffer decode mode** — `AMediaCodec_configure(...,
+nullptr, ...)` (no output Surface at all) with frames pulled directly via
+`AMediaCodec_getOutputBuffer()`. This is the same "not fully reliable
+across devices" approach the original plan explicitly avoided in favor of
+Surface + `AImageReader` — proven necessary in practice once the
+"safer" choice was shown to have its own real hardware gap. Concretely:
+- `AMediaCodec_dequeueOutputBuffer()`'s `AMEDIACODEC_INFO_OUTPUT_FORMAT_CHANGED`
+  (-2) result is now handled explicitly (previously only `>= 0` indices
+  were handled) — triggers a `AMediaCodec_getOutputFormat()` query for
+  `AMEDIAFORMAT_KEY_COLOR_FORMAT`/`_STRIDE`/`_SLICE_HEIGHT`, which describe
+  the concrete buffer layout the codec actually chose (not exposed by the
+  NDK's public headers as named constants — `19`=`COLOR_FormatYUV420Planar`
+  (I420) and `21`=`COLOR_FormatYUV420SemiPlanar` (NV12) are declared
+  locally with that context). Falls back to the semi-planar/NV12
+  interpretation for anything else, including
+  `COLOR_FormatYUV420Flexible` (a request-time hint some devices echo
+  back unresolved) — NV12 being the overwhelmingly common real hardware
+  layout.
+- `convertYuv420ToBgra()` (took an `AImage*`) became
+  `convertYuvBufferToBgra()` (takes a raw `uint8_t*` + `stride`/
+  `slice_height`/`color_format`), computing plane offsets manually instead
+  of querying them per-plane — there's no `AImage` object in this mode. A
+  buffer-size sanity check was added before reading (a mismatched/missing
+  stride or slice-height key would otherwise read out of bounds).
+- All `AImageReader`/`ANativeWindow`/`AImageReader_ImageListener`
+  synchronization machinery from the previous approach (`image_mutex`,
+  `image_cv`, `image_available_generation`, the whole render-then-wait
+  dance) was removed — byte-buffer output has no async Surface hand-off to
+  race against; the buffer is immediately valid CPU memory once
+  `dequeueOutputBuffer()` returns a real index.
+
+**Verified live, on the same real device this was root-caused on**: clean
+playback — correct colors, sharp circle with no tearing, the burnt-in
+`campello_widgets t=…s` timestamp text legible, **FPS: 30** (full frame
+rate, no drops), no errors in `logcat`.
+
+**Also re-verified on the emulator** — and this is informative rather than
+just a formality: the earlier "TV static"-style glitch (the section
+above) **still occurs**, unchanged, even though byte-buffer mode no
+longer goes anywhere near `AImageReader`/Surface. Confirmed by comparing
+several live screenshots against ground-truth frames extracted directly
+from `sample_video.mp4` at matching timestamps (`cv2.VideoCapture`) — the
+glitch's signature shape (a dark green "hill" silhouette near the
+bouncing circle) does not exist in the source video at *any* timestamp,
+so it's still a genuine decode artifact, not content. Since the exact
+same artifact now survives a complete swap of the output *delivery*
+mechanism (Surface+`AImageReader` → byte-buffer), it can't be an I/O or
+buffer-synchronization bug — both investigations converge on the same
+conclusion: `c2.goldfish.h264.decoder` (the Android Studio emulator's own
+software H.264 decoder) has a real bug in its own frame reconstruction,
+independent of how the decoded output is consumed. This is a hard
+environment ceiling, not something fixable from this codebase — the
+real-device fix above is the one that matters; the emulator remains
+unreliable for visually verifying video playback specifically (everything
+else in the gallery continues to work fine there).
+
 ---
 
 ## Real GPU Rasterization for Visual Fidelity Tests
