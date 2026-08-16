@@ -3525,11 +3525,9 @@ what this session could build, run, and visually verify). `AVPlayer` +
 texture format, `bgra8unorm`, with no color-space conversion). `AVPlayer`
 owns playback timing *and* audio output automatically — audio isn't extra
 work here, it's inherent to using `AVPlayer` rather than a bare
-`AVAssetReader`. **Explicitly out of scope**: Android/Windows/Linux; a real
-iOS UI demo (the controller itself became iOS-portable the same day — see
-the follow-up entry below — but no iOS example app exists in this repo to
-exercise it visually); zero-copy import; a formal cross-platform decoder
-interface (one concrete implementation behind a platform-neutral header,
+`AVAssetReader`. **Explicitly out of scope**: Android/Windows/Linux;
+zero-copy import; a formal cross-platform decoder interface (one concrete
+implementation behind a platform-neutral header,
 matching how `HttpClient`'s header is implemented only in
 `src/macos/http_client.mm` today — no `IVideoDecoder` abstraction invented
 speculatively); a `DesignSystem`-level playback-controls builder; looping/subtitles/multiple
@@ -3675,6 +3673,82 @@ not re-evaluated on every build, so *every* build directory referencing a
 moved/renamed/added source file needs a fresh `cmake -S . -B <dir>` after
 the fact, not just the one being actively worked in. 690/690 tests still
 green afterward.
+
+### Follow-up, next day: iOS gallery flavor built and launched on Simulator (2026-08-16)
+
+Turned out an iOS gallery flavor already existed in this repo
+(`examples/gallery/ios/{CMakeLists.txt,main.mm,run.sh,Info.plist.in}`,
+predating this session, complete with device/Simulator auto-detection,
+code-signing, and framework-embedding already solved) — the request was to
+get it working and launched, not design one from scratch, discovered only
+by checking `examples/CMakeLists.txt`'s existing `iOS` branch and finding
+`add_subdirectory(gallery/ios)` already wired up.
+
+**What was actually stale/broken**, all found by just trying to build it:
+- `target_link_libraries` never linked `campello_ui`/`campello_material`/
+  `campello_cupertino` — predates their existence as separate libraries
+  (Phase 16 M0), which `gallery_app.cpp` has depended on ever since. Added
+  all three (they're static libraries there, like on macOS, so no
+  bundle-embedding step needed — only `campello_gpu`/`campello_image`,
+  already handled, are the shared `.dylib`s that need one).
+- Missing `AVFoundation`/`CoreMedia`/`CoreVideo` frameworks (this session's
+  video player work postdates this target's last touch).
+- `examples/gallery/macos/CMakeLists.txt`'s `CAMPELLO_GALLERY_ASSETS_DIR`
+  compile-time absolute-host-path trick (used by `VideoSectionState::
+  initState()` to find `sample_video.mp4`) doesn't work here — the app is
+  sandboxed, no access to an arbitrary host path, and wouldn't exist at
+  all on a real device. **Fix**: `gallery_app.hpp` gained
+  `setSampleVideoPath(std::string)` — a small, explicit indirection
+  (file-scope storage in `gallery_app.cpp`, read by `VideoSectionState`)
+  that each platform's `main.mm`/`main.cpp` populates *before*
+  `buildGalleryApp()`/`runApp()`, resolving the path however makes sense
+  for that platform: macOS's `main.mm` still uses the compile-time
+  `CAMPELLO_GALLERY_ASSETS_DIR` macro (unchanged, still correct there —
+  this example always runs from the build tree); iOS's `main.mm` resolves
+  it via `[[NSBundle mainBundle] pathForResource:ofType:]` instead, since
+  `sample_video.mp4` is now bundled as a real app resource
+  (`set_source_files_properties(... PROPERTIES MACOSX_PACKAGE_LOCATION
+  "Resources")` — applies to iOS `.app` bundles too despite the
+  `MACOSX_` prefix, same underlying CMake bundle machinery as macOS).
+  `gallery_app.cpp` itself stays fully portable, platform-agnostic C++.
+- **Real bug, not just missing wiring**: adding an actual `#import
+  <Foundation/Foundation.h>` + `NSBundle`/`NSString` usage to `main.mm`
+  (needed for the fix above) broke the build with cascading "unknown type
+  NSString" errors from deep inside `Foundation.h` — root cause: Unity
+  Build (`ENABLE_UNITY_BUILD`, root `CMakeLists.txt`) was batching
+  `main.mm` together with plain `.cpp` translation units and compiling the
+  batch as pure C++, not Objective-C++. This was latent, not new — the
+  *previous* `main.mm` had no actual Objective-C syntax in it, so
+  compiling it as plain C++ happened to work by accident; adding real
+  Objective-C usage is what exposed it. `macos.cmake` already has the
+  identical fix for the core library's own `.mm` files
+  (`SKIP_UNITY_BUILD_INCLUSION ON`) — same fix applied here to `main.mm`,
+  just missing from this example target specifically.
+
+**Verified end-to-end, not just compiled**: rebuilt `campello_widgets`
+clean for both `build/ios-sim`/`build/ios-device` (both pre-existing,
+already-configured from earlier project history — `BUILD_EXAMPLES=ON` was
+already cached in both from whenever `run.sh` first set them up);
+`cmake --build build/ios-sim --target campello_widgets_gallery -- -sdk
+iphonesimulator` → `** BUILD SUCCEEDED **`, confirmed `sample_video.mp4`
+present inside the built `.app`'s Resources; installed and launched via
+`xcrun simctl install`/`launch` on a booted iPhone 17 Pro Simulator —
+confirmed still running (not crashed) via `simctl spawn ... launchctl
+list`, and confirmed the actual rendered UI via `xcrun simctl io
+<device> screenshot` (bypasses this session's own `screencapture`/window-
+focus limitation entirely, since it asks the Simulator to render its own
+screenshot rather than capturing the host display) — sidebar, Layout tab
+content, and the new 🎬 Video tab icon all rendering correctly. Did not
+navigate into the Video tab itself to confirm playback — no touch-
+injection tool available in this environment (`xcrun simctl` has no
+tap/touch command, `cliclick`/AppleScript UI scripting both need real
+on-screen window coordinates this session can't determine, since
+`screencapture` itself doesn't see the actual window position here — a
+verifiable-in-this-session ceiling, not a code gap: the AVFoundation
+playback path itself is identical to what's already confirmed working on
+macOS). `build/ios-device` also rebuilds `campello_widgets_gallery`
+clean (not launched — no physical device connected). macOS: full rebuild
++ 690/690 tests green throughout, gallery relaunches without crashing.
 
 ---
 

@@ -13,7 +13,25 @@ endif()
 add_executable(campello_widgets_gallery MACOSX_BUNDLE
     main.mm
     ../gallery_app.cpp
+    ../assets/sample_video.mp4
 )
+
+# Bundled as an app resource (looked up via NSBundle in main.mm at
+# runtime) rather than referenced by a compile-time absolute path the way
+# the macOS flavor does — this app is sandboxed, no access to an arbitrary
+# host filesystem path. MACOSX_PACKAGE_LOCATION applies to iOS .app
+# bundles too despite the name; same bundle machinery as macOS.
+set_source_files_properties(../assets/sample_video.mp4 PROPERTIES
+    MACOSX_PACKAGE_LOCATION "Resources")
+
+# Unity Build (see root CMakeLists.txt's ENABLE_UNITY_BUILD) batches
+# main.mm together with plain .cpp translation units, compiling it as
+# pure C++ instead of Objective-C++ — silently harmless while main.mm had
+# no actual Objective-C syntax, but now that it does (NSBundle lookup for
+# the bundled sample video), that produces cascading "unknown type NSString"
+# errors from deep inside Foundation.h. Same fix macos.cmake already
+# applies to the core library's own .mm files.
+set_source_files_properties(main.mm PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 
 set_target_properties(campello_widgets_gallery PROPERTIES
     MACOSX_BUNDLE_BUNDLE_NAME          "campello_widgets Gallery"
@@ -31,12 +49,18 @@ target_compile_options(campello_widgets_gallery PRIVATE -fobjc-arc)
 
 target_link_libraries(campello_widgets_gallery
     campello_widgets
+    campello_ui
+    campello_material
+    campello_cupertino
     "-framework UIKit"
     "-framework Metal"
     "-framework MetalKit"
     "-framework CoreText"
     "-framework CoreGraphics"
     "-framework Foundation"
+    "-framework AVFoundation"
+    "-framework CoreMedia"
+    "-framework CoreVideo"
 )
 
 # campello_gpu/campello_image build as shared libraries (.dylib). On the

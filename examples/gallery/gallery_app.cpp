@@ -13,6 +13,23 @@
 
 namespace cw = systems::leal::campello_widgets;
 
+// Storage for setSampleVideoPath()/sampleVideoPath() — see
+// gallery_app.hpp's doc comment on setSampleVideoPath() for why this
+// indirection exists (each platform's main.mm/main.cpp resolves the path
+// differently; gallery_app.cpp itself stays portable). Defined at file
+// scope, ahead of every class that reads it, since VideoSectionState
+// (a good way below) needs it visible at its point of use.
+static std::string& sampleVideoPathStorage()
+{
+    static std::string path;
+    return path;
+}
+
+static const std::string& sampleVideoPath()
+{
+    return sampleVideoPathStorage();
+}
+
 // ---------------------------------------------------------------------------
 // Palette
 // ---------------------------------------------------------------------------
@@ -1816,7 +1833,7 @@ public:
     void initState() override
     {
         video_ctrl_ = std::make_shared<cw::VideoPlayerController>();
-        video_ctrl_->setSource(std::string(CAMPELLO_GALLERY_ASSETS_DIR) + "/sample_video.mp4");
+        video_ctrl_->setSource(sampleVideoPath());
         // Position/duration/ready/play-state all flow through this one
         // listener — matches AnimationController's addListener()
         // convention elsewhere in this file. Fires on the main thread
@@ -2279,6 +2296,11 @@ std::unique_ptr<cw::StateBase> GalleryShell::createState() const
 // ---------------------------------------------------------------------------
 namespace systems::leal::campello_widgets
 {
+    void setSampleVideoPath(std::string path)
+    {
+        sampleVideoPathStorage() = std::move(path);
+    }
+
     std::shared_ptr<Widget> buildGalleryApp()
     {
         ImageLoader::instance().initialize(4);
