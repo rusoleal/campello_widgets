@@ -1873,12 +1873,18 @@ public:
             cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
             cw::WidgetList{ play_btn, hspace(12.0f), pos_label });
 
-        // Full-bleed video, edge to edge — BoxFit::cover rather than
-        // contain (the small Controls-tab demo's choice), since this tab
-        // exists to fill the available space, not letterbox within it.
+        // BoxFit::contain — letterboxed, full frame always visible,
+        // preserving the video's own aspect ratio. BoxFit::cover (crop to
+        // fill) was tried first for a full-bleed look, but that's the
+        // wrong tradeoff for a player: normal video-player behavior is to
+        // fit the whole frame inside the available area, not crop into it
+        // — especially visible on a portrait phone screen showing a
+        // landscape (16:9) clip, where cover crops away most of the frame.
+        // The surrounding black Container is what actually fills the tab;
+        // the video itself letterboxes within it.
         auto surface = std::make_shared<cw::Container>();
         surface->color = cw::Color::fromRGB(0.0f, 0.0f, 0.0f);
-        surface->child = cw::VideoPlayer::create(video_ctrl_, cw::BoxFit::cover);
+        surface->child = cw::VideoPlayer::create(video_ctrl_, cw::BoxFit::contain);
 
         // The controls bar goes through ds->buildCard() (elevated —
         // Liquid Glass in Glass mode, same as the Controls tab's own Card
