@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "visual_fidelity.hpp"
-#include "gpu_visual_renderer.hpp"
 #include "fidelity.hpp"
 #include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/render_image.hpp>
@@ -117,7 +116,7 @@ static std::string getTestImagePath(const std::string& filename)
 /// Test 1: Display a single real image at explicit size
 TEST(VisualFidelityImageReal, SingleImageExplicitSize)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -176,7 +175,7 @@ TEST(VisualFidelityImageReal, SingleImageExplicitSize)
 /// Test 2: Image with BoxFit.contain (preserves aspect ratio)
 TEST(VisualFidelityImageReal, ImageFitContain)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -244,7 +243,7 @@ TEST(VisualFidelityImageReal, ImageFitContain)
 /// Test 3: Image with BoxFit.cover (fills and crops)
 TEST(VisualFidelityImageReal, ImageFitCover)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -310,7 +309,7 @@ TEST(VisualFidelityImageReal, ImageFitCover)
 /// Test 4: Multiple different images in a grid
 TEST(VisualFidelityImageReal, ImageGallery)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -398,7 +397,7 @@ TEST(VisualFidelityImageReal, ImageGallery)
 /// Test 5: Image with opacity
 TEST(VisualFidelityImageReal, ImageWithOpacity)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -478,7 +477,7 @@ TEST(VisualFidelityImageReal, ImageWithOpacity)
 
 TEST(VisualFidelityImageReal, BoxFitModes)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -569,7 +568,7 @@ TEST(VisualFidelityImageReal, BoxFitModes)
 
 TEST(VisualFidelityImageReal, BoxFitScaleDownDoesNotUpscale)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;
@@ -655,7 +654,7 @@ TEST(VisualFidelityImageReal, BoxFitScaleDownDoesNotUpscale)
 // bare-RenderImage setup the other BoxFit tests above use.
 TEST(VisualFidelityImageReal, BoxFitGalleryReplica)
 {
-    auto device = cwt::GpuVisualRenderer::sharedDevice();
+    auto device = cwt::sharedGpuDevice();
     if (!device) {
         GTEST_SKIP() << "GPU device not available";
         return;

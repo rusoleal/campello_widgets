@@ -9,22 +9,23 @@ file(GLOB_RECURSE UNIVERSAL_TEST_SOURCES
 set(TESTING_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/fidelity.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/visual_fidelity.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer.cpp"
 )
 
-# GPU visual renderer: platform-specific backend factory
+# Offscreen GPU capture: platform-specific draw-backend factory. This wraps
+# the same production IDrawBackend (MetalDrawBackend/VulkanDrawBackend/
+# D3DDrawBackend) real running apps use — see src/testing/offscreen_draw_backend.hpp.
 if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     list(APPEND TESTING_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_metal.mm")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/offscreen_draw_backend_metal.mm")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "Android")
     list(APPEND TESTING_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_vulkan.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/offscreen_draw_backend_vulkan.cpp")
 elseif(WIN32)
     list(APPEND TESTING_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_d3d.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/offscreen_draw_backend_d3d.cpp")
 else()
     list(APPEND TESTING_SOURCES
-        "${CMAKE_CURRENT_SOURCE_DIR}/gpu_visual_renderer_stub.cpp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing/offscreen_draw_backend_stub.cpp")
 endif()
 
 if(UNIVERSAL_TEST_SOURCES)
@@ -39,6 +40,21 @@ if(UNIVERSAL_TEST_SOURCES)
     target_link_libraries(campello_widgets_tests PRIVATE
         campello_widgets
         GTest::gtest_main
+    )
+
+    # Standalone thematic fidelity harness — renders DesignSystem components to PNG.
+    add_executable(campello_widgets_thematic_fidelity
+        "${CMAKE_CURRENT_SOURCE_DIR}/visual_fidelity/themed_component_harness.cpp"
+        ${TESTING_SOURCES})
+    target_include_directories(campello_widgets_thematic_fidelity PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing"
+    )
+    target_link_libraries(campello_widgets_thematic_fidelity PRIVATE
+        campello_widgets
+        campello_ui
+        campello_material
+        campello_cupertino
     )
 
     # On Windows the DLLs must live next to the test EXE so it can load them.

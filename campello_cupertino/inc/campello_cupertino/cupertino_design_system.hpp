@@ -108,6 +108,14 @@ namespace systems::leal::campello_widgets
         WidgetRef buildNavigationRail(const NavigationRailConfig&) const override;
         WidgetRef buildDataTable(const DataTableConfig&) const override;
 
+        /**
+         * @brief iOS 26's "remove app"-style confirmation dialog: one glass
+         * card, left-aligned title/message, individually-pilled stacked
+         * actions. Not part of the DesignSystem interface — no Material/
+         * classic-HIG equivalent exists for this specific system pattern.
+         */
+        WidgetRef buildConfirmationDialog(const ConfirmationDialogConfig&) const;
+
     private:
         DesignTokens      tokens_;
         CupertinoMaterial material_ = CupertinoMaterial::classic;

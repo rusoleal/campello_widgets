@@ -1,0 +1,125 @@
+import UIKit
+
+/// Builds and presents/adds a *real*, live system control for the four
+/// builders whose reference mockups exist only because their genuine
+/// translucent/glass chrome doesn't initialize when `.view` is extracted
+/// and snapshotted standalone (UIAlertController's presentation-controller
+/// dependency; UITabBar/UISearchTextField's SDK defaults with no public
+/// override API) — see ReferenceViewControllers.swift's makeDialog/
+/// makeActionSheet/makeSearchField/makeNavigationBar doc comments for the
+/// full rationale. export_references.sh launches one process per case in
+/// this mode, screenshots it externally via `simctl io screenshot`, then
+/// terminates it — this file never calls exit(0) itself.
+enum RealCapture {
+    static func present(_ componentCase: ComponentCase, in root: UIViewController, window: UIWindow) {
+        let isDark = (componentCase.theme == .cupertinoDark || componentCase.theme == .liquidGlassDark)
+        window.overrideUserInterfaceStyle = isDark ? .dark : .light
+
+        // Same shared backdrop every other reference case uses, full-screen,
+        // so a real system control's screenshot is visually comparable.
+        let bg = UIImageView(frame: root.view.bounds)
+        bg.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        bg.contentMode = .scaleToFill
+        if let path = Bundle.main.path(forResource: "liquid_glass_background", ofType: "png"),
+           let image = UIImage(contentsOfFile: path) {
+            bg.image = image
+        }
+        root.view.addSubview(bg)
+
+        switch componentCase.builder {
+        case .dialog:
+            presentDialog(state: componentCase.state, from: root)
+        case .actionSheet:
+            presentActionSheet(state: componentCase.state, from: root)
+        case .searchField:
+            addSearchField(state: componentCase.state, to: root)
+        case .navigationBar:
+            addTabBar(state: componentCase.state, to: root)
+        default:
+            break
+        }
+
+        // export_references.sh crops the raw full-screen `simctl io
+        // screenshot` down to just the content area. Written to a file
+        // (not hardcoded in the host script) so the crop is exact for
+        // whichever simulator/device actually ran this, instead of a
+        // guessed margin that silently drifts if the device changes. A
+        // real launch via `simctl launch` (non-blocking, unlike
+        // `--console-pty`) doesn't give the host script a live stdout
+        // stream, so a file — the same mechanism ScreenshotExporter
+        // already uses for its own output — is the simplest handoff.
+        let insets = window.safeAreaInsets
+        let scale = window.screen.scale
+        let text = "top=\(Int(insets.top * scale)) bottom=\(Int(insets.bottom * scale))"
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        try? text.write(to: docs.appendingPathComponent("safe_area.txt"), atomically: true, encoding: .utf8)
+    }
+
+    private static func presentDialog(state: String, from root: UIViewController) {
+        let alert = UIAlertController(title: "Title", message: "Message", preferredStyle: .alert)
+        switch state {
+        case "one_action":
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+        case "two_actions":
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+        case "three_actions":
+            alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+            alert.addAction(UIAlertAction(title: "OK", style: .default))
+            alert.addAction(UIAlertAction(title: "Delete", style: .destructive))
+        default:
+            break
+        }
+        root.present(alert, animated: false)
+    }
+
+    private static func presentActionSheet(state: String, from root: UIViewController) {
+        let sheet = UIAlertController(title: "Title", message: nil, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "Save", style: .default))
+        sheet.addAction(UIAlertAction(title: "Delete", style: .destructive))
+        sheet.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+        // Required on iPad (action sheets present as a popover there).
+        // Previously set unconditionally on the assumption it's a no-op on
+        // iPhone — confirmed wrong on iOS 26 (Liquid Glass): configuring
+        // popoverPresentationController there makes UIAlertController(
+        // .actionSheet) present as an actual floating popover with an
+        // arrow pointer instead of the classic full-width bottom sheet,
+        // even on a compact-width iPhone. Gating on the real iPad idiom
+        // avoids that on iPhone.
+        if UIDevice.current.userInterfaceIdiom == .pad, let popover = sheet.popoverPresentationController {
+            popover.sourceView = root.view
+            popover.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.maxY, width: 0, height: 0)
+        }
+        root.present(sheet, animated: false)
+    }
+
+    private static func addSearchField(state: String, to root: UIViewController) {
+        let field = UISearchTextField()
+        field.placeholder = "Search"
+        if state == "filled" { field.text = "query" }
+        field.translatesAutoresizingMaskIntoConstraints = false
+        root.view.addSubview(field)
+        NSLayoutConstraint.activate([
+            field.centerXAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.centerXAnchor),
+            field.topAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            field.widthAnchor.constraint(equalToConstant: 280),
+        ])
+    }
+
+    private static func addTabBar(state: String, to root: UIViewController) {
+        let tabBar = UITabBar()
+        tabBar.items = [
+            UITabBarItem(title: "First", image: UIImage(systemName: "house"), tag: 0),
+            UITabBarItem(title: "Second", image: UIImage(systemName: "magnifyingglass"), tag: 1),
+            UITabBarItem(title: "Third", image: UIImage(systemName: "person"), tag: 2),
+        ]
+        tabBar.selectedItem = tabBar.items?.first
+        tabBar.translatesAutoresizingMaskIntoConstraints = false
+        root.view.addSubview(tabBar)
+        NSLayoutConstraint.activate([
+            tabBar.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
+            tabBar.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
+            tabBar.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+        ])
+    }
+}

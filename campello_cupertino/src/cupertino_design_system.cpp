@@ -244,20 +244,37 @@ namespace systems::leal::campello_widgets
             fg = withOpacity(fg, 0.4f);
         }
 
-        WidgetRef content = cfg.label;
+        // Apply the computed foreground color to plain Text labels; richer
+        // labels (e.g. RichText/Row) are left to the caller.
+        auto applyForeground = [&](WidgetRef widget) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(widget)) {
+                TextStyle style = text->span.style;
+                style.withColor(fg);
+                auto styled = std::make_shared<Text>(text->span.text, style);
+                return styled;
+            }
+            return widget;
+        };
+
+        WidgetRef content = applyForeground(cfg.label);
         if (cfg.leading_icon || cfg.trailing_icon) {
             auto row = std::make_shared<Row>();
             row->cross_axis_alignment = CrossAxisAlignment::center;
             row->main_axis_size = MainAxisSize::min;
             if (cfg.leading_icon) row->children.push_back(cfg.leading_icon);
-            row->children.push_back(cfg.label);
+            row->children.push_back(content);
             if (cfg.trailing_icon) row->children.push_back(cfg.trailing_icon);
             content = row;
         }
 
+        auto centered = std::make_shared<Align>();
+        centered->alignment = Alignment::center();
+        centered->height_factor = 1.0f;
+        centered->child = content;
+
         auto padded = std::make_shared<Padding>();
         padded->padding = EdgeInsets::symmetric(20.0f, 10.0f);
-        padded->child   = content;
+        padded->child   = centered;
 
         WidgetRef result = padded;
         if (has_background) {
@@ -270,10 +287,15 @@ namespace systems::leal::campello_widgets
             result = decorated;
         }
 
-        (void)fg; // label color is caller-provided via cfg.label
+        // iOS .filled/.tinted buttons expand to fill the available width.
+        auto stretch = std::make_shared<Column>();
+        stretch->main_axis_size       = MainAxisSize::min;
+        stretch->cross_axis_alignment = CrossAxisAlignment::stretch;
+        stretch->children             = {result};
+
         auto detector = std::make_shared<GestureDetector>();
         detector->on_tap = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
-        detector->child  = result;
+        detector->child  = stretch;
 
         if (!cfg.enabled || !cfg.on_pressed) {
             auto faded = std::make_shared<Opacity>();
@@ -678,6 +700,16 @@ namespace systems::leal::campello_widgets
         padded->padding = EdgeInsets::symmetric(16.0f, 10.0f);
         padded->child   = row;
 
+        // Edge-to-edge bar, not a floating card — corner_radius 0 so the
+        // glass shader shapes it as a flat rect (see buildCard()'s
+        // BackdropFilter comment for why there's no enclosing ClipRRect).
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, 0.45f));
+            bf->child  = padded;
+            return bf;
+        }
+
         auto container = std::make_shared<Container>();
         container->color = c.surface;
         container->child = padded;
@@ -727,6 +759,15 @@ namespace systems::leal::campello_widgets
         row->cross_axis_alignment = CrossAxisAlignment::center;
         row->children = std::move(item_widgets);
 
+        // Edge-to-edge bar, not a floating card — corner_radius 0, matching
+        // buildAppBar()'s glass treatment above.
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, 0.45f));
+            bf->child  = row;
+            return bf;
+        }
+
         auto container = std::make_shared<Container>();
         container->color = c.surface;
         container->child = row;
@@ -744,6 +785,46 @@ namespace systems::leal::campello_widgets
     {
         const auto& c = tokens_.colors;
         std::vector<WidgetRef> children;
+
+        auto hairline = [&] {
+            auto line = std::make_shared<Container>();
+            line->height = 1.0f;
+            line->color  = c.outline_variant;
+            return line;
+        };
+        auto vhairline = [&] {
+            auto line = std::make_shared<Container>();
+            line->width = 1.0f;
+            line->color = c.outline_variant;
+            return line;
+        };
+        // UIAlertController tints .default/.cancel actions with the app's
+        // accent color automatically; only .destructive actions need an
+        // explicit color from the caller. A plain Text still carrying
+        // TextStyle's untouched default (black) is treated as
+        // "un-styled" and gets the accent tint; anything the caller
+        // already colored (e.g. a red "Delete") is left alone. `bold`
+        // additionally renders it in bold weight — real iOS bolds the
+        // cancel-slot action (the last of 3+ stacked actions), confirmed
+        // against a real-captured reference screenshot.
+        auto tint_default_action = [&](WidgetRef action, bool bold) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(action)) {
+                TextStyle style = text->span.style;
+                bool changed = false;
+                if (style.color == Color::black()) { style.withColor(c.primary); changed = true; }
+                if (bold) { style.font_weight = FontWeight::bold; changed = true; }
+                if (changed) return std::make_shared<Text>(text->span.text, style);
+            }
+            return action;
+        };
+        auto wrap_action = [&](WidgetRef action, bool bold = false) {
+            auto centered = std::make_shared<Center>(tint_default_action(std::move(action), bold));
+            centered->height_factor = 1.0f;
+            auto padded = std::make_shared<Padding>();
+            padded->padding = EdgeInsets::symmetric(0.0f, 12.0f);
+            padded->child = centered;
+            return WidgetRef(padded);
+        };
 
         if (cfg.title) {
             // height_factor = 1.0 is load-bearing, not decorative: Align
@@ -770,108 +851,63 @@ namespace systems::leal::campello_widgets
         }
 
         if (!cfg.actions.empty()) {
-            auto hairline = [&] {
-                auto line = std::make_shared<Container>();
-                line->height = 1.0f;
-                line->color  = c.outline_variant;
-                return line;
-            };
-            auto vhairline = [&] {
-                auto line = std::make_shared<Container>();
-                line->width = 1.0f;
-                line->color = c.outline_variant;
-                return line;
-            };
-
             children.push_back(hairline());
 
+            // Real UIAlertController bolds the last action's text when 3+
+            // actions stack — the cancel slot's traditional treatment
+            // (confirmed against a real-captured reference screenshot: a
+            // plain hairline row like the others, just bold text, not a
+            // detached card as an earlier pass here mistakenly assumed
+            // from a coarser view of the same screenshot). DialogConfig
+            // has no per-action "style" field, so the last action is
+            // taken as that slot whenever there are 3 or more (2-action
+            // alerts render side by side with no special treatment).
+            const bool bold_last_action = cfg.actions.size() >= 3;
+
+            // iOS alert buttons sit on a light gray surface, centered. A
+            // fixed 44pt height matches a single row of side-by-side
+            // actions (<=2), but a stacked column of 3+ actions needs its
+            // natural (unforced) height or the extra rows clip/overlap.
+            auto action_bg = std::make_shared<Container>();
+            action_bg->color = c.surface_variant;
+
             if (cfg.actions.size() <= 2) {
-                // Real iOS alerts lay 1-2 actions side by side, separated
-                // by a vertical hairline — not a right-aligned button row.
-                //
-                // Deliberately NOT cross_axis_alignment::stretch (tried
-                // first, twice — see TODO.md's Liquid Glass entry): stretch
-                // makes a Row report its OWN height as whatever max_height
-                // it's handed, and this Row's ancestor chain (the outer
-                // Column, sized by showDialog()'s Center, which loosens
-                // rather than bounds) hands it a large loose budget, not
-                // the buttons' true content height — so a fixed-height
-                // wrapper became necessary, and centering the (naturally
-                // much shorter) buttons within that artificial slack space
-                // is exactly where a small residual text-baseline offset
-                // became visible, even after Cupertino/iOS's tightened
-                // vertical text metrics. MaterialDesignSystem's own action
-                // row (no stretch, no artificial height, buttons simply
-                // determine the row's natural height) never shows this,
-                // confirming the manufactured slack — not text rendering —
-                // was the real cause. cross_axis_alignment::center here
-                // matches that: the row sizes to its tallest child (the
-                // buttons) with zero artificial slack, so there's nothing
-                // for a sub-pixel offset to be visible within.
                 std::vector<WidgetRef> row_children;
                 for (size_t i = 0; i < cfg.actions.size(); ++i) {
-                    if (i > 0) {
-                        auto divider = vhairline();
-                        // No natural height of its own (a bare 1px-wide
-                        // Container with unset height reports 0 under the
-                        // loose constraints this row hands non-flex
-                        // children) — an explicit height is required for
-                        // it to be visible at all now that stretch isn't
-                        // doing that job. Approximates real button content
-                        // height; exact dynamic matching isn't possible
-                        // here since cfg.actions[i] is a caller-supplied,
-                        // opaque WidgetRef whose true height buildDialog()
-                        // has no way to query ahead of layout.
-                        divider->height = 24.0f;
-                        row_children.push_back(divider);
-                    }
-                    // buildButton() sizes to its own label content and
-                    // doesn't center within extra width handed to it, so a
-                    // bare Expanded button reads left-aligned inside its
-                    // half. Center fixes that, but height_factor = 1.0 is
-                    // required — without it, Align/Center reports
-                    // constraints_.max_height when no factor is set, and
-                    // this Expanded child's height constraint is loose up
-                    // to the Row's own max_cross, which (see the row-level
-                    // comment above) is inherited from the same large loose
-                    // ancestor budget this whole rewrite exists to avoid.
-                    // height_factor = 1.0 makes it shrink-wrap to the
-                    // button's natural height instead, so it can't inflate
-                    // the row's cross_size the way a factor-less Center did
-                    // when this was still wrapped in the old stretch/fixed-
-                    // height composition.
-                    auto centered_action = std::make_shared<Center>(cfg.actions[i]);
-                    centered_action->height_factor = 1.0f;
-                    row_children.push_back(std::make_shared<Expanded>(WidgetRef(centered_action)));
+                    if (i > 0) row_children.push_back(vhairline());
+                    row_children.push_back(std::make_shared<Expanded>(wrap_action(cfg.actions[i])));
                 }
                 auto row = std::make_shared<Row>();
                 row->cross_axis_alignment = CrossAxisAlignment::center;
                 row->children = std::move(row_children);
-                children.push_back(row);
+                action_bg->height = 44.0f;
+                action_bg->child  = row;
             } else {
-                // 3+ actions stack vertically, each divided by a hairline.
                 std::vector<WidgetRef> col_children;
                 for (size_t i = 0; i < cfg.actions.size(); ++i) {
                     if (i > 0) col_children.push_back(hairline());
-                    // Same left-alignment issue as the <=2-actions Row
-                    // above, fixed the same way — Center's content within
-                    // the width the Column's own stretch already forces
-                    // tight. Unlike that Row case, though, height here is
-                    // loose (this Column's non-flex/non-Expanded children
-                    // get {0, remaining_main} — see RenderFlex's first
-                    // pass), so height_factor = 1.0 stays required to
-                    // avoid the exact "Align fills all available height"
-                    // hazard fixed above for the title/content wrappers.
-                    auto centered_action = std::make_shared<Center>(cfg.actions[i]);
-                    centered_action->height_factor = 1.0f;
-                    col_children.push_back(centered_action);
+                    const bool is_last = (i + 1 == cfg.actions.size());
+                    // wrap_action's own padding has 0 vertical inset, so
+                    // without an explicit per-row height each stacked row
+                    // shrinks to bare text height instead of matching a
+                    // real UIAlertController's 44pt row — confirmed as the
+                    // dominant remaining gap for 3+-action dialogs by
+                    // measuring a real-captured reference's card height
+                    // against this render's (real ~638px vs rendered
+                    // ~387px at 3x scale, i.e. roughly text-height-only).
+                    auto sized_row = std::make_shared<Container>();
+                    sized_row->height = 44.0f;
+                    sized_row->child  = wrap_action(cfg.actions[i], is_last && bold_last_action);
+                    col_children.push_back(sized_row);
                 }
                 auto actions_col = std::make_shared<Column>();
                 actions_col->main_axis_size = MainAxisSize::min;
                 actions_col->cross_axis_alignment = CrossAxisAlignment::stretch;
                 actions_col->children = std::move(col_children);
-                children.push_back(actions_col);
+                action_bg->child = actions_col;
             }
+
+            children.push_back(action_bg);
         } else {
             children.push_back(SizedBox::from_height(16.0f));
         }
@@ -887,12 +923,160 @@ namespace systems::leal::campello_widgets
         dialog->elevation         = tokens_.elevation.level2;
         dialog->min_width         = 270.0f; // UIAlertController's fixed width
         dialog->max_width         = 270.0f;
+        // iOS inverts which surface reads as "elevated" between light and
+        // dark: in light mode a floating card is white (c.surface) sitting
+        // on a slightly grayer root background; in dark mode c.surface is
+        // pure black (matching .systemBackground) and the card needs the
+        // lighter c.surface_variant instead, or it disappears into the root.
+        const Color dialog_bg = (tokens_.brightness == Brightness::dark) ? c.surface_variant : c.surface;
         if (material_ == CupertinoMaterial::liquidGlass) {
-            dialog->background_color  = withOpacity(c.surface, 0.45f);
+            dialog->background_color  = withOpacity(dialog_bg, 0.60f);
             dialog->backdrop_filter   = ImageFilter::liquidGlass(tokens_.shape.radius_lg,
-                                                                   withOpacity(c.surface, 0.45f));
+                                                                   withOpacity(dialog_bg, 0.60f));
         } else {
-            dialog->background_color = c.surface;
+            dialog->background_color = dialog_bg;
+        }
+        return dialog;
+    }
+
+    // -----------------------------------------------------------------------
+    // ConfirmationDialog — iOS 26's "remove app" system prompt style: one
+    // glass card, left-aligned title/message, individually-pilled stacked
+    // actions (unlike the hairline-divided, centered classic alert above).
+    // -----------------------------------------------------------------------
+
+    WidgetRef CupertinoDesignSystem::buildConfirmationDialog(const ConfirmationDialogConfig& cfg) const
+    {
+        // Pre-iOS-26 "remove app"-style prompts use the exact same
+        // UIAlertController chrome as any other classic alert — centered
+        // text, hairline-divided action rows, blue/red action colors — not
+        // iOS 26's individually pilled buttons (confirmed against a real
+        // device screenshot on iOS 18). Delegate to buildDialog() instead
+        // of duplicating that layout; only Liquid Glass gets the pill style
+        // built below.
+        if (material_ != CupertinoMaterial::liquidGlass) {
+            // Re-style rather than forward cfg.title/cfg.message as-is: the
+            // caller may have tuned their font size for the Liquid Glass
+            // pill layout's proportions (e.g. a larger title), which is
+            // wrong for the classic alert's real typography and changes
+            // word-wrap points / total height enough to visibly shift the
+            // whole dialog's centered position. Extract just the text and
+            // rebuild with the same 17pt bold title / 13pt message
+            // convention makeDialog()/buildDialog() actually use.
+            auto restyle = [](WidgetRef widget, TextStyle style) -> WidgetRef {
+                if (auto text = std::dynamic_pointer_cast<const Text>(widget)) {
+                    return std::make_shared<Text>(text->span.text, style);
+                }
+                return widget;
+            };
+
+            DialogConfig dialog_cfg;
+            TextStyle title_ts;
+            title_ts.font_size   = 17.0f;
+            title_ts.font_weight = FontWeight::bold;
+            dialog_cfg.title = restyle(cfg.title, title_ts);
+
+            TextStyle content_ts;
+            content_ts.font_size = 13.0f;
+            content_ts.color     = tokens_.colors.on_surface_variant;
+            dialog_cfg.content = restyle(cfg.message, content_ts);
+
+            for (const auto& action : cfg.actions) {
+                TextStyle ts;
+                ts.font_size = 17.0f;
+                if (action.destructive) ts.color = tokens_.colors.error;
+                dialog_cfg.actions.push_back(std::make_shared<Text>(action.label, ts));
+            }
+            if (cfg.on_cancel) {
+                dialog_cfg.actions.push_back(std::make_shared<Text>(cfg.cancel_label));
+            }
+            return buildDialog(dialog_cfg);
+        }
+
+        const auto& c = tokens_.colors;
+        std::vector<WidgetRef> children;
+
+        if (cfg.title) {
+            children.push_back(cfg.title);
+            children.push_back(SizedBox::from_height(4.0f));
+        }
+        if (cfg.message) {
+            children.push_back(cfg.message);
+            children.push_back(SizedBox::from_height(16.0f));
+        }
+
+        // Apple's .tertiarySystemFill isn't a fixed opacity — calibrated
+        // separately per brightness against a real device screenshot (light
+        // ~0.06, dark ~0.10; using one shared value regressed whichever
+        // brightness it wasn't tuned against).
+        const float pill_fill_opacity = (tokens_.brightness == Brightness::dark) ? 0.10f : 0.06f;
+
+        auto makePill = [&](const std::string& label, Color textColor,
+                             std::function<void()> cb) -> WidgetRef {
+            TextStyle ts;
+            ts.font_size   = 17.0f;
+            ts.font_weight = FontWeight::bold;
+            ts.color       = textColor;
+            auto text = std::make_shared<Text>(label, ts);
+            auto centered = std::make_shared<Align>(Alignment::center(), text);
+            centered->height_factor = 1.0f;
+
+            BoxDecoration deco;
+            deco.color         = withOpacity(c.on_surface, pill_fill_opacity);
+            deco.border_radius = tokens_.shape.radius_full; // fully rounded capsule, matches the reference screenshot
+            auto decorated = std::make_shared<DecoratedBox>();
+            decorated->decoration = deco;
+            decorated->child      = centered;
+
+            auto sized = std::make_shared<SizedBox>();
+            sized->height = 50.0f;
+            sized->child  = decorated;
+
+            WidgetRef result = sized;
+            if (cb) {
+                auto gesture = std::make_shared<GestureDetector>();
+                gesture->on_tap = std::move(cb);
+                gesture->child  = result;
+                result = gesture;
+            }
+            return result;
+        };
+
+        for (const auto& action : cfg.actions) {
+            children.push_back(makePill(action.label, action.destructive ? c.error : c.on_surface,
+                                         action.on_selected));
+            children.push_back(SizedBox::from_height(4.0f));
+        }
+        if (cfg.on_cancel) {
+            children.push_back(makePill(cfg.cancel_label, c.on_surface, cfg.on_cancel));
+        } else if (!children.empty()) {
+            children.pop_back(); // drop the trailing spacer after the last action
+        }
+
+        auto col = std::make_shared<Column>();
+        col->main_axis_size       = MainAxisSize::min;
+        col->cross_axis_alignment = CrossAxisAlignment::stretch;
+        col->children             = std::move(children);
+
+        auto padded = std::make_shared<Padding>();
+        padded->padding = EdgeInsets::all(20.0f);
+        padded->child   = col;
+
+        auto dialog = std::make_shared<Dialog>();
+        dialog->child         = padded;
+        dialog->border_radius = tokens_.shape.radius_xl;
+        dialog->elevation     = tokens_.elevation.level2;
+        dialog->min_width     = 320.0f;
+        dialog->max_width     = 320.0f;
+        // See buildDialog()'s identical comment above: iOS inverts which
+        // surface reads as "elevated" between light and dark mode.
+        const Color dialog_bg = (tokens_.brightness == Brightness::dark) ? c.surface_variant : c.surface;
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            dialog->background_color = withOpacity(dialog_bg, 0.60f);
+            dialog->backdrop_filter  = ImageFilter::liquidGlass(tokens_.shape.radius_xl,
+                                                                  withOpacity(dialog_bg, 0.60f));
+        } else {
+            dialog->background_color = dialog_bg;
         }
         return dialog;
     }
@@ -1294,13 +1478,29 @@ namespace systems::leal::campello_widgets
         col->cross_axis_alignment = CrossAxisAlignment::stretch;
         col->children = std::move(children);
 
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(tokens_.shape.radius_xl, withOpacity(c.surface, 0.45f));
+            bf->child  = col;
+            auto sized = std::make_shared<SizedBox>();
+            sized->width  = 360.0f;
+            sized->height = 200.0f;
+            sized->child  = bf;
+            return sized;
+        }
+
         BoxDecoration deco;
-        deco.color         = c.surface;
+        deco.color         = c.surface_variant;
         deco.border_radius = tokens_.shape.radius_xl;
         auto decorated = std::make_shared<DecoratedBox>();
         decorated->decoration = deco;
         decorated->child      = col;
-        return decorated;
+
+        auto sized = std::make_shared<SizedBox>();
+        sized->width  = 360.0f;
+        sized->height = 200.0f;
+        sized->child  = decorated;
+        return sized;
     }
 
     // -----------------------------------------------------------------------
@@ -1501,6 +1701,92 @@ namespace systems::leal::campello_widgets
     WidgetRef CupertinoDesignSystem::buildActionSheet(const ActionSheetConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+
+        // iOS 26 redesigned the action sheet's structure, not just its
+        // material: one glass card with each action as its own
+        // individually-pilled row (no hairline dividers, no separate
+        // detached Cancel card) — confirmed against a real device
+        // screenshot, and structurally identical to buildConfirmationDialog()'s
+        // Liquid Glass branch (reusing its exact pill styling/opacity
+        // calibration here rather than duplicating it with new, unverified
+        // values). The classic hairline-divided two-card layout below is
+        // unchanged and still correct for CupertinoMaterial::classic.
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            std::vector<WidgetRef> children;
+            if (cfg.title) {
+                // Centered, unlike buildConfirmationDialog()'s left-aligned
+                // title — confirmed against a real device screenshot; the
+                // two components share the pill-action styling but not
+                // this particular layout detail.
+                auto centered_title = std::make_shared<Align>(Alignment::center(), cfg.title);
+                centered_title->height_factor = 1.0f;
+                children.push_back(centered_title);
+                children.push_back(SizedBox::from_height(16.0f));
+            }
+
+            const float pill_fill_opacity = (tokens_.brightness == Brightness::dark) ? 0.10f : 0.06f;
+            auto makePill = [&](const std::string& label, Color textColor,
+                                 std::function<void()> cb) -> WidgetRef {
+                TextStyle ts;
+                ts.font_size   = 17.0f;
+                ts.font_weight = FontWeight::bold;
+                ts.color       = textColor;
+                auto text = std::make_shared<Text>(label, ts);
+                auto centered = std::make_shared<Align>(Alignment::center(), text);
+                centered->height_factor = 1.0f;
+
+                BoxDecoration deco;
+                deco.color         = withOpacity(c.on_surface, pill_fill_opacity);
+                deco.border_radius = tokens_.shape.radius_full;
+                auto decorated = std::make_shared<DecoratedBox>();
+                decorated->decoration = deco;
+                decorated->child      = centered;
+
+                auto sized = std::make_shared<SizedBox>();
+                sized->height = 50.0f;
+                sized->child  = decorated;
+
+                WidgetRef result = sized;
+                if (cb) {
+                    auto gesture = std::make_shared<GestureDetector>();
+                    gesture->on_tap = std::move(cb);
+                    gesture->child  = result;
+                    result = gesture;
+                }
+                return result;
+            };
+
+            for (const auto& action : cfg.actions) {
+                children.push_back(makePill(action.label, action.destructive ? c.error : c.primary,
+                                             action.on_selected));
+                children.push_back(SizedBox::from_height(4.0f));
+            }
+            if (cfg.on_cancel) {
+                children.push_back(makePill("Cancel", c.primary, cfg.on_cancel));
+            } else if (!children.empty()) {
+                children.pop_back(); // drop the trailing spacer after the last action
+            }
+
+            auto col = std::make_shared<Column>();
+            col->main_axis_size       = MainAxisSize::min;
+            col->cross_axis_alignment = CrossAxisAlignment::stretch;
+            col->children             = std::move(children);
+
+            auto padded = std::make_shared<Padding>();
+            padded->padding = EdgeInsets::all(20.0f);
+            padded->child   = col;
+
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(tokens_.shape.radius_xl, withOpacity(c.surface, 0.45f));
+            bf->child  = padded;
+            BoxDecoration shadow_deco;
+            shadow_deco.border_radius = tokens_.shape.radius_xl;
+            auto shadowed = std::make_shared<DecoratedBox>();
+            shadowed->decoration = shadow_deco;
+            shadowed->child      = bf;
+            return shadowed;
+        }
+
         std::vector<WidgetRef> actions_children;
 
         if (cfg.title) {
@@ -1647,20 +1933,29 @@ namespace systems::leal::campello_widgets
         padded->padding = EdgeInsets::symmetric(10.0f, 4.0f);
         padded->child   = row;
 
-        BoxDecoration deco;
-        deco.color         = c.surface_variant;
-        deco.border_radius = tokens_.shape.radius_md; // rounded rect, not a pill
-        auto decorated = std::make_shared<DecoratedBox>();
-        decorated->decoration = deco;
-        decorated->child      = padded;
+        WidgetRef surface;
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(tokens_.shape.radius_md, withOpacity(c.surface, 0.45f));
+            bf->child  = padded;
+            surface = bf;
+        } else {
+            BoxDecoration deco;
+            deco.color         = c.surface_variant;
+            deco.border_radius = tokens_.shape.radius_md; // rounded rect, not a pill
+            auto decorated = std::make_shared<DecoratedBox>();
+            decorated->decoration = deco;
+            decorated->child      = padded;
+            surface = decorated;
+        }
 
         if (!cfg.enabled) {
             auto faded = std::make_shared<Opacity>();
             faded->opacity = 0.4f;
-            faded->child   = decorated;
+            faded->child   = surface;
             return faded;
         }
-        return decorated;
+        return surface;
     }
 
     // -----------------------------------------------------------------------
@@ -1830,15 +2125,26 @@ namespace systems::leal::campello_widgets
     WidgetRef CupertinoDesignSystem::buildBanner(const BannerConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+
+        // iOS banner-style tint: primary color at 15 % opacity, primary text.
+        auto applyBannerColor = [&](WidgetRef widget) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(widget)) {
+                TextStyle style = text->span.style;
+                style.withColor(c.primary);
+                return std::make_shared<Text>(text->span.text, style);
+            }
+            return widget;
+        };
+
         std::vector<WidgetRef> row_children;
         if (cfg.leading) {
             row_children.push_back(cfg.leading);
             row_children.push_back(SizedBox::from_width(12.0f));
         }
-        row_children.push_back(std::make_shared<Expanded>(WidgetRef(cfg.content)));
+        row_children.push_back(std::make_shared<Expanded>(WidgetRef(applyBannerColor(cfg.content))));
         for (const auto& action : cfg.actions) {
             row_children.push_back(SizedBox::from_width(8.0f));
-            row_children.push_back(action);
+            row_children.push_back(applyBannerColor(action));
         }
 
         auto row = std::make_shared<Row>();
@@ -1846,27 +2152,15 @@ namespace systems::leal::campello_widgets
         row->children = std::move(row_children);
 
         auto padded = std::make_shared<Padding>();
-        padded->padding = EdgeInsets::all(14.0f);
+        padded->padding = EdgeInsets::symmetric(14.0f, 12.0f);
         padded->child   = row;
 
-        std::vector<WidgetRef> col_children = {padded};
-        auto hairline = std::make_shared<Container>();
-        hairline->height = 1.0f;
-        hairline->color  = c.outline_variant;
-        col_children.push_back(hairline);
-
-        auto col = std::make_shared<Column>();
-        col->main_axis_size = MainAxisSize::min;
-        col->cross_axis_alignment = CrossAxisAlignment::stretch;
-        col->children = std::move(col_children);
-
-        // iOS in-app banners sit on secondarySystemBackground, distinguished
-        // by a hairline rather than a heavy tint or shadow.
         BoxDecoration deco;
-        deco.color = c.surface_variant;
+        deco.color         = withOpacity(c.primary, 0.15f);
+        deco.border_radius = tokens_.shape.radius_sm;
         auto decorated = std::make_shared<DecoratedBox>();
         decorated->decoration = deco;
-        decorated->child      = col;
+        decorated->child      = padded;
         return decorated;
     }
 

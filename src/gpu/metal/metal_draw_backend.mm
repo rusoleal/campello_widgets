@@ -50,9 +50,18 @@ namespace
     // CTFontCreateWithName always returns the family's regular face — bold
     // and italic must be requested explicitly via symbolic traits, or every
     // TextStyle renders identically regardless of font_weight/italic.
+    //
+    // `family == nil` means "no explicit font_family was requested" and
+    // resolves to the OS UI system font (San Francisco on macOS/iOS) via
+    // CTFontCreateUIFontForLanguage — matching what UIFont.systemFont(...)
+    // resolves to on the iOS side, rather than hardcoding a fixed family
+    // name (which wouldn't track San Francisco across OS releases and
+    // doesn't match the reference screenshots' actual glyph shapes/metrics).
     CTFontRef CreateStyledCTFont(NSString* family, CGFloat size, FontWeight weight, bool italic)
     {
-        CTFontRef base = CTFontCreateWithName((__bridge CFStringRef)family, size, nullptr);
+        CTFontRef base = family
+            ? CTFontCreateWithName((__bridge CFStringRef)family, size, nullptr)
+            : CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, nullptr);
         if (!base) return nullptr;
 
         CTFontSymbolicTraits traits = 0;
@@ -1123,7 +1132,7 @@ systems::leal::campello_widgets::Size MetalDrawBackend::measureText(const TextSp
         const float fontSize = span.style.font_size > 0.0f ? span.style.font_size : 14.0f;
 
         NSString *family = span.style.font_family.empty()
-                           ? @"Helvetica Neue"
+                           ? nil // CreateStyledCTFont resolves nil to the OS system font
                            : [NSString stringWithUTF8String:span.style.font_family.c_str()];
 
         CTFontRef ctFont = CreateStyledCTFont(
@@ -1185,7 +1194,7 @@ systems::leal::campello_widgets::Rect MetalDrawBackend::measureTextInkBounds(con
         const float fontSize = span.style.font_size > 0.0f ? span.style.font_size : 14.0f;
 
         NSString *family = span.style.font_family.empty()
-                           ? @"Helvetica Neue"
+                           ? nil // CreateStyledCTFont resolves nil to the OS system font
                            : [NSString stringWithUTF8String:span.style.font_family.c_str()];
 
         CTFontRef ctFont = CreateStyledCTFont(
@@ -1252,7 +1261,7 @@ std::shared_ptr<GPU::Texture> MetalDrawBackend::rasterizeText(
 
         // Build font
         NSString *family = span.style.font_family.empty()
-                           ? @"Helvetica Neue"
+                           ? nil // CreateStyledCTFont resolves nil to the OS system font
                            : [NSString stringWithUTF8String:span.style.font_family.c_str()];
 
         CTFontRef ctFont = CreateStyledCTFont(

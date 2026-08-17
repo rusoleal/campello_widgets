@@ -151,11 +151,18 @@ namespace systems::leal::campello_widgets
             t.colors.on_tertiary        = Color::fromARGB(0xFF492532);
             t.colors.tertiary_container    = Color::fromARGB(0xFF633B48);
             t.colors.on_tertiary_container = Color::fromARGB(0xFFFFD8E4);
-            t.colors.surface            = Color::fromARGB(0xFF1C1B1F);
+            // 0x141218, not the 0x1C1B1F commonly cited as the MD3 "spec"
+            // dark surface tone — confirmed against a real Android capture
+            // of Compose Material3's actual darkColorScheme() default
+            // (sampled background pixel: (20,18,24) exactly). The two
+            // hex values are a well-known small discrepancy between
+            // hand-copied spec-sheet tones and the real HCT-generated
+            // Compose defaults.
+            t.colors.surface            = Color::fromARGB(0xFF141218);
             t.colors.on_surface         = Color::fromARGB(0xFFE6E1E5);
             t.colors.surface_variant    = Color::fromARGB(0xFF49454F);
             t.colors.on_surface_variant = Color::fromARGB(0xFFCAC4D0);
-            t.colors.background         = Color::fromARGB(0xFF1C1B1F);
+            t.colors.background         = Color::fromARGB(0xFF141218);
             t.colors.on_background      = Color::fromARGB(0xFFE6E1E5);
             t.colors.error              = Color::fromARGB(0xFFF2B8B5);
             t.colors.on_error           = Color::fromARGB(0xFF601410);
@@ -182,6 +189,23 @@ namespace systems::leal::campello_widgets
             t.typography = makeTypography(t.colors.on_surface);
             return t;
         }
+        // M3 Expressive Phase A: same palette/type ramp as baseline MD3 (see
+        // header doc), rounder shape scale within the existing 7 fields.
+        DesignTokens makeExpressiveLightTokens()
+        {
+            DesignTokens t = makeLightTokens();
+            t.shape.radius_lg = 20.0f;
+            t.shape.radius_xl = 32.0f;
+            return t;
+        }
+
+        DesignTokens makeExpressiveDarkTokens()
+        {
+            DesignTokens t = makeDarkTokens();
+            t.shape.radius_lg = 20.0f;
+            t.shape.radius_xl = 32.0f;
+            return t;
+        }
     } // namespace
 
     MaterialDesignSystem::MaterialDesignSystem() : tokens_(makeLightTokens()) {}
@@ -189,6 +213,8 @@ namespace systems::leal::campello_widgets
 
     MaterialDesignSystem MaterialDesignSystem::light() { return MaterialDesignSystem(makeLightTokens()); }
     MaterialDesignSystem MaterialDesignSystem::dark()  { return MaterialDesignSystem(makeDarkTokens()); }
+    MaterialDesignSystem MaterialDesignSystem::expressiveLight() { return MaterialDesignSystem(makeExpressiveLightTokens()); }
+    MaterialDesignSystem MaterialDesignSystem::expressiveDark()  { return MaterialDesignSystem(makeExpressiveDarkTokens()); }
 
     // -----------------------------------------------------------------------
     // Button — MD3 Filled Button: fully rounded (stadium), flat (0dp elevation)
@@ -226,19 +252,44 @@ namespace systems::leal::campello_widgets
             fg = withOpacity(fg, 0.4f);
         }
 
-        WidgetRef content = cfg.label;
+        // The label is caller-supplied plain text (see themed_component_
+        // harness.cpp's `cfg.label = text("Button")`, default TextStyle —
+        // black) with no expectation that it already carries the right
+        // on-color; buildButton() owns applying `fg`, the same way the
+        // background color is owned here rather than by the caller. Never
+        // discarding `fg` unapplied was a real, previously-uncaught bug —
+        // first surfaced by real-device (Android M3 Expressive) fidelity
+        // testing, since this builder had no prior visual verification.
+        auto tint_label = [&](WidgetRef label) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(label)) {
+                TextStyle style = text->span.style;
+                style.withColor(fg);
+                return std::make_shared<Text>(text->span.text, style);
+            }
+            return label;
+        };
+
+        WidgetRef content = tint_label(cfg.label);
         if (cfg.leading_icon || cfg.trailing_icon) {
             auto row = std::make_shared<Row>();
             row->cross_axis_alignment = CrossAxisAlignment::center;
             row->main_axis_size = MainAxisSize::min;
             if (cfg.leading_icon) row->children.push_back(cfg.leading_icon);
-            row->children.push_back(cfg.label);
+            row->children.push_back(tint_label(cfg.label));
             if (cfg.trailing_icon) row->children.push_back(cfg.trailing_icon);
             content = row;
         }
 
         auto padded = std::make_shared<Padding>();
-        padded->padding = EdgeInsets::symmetric(24.0f, 10.0f); // MD3 filled-button padding
+        // EdgeInsets::symmetric(vertical, horizontal) — confirmed via real
+        // Android M3 Expressive capture comparison that this call previously
+        // had the arguments swapped (24pt applied vertically instead of
+        // horizontally), producing a near-square/circular button instead of
+        // MD3's wide stadium pill. The same swapped-argument mistake likely
+        // recurs at this file's other EdgeInsets::symmetric() call sites —
+        // unconfirmed without a real capture per builder, so left alone
+        // pending evidence rather than blindly "fixed" here.
+        padded->padding = EdgeInsets::symmetric(10.0f, 24.0f); // MD3 filled-button padding
         padded->child   = content;
 
         BoxDecoration deco;
@@ -254,7 +305,6 @@ namespace systems::leal::campello_widgets
         detector->on_tap = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
         detector->child  = decorated;
 
-        (void)fg;
         if (!cfg.enabled || !cfg.on_pressed) {
             auto faded = std::make_shared<Opacity>();
             faded->opacity = 0.4f;
@@ -911,12 +961,27 @@ namespace systems::leal::campello_widgets
         Color fg     = cfg.selected ? c.on_secondary_container : c.on_surface_variant;
         Color border = cfg.selected ? Color::transparent() : c.outline;
 
+        // Same real bug as buildButton() had: `fg` was computed (selected ->
+        // on_secondary_container, unselected -> on_surface_variant) but
+        // never applied to cfg.label, which arrives as plain caller text
+        // with no color set (see themed_component_harness.cpp's
+        // `cfg.label = text("Chip")`) — so the label always rendered in
+        // TextStyle's untouched default (black) regardless of chip state.
+        auto tint_label = [&](WidgetRef label) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(label)) {
+                TextStyle style = text->span.style;
+                style.withColor(fg);
+                return std::make_shared<Text>(text->span.text, style);
+            }
+            return label;
+        };
+
         std::vector<WidgetRef> row_children;
         if (cfg.leading_icon) {
             row_children.push_back(cfg.leading_icon);
             row_children.push_back(SizedBox::from_width(8.0f));
         }
-        row_children.push_back(cfg.label);
+        row_children.push_back(tint_label(cfg.label));
         if (cfg.on_deleted) {
             row_children.push_back(SizedBox::from_width(8.0f));
             auto del = std::make_shared<Text>("x", TextStyle{}.withFontSize(12.0f).withColor(fg));
@@ -966,15 +1031,31 @@ namespace systems::leal::campello_widgets
     WidgetRef MaterialDesignSystem::buildSegmentedButton(const SegmentedConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+        // Same fg-discard pattern already found and fixed in buildButton()/
+        // buildChip(): seg.label arrives as plain caller text (see
+        // themed_component_harness.cpp's `text("Day")`, default black) with
+        // no expectation that it's pre-colored for this segment's state.
+        auto tint_label = [&](WidgetRef label, Color fg) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(label)) {
+                TextStyle style = text->span.style;
+                style.withColor(fg);
+                return std::make_shared<Text>(text->span.text, style);
+            }
+            return label;
+        };
+
         std::vector<WidgetRef> row_children;
         for (size_t i = 0; i < cfg.segments.size(); ++i) {
             const auto& seg = cfg.segments[i];
             bool selected = static_cast<int>(i) == cfg.selected_index;
             bool is_last  = i + 1 == cfg.segments.size();
+            // Real MD3 SegmentedButton: selected label ->
+            // onSecondaryContainer, unselected -> onSurface.
+            const Color fg = selected ? c.on_secondary_container : c.on_surface;
 
             std::vector<WidgetRef> content_children;
             if (seg.icon) content_children.push_back(seg.icon);
-            if (seg.label) content_children.push_back(seg.label);
+            if (seg.label) content_children.push_back(tint_label(seg.label, fg));
             auto content_row = std::make_shared<Row>();
             content_row->main_axis_alignment = MainAxisAlignment::center;
             content_row->main_axis_size = MainAxisSize::min;

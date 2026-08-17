@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "visual_fidelity.hpp"
-#include "gpu_visual_renderer.hpp"
 #include "visual_fidelity_helpers.hpp"
 
 #include <campello_widgets/ui/canvas.hpp>
@@ -34,25 +33,18 @@ bool renderCanvasToPng(cw::Canvas& canvas, const std::string& name,
                        cw::Color clearColor = cw::Color::white())
 {
     std::string outputPath = getCppOutputPath(name + ".png");
-    bool success = false;
 
-    cwt::GpuVisualRenderer gpuR(static_cast<int>(kFidelityWidth),
-                                static_cast<int>(kFidelityHeight));
-    if (gpuR.isValid()) {
-        gpuR.setClearColor(clearColor);
-        if (gpuR.renderDrawList(canvas.commands()))
-            success = gpuR.saveToPng(outputPath);
+    // GPU path via the production Renderer/IDrawBackend, falling back to the
+    // CPU software rasterizer only when no GPU device is available.
+    if (cwt::captureDrawListToPng(canvas.commands(), kFidelityWidth, kFidelityHeight, clearColor, outputPath)) {
+        return true;
     }
 
-    if (!success) {
-        cwt::VisualRenderer renderer(static_cast<int>(kFidelityWidth),
-                                     static_cast<int>(kFidelityHeight));
-        renderer.clear(clearColor);
-        renderer.renderDrawList(canvas.commands());
-        success = renderer.saveToPng(outputPath);
-    }
-
-    return success;
+    cwt::VisualRenderer renderer(static_cast<int>(kFidelityWidth),
+                                 static_cast<int>(kFidelityHeight));
+    renderer.clear(clearColor);
+    renderer.renderDrawList(canvas.commands());
+    return renderer.saveToPng(outputPath);
 }
 
 void compareWithFlutterGolden(const std::string& name)

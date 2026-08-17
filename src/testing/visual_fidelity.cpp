@@ -1,12 +1,28 @@
 #include "visual_fidelity.hpp"
-#include "gpu_visual_renderer.hpp"
+#include "offscreen_draw_backend.hpp"
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/render_box.hpp>
+#include <campello_widgets/ui/renderer.hpp>
+#include <campello_widgets/ui/frame_package.hpp>
 #include <campello_widgets/ui/color.hpp>
 #include <vector_math/matrix4.hpp>
 #include <campello_widgets/ui/rect.hpp>
+#include <campello_widgets/ui/path.hpp>
+#include <campello_widgets/ui/rrect.hpp>
 
 #include <campello_image/image.hpp>
+
+#include <campello_gpu/device.hpp>
+#include <campello_gpu/texture.hpp>
+#include <campello_gpu/texture_view.hpp>
+#include <campello_gpu/constants/texture_type.hpp>
+#include <campello_gpu/constants/texture_usage.hpp>
+#include <campello_gpu/constants/pixel_format.hpp>
+
+// stb_image_write — implementation included here (this file is compiled into
+// every target that links src/testing/, so this is the single definition).
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "../../tests/third_party/stb_image_write.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +34,7 @@ namespace cw = systems::leal::campello_widgets;
 namespace cwt = systems::leal::campello_widgets::testing;
 namespace vm = systems::leal::vector_math;
 namespace ci = systems::leal::campello_image;
+namespace GPU = systems::leal::campello_gpu;
 
 // ============================================================================
 // Helper Functions
@@ -218,6 +235,65 @@ void cwt::VisualRenderer::drawLine(int x1, int y1, int x2, int y2, int strokeWid
     }
 }
 
+void cwt::VisualRenderer::drawShadow(int x1, int y1, int x2, int y2, int radius, float sigma, const cw::Color& color)
+{
+    const int left   = std::min(x1, x2);
+    const int right  = std::max(x1, x2);
+    const int top    = std::min(y1, y2);
+    const int bottom = std::max(y1, y2);
+    const int width  = right - left;
+    const int height = bottom - top;
+
+    if (width <= 0 || height <= 0 || sigma <= 0.0f || color.a <= 0.0f) return;
+
+    // Match the production renderer's 3-sigma cutoff (capped at 48 logical pixels).
+    const float margin = std::min(sigma * 3.0f, 48.0f);
+    const int margin_i = static_cast<int>(std::ceil(margin));
+
+    const int maxRadius = std::min(width, height) / 2;
+    radius = std::min(radius, maxRadius);
+
+    const int startX = clamp(left - margin_i, 0, width_ - 1);
+    const int endX   = clamp(right + margin_i, 0, width_ - 1);
+    const int startY = clamp(top - margin_i, 0, height_ - 1);
+    const int endY   = clamp(bottom + margin_i, 0, height_ - 1);
+
+    const float cx = (left + right) * 0.5f;
+    const float cy = (top + bottom) * 0.5f;
+    const float sx = width * 0.5f;
+    const float sy = height * 0.5f;
+    const float r  = static_cast<float>(radius);
+    const float sqrt2_sigma = sigma * 1.41421356f;
+
+    for (int y = startY; y <= endY; ++y) {
+        for (int x = startX; x <= endX; ++x) {
+            const float px = static_cast<float>(x) + 0.5f;
+            const float py = static_cast<float>(y) + 0.5f;
+
+            // Signed-distance to a rounded rectangle. Positive outside, zero on
+            // the edge, negative inside. The occluder itself is drawn later, so
+            // we only emit shadow where d > 0.
+            const float dx = std::abs(px - cx) - sx + r;
+            const float dy = std::abs(py - cy) - sy + r;
+            const float d_out = std::sqrt(
+                std::max(dx, 0.0f) * std::max(dx, 0.0f) +
+                std::max(dy, 0.0f) * std::max(dy, 0.0f));
+            const float d_in = std::min(std::max(dx, dy), 0.0f);
+            const float d = d_out + d_in - r;
+
+            if (d > 0.0f) {
+                // Gaussian-blurred step falloff: integral of a Gaussian from d
+                // to infinity. This matches the profile produced by the
+                // production renderer's separable blur of a filled shape.
+                const float a = color.a * 0.5f * std::erfc(d / sqrt2_sigma);
+                if (a > 0.001f) {
+                    setPixel(x, y, cw::Color{color.r, color.g, color.b, a});
+                }
+            }
+        }
+    }
+}
+
 // Visitor struct for DrawCommand processing
 struct DrawCommandVisitor {
     cwt::VisualRenderer* renderer;
@@ -305,7 +381,30 @@ struct DrawCommandVisitor {
     void operator()(const cw::DrawArcCmd&) {}
     void operator()(const cw::DrawPointsCmd&) {}
     void operator()(const cw::DrawPathCmd&) {}
-    void operator()(const cw::DrawShadowCmd&) {}
+    void operator()(const cw::DrawShadowCmd& c) {
+        cw::RRect rr;
+        if (auto simple = c.path.simpleRRectShape()) {
+            rr = *simple;
+        } else {
+            rr = cw::RRect{c.path.getBounds(), 0.0f, 0.0f};
+        }
+
+        auto tl = transforms->current() * vm::Vector4<float>(rr.rect.left(), rr.rect.top(), 0.0f, 1.0f);
+        auto br = transforms->current() * vm::Vector4<float>(rr.rect.right(), rr.rect.bottom(), 0.0f, 1.0f);
+
+        auto scaleVec = transforms->current() * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+        float scale = std::sqrt(scaleVec.x() * scaleVec.x() + scaleVec.y() * scaleVec.y());
+
+        int x1 = static_cast<int>(std::min(tl.x(), br.x()));
+        int y1 = static_cast<int>(std::min(tl.y(), br.y()));
+        int x2 = static_cast<int>(std::max(tl.x(), br.x()));
+        int y2 = static_cast<int>(std::max(tl.y(), br.y()));
+        int radius = static_cast<int>((rr.radius_x + rr.radius_y) * 0.5f * scale);
+        float sigma = c.elevation * scale * 0.57735f + 0.5f;
+
+        renderer->drawShadow(x1, y1, x2, y2, radius, sigma, c.color);
+    }
+
     void operator()(const cw::DrawTextCmd&) {}
     void operator()(const cw::DrawImageCmd&) {}
     void operator()(const cw::PushClipPathCmd&) {}
@@ -446,6 +545,171 @@ bool cwt::VisualRenderer::saveToPng(const std::string& filepath)
 }
 
 // ============================================================================
+// Offscreen GPU capture (production Renderer/IDrawBackend — no duplicate
+// rendering path; see gpu_visual_renderer.hpp's retirement)
+// ============================================================================
+
+std::shared_ptr<GPU::Device> cwt::sharedGpuDevice()
+{
+    // Function-local static: created once per process, reused by every
+    // capture call and by any test that needs to build GPU resources (e.g.
+    // an image texture) on the same logical device — mixing devices is
+    // invalid, not just slow (see the header doc comment on this function).
+    static std::shared_ptr<GPU::Device> device = GPU::Device::createDefaultDevice(nullptr);
+    return device;
+}
+
+namespace
+{
+    // Downloads `tex`'s pixels and writes them as a PNG, unpremultiplying
+    // alpha first: the render target stores premultiplied-alpha color (as
+    // produced by the shaders), but PNG — and the reference goldens this is
+    // diffed against — use straight (unpremultiplied) alpha.
+    bool downloadAndSavePng(const std::shared_ptr<GPU::Texture>& tex,
+                             uint32_t width, uint32_t height,
+                             const std::string& outputPath)
+    {
+        if (!tex) return false;
+
+        const uint64_t byte_count =
+            static_cast<uint64_t>(width) * static_cast<uint64_t>(height) * 4;
+        std::vector<uint8_t> pixels(byte_count);
+
+        if (!tex->download(0, 0, pixels.data(), byte_count)) {
+            std::cerr << "[visual_fidelity] Texture::download failed\n";
+            return false;
+        }
+
+        for (uint64_t i = 0; i < byte_count; i += 4) {
+            const uint8_t a = pixels[i + 3];
+            if (a == 0 || a == 255) continue;
+            for (int c = 0; c < 3; ++c) {
+                const int straight = (static_cast<int>(pixels[i + c]) * 255 + a / 2) / a;
+                pixels[i + c] = static_cast<uint8_t>(std::min(255, straight));
+            }
+        }
+
+        return stbi_write_png(
+            outputPath.c_str(),
+            static_cast<int>(width), static_cast<int>(height),
+            4, pixels.data(),
+            static_cast<int>(width) * 4) != 0;
+    }
+
+    GPU::TextureUsage offscreenTargetUsage()
+    {
+        return static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::copySrc));
+    }
+
+    // A throwaway Renderer used purely to dispatch an already-recorded
+    // DrawList through the real GPU raster path (Renderer::rasterFrame()) —
+    // no root RenderBox, since the caller already produced the DrawList
+    // itself (either via RenderObject::paint() or a raw Canvas). Cached
+    // per-process (like sharedGpuDevice()) so repeated captures in a test
+    // suite don't recompile GPU pipelines every call.
+    cw::Renderer* drawListRenderer()
+    {
+        static std::shared_ptr<cw::Renderer> renderer = [] () -> std::shared_ptr<cw::Renderer> {
+            auto device = cwt::sharedGpuDevice();
+            if (!device) return nullptr;
+            auto backend = cwt::createOffscreenDrawBackend(device, cw::Color::white(), GPU::PixelFormat::rgba8unorm);
+            if (!backend) return nullptr;
+            auto r = std::make_shared<cw::Renderer>(device, nullptr, cw::Color::white());
+            r->setDrawBackend(std::move(backend));
+            return r;
+        }();
+        return renderer.get();
+    }
+}
+
+bool cwt::captureDrawListToPng(
+    const cw::DrawList& commands,
+    float width,
+    float height,
+    const cw::Color& clearColor,
+    const std::string& outputPath,
+    float devicePixelRatio)
+{
+    auto device = sharedGpuDevice();
+    auto* renderer = drawListRenderer();
+    if (!device || !renderer) return false;
+
+    const uint32_t w = static_cast<uint32_t>(width);
+    const uint32_t h = static_cast<uint32_t>(height);
+    if (w == 0 || h == 0) return false;
+
+    auto color_tex = device->createTexture(
+        GPU::TextureType::tt2d, GPU::PixelFormat::rgba8unorm,
+        w, h, 1, 1, 1, offscreenTargetUsage());
+    if (!color_tex) return false;
+
+    auto target_view = color_tex->createView(GPU::PixelFormat::rgba8unorm, 1);
+    if (!target_view) return false;
+
+    cw::FramePackage package;
+    package.draw_list          = commands;
+    package.viewport_width     = width;
+    package.viewport_height    = height;
+    package.device_pixel_ratio = devicePixelRatio;
+    package.clear_color        = clearColor;
+    package.target             = target_view;
+
+    if (!renderer->rasterFrame(package)) return false;
+
+    device->waitForIdle();
+    return downloadAndSavePng(color_tex, w, h, outputPath);
+}
+
+bool cwt::captureRenderBoxToPng(
+    std::shared_ptr<cw::RenderBox> root,
+    float physicalWidth,
+    float physicalHeight,
+    float devicePixelRatio,
+    const cw::Color& clearColor,
+    const std::string& outputPath)
+{
+    auto device = sharedGpuDevice();
+    if (!device) return false;
+
+    auto backend = createOffscreenDrawBackend(device, clearColor, GPU::PixelFormat::rgba8unorm);
+    if (!backend) return false;
+
+    const uint32_t w = static_cast<uint32_t>(physicalWidth);
+    const uint32_t h = static_cast<uint32_t>(physicalHeight);
+    if (w == 0 || h == 0) return false;
+
+    auto color_tex = device->createTexture(
+        GPU::TextureType::tt2d, GPU::PixelFormat::rgba8unorm,
+        w, h, 1, 1, 1, offscreenTargetUsage());
+    if (!color_tex) return false;
+
+    auto target_view = color_tex->createView(GPU::PixelFormat::rgba8unorm, 1);
+    if (!target_view) return false;
+
+    // A fresh Renderer per call: root_ is bound at construction and this
+    // helper is called once per (widget, state) case with a different root
+    // each time — mirrors the per-window Renderer lifetime real platform
+    // launchers use, just against an offscreen texture instead of a
+    // swapchain (see src/macos/run_app.mm's MetalDrawBackend+Renderer setup).
+    // Note: the caller must not have already called RenderBox::layout() on
+    // `root` before this — RenderObject::setActiveBackend() is a raw,
+    // non-owning global pointer that this call's Renderer::buildFrame() only
+    // repoints to a valid backend once layoutPass() actually runs; laying out
+    // any earlier would read whatever the *previous* call's (already-
+    // destroyed) backend left behind.
+    cw::Renderer renderer(device, std::move(root), clearColor);
+    renderer.setDrawBackend(std::move(backend));
+    renderer.setDevicePixelRatio(devicePixelRatio);
+
+    if (!renderer.renderFrame(target_view, physicalWidth, physicalHeight)) return false;
+
+    device->waitForIdle();
+    return downloadAndSavePng(color_tex, w, h, outputPath);
+}
+
+// ============================================================================
 // Capture to PNG
 // ============================================================================
 
@@ -454,7 +718,8 @@ bool cwt::captureToPng(
     const cw::BoxConstraints& constraints,
     float viewportWidth,
     float viewportHeight,
-    const std::string& outputPath)
+    const std::string& outputPath,
+    const cw::Color& clearColor)
 {
     try {
         // Perform layout
@@ -464,22 +729,17 @@ bool cwt::captureToPng(
         cw::PaintContext context(viewportWidth, viewportHeight);
         root.paint(context, cw::Offset::zero());
 
-        const int w = static_cast<int>(viewportWidth);
-        const int h = static_cast<int>(viewportHeight);
-
-        // Try GPU path first (macOS Metal; no-op stub on other platforms)
-        GpuVisualRenderer gpuRenderer(w, h);
-        if (gpuRenderer.isValid()) {
-            gpuRenderer.setClearColor(cw::Color::white());
-            if (gpuRenderer.renderDrawList(context.commands())) {
-                return gpuRenderer.saveToPng(outputPath);
-            }
-            // renderDrawList returned false → unsupported commands, fall through to CPU
+        // GPU path via the production Renderer/IDrawBackend (macOS Metal /
+        // Linux+Android Vulkan / Windows D3D12; no-op stub elsewhere).
+        if (captureDrawListToPng(context.commands(), viewportWidth, viewportHeight, clearColor, outputPath)) {
+            return true;
         }
 
-        // CPU software rasterizer fallback
+        // CPU software rasterizer fallback (no GPU device available).
+        const int w = static_cast<int>(viewportWidth);
+        const int h = static_cast<int>(viewportHeight);
         VisualRenderer renderer(w, h);
-        renderer.clear(cw::Color::white());
+        renderer.clear(clearColor);
         renderer.renderDrawList(context.commands());
         return renderer.saveToPng(outputPath);
     } catch (const std::exception& e) {

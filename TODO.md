@@ -4023,3 +4023,34 @@ Remaining work for full cross-platform coverage:
 - [x] Metal backend readback — `GpuVisualRenderer` offscreen → PNG (macOS)
 - [x] Vulkan backend readback (`vkCmdCopyImageToBuffer`) for Android/Linux
 - [ ] DirectX 12 backend readback (`CopyTextureRegion` into readback heap) for Windows
+
+---
+
+## Pending — Cross-platform fidelity & design system research
+
+> The iOS / Liquid Glass visual-fidelity pass is currently being driven
+> manually by the project owner. The items below are the next queued
+> investigations once that pass is complete.
+
+- [ ] **Elaborate the same iOS fidelity test workflow for Material/Android and
+      Fluent/Windows.**
+  - Reuse the offscreen renderer + reference-app screenshot + pixel-diff
+    pipeline already built for `ios_fidelity_reference`.
+  - For Material/Android: build a native Android reference activity using
+    Compose Material3 (or the platform Material components) and export
+    deterministic screenshots for each themed component/state.
+  - For Fluent/Windows: build a reference WinUI 3 / Windows App SDK page
+    and export screenshots at matching logical/physical sizes.
+  - Extend `tests/visual_fidelity/themed_component_harness.cpp` and
+    `compare_ios_cpp.py` (or create sibling scripts) so the C++ render can be
+    diffed against the Android/Windows reference sets.
+
+- [ ] **Analyze M3 Expressive on the web and determine if the current
+      `DesignSystem` abstraction can hold this evolution of Material 3.**
+  - Review the public M3 Expressive guidelines/components/tokens.
+  - Identify which new concepts (e.g. expanded shape language, richer motion,
+    color extractions, container transformations) map to existing
+    `DesignTokens` fields and which require new tokens or backend features.
+  - Produce a short assessment: can `MaterialDesignSystem` absorb M3
+    Expressive as a new preset/token set, or does it need breaking changes
+    to `DesignSystem` / `DesignTokens`?

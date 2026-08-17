@@ -37,3 +37,10 @@ local.properties
 .idea/
 *.iml
 .cxx/
+.kotlin/
+
+# Fidelity reference apps' generated captures/reports
+android_fidelity_reference/output/
+ios_fidelity_reference/output/
+tests/visual_fidelity/__pycache__/
+tests/visual_fidelity/reports/

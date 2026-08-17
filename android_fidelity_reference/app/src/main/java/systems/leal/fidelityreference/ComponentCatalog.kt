@@ -1,0 +1,127 @@
+package systems.leal.fidelityreference
+
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+
+/**
+ * Maps a `{builder}_{state}` case id — the same naming convention
+ * `themed_component_harness.cpp` uses — to a real M3 Expressive composable.
+ * Content/labels mirror that file's cases exactly (see its `button`/
+ * `switch`/`card` builder blocks) so the two sides render the same content.
+ */
+object ComponentCatalog {
+    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
+    @Composable
+    fun render(caseId: String) {
+        when (caseId) {
+            "button_primary" -> Button(onClick = {}) { Text("Button") }
+            "button_secondary" -> Button(
+                onClick = {},
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.secondary,
+                    contentColor = MaterialTheme.colorScheme.onSecondary
+                )
+            ) { Text("Button") }
+            "button_tertiary" -> OutlinedButton(onClick = {}) { Text("Button") }
+            "button_danger" -> Button(
+                onClick = {},
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.error,
+                    contentColor = MaterialTheme.colorScheme.onError
+                )
+            ) { Text("Button") }
+            "button_disabled" -> OutlinedButton(onClick = {}, enabled = false) { Text("Button") }
+
+            "switch_on" -> Switch(checked = true, onCheckedChange = {})
+            "switch_off" -> Switch(checked = false, onCheckedChange = {})
+            "switch_disabled" -> Switch(checked = false, onCheckedChange = {}, enabled = false)
+
+            "card_elevated" -> ElevatedCard(modifier = Modifier.padding(16.dp)) {
+                Text("Card content", modifier = Modifier.padding(16.dp))
+            }
+            "card_filled" -> Card(modifier = Modifier.padding(16.dp)) {
+                Text("Card content", modifier = Modifier.padding(16.dp))
+            }
+            "card_outlined" -> OutlinedCard(modifier = Modifier.padding(16.dp)) {
+                Text("Card content", modifier = Modifier.padding(16.dp))
+            }
+
+            "slider_value" -> Slider(
+                value = 0.33f, onValueChange = {}, modifier = Modifier.width(280.dp)
+            )
+            "slider_disabled" -> Slider(
+                value = 0.33f, onValueChange = {}, enabled = false, modifier = Modifier.width(280.dp)
+            )
+
+            "chip_unselected" -> FilterChip(selected = false, onClick = {}, label = { Text("Chip") })
+            "chip_selected" -> FilterChip(selected = true, onClick = {}, label = { Text("Chip") })
+
+            "divider_default" -> HorizontalDivider(modifier = Modifier.width(280.dp))
+            "divider_indented" -> HorizontalDivider(
+                modifier = Modifier.width(280.dp).padding(start = 16.dp, end = 16.dp)
+            )
+
+            // "listTile_with_icon" intentionally omitted: the C++ side's
+            // icon() helper is a "★" text placeholder (no real Icon widget
+            // yet — see themed_component_harness.cpp's TODO), so comparing
+            // it against a real Compose icon would test icon-glyph fidelity
+            // rather than the ListItem/ListTile chrome this pass covers.
+            "listTile_one_line" -> ListItem(
+                headlineContent = { Text("Title") },
+                modifier = Modifier.width(280.dp)
+            )
+            "listTile_two_line" -> ListItem(
+                headlineContent = { Text("Title") },
+                supportingContent = { Text("Subtitle") },
+                modifier = Modifier.width(280.dp)
+            )
+
+            "textField_empty" -> OutlinedTextField(
+                value = "", onValueChange = {}, placeholder = { Text("Placeholder") },
+                modifier = Modifier.width(240.dp)
+            )
+            "textField_filled" -> OutlinedTextField(
+                value = "Hello", onValueChange = {}, placeholder = { Text("Placeholder") },
+                modifier = Modifier.width(240.dp)
+            )
+            "textField_disabled" -> OutlinedTextField(
+                value = "", onValueChange = {}, placeholder = { Text("Placeholder") }, enabled = false,
+                modifier = Modifier.width(240.dp)
+            )
+
+            "segmentedButton_three_segments" -> {
+                val labels = listOf("Day", "Week", "Month")
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.width(280.dp)) {
+                    labels.forEachIndexed { index, label ->
+                        SegmentedButton(
+                            selected = index == 0,
+                            onClick = {},
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = labels.size)
+                        ) { Text(label) }
+                    }
+                }
+            }
+        }
+    }
+}

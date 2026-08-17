@@ -30,6 +30,25 @@ namespace systems::leal::campello_widgets
         /** @brief Dark-mode preset (MD3 baseline dark scheme). */
         static MaterialDesignSystem dark();
 
+        /**
+         * @brief Light-mode M3 Expressive preset.
+         *
+         * Phase A per the theme-abstraction proposal: same MD3 baseline
+         * tonal palette and type ramp as light() (M3 Expressive does not
+         * redefine the color algorithm or introduce a new default seed —
+         * Android's own baseline ColorScheme is unchanged), but a rounder
+         * shape scale within the existing 7 ShapeTokens fields
+         * (radius_lg 16->20dp, radius_xl 28->32dp — the "L-Increased"/
+         * "XL-Increased" steps of M3 Expressive's expanded 10-level shape
+         * scale). Emphasized typography, spring motion, and the full
+         * 10-level shape scale are deferred to a later phase — see
+         * memory/theme_abstraction_redefinition_proposal.md.
+         */
+        static MaterialDesignSystem expressiveLight();
+
+        /** @brief Dark-mode M3 Expressive preset — see expressiveLight(). */
+        static MaterialDesignSystem expressiveDark();
+
         const DesignTokens& tokens() const override { return tokens_; }
 
         // Component builders

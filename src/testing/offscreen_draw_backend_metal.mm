@@ -1,5 +1,5 @@
-// Metal backend factory for GpuVisualRenderer.
-#include "gpu_visual_renderer_backend.hpp"
+// Metal backend factory for offscreen GPU capture (macOS/iOS).
+#include "offscreen_draw_backend.hpp"
 #include "../gpu/metal/metal_draw_backend.hpp"
 #include <iostream>
 
@@ -7,7 +7,7 @@ namespace cwt = systems::leal::campello_widgets::testing;
 namespace cw  = systems::leal::campello_widgets;
 namespace GPU = systems::leal::campello_gpu;
 
-std::unique_ptr<cw::IDrawBackend> cwt::createVisualRendererBackend(
+std::unique_ptr<cw::IDrawBackend> cwt::createOffscreenDrawBackend(
     std::shared_ptr<GPU::Device> device,
     cw::Color                    bg_color,
     GPU::PixelFormat             pixel_format)
@@ -18,7 +18,7 @@ std::unique_ptr<cw::IDrawBackend> cwt::createVisualRendererBackend(
         pixel_format);
 
     if (!backend->isValid()) {
-        std::cerr << "[GpuVisualRenderer] MetalDrawBackend pipelines failed to compile\n";
+        std::cerr << "[offscreen_draw_backend] MetalDrawBackend pipelines failed to compile\n";
         return nullptr;
     }
     return backend;

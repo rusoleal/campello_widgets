@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "visual_fidelity.hpp"
-#include "gpu_visual_renderer.hpp"
 #include "fidelity.hpp"
 #include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/render_flex.hpp>
@@ -422,19 +421,7 @@ TEST(VisualFidelity, CanvasBasicShapes)
 
     // Render to PNG
     std::string outputPath = getCppOutputPath("canvas_basic_shapes.png");
-    bool success = false;
-    cwt::GpuVisualRenderer gpuR(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-    if (gpuR.isValid()) {
-        gpuR.setClearColor(cw::Color::white());
-        if (gpuR.renderDrawList(canvas.commands()))
-            success = gpuR.saveToPng(outputPath);
-    }
-    if (!success) {
-        cwt::VisualRenderer renderer(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-        renderer.clear(cw::Color::white());
-        renderer.renderDrawList(canvas.commands());
-        success = renderer.saveToPng(outputPath);
-    }
+    bool success = cwt::captureDrawListToPng(canvas.commands(), kFidelityWidth, kFidelityHeight, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_basic_shapes.png")) {
@@ -488,19 +475,7 @@ TEST(VisualFidelity, CanvasRoundedRects)
     canvas.drawRRect(rrect3, redStroke);
 
     std::string outputPath = getCppOutputPath("canvas_rounded_rects.png");
-    bool success = false;
-    cwt::GpuVisualRenderer gpuR2(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-    if (gpuR2.isValid()) {
-        gpuR2.setClearColor(cw::Color::white());
-        if (gpuR2.renderDrawList(canvas.commands()))
-            success = gpuR2.saveToPng(outputPath);
-    }
-    if (!success) {
-        cwt::VisualRenderer renderer(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-        renderer.clear(cw::Color::white());
-        renderer.renderDrawList(canvas.commands());
-        success = renderer.saveToPng(outputPath);
-    }
+    bool success = cwt::captureDrawListToPng(canvas.commands(), kFidelityWidth, kFidelityHeight, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_rounded_rects.png")) {
@@ -550,19 +525,7 @@ TEST(VisualFidelity, CanvasLines)
     }
 
     std::string outputPath = getCppOutputPath("canvas_lines.png");
-    bool success = false;
-    cwt::GpuVisualRenderer gpuR3(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-    if (gpuR3.isValid()) {
-        gpuR3.setClearColor(cw::Color::white());
-        if (gpuR3.renderDrawList(canvas.commands()))
-            success = gpuR3.saveToPng(outputPath);
-    }
-    if (!success) {
-        cwt::VisualRenderer renderer(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-        renderer.clear(cw::Color::white());
-        renderer.renderDrawList(canvas.commands());
-        success = renderer.saveToPng(outputPath);
-    }
+    bool success = cwt::captureDrawListToPng(canvas.commands(), kFidelityWidth, kFidelityHeight, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_lines.png")) {
@@ -634,13 +597,8 @@ TEST(VisualFidelity, CanvasComplexScene)
     borderPaint.stroke_width = 3 * scaleX;
     canvas.drawRRect(cardRRect, borderPaint);
 
-    cwt::GpuVisualRenderer renderer(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-    renderer.setClearColor(cw::Color::white());
-    if (!renderer.isValid()) { GTEST_SKIP() << "GPU renderer unavailable"; return; }
-    renderer.renderDrawList(canvas.commands());
-
     std::string outputPath = getCppOutputPath("canvas_complex_scene.png");
-    bool success = renderer.saveToPng(outputPath);
+    bool success = cwt::captureDrawListToPng(canvas.commands(), kFidelityWidth, kFidelityHeight, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_complex_scene.png")) {
@@ -722,13 +680,8 @@ TEST(VisualFidelity, CanvasTextBasic)
         canvas.drawText(span, cw::Offset(50.0f, 370.0f));
     }
 
-    cwt::GpuVisualRenderer renderer(static_cast<int>(kFidelityWidth), static_cast<int>(kFidelityHeight));
-    renderer.setClearColor(cw::Color::white());
-    if (!renderer.isValid()) { GTEST_SKIP() << "GPU renderer unavailable"; return; }
-    renderer.renderDrawList(canvas.commands());
-
     std::string outputPath = getCppOutputPath("canvas_text_basic.png");
-    bool success = renderer.saveToPng(outputPath);
+    bool success = cwt::captureDrawListToPng(canvas.commands(), kFidelityWidth, kFidelityHeight, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_text_basic.png")) {
@@ -838,13 +791,8 @@ TEST(VisualFidelity, CanvasTransforms)
     }
     canvas.restore();
 
-    cwt::GpuVisualRenderer renderer(static_cast<int>(W), static_cast<int>(H));
-    renderer.setClearColor(cw::Color::white());
-    if (!renderer.isValid()) { GTEST_SKIP() << "GPU renderer unavailable"; return; }
-    renderer.renderDrawList(canvas.commands());
-
     std::string outputPath = getCppOutputPath("canvas_transforms.png");
-    bool success = renderer.saveToPng(outputPath);
+    bool success = cwt::captureDrawListToPng(canvas.commands(), W, H, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_transforms.png")) {
@@ -923,13 +871,8 @@ TEST(VisualFidelity, CanvasRotate)
     }
     canvas.restore();
 
-    cwt::GpuVisualRenderer renderer(static_cast<int>(W), static_cast<int>(H));
-    renderer.setClearColor(cw::Color::white());
-    if (!renderer.isValid()) { GTEST_SKIP() << "GPU renderer unavailable"; return; }
-    renderer.renderDrawList(canvas.commands());
-
     std::string outputPath = getCppOutputPath("canvas_rotate.png");
-    bool success = renderer.saveToPng(outputPath);
+    bool success = cwt::captureDrawListToPng(canvas.commands(), W, H, cw::Color::white(), outputPath);
     EXPECT_TRUE(success);
 
     if (flutterGoldenExists("canvas_rotate.png")) {

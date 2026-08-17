@@ -8,6 +8,13 @@
 #include <vector>
 #include <memory>
 
+namespace systems::leal::campello_gpu { class Device; }
+
+namespace systems::leal::campello_widgets
+{
+    class RenderBox;
+}
+
 namespace systems::leal::campello_widgets::testing
 {
 
@@ -69,6 +76,19 @@ namespace systems::leal::campello_widgets::testing
         void fillRoundedRect(int x1, int y1, int x2, int y2, int radius, const Color& color);
         void drawLine(int x1, int y1, int x2, int y2, int strokeWidth, const Color& color);
 
+        /**
+         * @brief Draw a drop shadow for a rounded rectangle.
+         *
+         * The shadow is rendered outside the shape using a Gaussian falloff
+         * matching the production renderer's blur profile.
+         *
+         * @param x1, y1, x2, y2 Screen-space bounding box of the occluder.
+         * @param radius Screen-space corner radius.
+         * @param sigma Screen-space Gaussian sigma (controls softness).
+         * @param color Shadow color and peak alpha.
+         */
+        void drawShadow(int x1, int y1, int x2, int y2, int radius, float sigma, const Color& color);
+
         // Transform handling
         struct TransformStack {
             std::vector<Matrix4> stack;
@@ -93,16 +113,89 @@ namespace systems::leal::campello_widgets::testing
     };
 
     /**
+     * @brief Returns the GPU device shared by every offscreen capture in this
+     * process, creating it on first call.
+     *
+     * A Vulkan `VkImageView` (and similarly Metal/D3D12 resources) can only
+     * be bound into commands submitted on the same logical device that
+     * created it. Tests that build their own GPU resources (e.g. loading an
+     * image into a texture) and then feed them through captureDrawListToPng()
+     * / captureRenderBoxToPng() must create those resources on this shared
+     * device — not a separate `Device::createDefaultDevice()` — or the
+     * resource will be invalid on the device actually used to render.
+     */
+    std::shared_ptr<campello_gpu::Device> sharedGpuDevice();
+
+    /**
+     * @brief Renders an already-recorded DrawList to a PNG file via the
+     * production cw::Renderer + platform IDrawBackend — the same GPU code
+     * path (Metal/Vulkan/D3D12) real running apps use, not a hand-rolled
+     * duplicate.
+     *
+     * Use this when the caller already has a DrawList with no associated
+     * RenderBox tree (e.g. a raw Canvas, or a RenderObject painted directly
+     * via captureToPng()). For a mounted widget tree that needs DPR-correct
+     * text/layout, use captureRenderBoxToPng() instead.
+     *
+     * @param commands Draw commands to render, in logical-pixel coordinates.
+     * @param width, height Physical-pixel viewport / output texture size.
+     * @param clearColor Background color the canvas is cleared to before painting.
+     * @param outputPath Path to save the PNG file.
+     * @param devicePixelRatio Logical-to-physical scale baked in by the backend.
+     * @return true on success (false if no GPU device is available — caller
+     *         should fall back to the CPU VisualRenderer).
+     */
+    bool captureDrawListToPng(
+        const DrawList& commands,
+        float width,
+        float height,
+        const Color& clearColor,
+        const std::string& outputPath,
+        float devicePixelRatio = 1.0f);
+
+    /**
+     * @brief Renders a mounted RenderBox tree to a PNG file via a full
+     * cw::Renderer (layout + paint + GPU raster), with correct device-pixel-
+     * ratio handling — mirrors exactly how a real platform run loop
+     * (src/macos/run_app.mm et al.) drives the renderer, just against an
+     * offscreen texture instead of a swapchain.
+     *
+     * @param root RenderBox to lay out and paint (e.g. from Element::mount()).
+     *        Must NOT already have had RenderBox::layout() called on it —
+     *        RenderObject::activeBackend() is a raw, non-owning global
+     *        pointer that only becomes valid once this call's own Renderer
+     *        starts its layout pass; laying out earlier reads whatever a
+     *        previous captureRenderBoxToPng() call's (already-destroyed)
+     *        backend left behind.
+     * @param physicalWidth, physicalHeight Physical-pixel viewport / output texture size.
+     * @param devicePixelRatio Logical-to-physical scale; `root` is laid out
+     *        at (physicalWidth/dpr, physicalHeight/dpr) logical pixels.
+     * @param clearColor Background color the canvas is cleared to before painting.
+     * @param outputPath Path to save the PNG file.
+     * @return true on success.
+     */
+    bool captureRenderBoxToPng(
+        std::shared_ptr<RenderBox> root,
+        float physicalWidth,
+        float physicalHeight,
+        float devicePixelRatio,
+        const Color& clearColor,
+        const std::string& outputPath);
+
+    /**
      * @brief Captures a RenderObject tree to a PNG file.
      *
      * This is the main entry point for visual fidelity testing.
-     * It performs layout, captures paint commands, and renders to PNG.
+     * It performs layout, captures paint commands, and renders to PNG via
+     * captureDrawListToPng() (falling back to the CPU VisualRenderer only
+     * when no GPU device is available).
      *
      * @param root The root RenderObject to render
      * @param constraints Layout constraints
      * @param viewportWidth The viewport width in pixels
      * @param viewportHeight The viewport height in pixels
      * @param outputPath Path to save the PNG file
+     * @param clearColor Background color the canvas is cleared to before painting
      * @return true on success
      */
     bool captureToPng(
@@ -110,7 +203,8 @@ namespace systems::leal::campello_widgets::testing
         const BoxConstraints& constraints,
         float viewportWidth,
         float viewportHeight,
-        const std::string& outputPath);
+        const std::string& outputPath,
+        const Color& clearColor = Color::white());
 
     /**
      * @brief Result of comparing two images.

@@ -330,7 +330,11 @@ fragment float4 blurFragment(
     sampler           smp [[sampler(1)]])
 {
     const float sigma = max(in.sigma, 0.5);
-    const int   RADIUS = min(int(ceil(2.5 * sigma)), 12);
+    // Capped at 24 (not the ideal 2.5*sigma) to bound the per-pixel sample
+    // count — real iOS Liquid Glass backdrops need a much stronger blur
+    // than this shader could reach at the old cap of 12, which silently
+    // clamped every sigma above ~4.8 to the same (too-sharp) result.
+    const int   RADIUS = min(int(ceil(2.5 * sigma)), 24);
 
     float2 step = (in.horizontal > 0.5)
         ? float2(1.0 / in.tex_size.x, 0.0)

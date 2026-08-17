@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 #include "visual_fidelity.hpp"
-#include "gpu_visual_renderer.hpp"
 #include "fidelity.hpp"
 #include "visual_fidelity_helpers.hpp"
 #include <campello_widgets/ui/render_image.hpp>

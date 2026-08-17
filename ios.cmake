@@ -3,10 +3,10 @@ file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.mm"
 )
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|windows|linux)/.*")
-# src/testing/ is fidelity-testing infrastructure (captureToPng, GpuVisualRenderer
-# callers) that depends on GpuVisualRenderer's implementation, which lives in
-# tests/ and is only compiled into campello_widgets_tests — linking it into the
-# shipped library leaves it with unresolved symbols for any non-test executable.
+# src/testing/ is fidelity-testing infrastructure (captureToPng, the offscreen
+# GPU capture helpers) that is only compiled into campello_widgets_tests /
+# campello_widgets_thematic_fidelity — linking it into the shipped library
+# leaves it with unresolved symbols for any non-test executable.
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 # iOS uses the shared Metal backend (src/gpu/metal/), not Vulkan.
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/gpu/vulkan/.*")

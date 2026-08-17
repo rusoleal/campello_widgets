@@ -287,6 +287,27 @@ namespace systems::leal::campello_widgets
         std::function<void()> on_cancel; ///< present -> shows a Cancel action
     };
 
+    /**
+     * @brief A title + message + individually-pilled stacked actions
+     * confirmation dialog — iOS 26's system "remove app"-style prompt, not
+     * the classic hairline-divided UIAlertController look (see
+     * DialogConfig). Cupertino-only; no cross-platform builder for it yet.
+     */
+    struct ConfirmationDialogConfig
+    {
+        struct Action
+        {
+            std::string label;
+            std::function<void()> on_selected;
+            bool destructive = false;
+        };
+        WidgetRef title;   ///< bold, left-aligned
+        WidgetRef message; ///< regular weight, muted, left-aligned
+        std::vector<Action> actions;
+        std::function<void()> on_cancel;    ///< present -> shows a cancel action
+        std::string cancel_label = "Cancel";
+    };
+
     struct SearchFieldConfig
     {
         std::string placeholder = "Search";
