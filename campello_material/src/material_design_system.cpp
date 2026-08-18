@@ -7,6 +7,7 @@
 #include <campello_widgets/widgets/center.hpp>
 #include <campello_widgets/widgets/checkbox.hpp>
 #include <campello_widgets/widgets/circular_progress_indicator.hpp>
+#include <campello_widgets/widgets/clip_rrect.hpp>
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/constrained_box.hpp>
 #include <campello_widgets/widgets/container.hpp>
@@ -1134,7 +1135,18 @@ namespace systems::leal::campello_widgets
             const Color fg = selected ? c.on_secondary_container : c.on_surface;
 
             std::vector<WidgetRef> content_children;
-            if (seg.icon) content_children.push_back(seg.icon);
+            // Real M3 SegmentedButton shows a checkmark in place of a
+            // custom icon when checked and none was supplied — confirmed
+            // against a real capture (segmentedButton_three_segments's
+            // "Day" segment renders a checkmark, not just a tinted
+            // background).
+            if (selected && !seg.icon) {
+                content_children.push_back(std::make_shared<Text>(
+                    "✓", TextStyle{}.withFontSize(16.0f).withColor(fg)));
+                content_children.push_back(SizedBox::from_width(8.0f));
+            } else if (seg.icon) {
+                content_children.push_back(seg.icon);
+            }
             if (seg.label) content_children.push_back(tint_label(seg.label, fg));
             auto content_row = std::make_shared<Row>();
             content_row->main_axis_alignment = MainAxisAlignment::center;
@@ -1172,7 +1184,14 @@ namespace systems::leal::campello_widgets
         outer.border        = BoxBorder::all(c.outline, 1.0f);
         auto decorated = std::make_shared<DecoratedBox>();
         decorated->decoration = outer;
-        decorated->child      = container_row;
+        // DecoratedBox's own rounded fill/border don't clip child painting
+        // (see render_decorated_box.cpp) — without this, the first/last
+        // segment's square-cornered secondaryContainer fill pokes past the
+        // stadium outline's rounded corners. Confirmed against a real
+        // capture: the real SegmentedButton's own first/last items get an
+        // itemShape with a rounded outer corner; ClipRRect reproduces that
+        // here without needing per-corner radius support in BoxDecoration.
+        decorated->child = std::make_shared<ClipRRect>(tokens_.shape.radius_full, container_row);
 
         // container_row's CrossAxisAlignment::stretch makes it report its
         // own height as whatever upper bound it's given — which, in a
@@ -1648,13 +1667,36 @@ namespace systems::leal::campello_widgets
     WidgetRef MaterialDesignSystem::buildToggleButtons(const ToggleButtonsConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+        // Real M3 ToggleButtons is functionally a multi-select
+        // SegmentedButtonRow (MultiChoiceSegmentedButtonRow +
+        // SegmentedButton in Compose) — mirrors buildSegmentedButton()'s
+        // shared stadium outline (one outer border, dividers only between
+        // items, not each item individually boxed) and checkmark-when-
+        // checked treatment, confirmed missing against a real capture.
+        auto tint_label = [&](WidgetRef label, Color fg) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(label)) {
+                TextStyle style = text->span.style;
+                style.withColor(fg);
+                return std::make_shared<Text>(text->span.text, style);
+            }
+            return label;
+        };
+
         std::vector<WidgetRef> items;
         for (size_t i = 0; i < cfg.items.size(); ++i) {
             const auto& item = cfg.items[i];
+            bool is_last = i + 1 == cfg.items.size();
+            const Color fg = item.selected ? c.on_secondary_container : c.on_surface;
 
             std::vector<WidgetRef> content_children;
-            if (item.icon) content_children.push_back(item.icon);
-            if (item.label) content_children.push_back(item.label);
+            if (item.selected && !item.icon) {
+                content_children.push_back(std::make_shared<Text>(
+                    "✓", TextStyle{}.withFontSize(16.0f).withColor(fg)));
+                content_children.push_back(SizedBox::from_width(8.0f));
+            } else if (item.icon) {
+                content_children.push_back(item.icon);
+            }
+            if (item.label) content_children.push_back(tint_label(item.label, fg));
             auto content_row = std::make_shared<Row>();
             content_row->main_axis_alignment = MainAxisAlignment::center;
             content_row->main_axis_size = MainAxisSize::min;
@@ -1668,8 +1710,8 @@ namespace systems::leal::campello_widgets
             // secondaryContainer background, matching the SegmentedButton
             // convention used elsewhere in this file.
             BoxDecoration deco;
-            deco.color  = item.selected ? c.secondary_container : Color::transparent();
-            deco.border = BoxBorder::all(c.outline, 1.0f);
+            deco.color = item.selected ? c.secondary_container : Color::transparent();
+            if (!is_last) deco.border = BoxBorder::all(c.outline, 1.0f);
             auto decorated = std::make_shared<DecoratedBox>();
             decorated->decoration = deco;
             decorated->child      = padded;
@@ -1686,15 +1728,31 @@ namespace systems::leal::campello_widgets
 
         auto row = std::make_shared<Row>();
         row->main_axis_size = MainAxisSize::min;
+        row->cross_axis_alignment = CrossAxisAlignment::stretch;
         row->children = std::move(items);
 
+        BoxDecoration outer;
+        outer.border_radius = tokens_.shape.radius_full; // stadium outer shape
+        outer.border        = BoxBorder::all(c.outline, 1.0f);
+        auto decorated = std::make_shared<DecoratedBox>();
+        decorated->decoration = outer;
+        // Same DecoratedBox-doesn't-clip-its-child issue fixed in
+        // buildSegmentedButton() above — without it the first/last item's
+        // square-cornered fill pokes past the stadium outline's corners.
+        decorated->child = std::make_shared<ClipRRect>(tokens_.shape.radius_full, row);
+
+        auto sized = std::make_shared<SizedBox>();
+        sized->height = 40.0f;
+        sized->child  = decorated;
+
+        WidgetRef result = sized;
         if (!cfg.enabled) {
             auto faded = std::make_shared<Opacity>();
             faded->opacity = 0.4f;
-            faded->child   = row;
+            faded->child   = result;
             return faded;
         }
-        return row;
+        return result;
     }
 
     WidgetRef MaterialDesignSystem::buildBanner(const BannerConfig& cfg) const

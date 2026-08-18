@@ -18,6 +18,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -205,6 +206,27 @@ object ComponentCatalog {
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
                             .fillMaxWidth()
                     )
+                }
+            }
+
+            // Mirrors themed_component_harness.cpp's "toggleButtons" case
+            // exactly: A and C checked, B unchecked. No fixed width here —
+            // unlike segmentedButton's longer "Day"/"Week"/"Month" labels,
+            // buildToggleButtons()'s Row shrink-wraps to its buttons'
+            // natural content width (MainAxisSize::min), so the real
+            // reference should too rather than stretching equally to fill
+            // an arbitrary 280dp.
+            "toggleButtons_multi" -> {
+                val labels = listOf("A", "B", "C")
+                val checked = listOf(true, false, true)
+                MultiChoiceSegmentedButtonRow {
+                    labels.forEachIndexed { index, label ->
+                        SegmentedButton(
+                            checked = checked[index],
+                            onCheckedChange = {},
+                            shape = SegmentedButtonDefaults.itemShape(index = index, count = labels.size)
+                        ) { Text(label) }
+                    }
                 }
             }
         }

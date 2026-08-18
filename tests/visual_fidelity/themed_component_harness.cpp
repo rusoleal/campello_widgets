@@ -119,7 +119,7 @@ static bool isAndroidTheme(const std::string& theme)
 static std::vector<std::string> androidBuilders()
 {
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
-            "segmentedButton", "dialog", "tabBar", "dropdownButton"};
+            "segmentedButton", "dialog", "tabBar", "dropdownButton", "toggleButtons"};
 }
 
 // Android-specific state override: dropdownButton's shared "open" state
