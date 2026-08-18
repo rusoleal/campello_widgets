@@ -17,6 +17,7 @@
 #include <campello_widgets/widgets/dropdown_button.hpp>
 #include <campello_widgets/widgets/expanded.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
+#include <campello_widgets/widgets/icon.hpp>
 #include <campello_widgets/widgets/linear_progress_indicator.hpp>
 #include <campello_widgets/widgets/list_tile.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
@@ -663,7 +664,20 @@ namespace systems::leal::campello_widgets
             const auto& item = cfg.items[i];
             bool selected = static_cast<int>(i) == cfg.selected_index;
 
+            // Same fg-discard pattern found and fixed repeatedly this
+            // session: item.icon arrives as plain caller content with no
+            // expectation of being pre-tinted for the selected state —
+            // real M3 NavigationBar tints on_secondary_container when
+            // selected (against the pill below) and on_surface_variant
+            // otherwise. Not yet validated against a real capture (this
+            // builder isn't in androidBuilders() yet), but the same
+            // correctness fix as the (validated) navigationRail case
+            // right below.
             WidgetRef icon_widget = item.icon;
+            const Color navbar_icon_tint = selected ? c.on_secondary_container : c.on_surface_variant;
+            if (auto asIcon = std::dynamic_pointer_cast<const Icon>(icon_widget)) {
+                icon_widget = Icon::create(asIcon->texture, asIcon->size, navbar_icon_tint);
+            }
             if (icon_widget && selected) {
                 // MD3 active indicator: a pill-shaped secondaryContainer
                 // behind the icon.
@@ -1333,9 +1347,22 @@ namespace systems::leal::campello_widgets
     WidgetRef MaterialDesignSystem::buildIconButton(const IconButtonConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+
+        // Same fg-discard pattern found and fixed repeatedly this session:
+        // cfg.icon arrives as plain caller content (a template Icon with
+        // whatever default color it was constructed with) with no
+        // expectation of being pre-tinted for the selected state — real
+        // M3 IconButton tints on_primary when selected (against the solid
+        // primary fill below) and on_surface_variant otherwise.
+        WidgetRef tinted_icon = cfg.icon;
+        const Color icon_tint = cfg.selected ? c.on_primary : c.on_surface_variant;
+        if (auto asIcon = std::dynamic_pointer_cast<const Icon>(cfg.icon)) {
+            tinted_icon = Icon::create(asIcon->texture, asIcon->size, icon_tint);
+        }
+
         auto padded = std::make_shared<Padding>();
         padded->padding = EdgeInsets::all(8.0f);
-        padded->child   = cfg.icon;
+        padded->child   = tinted_icon;
 
         BoxDecoration deco;
         deco.color         = cfg.selected ? c.primary : Color::transparent();
@@ -1823,7 +1850,15 @@ namespace systems::leal::campello_widgets
             const auto& item = cfg.items[i];
             bool selected = static_cast<int>(i) == cfg.selected_index;
 
+            // Same fg-discard pattern as buildIconButton()/buildNavigationBar()
+            // above: real M3 NavigationRail tints the icon
+            // on_secondary_container when selected (against the pill
+            // below) and on_surface_variant otherwise.
             WidgetRef icon_widget = item.icon;
+            const Color rail_icon_tint = selected ? c.on_secondary_container : c.on_surface_variant;
+            if (auto asIcon = std::dynamic_pointer_cast<const Icon>(icon_widget)) {
+                icon_widget = Icon::create(asIcon->texture, asIcon->size, rail_icon_tint);
+            }
             if (icon_widget && selected) {
                 // Same pill-indicator convention as buildNavigationBar.
                 BoxDecoration pill;

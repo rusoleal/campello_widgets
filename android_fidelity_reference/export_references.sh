@@ -36,7 +36,7 @@ echo "Installing..."
 # {builder}_{state} case ids — mirrors themed_component_harness.cpp's
 # "button"/"switch"/"card" builder blocks exactly (same content/labels),
 # per ComponentCatalog.kt's `when` cases.
-CASES="button_primary button_secondary button_tertiary button_danger button_disabled switch_on switch_off switch_disabled card_elevated card_filled card_outlined slider_value slider_disabled chip_unselected chip_selected divider_default divider_indented listTile_one_line listTile_two_line textField_empty textField_filled textField_disabled segmentedButton_three_segments dialog_one_action dialog_two_actions dialog_three_actions tabBar_two_tabs dropdownButton_closed toggleButtons_multi popupMenuButton_closed popupMenuButton_open"
+CASES="button_primary button_secondary button_tertiary button_danger button_disabled switch_on switch_off switch_disabled card_elevated card_filled card_outlined slider_value slider_disabled chip_unselected chip_selected divider_default divider_indented listTile_one_line listTile_two_line textField_empty textField_filled textField_disabled segmentedButton_three_segments dialog_one_action dialog_two_actions dialog_three_actions tabBar_two_tabs dropdownButton_closed toggleButtons_multi popupMenuButton_closed popupMenuButton_open badge_dot badge_number iconButton_plain iconButton_filled iconButton_selected navigationRail_compact"
 THEMES="expressive_light expressive_dark"
 
 # Hiding system bars (MainActivity's WindowInsetsControllerCompat call) does

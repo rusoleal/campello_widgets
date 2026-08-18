@@ -120,7 +120,7 @@ static std::vector<std::string> androidBuilders()
 {
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
             "segmentedButton", "dialog", "tabBar", "dropdownButton", "toggleButtons",
-            "popupMenuButton"};
+            "popupMenuButton", "badge", "iconButton", "navigationRail"};
 }
 
 // Android-specific state override: dropdownButton's shared "open" state
@@ -134,6 +134,11 @@ static std::vector<std::string> androidBuilders()
 static std::vector<std::string> androidBuilderStates(const std::string& builder)
 {
     if (builder == "dropdownButton") return {"closed"};
+    // Real M3 NavigationRail has no native "extended" mode — that
+    // horizontal icon+label layout is a NavigationDrawer concept, not
+    // NavigationRail's. Only "compact" (the real widget's actual shape)
+    // gets a real-capture comparison.
+    if (builder == "navigationRail") return {"compact"};
     return builderStates(builder);
 }
 

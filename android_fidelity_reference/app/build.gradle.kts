@@ -48,7 +48,7 @@ dependencies {
     // MaterialExpressiveTheme and pulls ui 1.8.2, which is compileSdk-36-safe.
     implementation("androidx.compose.material3:material3:1.5.0-alpha15")
     // Core Material Icons (Home/Search/Person/Notifications/Favorite) —
-    // used only for the one-off icon_export_* cases that generate
-    // campello_widgets' Icon widget assets, see ComponentCatalog.kt.
+    // used by navigationBar/navigationRail/badge/iconButton's real cases,
+    // see ComponentCatalog.kt.
     implementation("androidx.compose.material:material-icons-core:1.7.6")
 }
