@@ -12,6 +12,7 @@ namespace systems::leal::campello_widgets
         ro->setFit(fit);
         ro->setAlignment(alignment);
         ro->setOpacity(opacity);
+        ro->setColor(color);
         return ro;
     }
 
@@ -23,6 +24,7 @@ namespace systems::leal::campello_widgets
         ro.setFit(fit);
         ro.setAlignment(alignment);
         ro.setOpacity(opacity);
+        ro.setColor(color);
     }
 
 } // namespace systems::leal::campello_widgets

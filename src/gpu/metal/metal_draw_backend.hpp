@@ -136,6 +136,12 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawTintedImage(
+        const DrawTintedImageCmd&        cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     Size measureText(const TextSpan& span) const override;
     Rect measureTextInkBounds(const TextSpan& span) const override;
 
@@ -205,6 +211,7 @@ public:
         line_uniform_pool_.beginFrame();
         quad_uniform_pool_.beginFrame();
         quad_vertex_pool_.beginFrame();
+        icon_uniform_pool_.beginFrame();
         rect_vertex_pool_.beginFrame();
         clip_shape_uniform_pool_.beginFrame();
         shader_mask_uniform_pool_.beginFrame();
@@ -303,6 +310,20 @@ private:
         float opacity,
         campello_gpu::RenderPassEncoder&        encoder,
         std::shared_ptr<campello_gpu::BindGroup> cached_bind_group = nullptr);
+
+    // Mirrors drawTexturedQuad() exactly, but binds icon_pipeline_ (which
+    // samples only the source texture's alpha channel and recolors with
+    // `tint` — see iconFragment in widgets.metal) instead of quad_pipeline_.
+    // Kept as its own method rather than adding a tint parameter to
+    // drawTexturedQuad() so every existing call site (text glyphs, plain
+    // images, backdrop-filter compositing) is untouched.
+    void drawTintedTexturedQuad(
+        std::shared_ptr<campello_gpu::Texture>  texture,
+        const ProjectedCorner& c00, const ProjectedCorner& c10,
+        const ProjectedCorner& c01, const ProjectedCorner& c11,
+        const Color& tint,
+        float opacity,
+        campello_gpu::RenderPassEncoder&        encoder);
 
     // Utility: build and run a single-pass blur render into `dst`.
     void runBlurPass(
@@ -423,6 +444,13 @@ private:
     UniformBufferPool line_uniform_pool_;
     UniformBufferPool quad_uniform_pool_;
 
+    // Icon pipeline's uniforms (viewport/opacity/tint — larger than
+    // QuadUniforms, so it needs its own pool rather than sharing
+    // quad_uniform_pool_'s ring). Vertex geometry is identical in shape to
+    // the quad pipeline's (QuadVertex: x,y,w,u,v), so icon draws reuse
+    // quad_vertex_pool_ directly instead of a dedicated pool.
+    UniformBufferPool icon_uniform_pool_;
+
     // Separate pool for the quad pipeline's real per-vertex data (QuadVertex
     // arrays — see drawTexturedQuad()). Must be its own pool instance, not
     // shared with quad_uniform_pool_: UniformBufferPool's ring reuses a
@@ -468,6 +496,12 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_bgl_;
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;
+
+    // Icon pipeline (tinted template images — see iconVertex/iconFragment
+    // in widgets.metal). Reuses quad_bgl_/quad_sampler_ — same texture@0 +
+    // sampler@1 binding shape as the quad pipeline, just a different
+    // fragment shader and its own (larger) uniform struct.
+    std::shared_ptr<campello_gpu::RenderPipeline>  icon_pipeline_;
 
     // Blur pipeline (reuses quad_bgl_ for texture+sampler binding).
     std::shared_ptr<campello_gpu::RenderPipeline>  blur_pipeline_;

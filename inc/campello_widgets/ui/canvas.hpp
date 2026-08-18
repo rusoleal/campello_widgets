@@ -111,6 +111,24 @@ namespace systems::leal::campello_widgets
             const Rect& src_rect,
             const Rect& dst_rect);
 
+        /**
+         * @brief Draws a "template" texture recolored to an arbitrary tint.
+         *
+         * The source texture's own RGB is ignored; only its alpha channel
+         * is sampled, used as a stencil for `tint` — see
+         * `DrawTintedImageCmd`'s doc comment. Used by the `Icon` widget.
+         *
+         * @param texture  Source (template) texture.
+         * @param src_rect Normalised source rect [0,1]×[0,1].
+         * @param dst_rect Destination in local coordinates.
+         * @param tint     Straight-alpha recolor applied via the texture's alpha.
+         */
+        void drawTintedImage(
+            std::shared_ptr<campello_gpu::Texture> texture,
+            const Rect& src_rect,
+            const Rect& dst_rect,
+            const Color& tint);
+
         /** @brief Fills the canvas with the given paint. */
         void drawPaint(const Paint& paint);
 

@@ -53,6 +53,7 @@
 #include <campello_widgets/ui/render_rectangle.hpp>
 #include <campello_widgets/widgets/raw_text.hpp>
 #include <campello_widgets/ui/render_text.hpp>
+#include <campello_widgets/widgets/icon.hpp>
 #include <campello_widgets/widgets/raw_image.hpp>
 #include <campello_widgets/ui/render_image.hpp>
 #include <campello_widgets/widgets/draw_surface.hpp>

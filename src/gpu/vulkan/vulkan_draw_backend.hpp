@@ -72,6 +72,12 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawTintedImage(
+        const DrawTintedImageCmd&        cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     void drawCircle(
         const DrawCircleCmd&             cmd,
         const Matrix4&                   transform,
@@ -307,6 +313,22 @@ private:
         std::shared_ptr<campello_gpu::BindGroup>  cached_bind_group = nullptr,
         bool                                      persistent        = false);
 
+    // Mirrors drawTexturedQuad() (the non-axis-aligned, vertex-buffer path
+    // only — icons are drawn few-per-frame, so the axis-aligned push-
+    // constant-only fast path isn't worth a second variant), but binds
+    // icon_pipeline_ (samples only the source texture's alpha channel and
+    // recolors with `tint` — see icon.frag) instead of quad_pipeline_.
+    void drawTintedTexturedQuad(
+        std::shared_ptr<campello_gpu::Texture>    texture,
+        const QuadCorner&                         c00,
+        const QuadCorner&                         c10,
+        const QuadCorner&                         c01,
+        const QuadCorner&                         c11,
+        const Color&                               tint,
+        float                                     opacity,
+        const Rect&                               clip,
+        campello_gpu::RenderPassEncoder&          encoder);
+
     std::shared_ptr<campello_gpu::Device>         device_;
     Color                                          bg_color_;
     campello_gpu::PixelFormat                      pixel_format_;
@@ -326,6 +348,13 @@ private:
 
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_aa_pipeline_;
+    // Icon pipeline (tinted template images — see icon.vert/icon.frag).
+    // Reuses quad_bgl_ (same texture@1 + sampler@2 binding shape) but
+    // needs its own pipeline layout: IconUniforms must be readable from
+    // the fragment stage too (for `tint`), unlike quad_layout_'s
+    // vertex-only push constant range.
+    std::shared_ptr<campello_gpu::RenderPipeline>  icon_pipeline_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  icon_layout_;
     std::shared_ptr<campello_gpu::RenderPipeline>  clip_shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  shader_mask_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  blur_pipeline_;

@@ -407,6 +407,7 @@ struct DrawCommandVisitor {
 
     void operator()(const cw::DrawTextCmd&) {}
     void operator()(const cw::DrawImageCmd&) {}
+    void operator()(const cw::DrawTintedImageCmd&) {}
     void operator()(const cw::PushClipPathCmd&) {}
     void operator()(const cw::SaveLayerCmd&) {}
     void operator()(const cw::SaveLayerEndCmd&) {}

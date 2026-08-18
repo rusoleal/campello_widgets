@@ -75,6 +75,15 @@ struct alignas(16) QuadUniforms
 // Real per-vertex data for the quad pipeline (see drawTexturedQuad()).
 struct QuadVertex { float x, y, w, u, v; };
 
+// Mirrors icon.hlsl's IconUniforms field-for-field.
+struct alignas(16) IconUniforms
+{
+    float viewport[2];
+    float opacity;
+    float _pad;
+    float tint[4];
+};
+
 struct alignas(16) ShapeUniforms
 {
     float rect[4];
@@ -395,6 +404,16 @@ D3DDrawBackend::D3DDrawBackend(
         quad_tex_bgl_ = device_->createBindGroupLayout(desc);
     }
 
+    // --- Bind group layout 0 for icon: uniform@0, visible to *both*
+    //     vertex and pixel stages — IconPS itself reads `tint`, unlike
+    //     QuadPS (QuadUniforms is vertex-only). Bind group 1 (texture+
+    //     sampler) reuses quad_tex_bgl_ below — same shape.
+    {
+        GPU::BindGroupLayoutDescriptor desc{};
+        desc.entries = { cs(GPU::ShaderStage::vertex | GPU::ShaderStage::fragment) };
+        icon_uniform_bgl_ = device_->createBindGroupLayout(desc);
+    }
+
     // --- Bind group layout 0 for clip-shape composite: uniform@0 (vertex) —
     //     texture+sampler (bind group 1) reuses quad_tex_bgl_ below.
     {
@@ -451,6 +470,8 @@ D3DDrawBackend::D3DDrawBackend(
     // Order matters: index 0 = quad_uniform_bgl_ (setBindGroup(0, ...)),
     // index 1 = quad_tex_bgl_ (setBindGroup(1, ...)) — see drawTexturedQuad().
     auto quad_layout  = makeLayout({ quad_uniform_bgl_, quad_tex_bgl_ });
+    // Same split, reusing quad_tex_bgl_ — see drawTintedTexturedQuad().
+    auto icon_layout  = makeLayout({ icon_uniform_bgl_, quad_tex_bgl_ });
     // Same split, reusing quad_tex_bgl_ for the source texture+sampler —
     // see runBlurPass().
     auto blur_layout  = makeLayout({ blur_uniform_bgl_, quad_tex_bgl_ });
@@ -541,6 +562,61 @@ D3DDrawBackend::D3DDrawBackend(
         desc.layout    = quad_layout;
 
         quad_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Icon pipeline — tinted template images (see icon.hlsl) ---
+    // Loaded locally (not part of the mandatory shader list checked at the
+    // top of this constructor) so a missing/uncompiled icon shader
+    // degrades gracefully — see IDrawBackend::drawTintedImage()'s default
+    // no-op — rather than breaking every other pipeline's initialization.
+    {
+        auto icon_vs = loadShader(device_, shaders::kicon_vs_cso, shaders::kicon_vs_csoSize);
+        auto icon_ps = loadShader(device_, shaders::kicon_ps_cso, shaders::kicon_ps_csoSize);
+        if (!icon_vs || !icon_ps) {
+            std::fprintf(stderr, "[D3DDrawBackend] icon shader load FAILED\n");
+        } else {
+            GPU::ColorState colorState{};
+            colorState.format    = pixel_format_;
+            colorState.writeMask = GPU::ColorWrite::all;
+            colorState.blend     = premultipliedAlphaBlend();
+
+            GPU::RenderPipelineDescriptor desc{};
+            desc.vertex.module     = icon_vs;
+            desc.vertex.entryPoint = "IconVS";
+
+            // Same vertex layout as the quad pipeline (QuadVertex: x,y,w,u,v).
+            GPU::VertexAttribute posAttr{};
+            posAttr.componentType  = GPU::ComponentType::ctFloat;
+            posAttr.accessorType   = GPU::AccessorType::acVec3;
+            posAttr.offset         = offsetof(QuadVertex, x);
+            posAttr.shaderLocation = 0;
+
+            GPU::VertexAttribute uvAttr{};
+            uvAttr.componentType  = GPU::ComponentType::ctFloat;
+            uvAttr.accessorType   = GPU::AccessorType::acVec2;
+            uvAttr.offset         = offsetof(QuadVertex, u);
+            uvAttr.shaderLocation = 1;
+
+            GPU::VertexLayout layout{};
+            layout.arrayStride = sizeof(QuadVertex);
+            layout.attributes  = { posAttr, uvAttr };
+            layout.stepMode    = GPU::StepMode::vertex;
+            desc.vertex.buffers = { layout };
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = icon_ps;
+            frag.entryPoint = "IconPS";
+            frag.targets.push_back(colorState);
+            desc.fragment = frag;
+
+            desc.topology  = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode  = GPU::CullMode::none;
+            desc.frontFace = GPU::FrontFace::ccw;
+            desc.layout    = icon_layout;
+
+            icon_pipeline_ = device_->createRenderPipeline(desc);
+            if (!icon_pipeline_) std::fprintf(stderr, "[D3DDrawBackend] icon_pipeline_ creation FAILED\n");
+        }
     }
 
     // --- Shape pipeline (SDF circle/oval/rrect) — no vertex buffers ---
@@ -1333,6 +1409,92 @@ void D3DDrawBackend::drawImage(
         ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.opacity,
         encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawTintedImage — mirrors drawImage() exactly, see DrawTintedImageCmd
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::drawTintedImage(
+    const DrawTintedImageCmd& cmd,
+    const Matrix4&            transform,
+    const Rect&               clip,
+    GPU::RenderPassEncoder&   encoder)
+{
+    if (!icon_pipeline_ || !icon_uniform_bgl_ || !quad_tex_bgl_ || !quad_sampler_) return;
+    if (!cmd.texture) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+
+    const float su0 = cmd.src_rect.x,      sv0 = cmd.src_rect.y;
+    const float su1 = cmd.src_rect.right(), sv1 = cmd.src_rect.bottom();
+
+    drawTintedTexturedQuad(
+        cmd.texture,
+        ProjectedCorner{c00.x(), c00.y(), c00.w(), su0, sv0},
+        ProjectedCorner{c10.x(), c10.y(), c10.w(), su1, sv0},
+        ProjectedCorner{c01.x(), c01.y(), c01.w(), su0, sv1},
+        ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
+        cmd.tint,
+        cmd.opacity,
+        encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawTintedTexturedQuad — mirrors drawTexturedQuad(), binds icon_pipeline_
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::drawTintedTexturedQuad(
+    std::shared_ptr<GPU::Texture>  texture,
+    const ProjectedCorner& c00, const ProjectedCorner& c10,
+    const ProjectedCorner& c01, const ProjectedCorner& c11,
+    const Color& tint,
+    float opacity,
+    GPU::RenderPassEncoder&        encoder)
+{
+    if (!icon_pipeline_ || !icon_uniform_bgl_ || !quad_tex_bgl_ || !quad_sampler_) return;
+
+    GPU::BindGroupDescriptor bgDesc{};
+    bgDesc.layout  = quad_tex_bgl_;
+    bgDesc.entries = {
+        GPU::BindGroupEntryDescriptor{ 0, texture },
+        GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
+    };
+    auto texBindGroup = device_->createBindGroup(bgDesc);
+    if (!texBindGroup) return;
+
+    const QuadVertex verts[6] = {
+        {c00.x, c00.y, c00.w, c00.u, c00.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c11.x, c11.y, c11.w, c11.u, c11.v},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
+    IconUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.opacity     = opacity;
+    u.tint[0]     = tint.r;
+    u.tint[1]     = tint.g;
+    u.tint[2]     = tint.b;
+    u.tint[3]     = tint.a;
+
+    auto uniformSlot = icon_uniform_pool_.acquire(*device_, icon_uniform_bgl_, sizeof(IconUniforms), &u);
+    if (!uniformSlot.bind_group) return;
+
+    encoder.setPipeline(icon_pipeline_);
+    encoder.setBindGroup(0, uniformSlot.bind_group);
+    encoder.setBindGroup(1, texBindGroup);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.draw(6);
 }
 
 // ---------------------------------------------------------------------------

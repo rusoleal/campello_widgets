@@ -74,6 +74,16 @@ struct alignas(16) QuadUniforms
     float _pad;
 };
 
+// Mirrors icon.vert/icon.frag's IconUniforms field-for-field. Visible to
+// both stages (see icon_layout_) since icon.frag reads `tint`.
+struct alignas(16) IconUniforms
+{
+    float viewport[2];  // w, h (physical pixels)
+    float opacity;
+    float _pad;
+    float tint[4];      // straight-alpha RGBA recolor
+};
+
 // Push constants for the axis-aligned fast path — no vertex buffer needed.
 struct alignas(16) QuadAAUniforms
 {
@@ -429,6 +439,20 @@ VulkanDrawBackend::VulkanDrawBackend(
         quad_layout_ = device_->createPipelineLayout(desc);
     }
 
+    // Pipeline layout for the icon pipeline: Set 0 = quad_bgl_ (same
+    // texture+sampler shape), push constants are IconUniforms, visible to
+    // *both* stages — unlike quad_layout_, icon.frag itself reads `tint`.
+    {
+        GPU::PipelineLayoutDescriptor desc{};
+        desc.bindGroupLayouts   = { quad_bgl_ };
+        desc.pushConstantRanges = { {
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(IconUniforms) } };
+        icon_layout_ = device_->createPipelineLayout(desc);
+    }
+
     // Pipeline layout for ShaderMask: Set 0 = shader_mask_bgl_, push
     // constants are vertex-stage-only ShaderMaskUniforms.
     {
@@ -583,6 +607,37 @@ VulkanDrawBackend::VulkanDrawBackend(
 
         quad_pipeline_ = device_->createRenderPipeline(desc);
         if (!quad_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] quad_pipeline_ creation FAILED\n");
+    }
+
+    // Icon pipeline — tinted template images (see icon.vert/icon.frag).
+    // Same vertex layout as the quad pipeline (QuadVertex: x,y,w,u,v), its
+    // own pipeline layout (icon_layout_ — IconUniforms need fragment-stage
+    // visibility for `tint`, unlike quad_layout_).
+    {
+        auto icon_vert = loadSpv(device_, shaders::kicon_vert_spv, shaders::kicon_vert_spvSize);
+        auto icon_frag = loadSpv(device_, shaders::kicon_frag_spv, shaders::kicon_frag_spvSize);
+        if (!icon_vert || !icon_frag) {
+            std::fprintf(stderr, "[VulkanDrawBackend] icon shader module load FAILED\n");
+        } else {
+            GPU::RenderPipelineDescriptor desc{};
+            desc.layout      = icon_layout_;
+            desc.topology    = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode    = GPU::CullMode::none;
+            desc.frontFace   = GPU::FrontFace::ccw;
+
+            desc.vertex.module     = icon_vert;
+            desc.vertex.entryPoint = "main";
+            desc.vertex.buffers    = { quad_vtx_layout };
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = icon_frag;
+            frag.entryPoint = "main";
+            frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+            desc.fragment   = frag;
+
+            icon_pipeline_ = device_->createRenderPipeline(desc);
+            if (!icon_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] icon_pipeline_ creation FAILED\n");
+        }
     }
 
     // Axis-aligned quad pipeline — same fragment shader as quad, but vertex
@@ -1475,6 +1530,102 @@ void VulkanDrawBackend::drawImage(
         cmd.opacity,
         clip,
         encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawTintedImage — mirrors drawImage() exactly, see DrawTintedImageCmd
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::drawTintedImage(
+    const DrawTintedImageCmd&        cmd,
+    const Matrix4&                   transform,
+    const Rect&                      clip,
+    GPU::RenderPassEncoder&          encoder)
+{
+    namespace vm = systems::leal::vector_math;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+
+    const float su0 = cmd.src_rect.left(),  sv0 = cmd.src_rect.top();
+    const float su1 = cmd.src_rect.right(), sv1 = cmd.src_rect.bottom();
+
+    drawTintedTexturedQuad(
+        cmd.texture,
+        {c00.x(), c00.y(), c00.w(), su0, sv0},
+        {c10.x(), c10.y(), c10.w(), su1, sv0},
+        {c01.x(), c01.y(), c01.w(), su0, sv1},
+        {c11.x(), c11.y(), c11.w(), su1, sv1},
+        cmd.tint,
+        cmd.opacity,
+        clip,
+        encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawTintedTexturedQuad — mirrors drawTexturedQuad()'s vertex-buffer path,
+// binds icon_pipeline_/icon_layout_ instead of quad_pipeline_/quad_layout_
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::drawTintedTexturedQuad(
+    std::shared_ptr<GPU::Texture>   texture,
+    const QuadCorner&               c00,
+    const QuadCorner&               c10,
+    const QuadCorner&               c01,
+    const QuadCorner&               c11,
+    const Color&                    tint,
+    float                           opacity,
+    const Rect&                     clip,
+    GPU::RenderPassEncoder&         encoder)
+{
+    if (!icon_pipeline_ || !quad_bgl_ || !linear_sampler_) return;
+    if (!texture) return;
+
+    GPU::BindGroupDescriptor bg_desc{};
+    bg_desc.layout  = quad_bgl_;
+    bg_desc.entries = {
+        { 1, texture },
+        { 2, linear_sampler_ }
+    };
+    auto bind_group = device_->createBindGroup(bg_desc);
+    if (!bind_group) return;
+
+    applyScissor(clip, encoder);
+
+    // Same corner/winding layout as drawTexturedQuad() — geometry shape is
+    // identical between the quad and icon pipelines, only the pipeline/
+    // push constants bound below differ.
+    QuadVertex verts[6] = {
+        {c00.x, c00.y, c00.w, c00.u, c00.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c11.x, c11.y, c11.w, c11.u, c11.v},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
+    IconUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.opacity     = opacity;
+    u.tint[0]     = tint.r;
+    u.tint[1]     = tint.g;
+    u.tint[2]     = tint.b;
+    u.tint[3]     = tint.a;
+
+    encoder.setPipeline(icon_pipeline_);
+    encoder.setBindGroup(0, bind_group);
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(IconUniforms), &u);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.draw(6);
 }
 
 // ---------------------------------------------------------------------------

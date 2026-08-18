@@ -81,6 +81,13 @@ namespace systems::leal::campello_widgets
         markNeedsPaint();
     }
 
+    void RenderImage::setColor(std::optional<Color> color) noexcept
+    {
+        if (color_ == color) return;
+        color_ = color;
+        markNeedsPaint();
+    }
+
     void RenderImage::performLayout()
     {
         const bool has_explicit = explicit_size_.width > 0.0f || explicit_size_.height > 0.0f;
@@ -207,7 +214,10 @@ namespace systems::leal::campello_widgets
             canvas.setOpacity(opacity_);
         if (need_clip)
             canvas.clipRect(Rect::fromOffsetAndSize(offset, size_));
-        canvas.drawImage(texture_, src, dst);
+        if (color_.has_value())
+            canvas.drawTintedImage(texture_, src, dst, *color_);
+        else
+            canvas.drawImage(texture_, src, dst);
         canvas.restore();
     }
 

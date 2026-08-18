@@ -170,6 +170,18 @@ namespace systems::leal::campello_widgets
             const Rect&                      clip,
             campello_gpu::RenderPassEncoder& encoder) = 0;
 
+        /**
+         * @brief Draw a template texture recolored to an arbitrary tint —
+         * see `DrawTintedImageCmd`'s doc comment. Default: no-op (a
+         * backend without icon support renders nothing rather than an
+         * untinted/wrong-colored texture).
+         */
+        virtual void drawTintedImage(
+            const DrawTintedImageCmd&        cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
         /** @brief Draw a circle (fill or stroke). Default: no-op. */
         virtual void drawCircle(
             const DrawCircleCmd&             cmd,

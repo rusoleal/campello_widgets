@@ -13,7 +13,8 @@ $csoFiles = @(
     "line_vs.cso", "line_ps.cso",
     "blur_vs.cso", "blur_ps.cso",
     "clip_shape_vs.cso", "clip_shape_ps.cso",
-    "shader_mask_vs.cso", "shader_mask_ps.cso"
+    "shader_mask_vs.cso", "shader_mask_ps.cso",
+    "icon_vs.cso", "icon_ps.cso"
 )
 
 $arrays = New-Object System.Text.StringBuilder

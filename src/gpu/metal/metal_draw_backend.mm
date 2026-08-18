@@ -108,6 +108,14 @@ struct QuadVertex {
     float u, v;       // texture UV for this corner
 };
 
+// Mirrors widgets.metal's IconUniforms field-for-field.
+struct alignas(16) IconUniforms {
+    float viewport[2];  // width, height (pixels)
+    float opacity;      // [0, 1] — scales the final alpha
+    float _pad;
+    float tint[4];      // straight-alpha RGBA recolor
+};
+
 struct alignas(16) ShapeUniforms {
     float rect[4];      // x, y, w, h  (bounding box, pixels)
     float color[4];     // r, g, b, a
@@ -239,6 +247,55 @@ MetalDrawBackend::MetalDrawBackend(
         desc.frontFace = GPU::FrontFace::ccw;
 
         quad_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Icon pipeline — tinted template images, premultiplied-alpha blend ---
+    {
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "iconVertex";
+
+        // Same vertex layout as the quad pipeline (QuadVertex: x,y,w,u,v)
+        // — iconVertex consumes QuadVertexIn identically, just with a
+        // different (larger) uniform struct at buffer(1).
+        GPU::VertexAttribute posAttr{};
+        posAttr.componentType  = GPU::ComponentType::ctFloat;
+        posAttr.accessorType   = GPU::AccessorType::acVec3;
+        posAttr.offset         = offsetof(QuadVertex, x);
+        posAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute uvAttr{};
+        uvAttr.componentType = GPU::ComponentType::ctFloat;
+        uvAttr.accessorType  = GPU::AccessorType::acVec2;
+        uvAttr.offset        = offsetof(QuadVertex, u);
+        uvAttr.shaderLocation = 1;
+
+        GPU::VertexLayout iconLayout{};
+        iconLayout.arrayStride = sizeof(QuadVertex);
+        iconLayout.attributes  = {posAttr, uvAttr};
+        iconLayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {iconLayout};
+
+        GPU::ColorState iconCs{};
+        iconCs.format    = pixel_format;
+        iconCs.writeMask = GPU::ColorWrite::all;
+        iconCs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "iconFragment";
+        frag.targets.push_back(iconCs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        icon_pipeline_ = device_->createRenderPipeline(desc);
     }
 
     // --- Liquid Glass pipeline — premultiplied-alpha blend ---
@@ -1423,6 +1480,97 @@ void MetalDrawBackend::drawImage(
         ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.opacity,
         encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawTintedImage — mirrors drawImage() exactly, see DrawTintedImageCmd
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawTintedImage(
+    const DrawTintedImageCmd& cmd,
+    const Matrix4&        transform,
+    const Rect&           clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!icon_pipeline_ || !quad_bgl_ || !quad_sampler_) return;
+    if (!cmd.texture) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto c00 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c10 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.top(),    0.0f, 1.0f);
+    auto c01 = transform * vm::Vector4<float>(cmd.dst_rect.left(),  cmd.dst_rect.bottom(), 0.0f, 1.0f);
+    auto c11 = transform * vm::Vector4<float>(cmd.dst_rect.right(), cmd.dst_rect.bottom(), 0.0f, 1.0f);
+
+    const float su0 = cmd.src_rect.x,      sv0 = cmd.src_rect.y;
+    const float su1 = cmd.src_rect.right(), sv1 = cmd.src_rect.bottom();
+
+    drawTintedTexturedQuad(
+        cmd.texture,
+        ProjectedCorner{c00.x(), c00.y(), c00.w(), su0, sv0},
+        ProjectedCorner{c10.x(), c10.y(), c10.w(), su1, sv0},
+        ProjectedCorner{c01.x(), c01.y(), c01.w(), su0, sv1},
+        ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
+        cmd.tint,
+        cmd.opacity,
+        encoder);
+}
+
+// ---------------------------------------------------------------------------
+// drawTintedTexturedQuad — mirrors drawTexturedQuad(), binds icon_pipeline_
+// ---------------------------------------------------------------------------
+
+void MetalDrawBackend::drawTintedTexturedQuad(
+    std::shared_ptr<GPU::Texture>  texture,
+    const ProjectedCorner& c00, const ProjectedCorner& c10,
+    const ProjectedCorner& c01, const ProjectedCorner& c11,
+    const Color& tint,
+    float opacity,
+    GPU::RenderPassEncoder&        encoder)
+{
+    if (!icon_pipeline_) { std::cerr << "[MetalDrawBackend] No icon pipeline!\n"; return; }
+    if (!quad_bgl_)      { std::cerr << "[MetalDrawBackend] No bind group layout!\n"; return; }
+    if (!quad_sampler_)  { std::cerr << "[MetalDrawBackend] No sampler!\n"; return; }
+
+    GPU::BindGroupDescriptor bgDesc{};
+    bgDesc.layout  = quad_bgl_;
+    bgDesc.entries = {
+        GPU::BindGroupEntryDescriptor{ 0, texture },
+        GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
+    };
+    auto bindGroup = device_->createBindGroup(bgDesc);
+    if (!bindGroup) { std::cerr << "[MetalDrawBackend] Failed to create bind group!\n"; return; }
+
+    // Same corner/winding layout as drawTexturedQuad() — geometry shape is
+    // identical between the quad and icon pipelines, only the pipeline/
+    // uniforms bound below differ.
+    const QuadVertex verts[6] = {
+        {c00.x, c00.y, c00.w, c00.u, c00.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c01.x, c01.y, c01.w, c01.u, c01.v},
+        {c10.x, c10.y, c10.w, c10.u, c10.v},
+        {c11.x, c11.y, c11.w, c11.u, c11.v},
+    };
+    auto vbuf = quad_vertex_pool_.acquire(*device_, sizeof(verts), verts);
+    if (!vbuf) return;
+
+    IconUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.opacity     = opacity;
+    u.tint[0]     = tint.r;
+    u.tint[1]     = tint.g;
+    u.tint[2]     = tint.b;
+    u.tint[3]     = tint.a;
+
+    auto ubuf = icon_uniform_pool_.acquire(*device_, sizeof(IconUniforms), &u);
+    if (!ubuf) return;
+
+    encoder.setPipeline(icon_pipeline_);
+    encoder.setBindGroup(0, bindGroup);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
+    encoder.draw(6);
 }
 
 // ---------------------------------------------------------------------------

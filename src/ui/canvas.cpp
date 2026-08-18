@@ -88,6 +88,15 @@ namespace systems::leal::campello_widgets
         commands_.push_back(DrawImageCmd{std::move(texture), src_rect, dst_rect, current_opacity_});
     }
 
+    void Canvas::drawTintedImage(
+        std::shared_ptr<campello_gpu::Texture> texture,
+        const Rect& src_rect,
+        const Rect& dst_rect,
+        const Color& tint)
+    {
+        commands_.push_back(DrawTintedImageCmd{std::move(texture), src_rect, dst_rect, tint, current_opacity_});
+    }
+
     // ------------------------------------------------------------------
     // New drawing methods for Flutter Canvas API compatibility
     // ------------------------------------------------------------------

@@ -142,6 +142,62 @@ fragment float4 quadFragment(
 }
 
 // ---------------------------------------------------------------------------
+// Icon pipeline — tinted template image
+//
+// Draws a "template" texture (an icon's shape, encoded in its alpha
+// channel — the source RGB is ignored entirely) recolored to an arbitrary
+// runtime tint, the same mechanism as iOS's
+// UIImage.withRenderingMode(.alwaysTemplate) and Android's icon tinting.
+// This lets a single monochrome asset per icon serve any theme color
+// instead of needing a pre-baked PNG per tint. Reuses QuadVertexIn's
+// vertex layout (position+w, uv) so drawTintedTexturedQuad() can build
+// geometry identically to drawTexturedQuad() — only the uniforms/pipeline
+// differ.
+// ---------------------------------------------------------------------------
+
+struct IconUniforms {
+    float2 viewport;  // width, height (pixels)
+    float  opacity;   // [0, 1] — multiplied into every pixel
+    float  _pad;
+    float4 tint;      // straight-alpha RGBA recolor
+};
+
+struct IconVertOut {
+    float4 pos     [[position]];
+    float2 uv;
+    float  opacity;
+    float4 tint;
+};
+
+vertex IconVertOut iconVertex(
+    QuadVertexIn           in [[stage_in]],
+    constant IconUniforms &u  [[buffer(1)]])
+{
+    // Same clip-space derivation as quadVertex() above.
+    float clip_x =  2.0 * in.posw.x / u.viewport.x - in.posw.z;
+    float clip_y = -(2.0 * in.posw.y / u.viewport.y - in.posw.z);
+
+    IconVertOut out;
+    out.pos     = float4(clip_x, clip_y, 0.0, in.posw.z);
+    out.uv      = in.uv;
+    out.opacity = u.opacity;
+    out.tint    = u.tint;
+    return out;
+}
+
+fragment float4 iconFragment(
+    IconVertOut      in  [[stage_in]],
+    texture2d<float> tex [[texture(0)]],
+    sampler          smp [[sampler(1)]])
+{
+    // Ignore the source texture's own RGB; use only its alpha as a
+    // stencil for the tint color. Output premultiplied, matching every
+    // other pipeline's blend state (src=ONE dst=ONE_MINUS_SRC_ALPHA).
+    float a = tex.sample(smp, in.uv).a * in.tint.a * in.opacity;
+    return float4(in.tint.rgb * a, a);
+}
+
+// ---------------------------------------------------------------------------
 // Shape pipeline — circle, oval, and rounded rect via signed distance field
 //
 // Uniforms at [[buffer(0)]]: ShapeUniforms (vertex stage only)

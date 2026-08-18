@@ -12,11 +12,19 @@ import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.Icon
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
@@ -40,6 +48,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /**
@@ -211,6 +220,17 @@ object ComponentCatalog {
                     )
                 }
             }
+
+            // One-off Material Symbols asset export for campello_widgets'
+            // Icon widget — see inc/campello_widgets/widgets/icon.hpp.
+            // Rendered solid black on white (not transparent): screencap
+            // can't capture alpha, so the alpha mask is recovered in post
+            // via 255-luminance (see the export step that pulls these).
+            "icon_export_house" -> Icon(Icons.Filled.Home, null, tint = Color.Black, modifier = Modifier.size(512.dp))
+            "icon_export_magnifyingglass" -> Icon(Icons.Filled.Search, null, tint = Color.Black, modifier = Modifier.size(512.dp))
+            "icon_export_person" -> Icon(Icons.Filled.Person, null, tint = Color.Black, modifier = Modifier.size(512.dp))
+            "icon_export_bell" -> Icon(Icons.Filled.Notifications, null, tint = Color.Black, modifier = Modifier.size(512.dp))
+            "icon_export_heart" -> Icon(Icons.Filled.Favorite, null, tint = Color.Black, modifier = Modifier.size(512.dp))
 
             "popupMenuButton_closed" -> OutlinedButton(onClick = {}) { Text("Open Menu") }
             "popupMenuButton_open" -> {

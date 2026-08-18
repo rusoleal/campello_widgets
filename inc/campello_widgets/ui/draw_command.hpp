@@ -211,6 +211,30 @@ namespace systems::leal::campello_widgets
         float opacity = 1.0f;
     };
 
+    /**
+     * @brief Draw a "template" texture recolored to an arbitrary tint.
+     *
+     * The source texture's own RGB is ignored entirely; only its alpha
+     * channel is sampled, used as a stencil for `tint` — the same
+     * mechanism as iOS's `UIImage.withRenderingMode(.alwaysTemplate)` and
+     * Android's icon tinting. Lets a single monochrome icon asset serve
+     * any theme color instead of needing a pre-baked PNG per tint. Used
+     * by the `Icon` widget.
+     *
+     * @param texture  The source (template) texture.
+     * @param src_rect Normalized source rectangle [0,1]×[0,1] within the texture.
+     * @param dst_rect Destination rectangle in local coordinates.
+     * @param tint     Straight-alpha recolor applied via the texture's alpha.
+     */
+    struct DrawTintedImageCmd
+    {
+        std::shared_ptr<campello_gpu::Texture> texture;
+        Rect  src_rect;
+        Rect  dst_rect;
+        Color tint;
+        float opacity = 1.0f;
+    };
+
     /** @brief Push a new clip rectangle onto the clip stack (intersects with current). */
     struct PushClipRectCmd
     {
@@ -321,6 +345,7 @@ namespace systems::leal::campello_widgets
         // Text and images
         DrawTextCmd,
         DrawImageCmd,
+        DrawTintedImageCmd,
 
         // Clipping
         PushClipRectCmd,

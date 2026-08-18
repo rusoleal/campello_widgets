@@ -1,10 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/box_fit.hpp>
 #include <campello_widgets/ui/alignment.hpp>
+#include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/diagnostics/debug_assert.hpp>
 
 namespace systems::leal::campello_gpu { class Texture; }
@@ -39,12 +41,20 @@ namespace systems::leal::campello_widgets
         Alignment alignment = Alignment::center();
         float     opacity   = 1.0f;
 
+        /**
+         * @brief Recolors the texture via its alpha channel — see
+         * `RenderImage::setColor()`'s doc comment. `std::nullopt` (the
+         * default) paints the texture's real colors unmodified.
+         */
+        std::optional<Color> color;
+
         static std::shared_ptr<RawImage> create(
             std::shared_ptr<campello_gpu::Texture> texture,
             Size                                   size      = Size::zero(),
             BoxFit                                 fit       = BoxFit::fill,
             Alignment                              alignment = Alignment::center(),
-            float                                  opacity   = 1.0f)
+            float                                  opacity   = 1.0f,
+            std::optional<Color>                   color     = std::nullopt)
         {
             auto w     = std::make_shared<RawImage>();
             w->texture  = std::move(texture);
@@ -52,6 +62,7 @@ namespace systems::leal::campello_widgets
             w->fit      = fit;
             w->alignment = alignment;
             w->opacity  = opacity;
+            w->color    = color;
             return w;
         }
 

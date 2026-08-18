@@ -170,10 +170,60 @@ static cw::WidgetRef text(const std::string& str, const cw::TextStyle& style = c
     return std::make_shared<cw::Text>(str, style);
 }
 
-static cw::WidgetRef icon(const std::string& /*name*/)
+// Real SF Symbol (iOS)/Material Symbol (Android) template PNGs, sourced
+// once per session — see tests/visual_fidelity/test_images/icons/{ios,
+// android}/. Only the 5 icons the current Cupertino/Material real-capture
+// builders (navigationBar/navigationRail/badge/iconButton) actually need
+// are sourced so far; any other name falls back to the "★" placeholder
+// this whole function used to unconditionally return.
+static std::shared_ptr<GPU::Texture> loadIconTexture(const std::string& platform, const std::string& name)
 {
-    // TODO: replace with real icon glyph once campello_widgets has an Icon widget.
-    return text("★");
+    static std::map<std::string, std::shared_ptr<GPU::Texture>> cache;
+    const std::string key = platform + "/" + name;
+    auto it = cache.find(key);
+    if (it != cache.end()) return it->second;
+
+    auto device = cwt::sharedGpuDevice();
+    if (!device) return nullptr;
+
+    std::filesystem::path path = std::filesystem::path(cwt::getVisualFidelityDirectory()) /
+                                 "test_images" / "icons" / platform / (name + ".png");
+    auto img = ci::Image::fromFile(path.string().c_str());
+    if (!img) return nullptr;
+    if (img->getFormat() != ci::ImageFormat::rgba8) return nullptr;
+
+    uint32_t w = static_cast<uint32_t>(img->getWidth());
+    uint32_t h = static_cast<uint32_t>(img->getHeight());
+    auto tex = device->createTexture(
+        GPU::TextureType::tt2d,
+        GPU::PixelFormat::rgba8unorm,
+        w, h, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copyDst)));
+    if (!tex) return nullptr;
+
+    // Icon::create()'s tinted-image draw path only ever samples this
+    // texture's *alpha* channel (see DrawTintedImageCmd's doc comment) —
+    // unlike loadBackgroundTexture(), there's no need to premultiply RGB
+    // by alpha here since RGB is never read.
+    std::vector<uint8_t> pixels(
+        static_cast<const uint8_t*>(img->getData()),
+        static_cast<const uint8_t*>(img->getData()) + static_cast<size_t>(w) * h * 4);
+    if (!tex->upload(0, w * h * 4, pixels.data())) return nullptr;
+
+    cache[key] = tex;
+    return tex;
+}
+
+static cw::WidgetRef icon(const cw::DesignSystem& ds, const std::string& name)
+{
+    using namespace cw;
+    const bool is_material = dynamic_cast<const MaterialDesignSystem*>(&ds) != nullptr;
+    const std::string platform = is_material ? "android" : "ios";
+    auto tex = loadIconTexture(platform, name);
+    if (!tex) return text("★"); // not yet sourced for this name — see loadIconTexture()'s comment
+    return Icon::create(tex, 24.0f, Color::black());
 }
 
 static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& builder, const std::string& state)
@@ -231,7 +281,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
         ListTileConfig cfg;
         cfg.title = text("Title");
         if (state == "two_line")  cfg.subtitle = text("Subtitle");
-        if (state == "with_icon") cfg.leading = icon("star");
+        if (state == "with_icon") cfg.leading = icon(ds, "star");
         cfg.on_tap = [] {};
         return ds.buildListTile(cfg);
     }
@@ -245,17 +295,17 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
     if (builder == "appBar") {
         AppBarConfig cfg;
         cfg.title = text(state == "center_title" ? "Title" : "Navigation");
-        cfg.leading = icon("chevron.left");
-        cfg.actions = { icon("gear") };
+        cfg.leading = icon(ds, "chevron.left");
+        cfg.actions = { icon(ds, "gear") };
         return ds.buildAppBar(cfg);
     }
 
     if (builder == "navigationBar") {
         NavigationBarConfig cfg;
         cfg.items = {
-            {icon("house"), "First"},
-            {icon("magnifyingglass"), "Second"},
-            {icon("person"), "Third"},
+            {icon(ds, "house"), "First"},
+            {icon(ds, "magnifyingglass"), "Second"},
+            {icon(ds, "person"), "Third"},
         };
         cfg.selected_index = 0;
         cfg.on_tap = [](int) {};
@@ -308,7 +358,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
     if (builder == "primaryActionButton") {
         PrimaryActionConfig cfg;
         cfg.on_pressed = [] {};
-        if (state == "icon") cfg.icon = icon("plus");
+        if (state == "icon") cfg.icon = icon(ds, "plus");
         else                 cfg.label = text("+");
         return ds.buildPrimaryActionButton(cfg);
     }
@@ -346,14 +396,14 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "badge") {
         BadgeConfig cfg;
-        cfg.child = icon("bell");
+        cfg.child = icon(ds, "bell");
         if (state == "number") cfg.label = "3";
         return ds.buildBadge(cfg);
     }
 
     if (builder == "iconButton") {
         IconButtonConfig cfg;
-        cfg.icon = icon("heart");
+        cfg.icon = icon(ds, "heart");
         cfg.on_pressed = [] {};
         if (state == "filled")   cfg.selected = false;
         if (state == "selected") cfg.selected = true;
@@ -428,7 +478,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "navigationRail") {
         NavigationRailConfig cfg;
-        cfg.items = {{icon("house"), "Home"}, {icon("magnifyingglass"), "Search"}, {icon("person"), "Profile"}};
+        cfg.items = {{icon(ds, "house"), "Home"}, {icon(ds, "magnifyingglass"), "Search"}, {icon(ds, "person"), "Profile"}};
         cfg.extended = (state == "extended");
         cfg.on_tap = [](int) {};
         return ds.buildNavigationRail(cfg);
@@ -808,6 +858,57 @@ static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, con
                                       kDevicePixelRatio, Color::black(), outPath.string());
 }
 
+// Real UITabBar is screen furniture pinned to the literal physical bottom
+// edge (extending under the home indicator), unlike dialog/actionSheet
+// (modal, safe-area-centered) or searchField (safe-area-top-anchored).
+// export_references.sh's real-capture crop (safe_area.txt top/bottom) is
+// applied uniformly to both sides after the fact — see
+// run_real_capture_case() — so this only needs to match position *before*
+// that crop, same as every other real-capture case.
+static bool renderNavigationBarCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
+{
+    using namespace cw;
+
+    auto barWidget = buildWidget(ds, c.builder, c.state);
+    if (!barWidget) {
+        std::cerr << "Unknown builder: " << c.builder << "\n";
+        return false;
+    }
+
+    WidgetRef background;
+    auto tex = loadBackgroundTexture();
+    if (tex) {
+        auto bgImage = std::make_shared<Image>();
+        bgImage->texture = tex;
+        bgImage->fit = BoxFit::fill;
+        background = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, bgImage);
+    }
+
+    // Edge-to-edge width, matching a real UITabBar — buildNavigationBar()'s
+    // Row of Expanded items needs a bounded width to mean anything (same
+    // "expands to fill whatever width it's given" reasoning as several
+    // Android builders in renderAndroidCase()).
+    auto sizedBar = SizedBox::from_width(kLogicalWidth, barWidget);
+
+    auto bottomAligned = std::make_shared<Align>(Alignment::bottomCenter());
+    bottomAligned->child = sizedBar;
+
+    auto overlay = std::make_shared<Overlay>();
+    if (background) {
+        overlay->initial_entries.push_back(OverlayEntry::create(background));
+    }
+    overlay->initial_entries.push_back(OverlayEntry::create(bottomAligned));
+
+    auto rootWidget = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, overlay);
+
+    auto root = mountAndLayout(ds, rootWidget, kLogicalWidth, kLogicalHeight);
+    if (!root) return false;
+
+    auto outPath = outDir / (fileName(c) + ".png");
+    return cwt::captureRenderBoxToPng(root, kPhysicalWidth, kPhysicalHeight,
+                                      kDevicePixelRatio, Color::black(), outPath.string());
+}
+
 static bool renderActionSheetCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
 {
     using namespace cw;
@@ -1087,6 +1188,9 @@ static bool renderCase(const cw::DesignSystem& ds, const Case& c, const std::fil
     }
     if (c.builder == "searchField" && !isAndroidTheme(c.theme)) {
         return renderSearchFieldCase(ds, c, outDir);
+    }
+    if (c.builder == "navigationBar" && !isAndroidTheme(c.theme)) {
+        return renderNavigationBarCase(ds, c, outDir);
     }
     if (isAndroidTheme(c.theme)) {
         return renderAndroidCase(ds, c, outDir);

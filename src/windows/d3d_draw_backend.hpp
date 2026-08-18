@@ -133,6 +133,12 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawTintedImage(
+        const DrawTintedImageCmd&        cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     Size measureText(const TextSpan& span) const override;
 
     campello_gpu::PixelFormat offscreenPixelFormat() const noexcept override
@@ -283,6 +289,20 @@ private:
         float opacity,
         campello_gpu::RenderPassEncoder&        encoder,
         std::shared_ptr<campello_gpu::BindGroup> cached_bind_group = nullptr);
+
+    // Mirrors drawTexturedQuad() exactly, but binds icon_pipeline_ (which
+    // samples only the source texture's alpha channel and recolors with
+    // `tint` — see IconPS in icon.hlsl) instead of quad_pipeline_. Kept as
+    // its own method rather than adding a tint parameter to
+    // drawTexturedQuad() so every existing call site is untouched — same
+    // rationale as MetalDrawBackend::drawTintedTexturedQuad().
+    void drawTintedTexturedQuad(
+        std::shared_ptr<campello_gpu::Texture>  texture,
+        const ProjectedCorner& c00, const ProjectedCorner& c10,
+        const ProjectedCorner& c01, const ProjectedCorner& c11,
+        const Color& tint,
+        float opacity,
+        campello_gpu::RenderPassEncoder&        encoder);
 
     // Runs a single-pass blur render (horizontal or vertical) from src into
     // dst — see blurTexture(), which chains two of these. `src_bind_group`
@@ -485,6 +505,10 @@ private:
     UniformBindGroupPool shape_uniform_pool_;
     UniformBindGroupPool line_uniform_pool_;
     UniformBindGroupPool quad_uniform_pool_;
+    // Icon pipeline's uniforms (viewport/opacity/tint — larger than
+    // QuadUniforms, so it needs its own pool rather than sharing
+    // quad_uniform_pool_'s ring).
+    UniformBindGroupPool icon_uniform_pool_;
     UniformBindGroupPool blur_uniform_pool_;
     UniformBindGroupPool clip_shape_uniform_pool_;
     UniformBindGroupPool shader_mask_uniform_pool_;
@@ -505,6 +529,8 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>   shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   quad_pipeline_;
+    // Icon pipeline (tinted template images — see icon.hlsl).
+    std::shared_ptr<campello_gpu::RenderPipeline>   icon_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   blur_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   clip_shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   shader_mask_pipeline_;
@@ -514,6 +540,9 @@ private:
     std::shared_ptr<campello_gpu::BindGroupLayout>  line_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_uniform_bgl_;  // uniform@0 (bind group 0)
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_tex_bgl_;      // texture@0, sampler@1 (bind group 1)
+    // Icon pipeline's uniform bind group (bind group 0) — icon_layout's
+    // bind group 1 (texture+sampler) reuses quad_tex_bgl_ directly.
+    std::shared_ptr<campello_gpu::BindGroupLayout>  icon_uniform_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  blur_uniform_bgl_;  // uniform@0 (bind group 0)
     // blur's and clip-shape's texture+sampler (bind group 1) both reuse
     // quad_tex_bgl_ — same texture@0/sampler@1 structure, no need for

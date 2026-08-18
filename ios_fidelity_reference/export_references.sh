@@ -121,12 +121,13 @@ run_export_pass() {
 # Builders whose reference is a genuinely live-presented system control
 # (see RealCapture.swift) rather than a batch-exported offscreen snapshot,
 # and each one's states — mirrors ComponentCatalog.swift's states().
-REAL_CAPTURE_BUILDERS="dialog actionSheet searchField"
+REAL_CAPTURE_BUILDERS="dialog actionSheet searchField navigationBar"
 real_capture_states() {
     case "$1" in
         dialog) echo "one_action two_actions three_actions" ;;
         actionSheet) echo "open" ;;
         searchField) echo "empty filled" ;;
+        navigationBar) echo "three_items" ;;
         *) echo "" ;;
     esac
 }

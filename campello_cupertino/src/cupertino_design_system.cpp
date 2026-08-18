@@ -17,6 +17,7 @@
 #include <campello_widgets/widgets/dropdown_button.hpp>
 #include <campello_widgets/widgets/expanded.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
+#include <campello_widgets/widgets/icon.hpp>
 #include <campello_widgets/widgets/linear_progress_indicator.hpp>
 #include <campello_widgets/widgets/list_tile.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
@@ -733,7 +734,19 @@ namespace systems::leal::campello_widgets
             auto col = std::make_shared<Column>();
             col->main_axis_size = MainAxisSize::min;
             col->cross_axis_alignment = CrossAxisAlignment::center;
-            if (item.icon) col->children.push_back(item.icon);
+            // Same fg-discard pattern found and fixed repeatedly this
+            // session: item.icon arrives as plain caller content (a
+            // template Icon with whatever default color it was
+            // constructed with) with no expectation of being pre-tinted
+            // for the selected/unselected state — real UITabBar tints its
+            // template images automatically per selection.
+            if (item.icon) {
+                if (auto asIcon = std::dynamic_pointer_cast<const Icon>(item.icon)) {
+                    col->children.push_back(Icon::create(asIcon->texture, asIcon->size, tint));
+                } else {
+                    col->children.push_back(item.icon);
+                }
+            }
             if (!item.label.empty()) {
                 TextStyle ts;
                 ts.font_size = 11.0f; // UITabBarItem label size

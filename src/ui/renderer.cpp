@@ -882,6 +882,10 @@ namespace systems::leal::campello_widgets
                 {
                     timeDraw(image_stats, [&] { draw_backend_->drawImage(c, current_transform, current_clip, *rpe); });
                 }
+                else if constexpr (std::is_same_v<T, DrawTintedImageCmd>)
+                {
+                    timeDraw(image_stats, [&] { draw_backend_->drawTintedImage(c, current_transform, current_clip, *rpe); });
+                }
                 else if constexpr (std::is_same_v<T, DrawCircleCmd>)
                 {
                     timeDraw(circle_stats, [&] { draw_backend_->drawCircle(c, current_transform, current_clip, *rpe); });
