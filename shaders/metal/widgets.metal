@@ -475,8 +475,8 @@ fragment float4 liquidGlassFragment(
     // much thinner band for the bright edge glint below — real glass
     // visibly bends light across several pixels but only *catches* a
     // crisp highlight in a much thinner strip right at the boundary.
-    float refractBand = clamp(in.corner_radius * 0.6,  4.0, 14.0);
-    float rimBand      = clamp(in.corner_radius * 0.18, 1.5,  4.0);
+    float refractBand = clamp(in.corner_radius * 0.35, 3.0,  8.0);
+    float rimBand      = clamp(in.corner_radius * 0.08, 0.75, 2.0);
 
     float refract_amt = 1.0 - smoothstep(0.0, refractBand, -d);
     // Peaks at the true edge (d ~ 0), falls off to *both* sides — inward
@@ -490,7 +490,7 @@ fragment float4 liquidGlassFragment(
     // plain Gaussian blur (or a single-sample refraction) can never
     // produce on its own. Kept small (a couple pixels at most) so it
     // reads as a glassy edge shimmer, not a lens-flare gimmick.
-    const float kChromaticAberration = 1.5; // px, at full refraction
+    const float kChromaticAberration = 2.75; // px, at full refraction
     float2 base_offset = normal * (in.refraction_strength * refract_amt) / in.viewport;
     float2 ca_offset   = normal * (kChromaticAberration    * refract_amt) / in.viewport;
 
@@ -514,11 +514,13 @@ fragment float4 liquidGlassFragment(
     backdrop.a = 1.0;
 
     // Saturation boost — cheap luma-based mix (the second ingredient of
-    // the effect, alongside blur and the tint below). Slightly more
-    // restrained than v1 (1.25 vs 1.35) now that chromatic aberration
-    // also adds visual richness at the edge.
+    // the effect, alongside blur and the tint below). Pushed past v1's
+    // 1.35 (which had been dialed back to 1.25 when chromatic aberration
+    // was added) — the interior of a large card reads as near-identical
+    // to plain frosted blur without a genuinely vivid boost, since
+    // refraction/chromatic aberration/specular only touch a thin rim.
     float  luma      = dot(backdrop.rgb, float3(0.299, 0.587, 0.114));
-    float3 saturated = mix(float3(luma), backdrop.rgb, 1.25);
+    float3 saturated = mix(float3(luma), backdrop.rgb, 1.5);
 
     // Tinted overlay — real Liquid Glass stays close to neutral/clear
     // rather than heavily colored; the material reads mostly through

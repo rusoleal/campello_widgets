@@ -930,9 +930,26 @@ namespace systems::leal::campello_widgets
         // lighter c.surface_variant instead, or it disappears into the root.
         const Color dialog_bg = (tokens_.brightness == Brightness::dark) ? c.surface_variant : c.surface;
         if (material_ == CupertinoMaterial::liquidGlass) {
-            dialog->background_color  = withOpacity(dialog_bg, 0.60f);
+            // Dialog::build() never reads background_color once
+            // backdrop_filter is set (only the filter's own `tint` param
+            // applies — see its doc comment) — kept in sync anyway.
+            //
+            // Not a fixed opacity — calibrated separately per brightness by
+            // sampling a real-captured reference's card-interior brightness
+            // plateau and solving for the tint weight that reproduces it
+            // (light: measured plateau ~210-213/255 -> ~0.75; dark:
+            // ~57/255 -> ~0.54). The two need different values because
+            // dialog_bg's own luminance relative to the blurred backdrop
+            // flips sign between themes: light's near-white c.surface is
+            // *brighter* than the backdrop, so more tint weight brightens
+            // the result; dark's c.surface_variant is *darker* than the
+            // backdrop, so more tint weight darkens it — the same
+            // light/dark asymmetry already found this session for the
+            // dialog scrim and confirmationDialog pill fill.
+            const float tint_opacity = (tokens_.brightness == Brightness::dark) ? 0.54f : 0.75f;
+            dialog->background_color  = withOpacity(dialog_bg, tint_opacity);
             dialog->backdrop_filter   = ImageFilter::liquidGlass(tokens_.shape.radius_lg,
-                                                                   withOpacity(dialog_bg, 0.60f));
+                                                                   withOpacity(dialog_bg, tint_opacity));
         } else {
             dialog->background_color = dialog_bg;
         }
@@ -1072,9 +1089,13 @@ namespace systems::leal::campello_widgets
         // surface reads as "elevated" between light and dark mode.
         const Color dialog_bg = (tokens_.brightness == Brightness::dark) ? c.surface_variant : c.surface;
         if (material_ == CupertinoMaterial::liquidGlass) {
-            dialog->background_color = withOpacity(dialog_bg, 0.60f);
+            // See buildDialog()'s identical comment: tint opacity
+            // calibrated per brightness against a real-captured
+            // reference's card-interior brightness plateau.
+            const float tint_opacity = (tokens_.brightness == Brightness::dark) ? 0.54f : 0.75f;
+            dialog->background_color = withOpacity(dialog_bg, tint_opacity);
             dialog->backdrop_filter  = ImageFilter::liquidGlass(tokens_.shape.radius_xl,
-                                                                  withOpacity(dialog_bg, 0.60f));
+                                                                  withOpacity(dialog_bg, tint_opacity));
         } else {
             dialog->background_color = dialog_bg;
         }

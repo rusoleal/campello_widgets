@@ -90,9 +90,9 @@ namespace systems::leal::campello_widgets
         static constexpr ImageFilter liquidGlass(
             float corner_radius,
             Color tint                = Color::fromRGBA(1.0f, 1.0f, 1.0f, 0.14f),
-            float blur_sigma          = 40.0f,
-            float refraction_strength = 10.0f,
-            float specular_intensity  = 0.8f) noexcept
+            float blur_sigma          = 16.0f,
+            float refraction_strength = 18.0f,
+            float specular_intensity  = 1.0f) noexcept
         {
             ImageFilter f{};
             f.kind                = ImageFilterKind::liquidGlass;
