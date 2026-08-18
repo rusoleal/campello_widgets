@@ -720,6 +720,57 @@ static bool renderDialogCase(const cw::DesignSystem& ds, const Case& c, const st
                                       kDevicePixelRatio, Color::black(), outPath.string());
 }
 
+static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
+{
+    using namespace cw;
+
+    auto fieldWidget = buildWidget(ds, c.builder, c.state);
+    if (!fieldWidget) {
+        std::cerr << "Unknown builder: " << c.builder << "\n";
+        return false;
+    }
+
+    WidgetRef background;
+    auto tex = loadBackgroundTexture();
+    if (tex) {
+        auto bgImage = std::make_shared<Image>();
+        bgImage->texture = tex;
+        bgImage->fit = BoxFit::fill;
+        background = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, bgImage);
+    }
+
+    // Not modal — screen furniture pinned near the top of the safe area,
+    // not an overlay, so no dimming barrier. Matches RealCapture.swift's
+    // addSearchField(): centerX of the safe area, 8pt below its top,
+    // width 280 (already applied by buildWidget()'s SizedBox wrapper).
+    auto topAligned = std::make_shared<Align>(Alignment::topCenter());
+    topAligned->child = fieldWidget;
+
+    auto fieldPadding = std::make_shared<Padding>();
+    fieldPadding->padding = EdgeInsets::only(0.0f, 8.0f, 0.0f, 0.0f);
+    fieldPadding->child   = topAligned;
+
+    // Same safe-area reasoning as renderDialogCase()/renderActionSheetCase().
+    auto safeAreaPadding = std::make_shared<Padding>();
+    safeAreaPadding->padding = EdgeInsets::only(0.0f, 62.0f, 0.0f, 34.0f);
+    safeAreaPadding->child   = fieldPadding;
+
+    auto overlay = std::make_shared<Overlay>();
+    if (background) {
+        overlay->initial_entries.push_back(OverlayEntry::create(background));
+    }
+    overlay->initial_entries.push_back(OverlayEntry::create(safeAreaPadding));
+
+    auto rootWidget = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, overlay);
+
+    auto root = mountAndLayout(rootWidget, kLogicalWidth, kLogicalHeight);
+    if (!root) return false;
+
+    auto outPath = outDir / (fileName(c) + ".png");
+    return cwt::captureRenderBoxToPng(root, kPhysicalWidth, kPhysicalHeight,
+                                      kDevicePixelRatio, Color::black(), outPath.string());
+}
+
 static bool renderActionSheetCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
 {
     using namespace cw;
@@ -841,6 +892,9 @@ static bool renderCase(const cw::DesignSystem& ds, const Case& c, const std::fil
     }
     if (c.builder == "actionSheet" && !isAndroidTheme(c.theme)) {
         return renderActionSheetCase(ds, c, outDir);
+    }
+    if (c.builder == "searchField" && !isAndroidTheme(c.theme)) {
+        return renderSearchFieldCase(ds, c, outDir);
     }
     if (isAndroidTheme(c.theme)) {
         return renderAndroidCase(ds, c, outDir);
