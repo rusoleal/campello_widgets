@@ -46,6 +46,16 @@ static constexpr float kAndroidPhysicalHeight = 2400.0f;
 static constexpr float kAndroidLogicalWidth   = kAndroidPhysicalWidth  / kAndroidDevicePixelRatio;
 static constexpr float kAndroidLogicalHeight  = kAndroidPhysicalHeight / kAndroidDevicePixelRatio;
 
+// Same 136px status bar export_references.sh crops off before comparison
+// (see compare_android_cpp.py's STATUS_BAR_PX), converted to logical dp.
+// Needed because Android's AlertDialog window centers within the display
+// area *below the status bar down to the physical bottom edge* — the nav
+// bar is an edge-to-edge overlay, not a layout-reserving inset — not within
+// the full physical screen. Confirmed empirically: a real capture's dialog
+// card sits ~26dp lower than dead-center of the (already status/nav-bar-
+// cropped) comparison frame, matching exactly half this value.
+static constexpr float kAndroidStatusBarLogicalHeight = 136.0f / kAndroidDevicePixelRatio;
+
 struct Case {
     std::string theme;
     std::string builder;
@@ -109,7 +119,7 @@ static bool isAndroidTheme(const std::string& theme)
 static std::vector<std::string> androidBuilders()
 {
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
-            "segmentedButton"};
+            "segmentedButton", "dialog", "tabBar"};
 }
 
 static std::vector<std::string> builders()
@@ -858,12 +868,42 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
     // constraint with no minimum, so left unwrapped they collapse instead
     // of expanding. Fixed here rather than in buildWidget() itself, which
     // is shared with the iOS path and already works there without this.
-    if (c.builder == "slider" || c.builder == "divider" || c.builder == "listTile") {
+    // Same "expands to fill whatever width it's given" issue as slider/
+    // divider/listTile/tabBar above — but for "dialog" specifically, the
+    // width isn't arbitrary: 280dp is Compose AlertDialog's own real
+    // sizing, confirmed by measuring a real capture's card width (734px
+    // physical / 2.625 DPR = 280dp exactly). buildDialog()'s own
+    // max_width=560 never actually constrains anything here since it's
+    // wider than the whole screen.
+    if (c.builder == "slider" || c.builder == "divider" || c.builder == "listTile" ||
+        c.builder == "tabBar" || c.builder == "dialog") {
         widget = SizedBox::from_width(280.0f, widget);
     }
 
     auto centered = std::make_shared<Center>();
     centered->child = widget;
+
+    // Compose's AlertDialog is a real modal — its own Dialog window dims
+    // the content behind it, which the real capture's screenshot includes.
+    // Match that here so the comparison isn't measuring "dimmed real
+    // capture vs undimmed C++ render" — the same class of bug found and
+    // fixed for iOS dialog/actionSheet. Opacity confirmed empirically by
+    // solving scrimmed-vs-unscrimmed background samples from real
+    // captures: ~0.60 for *both* themes (unlike iOS's liquid glass tint,
+    // which needed different values per brightness, Android's dialog dim
+    // is a fixed window-level system default, not theme-dependent).
+    WidgetRef content = centered;
+    if (c.builder == "dialog") {
+        auto statusBarPad = std::make_shared<Padding>();
+        statusBarPad->padding = EdgeInsets::only(0.0f, kAndroidStatusBarLogicalHeight, 0.0f, 0.0f);
+        statusBarPad->child   = centered;
+
+        auto barrier = ModalBarrier::create(Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.60f), false, nullptr);
+        auto stack = std::make_shared<Stack>();
+        stack->fit = StackFit::expand;
+        stack->children = {barrier, statusBarPad};
+        content = stack;
+    }
 
     // Plain colorScheme.background fill, matching MaterialExpressiveTheme's
     // Surface(color = MaterialTheme.colorScheme.background) in
@@ -872,7 +912,7 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
     // conventions with no Android equivalent.
     auto background = std::make_shared<Container>();
     background->color = ds.tokens().colors.background;
-    background->child = centered;
+    background->child = content;
 
     auto rootWidget = std::make_shared<SizedBox>(kAndroidLogicalWidth, kAndroidLogicalHeight, background);
 
@@ -887,7 +927,7 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
 
 static bool renderCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
 {
-    if (c.builder == "dialog") {
+    if (c.builder == "dialog" && !isAndroidTheme(c.theme)) {
         return renderDialogCase(ds, c, outDir);
     }
     if (c.builder == "actionSheet" && !isAndroidTheme(c.theme)) {

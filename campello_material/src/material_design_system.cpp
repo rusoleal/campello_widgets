@@ -4,6 +4,7 @@
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/button.hpp>
 #include <campello_widgets/widgets/card.hpp>
+#include <campello_widgets/widgets/center.hpp>
 #include <campello_widgets/widgets/checkbox.hpp>
 #include <campello_widgets/widgets/circular_progress_indicator.hpp>
 #include <campello_widgets/widgets/column.hpp>
@@ -722,23 +723,91 @@ namespace systems::leal::campello_widgets
         const auto& c = tokens_.colors;
         std::vector<WidgetRef> children;
 
+        // cfg.title/cfg.content arrive as plain caller Text (see
+        // themed_component_harness.cpp's shared "dialog" case, default
+        // TextStyle — no expectation of being pre-sized for this design
+        // system), but never had M3's real dialog typography applied —
+        // confirmed against a real capture showing the title rendering at
+        // roughly body size instead of the real headlineSmall. Real M3:
+        // title -> headlineSmall/onSurface, content -> bodyMedium/
+        // onSurfaceVariant.
+        auto restyle = [](WidgetRef widget, TextStyle style) -> WidgetRef {
+            if (auto text = std::dynamic_pointer_cast<const Text>(widget)) {
+                return std::make_shared<Text>(text->span.text, style);
+            }
+            return widget;
+        };
+
         if (cfg.title) {
+            TextStyle title_style = tokens_.typography.headline_small;
+            title_style.withColor(c.on_surface);
             auto padded = std::make_shared<Padding>();
             padded->padding = EdgeInsets::only(24.0f, 24.0f, 24.0f, 0.0f);
-            padded->child   = cfg.title;
+            padded->child   = restyle(cfg.title, title_style);
             children.push_back(padded);
         }
         if (cfg.content) {
+            TextStyle content_style = tokens_.typography.body_medium;
+            content_style.withColor(c.on_surface_variant);
             auto padded = std::make_shared<Padding>();
             padded->padding = EdgeInsets::only(24.0f, 16.0f, 24.0f, 0.0f);
-            padded->child   = cfg.content;
+            padded->child   = restyle(cfg.content, content_style);
             children.push_back(padded);
         }
         if (!cfg.actions.empty()) {
             children.push_back(SizedBox::from_height(24.0f));
+            // Same fg-discard pattern already found in buildButton()/
+            // buildChip()/buildSegmentedButton(): a real M3 dialog's
+            // TextButton actions default to colorScheme.primary, but
+            // cfg.actions arrives as plain caller widgets (see
+            // themed_component_harness.cpp's shared "dialog" case, whose
+            // black-default styling was tuned for iOS, not Material) with
+            // no expectation of being pre-colored for this design system.
+            // Real M3 TextButtons reserve a 40dp minimum height (plus 24dp
+            // bottom margin below the whole row) even though the label text
+            // itself is much shorter — confirmed against a real capture
+            // whose dialog card ran ~37dp taller than ours despite matching
+            // title/content layout, entirely accounted for by this row's
+            // height once fixed. Plain caller Text has no such reservation,
+            // so each action is centered inside a fixed-height box here.
+            auto tint_action = [&](WidgetRef action) -> WidgetRef {
+                WidgetRef styled = action;
+                if (auto text = std::dynamic_pointer_cast<const Text>(action)) {
+                    if (text->span.style.color == Color::black()) {
+                        TextStyle style = text->span.style;
+                        style.withColor(c.primary);
+                        styled = std::make_shared<Text>(text->span.text, style);
+                    }
+                }
+                // SizedBox::from_height() alone leaves width unset, which
+                // means "fill available width" — inside the Row that made
+                // every action balloon out to the Row's full remaining
+                // width, so Center ended up centering the label mid-row
+                // instead of hugging the trailing edge. IntrinsicWidth
+                // doesn't help either: it measures by laying the child out
+                // unconstrained, and an unconstrained SizedBox(width=
+                // nullopt) reports infinity, not its child's natural width.
+                // Align's width_factor is the actual "shrink-wrap to child"
+                // primitive; pairing it with a tight-height ConstrainedBox
+                // shrink-wraps width while still forcing the 40dp height.
+                auto align = std::make_shared<Align>();
+                align->alignment    = Alignment::center();
+                align->width_factor = 1.0f;
+                align->child        = styled;
+
+                auto constrained = std::make_shared<ConstrainedBox>();
+                constrained->additional_constraints =
+                    BoxConstraints{0.0f, std::numeric_limits<float>::infinity(), 40.0f, 40.0f};
+                constrained->child = align;
+                return constrained;
+            };
+            std::vector<WidgetRef> tinted_actions;
+            tinted_actions.reserve(cfg.actions.size());
+            for (const auto& action : cfg.actions) tinted_actions.push_back(tint_action(action));
+
             auto row = std::make_shared<Row>();
             row->main_axis_alignment = MainAxisAlignment::end;
-            row->children = cfg.actions;
+            row->children = std::move(tinted_actions);
             auto action_pad = std::make_shared<Padding>();
             action_pad->padding = EdgeInsets::only(16.0f, 0.0f, 24.0f, 24.0f);
             action_pad->child   = row;
@@ -752,9 +821,20 @@ namespace systems::leal::campello_widgets
         col->cross_axis_alignment = CrossAxisAlignment::stretch;
         col->children = std::move(children);
 
+        // Real M3 AlertDialog containers use the surfaceContainerHigh tonal
+        // role, not plain surface — confirmed by sampling a real Compose
+        // AlertDialog capture (light: #ECE6F0, dark: #2B2930, both exact
+        // matches for the M3 baseline palette's surfaceContainerHigh). The
+        // shared ColorScheme has no container-tier roles, so these are
+        // inlined here rather than growing that cross-design-system struct
+        // for a single role only Material dialogs need.
+        const Color surface_container_high = (tokens_.brightness == Brightness::dark)
+            ? Color::fromARGB(0xFF2B2930)
+            : Color::fromARGB(0xFFECE6F0);
+
         auto dialog = std::make_shared<Dialog>();
         dialog->child             = col;
-        dialog->background_color  = c.surface;
+        dialog->background_color  = surface_container_high;
         dialog->border_radius     = tokens_.shape.radius_xl; // MD3: Extra Large
         dialog->elevation         = tokens_.elevation.level3;
         dialog->max_width         = 560.0f; // MD3 default basic dialog max width

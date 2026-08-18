@@ -1,7 +1,9 @@
 package systems.leal.fidelityreference
 
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -19,7 +21,10 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -121,6 +126,52 @@ object ComponentCatalog {
                         ) { Text(label) }
                     }
                 }
+            }
+
+            // All three states put every action in the confirmButton slot
+            // (never dismissButton) so left-to-right order is fully
+            // explicit here, matching themed_component_harness.cpp's
+            // "dialog" case exactly (one_action=[OK], two_actions=
+            // [Cancel,OK], three_actions=[OK,Delete,Cancel]) rather than
+            // relying on AlertDialog's own dismiss/confirm slot ordering.
+            "dialog_one_action" -> AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Title") },
+                text = { Text("Message") },
+                confirmButton = { TextButton(onClick = {}) { Text("OK") } }
+            )
+            "dialog_two_actions" -> AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Title") },
+                text = { Text("Message") },
+                confirmButton = {
+                    Row {
+                        TextButton(onClick = {}) { Text("Cancel") }
+                        TextButton(onClick = {}) { Text("OK") }
+                    }
+                }
+            )
+            "dialog_three_actions" -> AlertDialog(
+                onDismissRequest = {},
+                title = { Text("Title") },
+                text = { Text("Message") },
+                confirmButton = {
+                    Row {
+                        TextButton(onClick = {}) { Text("OK") }
+                        TextButton(
+                            onClick = {},
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            )
+                        ) { Text("Delete") }
+                        TextButton(onClick = {}) { Text("Cancel") }
+                    }
+                }
+            )
+
+            "tabBar_two_tabs" -> TabRow(selectedTabIndex = 0, modifier = Modifier.width(280.dp)) {
+                Tab(selected = true, onClick = {}, text = { Text("One") })
+                Tab(selected = false, onClick = {}, text = { Text("Two") })
             }
         }
     }
