@@ -906,13 +906,30 @@ namespace systems::leal::campello_widgets
             items.push_back(std::move(pmi));
         }
 
+        // Real M3 DropdownMenu uses the surfaceContainer tonal role, not
+        // plain surface — confirmed by sampling a real Compose capture
+        // (light: #F3EDF7, dark: #211F26, both exact matches for the M3
+        // baseline palette's surfaceContainer — one tonal step below
+        // buildDialog()'s surfaceContainerHigh). Same reasoning as that
+        // fix: the shared ColorScheme has no container-tier roles, so this
+        // is inlined here rather than growing that struct for one role.
+        const Color surface_container = (tokens_.brightness == Brightness::dark)
+            ? Color::fromARGB(0xFF211F26)
+            : Color::fromARGB(0xFFF3EDF7);
+
         auto pmb = std::make_shared<PopupMenuButton>();
         pmb->items         = std::move(items);
         pmb->on_selected   = cfg.on_selected;
         pmb->child         = cfg.child;
-        pmb->popup_color   = c.surface;
-        pmb->border_radius = tokens_.shape.radius_xs;
-        pmb->elevation     = tokens_.elevation.level2;
+        pmb->popup_color     = surface_container;
+        pmb->border_radius   = tokens_.shape.radius_xs;
+        pmb->elevation       = tokens_.elevation.level2;
+        // Real M3 DropdownMenu enforces a 112dp minimum width — confirmed
+        // against a real capture (two one-word items rendered at ~318px
+        // physical / 2.625 DPR ≈ 118dp, matching spec within antialiasing
+        // noise) rather than shrinking to the "One"/"Two" labels' own
+        // much narrower natural width.
+        pmb->menu_min_width  = 112.0f;
         return pmb;
     }
 

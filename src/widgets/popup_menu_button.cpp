@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/popup_menu_button.hpp>
+#include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/theme.hpp>
 #include <campello_widgets/widgets/stateful_element.hpp>
 #include <campello_widgets/widgets/overlay.hpp>
@@ -8,6 +9,7 @@
 #include <campello_widgets/widgets/backdrop_filter.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/column.hpp>
+#include <campello_widgets/widgets/constrained_box.hpp>
 #include <campello_widgets/widgets/divider.hpp>
 #include <campello_widgets/widgets/text.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
@@ -21,6 +23,8 @@
 #include <campello_widgets/ui/key.hpp>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/render_dropdown_menu_positioner.hpp>
+
+#include <limits>
 
 namespace systems::leal::campello_widgets
 {
@@ -145,8 +149,27 @@ namespace systems::leal::campello_widgets
                 }
 
                 auto padded = std::make_shared<Padding>();
-                padded->padding = EdgeInsets::symmetric(12.0f, 10.0f);
+                padded->padding = EdgeInsets::symmetric(12.0f, 0.0f);
                 padded->child   = label;
+
+                // Real M3 DropdownMenuItem rows are 48dp tall regardless of
+                // the label's own text height — confirmed against a real
+                // capture whose two-item menu ran a full item's worth
+                // taller than ours. width_factor=1.0 shrink-wraps the row
+                // to the label's natural width instead of the "fills
+                // available width" default an unfactored Align/SizedBox
+                // would take here — the same landmine already hit (and
+                // fixed the same way) for M3 dialog action buttons in
+                // MaterialDesignSystem::buildDialog().
+                auto align = std::make_shared<Align>();
+                align->alignment    = Alignment::centerLeft();
+                align->width_factor = 1.0f;
+                align->child        = padded;
+
+                auto row = std::make_shared<ConstrainedBox>();
+                row->additional_constraints =
+                    BoxConstraints{0.0f, std::numeric_limits<float>::infinity(), 48.0f, 48.0f};
+                row->child = align;
 
                 WidgetRef row_widget;
                 if (item.enabled) {
@@ -158,12 +181,12 @@ namespace systems::leal::campello_widgets
                         if (tap_fn)      tap_fn();
                         if (selected_fn) selected_fn(i);
                     };
-                    g->child  = padded;
+                    g->child  = row;
                     row_widget = g;
                 } else {
                     auto faded     = std::make_shared<Opacity>();
                     faded->opacity = 0.40f;
-                    faded->child   = padded;
+                    faded->child   = row;
                     row_widget     = faded;
                 }
 
@@ -172,7 +195,20 @@ namespace systems::leal::campello_widgets
 
             auto col = std::make_shared<Column>();
             col->main_axis_size       = MainAxisSize::min;
-            col->cross_axis_alignment = CrossAxisAlignment::stretch;
+            // start (not stretch): RenderDropdownMenuPositioner measures
+            // this column with a *loose* max-width equal to the live
+            // viewport (see its own doc comment), and stretch always
+            // claims the full incoming max rather than sizing to the
+            // widest item — the same failure mode already documented and
+            // fixed in DropdownButton::DropdownButtonState::open()'s
+            // identical menu-column construction. Confirmed by a real
+            // Android capture comparison: the menu was rendering full
+            // screen width instead of shrink-wrapped to its items.
+            // Known limitation: an `is_divider` item (currently unused
+            // anywhere in this codebase) relies on stretch to span the
+            // menu's width and will collapse to zero width without it —
+            // not fixed here since nothing exercises that path today.
+            col->cross_axis_alignment = CrossAxisAlignment::start;
             col->children             = std::move(item_widgets);
 
             WidgetRef menu_box;
@@ -214,6 +250,15 @@ namespace systems::leal::campello_widgets
                 decorated_box->decoration = menu_deco;
                 decorated_box->child      = col;
                 menu_box = decorated_box;
+            }
+
+            if (w.menu_min_width.has_value()) {
+                auto constrained = std::make_shared<ConstrainedBox>();
+                constrained->additional_constraints =
+                    BoxConstraints{*w.menu_min_width, std::numeric_limits<float>::infinity(), 0.0f,
+                                   std::numeric_limits<float>::infinity()};
+                constrained->child = menu_box;
+                menu_box = constrained;
             }
 
             // Anchor the menu to the trigger, like Flutter's real

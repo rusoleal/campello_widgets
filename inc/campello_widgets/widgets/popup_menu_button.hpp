@@ -53,6 +53,14 @@ namespace systems::leal::campello_widgets
         float                          elevation     = 8.0f;
 
         /**
+         * @brief Minimum width for the popup menu panel, regardless of how
+         * narrow its items are. Real M3 DropdownMenu enforces 112dp for
+         * exactly this reason — a two-item menu of one-letter labels would
+         * otherwise render implausibly narrow. Unset means no minimum.
+         */
+        std::optional<float>           menu_min_width;
+
+        /**
          * @brief When set, the popup renders as a frosted/liquid-glass
          * panel — the backdrop behind it is filtered per `*backdrop_filter`
          * and `popup_color` (if set) is used as the glass tint instead of a

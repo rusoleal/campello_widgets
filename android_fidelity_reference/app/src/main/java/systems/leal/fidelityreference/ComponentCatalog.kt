@@ -11,6 +11,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
@@ -206,6 +209,22 @@ object ComponentCatalog {
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
                             .fillMaxWidth()
                     )
+                }
+            }
+
+            "popupMenuButton_closed" -> OutlinedButton(onClick = {}) { Text("Open Menu") }
+            "popupMenuButton_open" -> {
+                // DropdownMenu(expanded = true) opens immediately with no
+                // click needed — real Android's default position (directly
+                // below, left-aligned to the anchor Box) needs no explicit
+                // offset for an isolated case like this with nothing else
+                // on screen to avoid.
+                Box {
+                    OutlinedButton(onClick = {}) { Text("Open Menu") }
+                    DropdownMenu(expanded = true, onDismissRequest = {}) {
+                        DropdownMenuItem(text = { Text("One") }, onClick = {})
+                        DropdownMenuItem(text = { Text("Two") }, onClick = {})
+                    }
                 }
             }
 

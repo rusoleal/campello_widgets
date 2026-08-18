@@ -119,7 +119,8 @@ static bool isAndroidTheme(const std::string& theme)
 static std::vector<std::string> androidBuilders()
 {
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
-            "segmentedButton", "dialog", "tabBar", "dropdownButton", "toggleButtons"};
+            "segmentedButton", "dialog", "tabBar", "dropdownButton", "toggleButtons",
+            "popupMenuButton"};
 }
 
 // Android-specific state override: dropdownButton's shared "open" state
@@ -904,6 +905,131 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
     if (c.builder == "slider" || c.builder == "divider" || c.builder == "listTile" ||
         c.builder == "tabBar" || c.builder == "dialog") {
         widget = SizedBox::from_width(280.0f, widget);
+    }
+
+    // PopupMenuButton's real menu is overlay-driven (opened via a runtime
+    // tap, positioned relative to the trigger's live on-screen offset) —
+    // the same overlay-anchor machinery that's kept both this and
+    // dropdownButton's "open" state out of automated capture all session.
+    // But for a static snapshot, a real anchored menu directly below-left
+    // of its trigger with nothing else on screen looks identical to just
+    // stacking [trigger, menu] in a Column — DropdownMenu's default
+    // position is exactly that, no runtime anchor lookup needed. Building
+    // the menu panel by hand here (mirroring PopupMenuButtonState::open()'s
+    // private construction, which isn't reusable outside a live tap).
+    if (c.builder == "popupMenuButton" && c.state == "open") {
+        const auto& colors = ds.tokens().colors;
+        constexpr float kItemRowHeight    = 48.0f;
+        constexpr float kMenuOuterPadding = 16.0f; // 8dp top + 8dp bottom
+        constexpr int   kItemCount        = 2;
+        std::vector<WidgetRef> item_widgets;
+        for (const std::string& label : {std::string("One"), std::string("Two")}) {
+            auto padded = std::make_shared<Padding>();
+            padded->padding = EdgeInsets::symmetric(12.0f, 0.0f);
+            padded->child   = std::make_shared<Text>(
+                label, TextStyle{}.withFontSize(14.0f).withColor(colors.on_surface));
+
+            // 48dp row height + width_factor=1.0 shrink-wrap — see the
+            // identical fix (and its full rationale) just applied to
+            // PopupMenuButtonState::open()'s own item construction in
+            // src/widgets/popup_menu_button.cpp.
+            auto align = std::make_shared<Align>();
+            align->alignment    = Alignment::centerLeft();
+            align->width_factor = 1.0f;
+            align->child        = padded;
+
+            auto row = std::make_shared<ConstrainedBox>();
+            row->additional_constraints =
+                BoxConstraints{0.0f, std::numeric_limits<float>::infinity(), kItemRowHeight, kItemRowHeight};
+            row->child = align;
+
+            item_widgets.push_back(row);
+        }
+        auto itemsCol = std::make_shared<Column>();
+        itemsCol->main_axis_size       = MainAxisSize::min;
+        // start, not stretch — see the identical fix (and its full
+        // rationale) just applied to
+        // PopupMenuButtonState::open()'s own item Column in
+        // src/widgets/popup_menu_button.cpp.
+        itemsCol->cross_axis_alignment = CrossAxisAlignment::start;
+        itemsCol->children             = std::move(item_widgets);
+
+        // Real M3 DropdownMenu uses surfaceContainer (not plain surface)
+        // and enforces a 112dp minimum width — see the identical fix (and
+        // its full rationale, including the exact real-capture-sampled hex
+        // values) just applied to MaterialDesignSystem::buildPopupMenuButton()
+        // in campello_material/src/material_design_system.cpp.
+        const bool  dark = isDarkTheme(c.theme);
+        const Color surfaceContainer = dark ? Color::fromARGB(0xFF211F26) : Color::fromARGB(0xFFF3EDF7);
+
+        // Real M3 DropdownMenu's own container adds vertical content
+        // padding around the item list (measured against a real capture:
+        // the whole panel ran ~15dp taller than 2×48dp items alone would
+        // account for) — matches Compose's default 8dp top/bottom.
+        auto itemsPadded = std::make_shared<Padding>();
+        itemsPadded->padding = EdgeInsets::symmetric(0.0f, kMenuOuterPadding / 2.0f);
+        itemsPadded->child   = itemsCol;
+
+        const float elevation = ds.tokens().elevation.level2;
+        BoxDecoration menuDeco;
+        menuDeco.color         = surfaceContainer;
+        menuDeco.border_radius = ds.tokens().shape.radius_xs;
+        menuDeco.box_shadow    = {BoxShadow{
+            Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.15f),
+            Offset{0.0f, elevation * 0.5f},
+            elevation * 2.0f
+        }};
+        auto menuDecorated = std::make_shared<DecoratedBox>();
+        menuDecorated->decoration = menuDeco;
+        menuDecorated->child      = itemsPadded;
+
+        auto menuConstrained = std::make_shared<ConstrainedBox>();
+        menuConstrained->additional_constraints =
+            BoxConstraints{112.0f, std::numeric_limits<float>::infinity(), 0.0f,
+                           std::numeric_limits<float>::infinity()};
+        menuConstrained->child = menuDecorated;
+        WidgetRef menuPanel    = menuConstrained;
+
+        auto column = std::make_shared<Column>();
+        column->main_axis_size       = MainAxisSize::min;
+        column->cross_axis_alignment = CrossAxisAlignment::start;
+        // DropdownMenu is a real Android Popup, positioned in window
+        // coordinates that include the (hidden-but-still-reserved) status
+        // bar — unlike the trigger, which is positioned by normal Compose
+        // layout within the content view and excludes it. The two only
+        // share a coordinate frame once flattened into a screenshot, so
+        // the popup lands one status-bar-height lower than a naive
+        // "right below the trigger" gap would predict — the same root
+        // cause as the AlertDialog status-bar centering fix above, just
+        // manifesting as an anchor-relative offset here instead of a
+        // centering offset. Confirmed against a real capture: the menu's
+        // top edge sat exactly kAndroidStatusBarLogicalHeight lower than
+        // this reconstruction produced before accounting for it.
+        const float gapHeight = 4.0f + kAndroidStatusBarLogicalHeight;
+
+        // Below this block, renderAndroidCase() wraps *this whole widget*
+        // in one Center() shared by every builder (including the
+        // already-correct "closed" case, at 0.32% diff). Real Android
+        // doesn't do that for this case — the trigger is centered on its
+        // own (the Popup menu doesn't count towards its parent's measured
+        // size at all), so only the trigger's own height should determine
+        // where it lands vertically. Simply Column-ing [trigger, gap,
+        // menu] and centering the *whole stack* redistributes the added
+        // gap+menu height evenly above/below, dragging the trigger itself
+        // upward — confirmed by a real capture showing the trigger's own
+        // position shift once the status-bar gap fix above was added.
+        // Prepending an invisible spacer of exactly half the extra
+        // (gap+menu) height counteracts that redistribution: it makes
+        // Center() place *this* padding-adjusted block such that the
+        // trigger itself lands exactly where Center()-ing the trigger
+        // alone would (solve center-of(padding+trigger+gap+menu) for the
+        // trigger's absolute position == center-of(trigger) alone).
+        const float menuHeight  = kItemCount * kItemRowHeight + kMenuOuterPadding;
+        const float counterPad  = (gapHeight + menuHeight) / 2.0f;
+
+        column->children = {SizedBox::from_height(counterPad), widget,
+                             SizedBox::from_height(gapHeight), menuPanel};
+        widget = column;
     }
 
     auto centered = std::make_shared<Center>();
