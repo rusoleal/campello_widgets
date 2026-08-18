@@ -119,7 +119,21 @@ static bool isAndroidTheme(const std::string& theme)
 static std::vector<std::string> androidBuilders()
 {
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
-            "segmentedButton", "dialog", "tabBar"};
+            "segmentedButton", "dialog", "tabBar", "dropdownButton"};
+}
+
+// Android-specific state override: dropdownButton's shared "open" state
+// would need a real anchored DropdownMenu overlay capture — the same
+// overlay-anchor positioning complexity that's kept popupMenuButton's
+// "open" state deferred all session. buildWidget() also doesn't currently
+// vary its output by state for dropdownButton, so "open" would just
+// duplicate "closed" on the C++ side too. Only the real ExposedDropdownMenuBox
+// closed-state chrome is covered here; falls back to the shared table for
+// every other builder.
+static std::vector<std::string> androidBuilderStates(const std::string& builder)
+{
+    if (builder == "dropdownButton") return {"closed"};
+    return builderStates(builder);
 }
 
 static std::vector<std::string> builders()
@@ -284,7 +298,10 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
         cfg.items = {{"Option 1", "1"}, {"Option 2", "2"}};
         cfg.hint = "Select";
         cfg.on_changed = [](const std::string&) {};
-        return ds.buildDropdownButton(cfg);
+        // Same fixed-width convention as textField above — its real Android
+        // counterpart (ExposedDropdownMenuBox) needs an explicit width too,
+        // matched here so both sides render the same 240dp box.
+        return SizedBox::from_width(240.0f, ds.buildDropdownButton(cfg));
     }
 
     if (builder == "primaryActionButton") {
@@ -462,9 +479,18 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 // would read whatever the *previous* case's (already-destroyed) backend left
 // behind, a dangling-pointer read that segfaults as soon as any RenderText
 // under `widget` measures text during layout.
-static std::shared_ptr<cw::RenderBox> mountAndLayout(cw::WidgetRef widget, float /*w*/, float /*h*/)
+// Wraps in a real Theme ancestor before mounting. Most builders don't need
+// this — ds.buildXxx(cfg) bakes the design system's resolved colors into
+// the returned widget tree directly — but a StatefulWidget like
+// DropdownButton looks up Theme::tokensOf(ctx) live from its own build(),
+// which silently falls back to NullDesignSystem (light-ish defaults) with
+// no Theme ancestor. That was invisible in light theme (the fallback
+// happened to look close enough) but produced a stark white dropdown box
+// in dark theme — confirmed by a real capture diff.
+static std::shared_ptr<cw::RenderBox> mountAndLayout(const cw::DesignSystem& ds, cw::WidgetRef widget, float /*w*/, float /*h*/)
 {
-    auto element = widget->createElement();
+    auto themed = std::make_shared<cw::Theme>(std::shared_ptr<const cw::DesignSystem>(&ds, [](const cw::DesignSystem*) {}), widget);
+    auto element = themed->createElement();
     element->mount(nullptr);
 
     auto* roe = element->findDescendantRenderObjectElement();
@@ -713,7 +739,7 @@ static bool renderDialogCase(const cw::DesignSystem& ds, const Case& c, const st
 
     auto rootWidget = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, overlay);
 
-    auto root = mountAndLayout(rootWidget, kLogicalWidth, kLogicalHeight);
+    auto root = mountAndLayout(ds, rootWidget, kLogicalWidth, kLogicalHeight);
     if (!root) return false;
 
     // The background PNG has semi-transparent (grain-textured) pixels, so
@@ -773,7 +799,7 @@ static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, con
 
     auto rootWidget = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, overlay);
 
-    auto root = mountAndLayout(rootWidget, kLogicalWidth, kLogicalHeight);
+    auto root = mountAndLayout(ds, rootWidget, kLogicalWidth, kLogicalHeight);
     if (!root) return false;
 
     auto outPath = outDir / (fileName(c) + ".png");
@@ -841,7 +867,7 @@ static bool renderActionSheetCase(const cw::DesignSystem& ds, const Case& c, con
 
     auto rootWidget = std::make_shared<SizedBox>(kLogicalWidth, kLogicalHeight, overlay);
 
-    auto root = mountAndLayout(rootWidget, kLogicalWidth, kLogicalHeight);
+    auto root = mountAndLayout(ds, rootWidget, kLogicalWidth, kLogicalHeight);
     if (!root) return false;
 
     auto outPath = outDir / (fileName(c) + ".png");
@@ -916,7 +942,7 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
 
     auto rootWidget = std::make_shared<SizedBox>(kAndroidLogicalWidth, kAndroidLogicalHeight, background);
 
-    auto root = mountAndLayout(rootWidget, kAndroidLogicalWidth, kAndroidLogicalHeight);
+    auto root = mountAndLayout(ds, rootWidget, kAndroidLogicalWidth, kAndroidLogicalHeight);
     if (!root) return false;
 
     auto outPath = outDir / (fileName(c) + ".png");
@@ -948,7 +974,7 @@ static bool renderCase(const cw::DesignSystem& ds, const Case& c, const std::fil
 
     auto rootWidget = wrapForViewport(ds, widget, c.builder, c.theme);
 
-    auto root = mountAndLayout(rootWidget, kLogicalWidth, kLogicalHeight);
+    auto root = mountAndLayout(ds, rootWidget, kLogicalWidth, kLogicalHeight);
     if (!root) return false;
 
     auto outPath = outDir / (fileName(c) + ".png");
@@ -982,8 +1008,9 @@ int main(int argc, char* argv[])
         auto themeDir = outputRoot / themeName;
         std::filesystem::create_directories(themeDir);
 
-        for (const auto& builderName : (isAndroidTheme(themeName) ? androidBuilders() : builders())) {
-            for (const auto& state : builderStates(builderName)) {
+        bool isAndroid = isAndroidTheme(themeName);
+        for (const auto& builderName : (isAndroid ? androidBuilders() : builders())) {
+            for (const auto& state : (isAndroid ? androidBuilderStates(builderName) : builderStates(builderName))) {
                 Case c{themeName, builderName, state};
                 std::cout << "Rendering " << themeName << "/" << fileName(c) << "\n";
                 if (renderCase(*ds, c, themeDir)) {

@@ -1,6 +1,7 @@
 package systems.leal.fidelityreference
 
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.AlertDialog
@@ -8,11 +9,15 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
@@ -26,6 +31,10 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -36,7 +45,7 @@ import androidx.compose.ui.unit.dp
  * `switch`/`card` builder blocks) so the two sides render the same content.
  */
 object ComponentCatalog {
-    @OptIn(ExperimentalMaterial3ExpressiveApi::class)
+    @OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
     @Composable
     fun render(caseId: String) {
         when (caseId) {
@@ -172,6 +181,31 @@ object ComponentCatalog {
             "tabBar_two_tabs" -> TabRow(selectedTabIndex = 0, modifier = Modifier.width(280.dp)) {
                 Tab(selected = true, onClick = {}, text = { Text("One") })
                 Tab(selected = false, onClick = {}, text = { Text("Two") })
+            }
+
+            // Only the closed state is captured — the "open" state would
+            // need a real anchored DropdownMenu overlay, the same overlay-
+            // positioning complexity that's deferred popupMenuButton's
+            // "open" state all session (see themed_component_harness.cpp's
+            // androidBuilderStates()).
+            "dropdownButton_closed" -> {
+                var expanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = it },
+                    modifier = Modifier.width(240.dp)
+                ) {
+                    OutlinedTextField(
+                        value = "",
+                        onValueChange = {},
+                        readOnly = true,
+                        placeholder = { Text("Select") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                        modifier = Modifier
+                            .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
+                            .fillMaxWidth()
+                    )
+                }
             }
         }
     }
