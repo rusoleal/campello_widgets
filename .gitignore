@@ -44,3 +44,9 @@ android_fidelity_reference/output/
 ios_fidelity_reference/output/
 tests/visual_fidelity/__pycache__/
 tests/visual_fidelity/reports/
+
+# Copied in by export_references.sh from the canonical source at
+# tests/visual_fidelity/test_images/ — not committed, to avoid a second
+# copy of the same binary drifting out of sync (same convention as iOS's
+# bundle copy, which is also never committed).
+android_fidelity_reference/app/src/main/res/drawable/liquid_glass_background.png

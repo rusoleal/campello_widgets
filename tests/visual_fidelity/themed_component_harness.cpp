@@ -1169,16 +1169,33 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
         content = stack;
     }
 
-    // Plain colorScheme.background fill, matching MaterialExpressiveTheme's
-    // Surface(color = MaterialTheme.colorScheme.background) in
-    // android_fidelity_reference's MainActivity — no shared background
-    // image or red-border alignment aid; those are iOS-mockup-specific
-    // conventions with no Android equivalent.
-    auto background = std::make_shared<Container>();
-    background->color = ds.tokens().colors.background;
-    background->child = content;
+    // Same colourful non-flat backdrop as the iOS/Cupertino side (see
+    // wrapForViewport()) — a plain colorScheme.background fill hides
+    // translucency/scrim/blur differences behind a uniform color, so
+    // Android now shares the identical liquid_glass_background.png asset,
+    // stretched to the device canvas. android_fidelity_reference's
+    // MainActivity paints the same bundled PNG behind its real capture, so
+    // both sides of the comparison are stretching the same source image to
+    // the same target size (no red-border alignment aid; that convention
+    // is iOS-mockup-specific).
+    WidgetRef background;
+    auto bgTex = loadBackgroundTexture();
+    if (bgTex) {
+        auto bgImage = std::make_shared<Image>();
+        bgImage->texture = bgTex;
+        bgImage->fit = BoxFit::fill;
+        background = std::make_shared<SizedBox>(kAndroidLogicalWidth, kAndroidLogicalHeight, bgImage);
+    } else {
+        auto flat = std::make_shared<Container>();
+        flat->color = ds.tokens().colors.background;
+        background = flat;
+    }
 
-    auto rootWidget = std::make_shared<SizedBox>(kAndroidLogicalWidth, kAndroidLogicalHeight, background);
+    auto backgroundStack = std::make_shared<Stack>();
+    backgroundStack->fit = StackFit::expand;
+    backgroundStack->children = {background, content};
+
+    auto rootWidget = std::make_shared<SizedBox>(kAndroidLogicalWidth, kAndroidLogicalHeight, backgroundStack);
 
     auto root = mountAndLayout(ds, rootWidget, kAndroidLogicalWidth, kAndroidLogicalHeight);
     if (!root) return false;

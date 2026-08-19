@@ -4,17 +4,21 @@ import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -47,11 +51,40 @@ class MainActivity : ComponentActivity() {
         setContent {
             val colorScheme = if (isDark) darkColorScheme() else lightColorScheme()
             MaterialExpressiveTheme(colorScheme = colorScheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    CaseHost(caseId)
+                Box(modifier = Modifier.fillMaxSize().background(colorScheme.background)) {
+                    // Same colourful non-flat backdrop the C++ harness's
+                    // Android path now paints (see renderAndroidCase() in
+                    // themed_component_harness.cpp) — a plain
+                    // colorScheme.background fill hid translucency/scrim/
+                    // blur differences behind a uniform color. Both sides
+                    // stretch the identical liquid_glass_background.png
+                    // asset to their own canvas size, so the comparison
+                    // still measures real content differences, not
+                    // background noise.
+                    //
+                    // The PNG itself has genuinely semi-transparent pixels
+                    // (some circles sit at ~47% alpha over the gradient),
+                    // so whatever backs the Image matters: the C++ side
+                    // clears its render target to colorScheme.background
+                    // before drawing the image over it
+                    // (renderAndroidCase()), so this Box needs the same
+                    // background modifier — without it, the Image fell
+                    // through to the window's default dark background
+                    // instead, producing a systematic color mismatch
+                    // everywhere the source PNG wasn't fully opaque.
+                    Image(
+                        painter = painterResource(R.drawable.liquid_glass_background),
+                        contentDescription = null,
+                        contentScale = ContentScale.FillBounds,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = Color.Transparent,
+                        contentColor = colorScheme.onBackground
+                    ) {
+                        CaseHost(caseId)
+                    }
                 }
             }
         }

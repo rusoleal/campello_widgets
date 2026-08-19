@@ -11,6 +11,21 @@ ADB="${ANDROID_HOME}/platform-tools/adb"
 PACKAGE="systems.leal.fidelityreference"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 
+# Copy the shared Liquid Glass background into res/drawable/ so the app can
+# reference it as R.drawable.liquid_glass_background — unlike iOS's bundle
+# resource (copied in after the build, since bundle assets don't need
+# compiling), Android resources must already be on disk before AAPT/Gradle
+# compiles the APK.
+BG_SRC="${SCRIPT_DIR}/../tests/visual_fidelity/test_images/liquid_glass_background.png"
+BG_DST_DIR="${SCRIPT_DIR}/app/src/main/res/drawable"
+if [ -f "${BG_SRC}" ]; then
+    mkdir -p "${BG_DST_DIR}"
+    cp "${BG_SRC}" "${BG_DST_DIR}/liquid_glass_background.png"
+    echo "Copied liquid glass background to res/drawable/"
+else
+    echo "WARNING: Liquid glass background not found at ${BG_SRC}"
+fi
+
 echo "Building FidelityReference..."
 ./gradlew :app:assembleDebug --console=plain > /tmp/android_fidelity_reference_build.log 2>&1
 APK="${SCRIPT_DIR}/app/build/outputs/apk/debug/app-debug.apk"
@@ -63,8 +78,10 @@ for theme in ${THEMES}; do
         # wasn't consistently enough for a fresh `am start` after
         # force-stop to clear it before the screenshot; confirmed by
         # inspecting a captured reference showing the bare Android-robot
-        # splash icon instead of real app content.
-        sleep 3
+        # splash icon instead of real app content. Bumped 3s -> 4s after
+        # decoding the liquid_glass_background bitmap on every cold start
+        # made a 12-case-long streak miss the 3s window in one run.
+        sleep 4
 
         "${ADB}" shell screencap -p /sdcard/fidelity_case.png
         raw_path="/tmp/android_fidelity_raw_${theme}_${case_id}.png"
