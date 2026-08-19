@@ -133,10 +133,16 @@ enum RealCapture {
         tabBar.selectedItem = tabBar.items?.first
         tabBar.translatesAutoresizingMaskIntoConstraints = false
         root.view.addSubview(tabBar)
+        // safeAreaLayoutGuide, not root.view.bottomAnchor directly — the
+        // latter pins the bar into the home-indicator strip that
+        // export_references.sh's crop trims off (using the same
+        // safe_area.txt insets this file itself writes below), clipping
+        // the bar's bottom edge out of the exported PNG. addSearchField()
+        // above already anchors to the safe area for the same reason.
         NSLayoutConstraint.activate([
             tabBar.leadingAnchor.constraint(equalTo: root.view.leadingAnchor),
             tabBar.trailingAnchor.constraint(equalTo: root.view.trailingAnchor),
-            tabBar.bottomAnchor.constraint(equalTo: root.view.bottomAnchor),
+            tabBar.bottomAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.bottomAnchor),
         ])
     }
 
