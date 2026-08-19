@@ -160,8 +160,18 @@ run_real_capture_case() {
     # showing only the backdrop with no sidebar rendered at all, while
     # the same construction reliably works when launched manually with
     # natural pauses between commands.
+    #
+    # navigationBar's real UITabBar under Liquid Glass has the same
+    # settle-time problem: UIGlassEffect compositing hadn't finished by
+    # 1.5s on a cold app launch, producing either a blank screenshot or a
+    # too-dark/uncomposited-looking pill (confirmed by re-running the same
+    # capture at 3.0s, which came back correctly light-tinted). Classic
+    # (non-glass) navigationBar and the other three real-capture builders
+    # haven't shown this failure mode, so they keep the shorter sleep.
     if [ "${builder}" = "navigationRail" ]; then
         sleep 3.5
+    elif [ "${builder}" = "navigationBar" ]; then
+        sleep 3.0
     else
         sleep 1.5
     fi
