@@ -4,6 +4,8 @@
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/size.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
+#include <atomic>
+#include <cstdint>
 #include <functional>
 
 namespace systems::leal::campello_widgets
@@ -92,10 +94,27 @@ namespace systems::leal::campello_widgets
         void record(PaintContext& context, const Offset& offset,
                     const std::function<void()>& paintContent);
 
+        /**
+         * @brief This OffsetLayer instance's own construction-order counter
+         * — unique for the lifetime of the process, never reused even if a
+         * later, unrelated OffsetLayer is allocated at the same address
+         * (e.g. a virtualized `ListView` unmounting a scrolled-out item's
+         * RenderObject and mounting a new one that happens to land in the
+         * same freed memory). Carried on `CacheReplayBeginCmd` alongside
+         * `this` so `Renderer`'s clip-shape/shader-mask/shadow GPU caches
+         * — keyed by this pair, not the raw address alone — can never
+         * mistake a fresh occupant of a reused address for the previous
+         * one and replay its stale cached content.
+         */
+        uint64_t incarnationId() const noexcept { return incarnation_id_; }
+
     private:
         PictureLayer picture_;
         Offset       recorded_offset_{};
         bool         has_recorded_ = false;
+
+        static inline std::atomic<uint64_t> next_incarnation_id_{1};
+        uint64_t incarnation_id_ = next_incarnation_id_.fetch_add(1, std::memory_order_relaxed);
     };
 
 } // namespace systems::leal::campello_widgets

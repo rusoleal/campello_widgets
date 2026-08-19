@@ -110,7 +110,7 @@ namespace systems::leal::campello_widgets
             // below for why that's still safe to bracket too), and can
             // safely reuse its cached GPU composite instead of recapturing
             // it. See CacheReplayBeginCmd's doc comment.
-            canvas.appendRecorded(DrawList{CacheReplayBeginCmd{this}});
+            canvas.appendRecorded(DrawList{CacheReplayBeginCmd{this, incarnation_id_}});
             canvas.appendRecorded(picture_.commands());
             canvas.appendRecorded(DrawList{CacheReplayEndCmd{}});
             return true;
@@ -160,7 +160,7 @@ namespace systems::leal::campello_widgets
         // composites at the correct, moved position; this bracket is
         // purely an opt-in performance signal, not a correctness
         // requirement of the reposition itself.
-        canvas.appendRecorded(DrawList{CacheReplayBeginCmd{this}});
+        canvas.appendRecorded(DrawList{CacheReplayBeginCmd{this, incarnation_id_}});
         canvas.appendRecorded(shiftClipRects(picture_.commands(), dx, dy));
         canvas.appendRecorded(DrawList{CacheReplayEndCmd{}});
         canvas.restore();

@@ -17,6 +17,7 @@
 #include <campello_widgets/ui/dirty_region.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <cstdint>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -27,9 +28,11 @@ namespace systems::leal::campello_gpu
     class Device;
     class TextureView;
     class CommandEncoder;
+    class CommandBuffer;
     class RenderPassEncoder;
     class Texture;
     class BindGroup;
+    class Fence;
 }
 
 namespace systems::leal::campello_widgets
@@ -473,14 +476,15 @@ namespace systems::leal::campello_widgets
         // offscreen composite — see flushDrawList() for why it must match
         // whatever `rpe` currently targets.
         //
-        // `replay_region_id`/`replay_bracket_index` identify this bracket's
-        // slot in `shader_mask_gpu_cache_` — see the cache members' doc
-        // comment below. Default (`nullptr`, 0) means "not inside a
-        // CacheReplayBeginCmd/EndCmd region", which disables the cache
-        // entirely for this call (no lookup, no store): only brackets
-        // encountered while replaying a previously-recorded, byte-for-byte-
-        // unchanged region are safe to key by (region_id, bracket index)
-        // alone, per CacheReplayBeginCmd's doc comment.
+        // `replay_region_id`/`replay_incarnation_id`/`replay_bracket_index`
+        // identify this bracket's slot in `shader_mask_gpu_cache_` — see
+        // the cache members' doc comment below. Default (`nullptr`, 0, 0)
+        // means "not inside a CacheReplayBeginCmd/EndCmd region", which
+        // disables the cache entirely for this call (no lookup, no store):
+        // only brackets encountered while replaying a previously-recorded,
+        // byte-for-byte-unchanged region are safe to key by (region_id,
+        // incarnation, bracket index), per CacheReplayBeginCmd's doc
+        // comment.
         void applyShaderMask(
             const DrawShaderMaskBeginCmd&                      cmd,
             const DrawList&                                    child_cmds,
@@ -491,14 +495,16 @@ namespace systems::leal::campello_widgets
             float dpr,
             const Matrix4& transform,
             const Rect&    clip,
-            const void*    replay_region_id     = nullptr,
-            size_t         replay_bracket_index  = 0);
+            const void*    replay_region_id       = nullptr,
+            uint64_t       replay_incarnation_id  = 0,
+            size_t         replay_bracket_index    = 0);
 
         // Applies a ClipRRect/ClipOval region: renders child commands to an
         // offscreen texture, then composites through a rounded-rect/ellipse
         // SDF mask into the main pass. `corner_radius` is ignored when
         // `is_oval` is true. See flushDrawList() for `target_view`, and
-        // applyShaderMask() above for `replay_region_id`/`replay_bracket_index`.
+        // applyShaderMask() above for
+        // `replay_region_id`/`replay_incarnation_id`/`replay_bracket_index`.
         void applyClipShape(
             const Rect&                                        bounds,
             float                                               corner_radius,
@@ -511,8 +517,9 @@ namespace systems::leal::campello_widgets
             float dpr,
             const Matrix4& transform,
             const Rect&    clip,
-            const void*    replay_region_id     = nullptr,
-            size_t         replay_bracket_index  = 0);
+            const void*    replay_region_id       = nullptr,
+            uint64_t       replay_incarnation_id  = 0,
+            size_t         replay_bracket_index    = 0);
 
         // Applies a box shadow (DrawShadowCmd): fills the shadow's shape
         // (recovered from the path via Path::simpleRRectShape(), falling
@@ -525,8 +532,8 @@ namespace systems::leal::campello_widgets
         // site); converted to a Gaussian sigma via the same formula
         // Flutter's BoxShadow.blurSigma uses. See flushDrawList() for
         // `target_view`, and applyShaderMask() above for
-        // `replay_region_id`/`replay_bracket_index` — same cache-gating
-        // mechanism, backed by shadow_gpu_cache_ below.
+        // `replay_region_id`/`replay_incarnation_id`/`replay_bracket_index`
+        // — same cache-gating mechanism, backed by shadow_gpu_cache_ below.
         void applyBoxShadow(
             const DrawShadowCmd&                               cmd,
             std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
@@ -536,8 +543,9 @@ namespace systems::leal::campello_widgets
             float dpr,
             const Matrix4& transform,
             const Rect&    clip,
-            const void*    replay_region_id     = nullptr,
-            size_t         replay_bracket_index  = 0);
+            const void*    replay_region_id       = nullptr,
+            uint64_t       replay_incarnation_id  = 0,
+            size_t         replay_bracket_index    = 0);
 
         // Applies a SaveLayer region: renders child commands to an offscreen
         // texture, then composites the texture back into the main pass using
@@ -555,8 +563,9 @@ namespace systems::leal::campello_widgets
             float dpr,
             const Matrix4& transform,
             const Rect&    clip,
-            const void*    replay_region_id     = nullptr,
-            size_t         replay_bracket_index  = 0);
+            const void*    replay_region_id       = nullptr,
+            uint64_t       replay_incarnation_id  = 0,
+            size_t         replay_bracket_index    = 0);
 
         // Renders `child_cmds` (a `RenderDrawSurface`'s newly-added stroke
         // segments) directly into `cmd.target` — preserving its existing
@@ -726,23 +735,38 @@ namespace systems::leal::campello_widgets
         // still reran every frame regardless — this is what actually fixes
         // that gap.
         //
-        // Keyed by (region_id, Nth clip-shape/shader-mask bracket since the
-        // region began) — safe as a non-fragile key with no content
-        // hashing needed, because "replay" only ever happens when nothing
-        // in the region changed, so the same region_id always produces the
-        // same sequence of brackets in the same order. `region_id` is an
-        // OffsetLayer's own address, used purely as an opaque, never-
-        // dereferenced map key: if the owning RenderObject unmounts, later
-        // reuse of that address by an unrelated OffsetLayer is harmless,
-        // because a fresh OffsetLayer's first paint is always a full
-        // record (never identity-replay), and the eviction sweep below
-        // drops any entry that goes unused for kClipShapeCacheMaxAgeFrames
-        // frames regardless.
+        // Keyed by (region_id, region's OffsetLayer incarnation, Nth clip-
+        // shape/shader-mask bracket since the region began) — safe as a
+        // non-fragile key with no content hashing needed, because "replay"
+        // only ever happens when nothing in the region changed, so a given
+        // (region_id, incarnation) always produces the same sequence of
+        // brackets in the same order. `region_id` is an OffsetLayer's own
+        // address, used as an opaque, never-dereferenced map key — but NOT
+        // by itself: a RenderObject can unmount (e.g. a virtualized
+        // `ListView` recycling a scrolled-out item) and a later, unrelated
+        // OffsetLayer can be allocated at that same freed address. Its
+        // first paint is always a full record, never a replay, so it can
+        // never itself trigger a false cache *hit* — but once IT starts
+        // replaying on a later frame, a lookup by address alone would
+        // still find whatever entry the *previous* occupant left behind
+        // (nothing erases a cache entry when its owning OffsetLayer is
+        // destroyed — only the age-based eviction below, which isn't
+        // guaranteed to have run yet) and silently replay that stale,
+        // wrong-content texture. `incarnation_id` — each OffsetLayer's own
+        // globally unique, never-reused construction-order counter — is
+        // the second half of the key specifically to close that gap: a new
+        // occupant's incarnation can never collide with any previous
+        // occupant's, so its first replay is guaranteed a cache miss and
+        // populates a fresh entry instead of trusting a stale one.
         struct ReplayKeyHash
         {
-            size_t operator()(const std::pair<const void*, size_t>& k) const noexcept
+            size_t operator()(const std::tuple<const void*, uint64_t, size_t>& k) const noexcept
             {
-                return std::hash<const void*>{}(k.first) ^ (k.second * 0x9E3779B97F4A7C15ull);
+                const auto& [ptr, incarnation, idx] = k;
+                size_t h = std::hash<const void*>{}(ptr);
+                h ^= std::hash<uint64_t>{}(incarnation) + 0x9E3779B97F4A7C15ull + (h << 6) + (h >> 2);
+                h ^= (idx * 0x9E3779B97F4A7C15ull);
+                return h;
             }
         };
 
@@ -787,13 +811,13 @@ namespace systems::leal::campello_widgets
 
         static constexpr uint64_t kClipShapeCacheMaxAgeFrames = 120;
 
-        std::unordered_map<std::pair<const void*, size_t>, ClipShapeGpuCacheEntry, ReplayKeyHash>
+        std::unordered_map<std::tuple<const void*, uint64_t, size_t>, ClipShapeGpuCacheEntry, ReplayKeyHash>
             clip_shape_gpu_cache_;
-        std::unordered_map<std::pair<const void*, size_t>, ShaderMaskGpuCacheEntry, ReplayKeyHash>
+        std::unordered_map<std::tuple<const void*, uint64_t, size_t>, ShaderMaskGpuCacheEntry, ReplayKeyHash>
             shader_mask_gpu_cache_;
-        std::unordered_map<std::pair<const void*, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
+        std::unordered_map<std::tuple<const void*, uint64_t, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
             shadow_gpu_cache_;
-        std::unordered_map<std::pair<const void*, size_t>, SaveLayerGpuCacheEntry, ReplayKeyHash>
+        std::unordered_map<std::tuple<const void*, uint64_t, size_t>, SaveLayerGpuCacheEntry, ReplayKeyHash>
             save_layer_gpu_cache_;
 
         // Platform-independent text-rasterization cache. GDI/CoreText/
@@ -841,6 +865,63 @@ namespace systems::leal::campello_widgets
         static constexpr uint64_t kTextTextureCacheMaxAgeFrames = 120;
 
         std::unordered_map<TextSpan, TextTextureCacheEntry, TextSpanHash> text_texture_cache_;
+
+        // ------------------------------------------------------------------
+        // Deferred GPU-resource retirement
+        // ------------------------------------------------------------------
+        //
+        // Device::submit() is pipelined (doesn't block — see its doc comment
+        // in campello_gpu/device.hpp), so a Texture/BindGroup evicted from
+        // one of the caches above mid-run (a region unmounting, or the
+        // age-based sweep in evictStaleGpuCaches()) can still be referenced
+        // by a command buffer the GPU hasn't finished executing yet.
+        // Dropping its last shared_ptr immediately — which erasing a cache
+        // entry does by default — destroys the underlying GPU handle while
+        // still in use: caught 100% reproducibly on Windows via the D3D12
+        // debug layer's `D3D12SDKLayers!ReportCorruption` fatal abort.
+        //
+        // This is the same bug class Renderer::~Renderer() already guards
+        // against at shutdown (via device_->waitForIdle() — see that
+        // constructor's doc comment), but waitForIdle() itself is not a fix
+        // for THIS case: it would stall the GPU pipeline on every eviction,
+        // which can happen every frame, defeating the entire point of
+        // pipelined submission. Instead, evicted resources are held here
+        // until a Fence confirms the GPU has actually finished with them:
+        // retireTexture()/retireBindGroup() move them into
+        // pending_retire_*_ instead of letting the caller's erase() destroy
+        // them outright; the next submit() call (in renderFrame()) attaches
+        // a Fence to that batch, and reclaimSignaledRetirements() (called
+        // once per frame, right after submit()) actually frees any
+        // previously retired batch whose Fence has since signaled.
+        std::vector<std::shared_ptr<campello_gpu::Texture>>   pending_retire_textures_;
+        std::vector<std::shared_ptr<campello_gpu::BindGroup>> pending_retire_bind_groups_;
+
+        struct RetiredGpuBatch
+        {
+            std::shared_ptr<campello_gpu::Fence>                  fence;
+            std::vector<std::shared_ptr<campello_gpu::Texture>>   textures;
+            std::vector<std::shared_ptr<campello_gpu::BindGroup>> bind_groups;
+        };
+        std::vector<RetiredGpuBatch> retired_gpu_batches_;
+
+        // Queues a GPU resource for deferred destruction instead of letting
+        // it be destroyed synchronously by the caller (e.g. a cache
+        // erase()). No-op for a null texture/bind_group (a cache entry that
+        // never allocated one, e.g. ClipShapeGpuCacheEntry has no
+        // bind_group at all — call sites simply don't call
+        // retireBindGroup() for those).
+        void retireTexture(std::shared_ptr<campello_gpu::Texture> texture);
+        void retireBindGroup(std::shared_ptr<campello_gpu::BindGroup> bind_group);
+
+        // Called once per frame, immediately after submit(): attaches a
+        // Fence to this frame's submission if anything was retired this
+        // frame (moving pending_retire_*_ into a new RetiredGpuBatch), then
+        // frees any previously retired batch whose Fence has since
+        // signaled — the actual point where those Texture/BindGroup
+        // shared_ptrs finally drop to zero and destroy their GPU handles,
+        // now provably safe since the GPU confirmed it's done with them.
+        void submitWithRetirement(std::shared_ptr<campello_gpu::CommandBuffer> cmd_buffer);
+        void reclaimSignaledRetirements();
 
         // Looks up (or rasterizes via IDrawBackend::rasterizeText() and
         // inserts) cmd.span's texture, draws it via

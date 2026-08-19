@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <variant>
 #include <vector>
@@ -247,11 +248,15 @@ namespace systems::leal::campello_widgets
      * `ShaderMask` bracket found inside, instead of recapturing it.
      *
      * `region_id` is `this` from the emitting `OffsetLayer`, used purely
-     * as an opaque, never-dereferenced map key — see
-     * `Renderer::clip_shape_gpu_cache_`'s doc comment for why reusing a
-     * stale address after the owning RenderObject unmounts is harmless.
+     * as an opaque, never-dereferenced map key. `incarnation_id` is that
+     * same `OffsetLayer`'s own construction-order counter — see
+     * `Renderer::clip_shape_gpu_cache_`'s doc comment for why the raw
+     * address alone isn't a safe cache key once the owning RenderObject
+     * can unmount and a later, unrelated OffsetLayer can be allocated at
+     * the same address (e.g. a virtualized `ListView` recycling scrolled-
+     * out item RenderObjects).
      */
-    struct CacheReplayBeginCmd { const void* region_id; };
+    struct CacheReplayBeginCmd { const void* region_id; uint64_t incarnation_id = 0; };
 
     /** @brief Marks the end of a `CacheReplayBeginCmd` region. */
     struct CacheReplayEndCmd {};
