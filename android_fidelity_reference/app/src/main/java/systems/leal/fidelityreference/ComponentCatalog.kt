@@ -1,9 +1,16 @@
 package systems.leal.fidelityreference
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -40,6 +47,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -52,6 +60,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
@@ -62,9 +71,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * Maps a `{builder}_{state}` case id — the same naming convention
@@ -333,6 +346,234 @@ object ComponentCatalog {
                             shape = SegmentedButtonDefaults.itemShape(index = index, count = labels.size)
                         ) { Text(label) }
                     }
+                }
+            }
+
+            // Mirrors "bottomSheet": show_drag_handle=true, content =
+            // Text("Sheet content") with no extra padding around it —
+            // ModalBottomSheet's default dragHandle already matches
+            // buildBottomSheet()'s hand-built 32x4dp pill handle.
+            "bottomSheet_partial" -> ModalBottomSheet(onDismissRequest = {}) {
+                Text("Sheet content")
+            }
+
+            // Mirrors "stepper": no real M3 Stepper composable exists, so
+            // buildStepper() itself uses literal "-"/"+" text glyphs (not
+            // icons) in a primary-12%-opacity tonal box — mirrored here
+            // exactly rather than substituting real icons, so the
+            // comparison measures layout/color fidelity to that design,
+            // not a separate icon-vs-text decision. value=0 for both
+            // states (StepperConfig's default, unchanged by "disabled").
+            "stepper_default", "stepper_disabled" -> {
+                val content: @Composable () -> Unit = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) { Text("-", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp) }
+                        Text(
+                            "0",
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                            fontSize = 14.sp
+                        )
+                        Box(
+                            modifier = Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                    RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 8.dp)
+                        ) { Text("+", color = MaterialTheme.colorScheme.primary, fontSize = 16.sp) }
+                    }
+                }
+                if (caseId == "stepper_disabled") {
+                    Box(modifier = Modifier.alpha(0.4f)) { content() }
+                } else {
+                    content()
+                }
+            }
+
+            // Mirrors "ratingIndicator": value=3, max=5 — buildRatingIndicator()
+            // uses literal "*"/"-" text glyphs (no real star icon), mirrored
+            // exactly here for the same reason as stepper above.
+            "ratingIndicator_three_of_five" -> Row {
+                val filled = listOf(true, true, true, false, false)
+                filled.forEachIndexed { index, isFilled ->
+                    Text(
+                        if (isFilled) "*" else "-",
+                        color = if (isFilled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                        fontSize = 18.sp
+                    )
+                    if (index < filled.size - 1) Spacer(modifier = Modifier.width(2.dp))
+                }
+            }
+
+            // Mirrors "actionSheet": MD3's real equivalent is a modal
+            // bottom sheet with a plain list of items — title, "Save"
+            // (normal), "Delete" (destructive/error-colored), "Cancel" as
+            // an ordinary row (MD3 has no separated Cancel button
+            // convention, per buildActionSheet()'s own comment).
+            "actionSheet_open" -> ModalBottomSheet(onDismissRequest = {}) {
+                Column {
+                    Text(
+                        "Title",
+                        modifier = Modifier.padding(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 8.dp)
+                    )
+                    Text(
+                        "Save",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp, horizontal = 12.dp)
+                    )
+                    Text(
+                        "Delete",
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp, horizontal = 12.dp)
+                    )
+                    Text(
+                        "Cancel",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 16.dp, horizontal = 12.dp)
+                    )
+                }
+            }
+
+            // Mirrors "searchField": buildSearchField() puts a literal
+            // "search" text glyph where a real search icon would go (not
+            // an Icon), and only shows a clear "x" when on_clear is set —
+            // the harness never sets it, so neither state shows one.
+            "searchField_empty", "searchField_filled" -> Surface(
+                shape = RoundedCornerShape(50),
+                color = MaterialTheme.colorScheme.surfaceVariant
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                ) {
+                    Text("search", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        if (caseId == "searchField_filled") "query" else "Search",
+                        modifier = Modifier.weight(1f),
+                        color = if (caseId == "searchField_filled") MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Mirrors "datePicker"/"timePicker": buildTriggerField() is a
+            // plain outlined box (border only, no fill) with the label and
+            // a literal trailing text glyph ("date"/"time" — not a real
+            // calendar/clock icon), mirrored exactly for the same reason
+            // as stepper/ratingIndicator above.
+            "datePicker_compact" -> Box(
+                modifier = Modifier
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+                    .padding(vertical = 16.dp, horizontal = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Aug 14, 2026", modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("date", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            "timePicker_compact" -> Box(
+                modifier = Modifier
+                    .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(4.dp))
+                    .padding(vertical = 16.dp, horizontal = 12.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("10:30 AM", modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("time", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Mirrors "expansionTile": no real M3 ExpansionTile composable
+            // exists, so buildExpansionTile() uses a literal "^"/"v" text
+            // glyph for the chevron (not a rotating icon), mirrored
+            // exactly. Content only shows when expanded.
+            "expansionTile_collapsed", "expansionTile_expanded" -> {
+                val expanded = caseId == "expansionTile_expanded"
+                Column {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {}
+                            .padding(vertical = 12.dp, horizontal = 16.dp)
+                    ) {
+                        Text("Settings", modifier = Modifier.weight(1f))
+                        Text(
+                            if (expanded) "^" else "v",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (expanded) {
+                        Text(
+                            "Expanded content goes here.",
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+
+            // Mirrors "banner": no leading icon/actions in the harness's
+            // config (cfg.content only) — plain surface background,
+            // distinguished by the bottom divider per buildBanner()'s own
+            // comment ("MD3 banners sit on plain surface, not
+            // surfaceVariant").
+            "banner_default" -> Surface(color = MaterialTheme.colorScheme.surface) {
+                Column {
+                    Row(modifier = Modifier.padding(16.dp)) {
+                        Text("A banner message", modifier = Modifier.weight(1f))
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+
+            // Mirrors "dataTable": columns=["Name","Age"], rows=[["Alice",
+            // "30"],["Bob","25"]] — buildDataTable() puts a divider after
+            // *every* row including the last (header divider uses
+            // `outline`, row dividers use `outline_variant`).
+            "dataTable_default" -> Column {
+                Row {
+                    Text(
+                        "Name",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f).padding(vertical = 16.dp, horizontal = 12.dp)
+                    )
+                    Text(
+                        "Age",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 13.sp,
+                        modifier = Modifier.weight(1f).padding(vertical = 16.dp, horizontal = 12.dp)
+                    )
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline)
+                listOf("Alice" to "30", "Bob" to "25").forEach { (name, age) ->
+                    Row {
+                        Text(
+                            name,
+                            modifier = Modifier.weight(1f).padding(vertical = 16.dp, horizontal = 12.dp)
+                        )
+                        Text(
+                            age,
+                            modifier = Modifier.weight(1f).padding(vertical = 16.dp, horizontal = 12.dp)
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }

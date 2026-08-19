@@ -1338,9 +1338,27 @@ namespace systems::leal::campello_widgets
             sized_handle->height = 4.0f;
             sized_handle->child  = handle_decorated;
 
+            // Align without width_factor/height_factor expands to fill
+            // whatever space it's given (its own size is the incoming max,
+            // not the child's actual size) — invisible as long as nothing
+            // ever handed this Column a generously loose height, but a
+            // real bug: the whole sheet would balloon to fill all
+            // available height instead of shrink-wrapping around the
+            // 32x4dp handle. width_factor/height_factor = 1 makes Align
+            // shrink-wrap to the child's own size, as intended.
+            auto handle_align = std::make_shared<Align>();
+            handle_align->alignment     = Alignment::center();
+            handle_align->width_factor  = 1.0f;
+            handle_align->height_factor = 1.0f;
+            handle_align->child         = sized_handle;
+
+            // Real BottomSheetDefaults.DragHandle() reserves substantially
+            // more vertical space around the handle than just its own 4dp
+            // — confirmed by measuring a real capture's total handle-row
+            // height (~62.5dp), not the bare handle size.
             auto padded_handle = std::make_shared<Padding>();
-            padded_handle->padding = EdgeInsets::symmetric(0.0f, 12.0f);
-            padded_handle->child   = std::make_shared<Align>(Alignment::center(), sized_handle);
+            padded_handle->padding = EdgeInsets::symmetric(29.25f, 12.0f);
+            padded_handle->child   = handle_align;
             children.push_back(padded_handle);
         }
         children.push_back(cfg.child);
@@ -1567,9 +1585,45 @@ namespace systems::leal::campello_widgets
         const auto& c = tokens_.colors;
         std::vector<WidgetRef> children;
 
+        // Real M3 ModalBottomSheet shows a drag handle by default (its
+        // dragHandle parameter defaults to BottomSheetDefaults.DragHandle())
+        // — confirmed against a real capture showing one even for this
+        // plain-list action-sheet content. Same construction as
+        // buildBottomSheet()'s own handle.
+        {
+            BoxDecoration handle_deco;
+            handle_deco.color         = c.outline_variant;
+            handle_deco.border_radius = tokens_.shape.radius_full;
+            auto handle_decorated = std::make_shared<DecoratedBox>();
+            handle_decorated->decoration = handle_deco;
+            auto sized_handle = std::make_shared<SizedBox>();
+            sized_handle->width  = 32.0f;
+            sized_handle->height = 4.0f;
+            sized_handle->child  = handle_decorated;
+
+            auto handle_align = std::make_shared<Align>();
+            handle_align->alignment     = Alignment::center();
+            handle_align->width_factor  = 1.0f;
+            handle_align->height_factor = 1.0f;
+            handle_align->child         = sized_handle;
+
+            // Real BottomSheetDefaults.DragHandle() reserves substantially
+            // more vertical space around the handle than just its own 4dp
+            // — confirmed by measuring a real capture's total handle-row
+            // height (~62.5dp), not the bare handle size.
+            auto padded_handle = std::make_shared<Padding>();
+            padded_handle->padding = EdgeInsets::symmetric(29.25f, 12.0f);
+            padded_handle->child   = handle_align;
+            children.push_back(padded_handle);
+        }
+
         if (cfg.title) {
+            // Real capture shows the title occupying a full ~56dp row
+            // block (matching the action rows' own spacing), not a
+            // compact 8dp-bottom-padded header — measured from the
+            // row-to-row spacing between the title and the first action.
             auto padded = std::make_shared<Padding>();
-            padded->padding = EdgeInsets::only(16.0f, 16.0f, 16.0f, 8.0f);
+            padded->padding = EdgeInsets::only(16.0f, 20.0f, 16.0f, 16.0f);
             padded->child   = cfg.title;
             children.push_back(padded);
         }

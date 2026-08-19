@@ -121,7 +121,9 @@ static std::vector<std::string> androidBuilders()
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
             "segmentedButton", "dialog", "tabBar", "dropdownButton", "toggleButtons",
             "popupMenuButton", "badge", "iconButton", "navigationRail", "appBar",
-            "primaryActionButton", "navigationBar"};
+            "primaryActionButton", "navigationBar", "bottomSheet", "stepper",
+            "ratingIndicator", "actionSheet", "searchField", "datePicker", "timePicker",
+            "expansionTile", "banner", "dataTable"};
 }
 
 // Android-specific state override: dropdownButton's shared "open" state
@@ -450,7 +452,12 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
         cfg.placeholder = "Search";
         cfg.on_changed = [](const std::string&) {};
         if (state == "filled") cfg.value = "query";
-        return SizedBox::from_width(280.0f, ds.buildSearchField(cfg));
+        // No fixed width here — real M3's search field is edge-to-edge
+        // (confirmed against a real capture), not a narrow pill, and this
+        // function is shared with the Android path. iOS's own 280pt
+        // presentation width is applied explicitly in
+        // renderSearchFieldCase() instead.
+        return ds.buildSearchField(cfg);
     }
 
     if (builder == "datePicker") {
@@ -838,6 +845,12 @@ static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, con
         std::cerr << "Unknown builder: " << c.builder << "\n";
         return false;
     }
+    // buildWidget()'s "searchField" case intentionally returns an
+    // unconstrained-width field (matching real M3's edge-to-edge search
+    // field) since it's shared with the Android path. iOS's own reference
+    // capture was measured/validated at a fixed 280pt presentation width,
+    // so apply that here rather than in the shared builder.
+    fieldWidget = SizedBox::from_width(280.0f, fieldWidget);
 
     WidgetRef background;
     auto tex = loadBackgroundTexture();
@@ -851,7 +864,7 @@ static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, con
     // Not modal — screen furniture pinned near the top of the safe area,
     // not an overlay, so no dimming barrier. Matches RealCapture.swift's
     // addSearchField(): centerX of the safe area, 8pt below its top,
-    // width 280 (already applied by buildWidget()'s SizedBox wrapper).
+    // width 280.
     auto topAligned = std::make_shared<Align>(Alignment::topCenter());
     topAligned->child = fieldWidget;
 
@@ -1026,12 +1039,18 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
     // max_width=560 never actually constrains anything here since it's
     // wider than the whole screen.
     if (c.builder == "slider" || c.builder == "divider" || c.builder == "listTile" ||
-        c.builder == "tabBar" || c.builder == "dialog") {
+        c.builder == "tabBar" || c.builder == "dialog" || c.builder == "expansionTile") {
         widget = SizedBox::from_width(280.0f, widget);
     }
-    // Real M3 TopAppBar and NavigationBar are edge-to-edge, unlike the
-    // fixed-280dp components above.
-    if (c.builder == "appBar" || c.builder == "navigationBar") {
+    // Real M3 TopAppBar/NavigationBar/ModalBottomSheet/actionSheet's sheet/
+    // banner/DataTable are all edge-to-edge, unlike the fixed-280dp
+    // components above — confirmed for DataTable against a real capture
+    // showing it spans the full screen width with no card/surface backing
+    // at all (backdrop visible straight through), unlike listTile/dialog's
+    // own bounded-card presentation.
+    if (c.builder == "appBar" || c.builder == "navigationBar" || c.builder == "bottomSheet" ||
+        c.builder == "banner" || c.builder == "actionSheet" || c.builder == "dataTable" ||
+        c.builder == "searchField") {
         widget = SizedBox::from_width(kAndroidLogicalWidth, widget);
     }
     // Real Compose TopAppBar reserves space for the status bar inset above
@@ -1214,6 +1233,23 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
         auto stack = std::make_shared<Stack>();
         stack->fit = StackFit::expand;
         stack->children = {barrier, statusBarPad};
+        content = stack;
+    } else if (c.builder == "bottomSheet" || c.builder == "actionSheet") {
+        // Real ModalBottomSheet is bottom-anchored (edge-to-edge, flush
+        // with the physical bottom), not centered like AlertDialog, and
+        // dims the content behind it with its own scrim — same class of
+        // fix as "dialog" above. 0.32 is an initial estimate (Compose's
+        // M3 baseline scrim token); pending confirmation against a real
+        // capture, same empirical-calibration approach already used for
+        // dialog's 60% value.
+        auto bottomAligned = std::make_shared<Align>();
+        bottomAligned->alignment = Alignment::bottomCenter();
+        bottomAligned->child = widget;
+
+        auto barrier = ModalBarrier::create(Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.32f), false, nullptr);
+        auto stack = std::make_shared<Stack>();
+        stack->fit = StackFit::expand;
+        stack->children = {barrier, bottomAligned};
         content = stack;
     }
 

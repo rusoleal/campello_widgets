@@ -1530,9 +1530,20 @@ namespace systems::leal::campello_widgets
             sized_handle->height = 5.0f;
             sized_handle->child  = handle_decorated;
 
+            // Same fix as MaterialDesignSystem::buildBottomSheet(): Align
+            // without width_factor/height_factor expands to fill whatever
+            // space it's given rather than shrink-wrapping to the handle's
+            // own 36x5dp size — invisible until something hands this
+            // Column a generously loose height budget.
+            auto handle_align = std::make_shared<Align>();
+            handle_align->alignment     = Alignment::center();
+            handle_align->width_factor  = 1.0f;
+            handle_align->height_factor = 1.0f;
+            handle_align->child         = sized_handle;
+
             auto padded_handle = std::make_shared<Padding>();
             padded_handle->padding = EdgeInsets::symmetric(0.0f, 8.0f);
-            padded_handle->child   = std::make_shared<Align>(Alignment::center(), sized_handle);
+            padded_handle->child   = handle_align;
             children.push_back(padded_handle);
         }
         children.push_back(cfg.child);
