@@ -153,7 +153,18 @@ run_real_capture_case() {
     fi
 
     xcrun simctl launch "${udid}" "${BUNDLE_ID}" "--present-case=${theme}:${case_id}" > /dev/null
-    sleep 1.5
+    # navigationRail's UISplitViewController is heavier to lay out than
+    # the other real-capture builders (replaces window.rootViewController
+    # entirely, activating real column-layout machinery) — 1.5s wasn't
+    # consistently enough: 3 of 4 iPad captures in one run came back
+    # showing only the backdrop with no sidebar rendered at all, while
+    # the same construction reliably works when launched manually with
+    # natural pauses between commands.
+    if [ "${builder}" = "navigationRail" ]; then
+        sleep 3.5
+    else
+        sleep 1.5
+    fi
 
     local raw_path="/tmp/fidelity_real_${theme}_${case_id}_$$.png"
     xcrun simctl io "${udid}" screenshot "${raw_path}" > /dev/null
@@ -170,15 +181,69 @@ run_real_capture_case() {
         echo "WARNING: ${insets_file} missing, using fallback crop margins"
     fi
 
+    # navigationRail is real screen furniture (a UISplitViewController
+    # sidebar), not a full-screen surface — only the rail portion at the
+    # left edge matters, the detail column beside it is discarded. Widths
+    # measured directly from a real capture with the detail column's
+    # backdrop image actually loaded (the first measurement attempt used
+    # a manual test run where that image had silently failed to load,
+    # making the whole screen look uniformly blank/white and hiding the
+    # true sidebar/detail boundary — this re-measurement used the
+    # gray-sidebar-to-colorful-backdrop color transition instead, sampled
+    # at multiple rows well below any icon/toolbar content, and lines up
+    # almost exactly with 2x the requested 100pt/260pt column width
+    # (RealCapture.swift's addNavigationRail), as expected for this
+    # iPad's DPR of 2.
+    local right_crop_py="w"
+    if [ "${builder}" = "navigationRail" ]; then
+        if [ "${state}" = "compact" ]; then
+            right_crop_py="199"
+        else
+            right_crop_py="520"
+        fi
+    fi
+
     mkdir -p "$(dirname "${out_path}")"
     python3 -c "
 from PIL import Image
 img = Image.open('${raw_path}')
 w, h = img.size
-img.crop((0, ${top}, w, h - ${bottom})).save('${out_path}')
+img.crop((0, ${top}, ${right_crop_py}, h - ${bottom})).save('${out_path}')
 "
     rm -f "${raw_path}"
     echo "Real-captured ${theme}/${case_id}.png"
+}
+
+# navigationRail's real equivalent is a UISplitViewController with a
+# `.sidebar`-appearance UICollectionView as its primary column (the same
+# pattern Mail/Notes/Files use) — this only exists on iPad (a compact-
+# width split view shows one column at a time, no rail), so it needs its
+# own capture pass on an iPad simulator rather than folding into
+# REAL_CAPTURE_BUILDERS/run_export_pass above, which are iPhone-only. The
+# same app bundle installs and runs unmodified — Simulator builds aren't
+# device-model-specific, only OS-version-specific — so no separate build
+# is needed, just a separate install+launch target.
+run_ipad_navigation_rail_pass() {
+    local device_name="$1" runtime_prefix="$2" theme_light="$3" theme_dark="$4"
+
+    local udid
+    udid=$(find_simulator_udid "${device_name}" "${runtime_prefix}")
+    if [ -z "${udid}" ]; then
+        echo "ERROR: No available simulator matching name='${device_name}' runtime~='${runtime_prefix}'"
+        exit 1
+    fi
+    echo "=== ${device_name} (runtime ~${runtime_prefix}) for navigationRail -> ${udid} ==="
+
+    boot_if_needed "${udid}"
+    xcrun simctl install "${udid}" "${APP_PATH}"
+
+    local theme
+    for theme in "${theme_light}" "${theme_dark}"; do
+        local state
+        for state in compact extended; do
+            run_real_capture_case "${udid}" "${theme}" "navigationRail" "${state}"
+        done
+    done
 }
 
 # Runs every real-capture case for the given theme pair on the given
@@ -207,5 +272,10 @@ run_export_pass "iPhone 16 Pro" "iOS-18" "cupertino_light,cupertino_dark"
 # Liquid Glass themes render on iOS 26+, where UIGlassEffect/the redesigned
 # system chrome actually exist.
 run_export_pass "iPhone 17 Pro" "iOS-26" "liquid_glass_light,liquid_glass_dark"
+
+# navigationRail: iPad-only real capture, one pass per OS version (same
+# classic-vs-glass split as the iPhone passes above).
+run_ipad_navigation_rail_pass "iPad Pro 11-inch (M4)" "iOS-18" "cupertino_light" "cupertino_dark"
+run_ipad_navigation_rail_pass "iPad Pro 11-inch (M4)" "iOS-26" "liquid_glass_light" "liquid_glass_dark"
 
 echo "Exported $(find "${OUTPUT_DIR}" -name '*.png' | wc -l) reference screenshots to ${OUTPUT_DIR}"

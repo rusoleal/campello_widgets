@@ -2289,6 +2289,19 @@ namespace systems::leal::campello_widgets
         padded_col->padding = EdgeInsets::symmetric(0.0f, 12.0f);
         padded_col->child   = col;
 
+        // Same liquidGlass branch as buildBottomSheet() — real iPadOS 26
+        // renders the sidebar as a translucent glass material (the
+        // colorful backdrop visibly blurs through it), not an opaque
+        // fill. Unlike buildBottomSheet()'s fixed 360x200 box, no fixed
+        // size here — the rail's own height/width stay content-driven,
+        // matching this function's existing (non-glass) sizing.
+        if (material_ == CupertinoMaterial::liquidGlass) {
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, 0.45f));
+            bf->child  = padded_col;
+            return bf;
+        }
+
         BoxDecoration outer;
         outer.color = c.surface_variant;
         auto decorated = std::make_shared<DecoratedBox>();

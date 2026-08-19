@@ -56,6 +56,43 @@ static constexpr float kAndroidLogicalHeight  = kAndroidPhysicalHeight / kAndroi
 // cropped) comparison frame, matching exactly half this value.
 static constexpr float kAndroidStatusBarLogicalHeight = 136.0f / kAndroidDevicePixelRatio;
 
+// iPad Pro 11-inch (M4) simulator: 1668x2420 physical, DPR 2 (`simctl io
+// screenshot` measured). navigationRail has no real iPhone equivalent at
+// all (see RealCapture.swift's addNavigationRail) — its only real ground
+// truth is a UISplitViewController sidebar on iPad, hence its own device
+// class and its own render function rather than sharing kLogicalWidth/
+// kPhysicalWidth with every other iOS builder.
+static constexpr float kIpadDevicePixelRatio  = 2.0f;
+static constexpr float kIpadPhysicalWidth     = 1668.0f;
+static constexpr float kIpadPhysicalHeight    = 2420.0f;
+static constexpr float kIpadLogicalHeight     = kIpadPhysicalHeight / kIpadDevicePixelRatio;
+
+// Real capture's window.safeAreaInsets (top: status bar, bottom: home
+// indicator), physical pixels — written dynamically to safe_area.txt per
+// capture by RealCapture.swift, needed here since the C++ side has no
+// live device to query it from. Differs by OS version on the exact same
+// iPad model/hardware: iOS 18.6 (cupertino themes) reports 48/50, iOS 26
+// (liquid_glass themes) reports 64/40 — confirmed from real captures'
+// own written safe_area.txt values, not guessed.
+static constexpr float kIpadTopInsetCupertinoPhysical    = 48.0f;
+static constexpr float kIpadBottomInsetCupertinoPhysical = 50.0f;
+static constexpr float kIpadTopInsetLiquidGlassPhysical    = 64.0f;
+static constexpr float kIpadBottomInsetLiquidGlassPhysical = 40.0f;
+
+// Real UISplitViewController sidebar width when requested at 100pt
+// (compact, icon-only) / 260pt (extended, icon+label) primary-column
+// width — lines up almost exactly with 2x the request (this iPad's DPR),
+// no extra chrome. Measured from a capture with the detail column's
+// backdrop image actually loaded, using the gray-sidebar-to-colorful-
+// backdrop color transition (an earlier measurement attempt used a
+// manual run where that image had silently failed to load, making the
+// whole screen look uniformly blank and hiding the true boundary).
+// export_references.sh crops the real capture to exactly these widths
+// too, so both sides match without further size-reconciliation logic in
+// compare_ios_cpp.py.
+static constexpr float kIpadRailWidthCompactPhysical  = 199.0f;
+static constexpr float kIpadRailWidthExtendedPhysical = 520.0f;
+
 struct Case {
     std::string theme;
     std::string builder;
@@ -893,6 +930,82 @@ static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, con
                                       kDevicePixelRatio, Color::black(), outPath.string());
 }
 
+// navigationRail's only real ground truth is an iPad UISplitViewController
+// sidebar (see RealCapture.swift's addNavigationRail) — a completely
+// different device class/canvas size from every other iOS builder, so
+// this renders directly at the sidebar's own measured crop dimensions
+// (kIpadRailWidth*Physical x kIpadPhysicalHeight-insets) rather than
+// kLogicalWidth/kPhysicalWidth's iPhone canvas, matching the real capture
+// exactly with no further size-reconciliation needed in
+// compare_ios_cpp.py. No shared backdrop image — the real sidebar's own
+// column has no such backdrop behind it either (it's the split view's
+// plain system background), so the capture's own clear color already
+// matches buildNavigationRail()'s own decoration fill.
+static bool renderNavigationRailCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
+{
+    using namespace cw;
+
+    auto railWidget = buildWidget(ds, c.builder, c.state);
+    if (!railWidget) {
+        std::cerr << "Unknown builder: " << c.builder << "\n";
+        return false;
+    }
+
+    const float railWidthPhysical = (c.state == "compact")
+        ? kIpadRailWidthCompactPhysical : kIpadRailWidthExtendedPhysical;
+    // Real safe-area insets differ by OS version on the same iPad
+    // hardware (cupertino themes run on iOS 18.6, liquid_glass on iOS 26).
+    const float topInsetPhysical = isLiquidGlass(c.theme)
+        ? kIpadTopInsetLiquidGlassPhysical : kIpadTopInsetCupertinoPhysical;
+    const float bottomInsetPhysical = isLiquidGlass(c.theme)
+        ? kIpadBottomInsetLiquidGlassPhysical : kIpadBottomInsetCupertinoPhysical;
+    const float physicalHeight = kIpadPhysicalHeight - topInsetPhysical - bottomInsetPhysical;
+    const float logicalWidth  = railWidthPhysical / kIpadDevicePixelRatio;
+    const float logicalHeight = physicalHeight / kIpadDevicePixelRatio;
+
+    // buildNavigationRail()'s outer DecoratedBox/BackdropFilter otherwise
+    // shrink-wraps to just its own content height — invisible as long as
+    // the canvas's own clear color matched the rail's fill color exactly
+    // (true before the backdrop image below was added), but a real bug:
+    // a real sidebar's fill/glass material covers the *entire* column
+    // height, not just the portion behind its icons/labels. Forcing a
+    // tight height here (same fix pattern as Android's own
+    // navigationRail full-height fix) makes the Column's own top-packed
+    // MainAxisAlignment naturally position content at the top with the
+    // fill/glass extending through the leftover space below.
+    auto sizedRail = std::make_shared<SizedBox>(logicalWidth, logicalHeight, railWidget);
+
+    // liquidGlass's buildNavigationRail() branch wraps the rail in a
+    // BackdropFilter — it needs actual colorful content behind it to
+    // blur, matching a real capture where the glass sidebar visibly
+    // shows the shared backdrop bleeding through. Harmless for the
+    // non-glass cupertino themes too, since their opaque DecoratedBox
+    // fully occludes it.
+    WidgetRef content = sizedRail;
+    auto bgTex = loadBackgroundTexture();
+    if (bgTex) {
+        auto bgImage = std::make_shared<Image>();
+        bgImage->texture = bgTex;
+        bgImage->fit = BoxFit::fill;
+        auto background = std::make_shared<SizedBox>(logicalWidth, logicalHeight, bgImage);
+
+        auto stack = std::make_shared<Stack>();
+        stack->fit = StackFit::expand;
+        stack->children = {background, sizedRail};
+        content = stack;
+    }
+
+    auto rootWidget = std::make_shared<SizedBox>(logicalWidth, logicalHeight, content);
+
+    auto root = mountAndLayout(ds, rootWidget, logicalWidth, logicalHeight);
+    if (!root) return false;
+
+    auto outPath = outDir / (fileName(c) + ".png");
+    return cwt::captureRenderBoxToPng(
+        root, railWidthPhysical, physicalHeight,
+        kIpadDevicePixelRatio, ds.tokens().colors.surface_variant, outPath.string());
+}
+
 // Real UITabBar is screen furniture pinned to the literal physical bottom
 // edge (extending under the home indicator), unlike dialog/actionSheet
 // (modal, safe-area-centered) or searchField (safe-area-top-anchored).
@@ -1303,6 +1416,9 @@ static bool renderCase(const cw::DesignSystem& ds, const Case& c, const std::fil
     }
     if (c.builder == "navigationBar" && !isAndroidTheme(c.theme)) {
         return renderNavigationBarCase(ds, c, outDir);
+    }
+    if (c.builder == "navigationRail" && !isAndroidTheme(c.theme)) {
+        return renderNavigationRailCase(ds, c, outDir);
     }
     if (isAndroidTheme(c.theme)) {
         return renderAndroidCase(ds, c, outDir);
