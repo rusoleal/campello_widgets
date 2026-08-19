@@ -42,5 +42,12 @@ local.properties
 # Fidelity reference apps' generated captures/reports
 android_fidelity_reference/output/
 ios_fidelity_reference/output/
+windows_fidelity_reference/output/
 tests/visual_fidelity/__pycache__/
 tests/visual_fidelity/reports/
+
+# windows_fidelity_reference/ is a WinUI 3 (.NET) project — its build
+# artifacts are much larger than the other reference apps' (obj/ + bin/
+# together run several hundred MB) and regenerate from export_references.ps1.
+windows_fidelity_reference/bin/
+windows_fidelity_reference/obj/

@@ -16,6 +16,7 @@ option(CAMPELLO_GPU_VALIDATION "Enable Vulkan validation layers (debug only)" OF
 option(BUILD_MATERIAL  "Build the campello_material design system library"  ON)
 option(BUILD_CUPERTINO "Build the campello_cupertino design system library" ON)
 option(BUILD_UI        "Build the campello_ui design system library"       ON)
+option(BUILD_FLUENT    "Build the campello_fluent design system library"   ON)
 
 if(BUILD_INTEGRATION_TESTS)
     set(BUILD_TESTS ON)
@@ -74,6 +75,7 @@ endif()
 
 # ---------------------------------------------------------------------------
 # Design system libraries — campello_ui / campello_material / campello_cupertino
+# / campello_fluent
 #
 # Each is a standalone DesignSystem implementation (see
 # inc/campello_widgets/ui/design_system.hpp) that links against
@@ -89,6 +91,9 @@ if(BUILD_MATERIAL)
 endif()
 if(BUILD_CUPERTINO)
     add_subdirectory(campello_cupertino)
+endif()
+if(BUILD_FLUENT)
+    add_subdirectory(campello_fluent)
 endif()
 
 # Cross-cutting abstract-contract suite (needs all three design systems

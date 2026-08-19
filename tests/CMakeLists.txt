@@ -55,6 +55,7 @@ if(UNIVERSAL_TEST_SOURCES)
         campello_ui
         campello_material
         campello_cupertino
+        campello_fluent
     )
 
     # On Windows the DLLs must live next to the test EXE so it can load them.
@@ -65,6 +66,13 @@ if(UNIVERSAL_TEST_SOURCES)
                 $<TARGET_FILE:campello_gpu>
                 $<TARGET_FILE:campello_image>
                 $<TARGET_FILE_DIR:campello_widgets_tests>
+        )
+        add_custom_command(TARGET campello_widgets_thematic_fidelity POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:campello_widgets>
+                $<TARGET_FILE:campello_gpu>
+                $<TARGET_FILE:campello_image>
+                $<TARGET_FILE_DIR:campello_widgets_thematic_fidelity>
         )
     endif()
 
