@@ -181,8 +181,12 @@ namespace systems::leal::campello_widgets
                 padded->padding = EdgeInsets::symmetric(12.0f, 8.0f);
                 padded->child   = row;
 
+                // Real M3 ExposedDropdownMenuBox's closed trigger is an
+                // outlined field — border only, no fill — letting whatever
+                // is behind it show through. Confirmed against a real
+                // capture: the trigger box was fully transparent, not
+                // filled with the surface color previously painted here.
                 BoxDecoration deco;
-                deco.color         = tokens->colors.surface;
                 deco.border_radius = w.border_radius;
                 deco.border = BoxBorder::all(outline, 1.0f);
 

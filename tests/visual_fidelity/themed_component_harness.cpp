@@ -280,7 +280,14 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
         if (state == "elevated") cfg.priority = CardPriority::elevated;
         if (state == "filled")   cfg.priority = CardPriority::filled;
         if (state == "outlined") cfg.priority = CardPriority::outlined;
-        return SizedBox::from_width(240.0f, ds.buildCard(cfg));
+        // No fixed width here — real M3 Card shrink-wraps to its content
+        // (confirmed against a real capture: ~340px physical for "Card
+        // content" text, not a round dp value), and this function is
+        // shared with the Android path, which needs that natural
+        // shrink-wrap. iOS's own 240dp presentation width (if still
+        // wanted) is applied in wrapForViewport() instead, keeping this
+        // platform-specific sizing decision out of shared code.
+        return ds.buildCard(cfg);
     }
 
     if (builder == "listTile") {
@@ -665,6 +672,15 @@ static cw::WidgetRef wrapForViewport(const cw::DesignSystem& ds, cw::WidgetRef w
 {
     using namespace cw;
 
+    // buildWidget()'s "card" case intentionally returns a shrink-wrapped
+    // card (matching real M3's Card, which sizes to its content) since
+    // this function is shared with the Android path. iOS's own reference
+    // capture was measured/validated at a fixed 240dp presentation width,
+    // so preserve that here rather than in the shared builder.
+    if (builder == "card") {
+        widget = SizedBox::from_width(240.0f, widget);
+    }
+
     // Use the same colourful non-flat background for every theme so all
     // fidelity comparisons are made against a shared, visually interesting
     // backdrop. This makes translucency/blur effects observable and keeps the
@@ -1017,6 +1033,38 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
     // fixed-280dp components above.
     if (c.builder == "appBar" || c.builder == "navigationBar") {
         widget = SizedBox::from_width(kAndroidLogicalWidth, widget);
+    }
+    // Real Compose TopAppBar reserves space for the status bar inset above
+    // its own ~64dp content row via its default windowInsets parameter —
+    // it does this even though this reference app hides the system bars,
+    // since the inset is still logically reported. Confirmed by measuring
+    // a real capture's bar: ~305px physical tall, matching
+    // kAndroidStatusBarLogicalHeight's 136px inset plus a ~168px content
+    // row almost exactly. Match it with a same-colored strip above the
+    // widget (buildAppBar() itself shouldn't bake this in — reserving
+    // status-bar space is a Scaffold/host concern in production, not the
+    // app bar widget's own).
+    if (c.builder == "appBar") {
+        auto statusStrip = std::make_shared<Container>();
+        statusStrip->color = ds.tokens().colors.surface;
+        auto sizedStrip = std::make_shared<SizedBox>(kAndroidLogicalWidth, kAndroidStatusBarLogicalHeight, statusStrip);
+        auto col = std::make_shared<Column>();
+        col->main_axis_size = MainAxisSize::min;
+        col->children = {sizedStrip, widget};
+        widget = col;
+    }
+    // Real M3 NavigationRail is full-height screen furniture (a vertical
+    // side rail whose items pack toward the top), unlike the shrink-
+    // wrapped treatment every other intrinsically-sized builder gets —
+    // buildNavigationRail() itself just returns a MainAxisSize::min
+    // Column (same "doesn't dictate its own screen-filling behavior"
+    // convention as buildAppBar()/buildNavigationBar()), so the harness
+    // has to supply the full-height constraint. The android reference
+    // app's own case host also just Center()s every case with no edge
+    // docking, so only the height was actually wrong here — horizontal
+    // centering below is already correct.
+    if (c.builder == "navigationRail") {
+        widget = SizedBox::from_height(kAndroidLogicalHeight, widget);
     }
 
     // PopupMenuButton's real menu is overlay-driven (opened via a runtime

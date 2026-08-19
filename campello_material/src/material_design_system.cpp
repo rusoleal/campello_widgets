@@ -295,8 +295,13 @@ namespace systems::leal::campello_widgets
         padded->padding = EdgeInsets::symmetric(10.0f, 24.0f); // MD3 filled-button padding
         padded->child   = content;
 
+        // Real M3 OutlinedButton is transparent (border only) — unlike
+        // filled/tonal buttons, it never paints its own container color.
+        // Confirmed against a real capture: the "tertiary"/outlined
+        // button's box was fully transparent, not filled with `bg`
+        // (c.surface) as this unconditionally did before.
         BoxDecoration deco;
-        deco.color         = bg;
+        if (!outlined) deco.color = bg;
         deco.border_radius = tokens_.shape.radius_full; // stadium shape
         if (outlined) deco.border = BoxBorder::all(c.outline, 1.0f);
 
@@ -463,7 +468,16 @@ namespace systems::leal::campello_widgets
 
         switch (cfg.priority) {
             case CardPriority::filled:
-                deco.color = c.surface_variant;
+                // Real M3 filled Card uses the surfaceContainerHighest
+                // tonal role, not surface_variant — confirmed by sampling
+                // a real capture (light: #E6E0E9, dark: #36343B). In light
+                // theme surface_variant (#E7E0EC) happens to sit close
+                // enough to pass within tolerance, which masked this in
+                // that theme; dark's surface_variant (#49454F) diverges
+                // far more, exposing the real mismatch.
+                deco.color = (tokens_.brightness == Brightness::dark)
+                    ? Color::fromARGB(0xFF36343B)
+                    : Color::fromARGB(0xFFE6E0E9);
                 break;
             case CardPriority::outlined:
                 deco.color  = c.surface;
@@ -471,7 +485,16 @@ namespace systems::leal::campello_widgets
                 break;
             case CardPriority::elevated:
             default:
-                deco.color = c.surface;
+                // Real M3 ElevatedCard uses the surfaceContainerLow tonal
+                // role, not plain surface — confirmed by sampling a real
+                // capture (light: #F7F2FA, dark: #1D1B20), one tonal step
+                // below buildPopupMenuButton()'s surfaceContainer. Same
+                // reasoning as that fix: the shared ColorScheme has no
+                // container-tier roles, so this is inlined here rather
+                // than growing that struct for one role.
+                deco.color = (tokens_.brightness == Brightness::dark)
+                    ? Color::fromARGB(0xFF1D1B20)
+                    : Color::fromARGB(0xFFF7F2FA);
                 // MD3 elevated card resting elevation is level 1 (1dp).
                 deco.box_shadow = {
                     BoxShadow{
@@ -586,7 +609,18 @@ namespace systems::leal::campello_widgets
         constrained->additional_constraints = BoxConstraints{0.0f, inf, min_h, inf};
         constrained->child = padded;
 
-        WidgetRef result = constrained;
+        // Real M3 ListItem paints an opaque containerColor by default
+        // (ListItemDefaults.colors().containerColor == colorScheme.surface)
+        // — unlike Flutter's ListTile convention of staying transparent and
+        // relying on an ancestor Scaffold/Container for its background.
+        // Confirmed by a real capture showing a solid surface-colored row
+        // behind the text, previously invisible here since this widget
+        // painted nothing at all.
+        auto container = std::make_shared<Container>();
+        container->color = c.surface;
+        container->child = constrained;
+
+        WidgetRef result = container;
         if ((cfg.on_tap || cfg.on_long_press) && cfg.enabled) {
             auto gesture = std::make_shared<GestureDetector>();
             gesture->on_tap        = cfg.on_tap;
@@ -1915,8 +1949,16 @@ namespace systems::leal::campello_widgets
 
             std::vector<WidgetRef> content;
             if (icon_widget) content.push_back(icon_widget);
-            if (cfg.extended && !item.label.empty()) {
-                content.push_back(SizedBox::from_width(12.0f));
+            // Real M3 NavigationRailItem defaults alwaysShowLabel=true —
+            // even the compact (non-extended) rail shows the label below
+            // the icon; cfg.extended only changes the layout (label beside
+            // the icon in a Row vs. stacked below it in a Column), not
+            // whether the label exists at all. Confirmed against a real
+            // capture showing "Home"/"Search"/"Profile" labels in compact
+            // mode, previously dropped entirely by this condition.
+            if (!item.label.empty()) {
+                content.push_back(cfg.extended ? SizedBox::from_width(12.0f)
+                                                : SizedBox::from_height(4.0f));
                 TextStyle ts;
                 ts.font_size = 13.0f;
                 ts.color = c.on_surface;
@@ -1968,6 +2010,16 @@ namespace systems::leal::campello_widgets
         auto decorated = std::make_shared<DecoratedBox>();
         decorated->decoration = outer;
         decorated->child      = padded_col;
+
+        // Real M3 NavigationRail's compact width is a fixed 80dp per spec,
+        // not content-driven — confirmed against a real capture (exactly
+        // 80.0dp), vs. this widget's previous organic shrink-to-content
+        // width (~90dp, coincidentally close but not the actual spec
+        // value). Extended rail width stays content-driven, matching its
+        // own spec (label-width-dependent, no single fixed value).
+        if (!cfg.extended) {
+            return SizedBox::from_width(80.0f, decorated);
+        }
         return decorated;
     }
 
