@@ -121,7 +121,7 @@ static std::vector<std::string> androidBuilders()
     return {"button", "switch", "card", "slider", "chip", "divider", "listTile", "textField",
             "segmentedButton", "dialog", "tabBar", "dropdownButton", "toggleButtons",
             "popupMenuButton", "badge", "iconButton", "navigationRail", "appBar",
-            "primaryActionButton"};
+            "primaryActionButton", "navigationBar"};
 }
 
 // Android-specific state override: dropdownButton's shared "open" state
@@ -1013,9 +1013,9 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
         c.builder == "tabBar" || c.builder == "dialog") {
         widget = SizedBox::from_width(280.0f, widget);
     }
-    // Real M3 TopAppBar is edge-to-edge, unlike the fixed-280dp components
-    // above.
-    if (c.builder == "appBar") {
+    // Real M3 TopAppBar and NavigationBar are edge-to-edge, unlike the
+    // fixed-280dp components above.
+    if (c.builder == "appBar" || c.builder == "navigationBar") {
         widget = SizedBox::from_width(kAndroidLogicalWidth, widget);
     }
 

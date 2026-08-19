@@ -41,6 +41,8 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.MultiChoiceSegmentedButtonRow
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.OutlinedButton
@@ -263,6 +265,17 @@ object ComponentCatalog {
                 NavigationRailItem(selected = true, onClick = {}, icon = { Icon(Icons.Filled.Home, null) }, label = { Text("Home") })
                 NavigationRailItem(selected = false, onClick = {}, icon = { Icon(Icons.Filled.Search, null) }, label = { Text("Search") })
                 NavigationRailItem(selected = false, onClick = {}, icon = { Icon(Icons.Filled.Person, null) }, label = { Text("Profile") })
+            }
+
+            // Mirrors "navigationBar" (Material's bottom nav bar, distinct
+            // from navigationRail above): house/magnifyingglass/person,
+            // labels "First"/"Second"/"Third" (not "Home"/"Search"/
+            // "Profile" — those are navigationRail's labels), first item
+            // selected.
+            "navigationBar_three_items" -> NavigationBar {
+                NavigationBarItem(selected = true, onClick = {}, icon = { Icon(Icons.Filled.Home, null) }, label = { Text("First") })
+                NavigationBarItem(selected = false, onClick = {}, icon = { Icon(Icons.Filled.Search, null) }, label = { Text("Second") })
+                NavigationBarItem(selected = false, onClick = {}, icon = { Icon(Icons.Filled.Person, null) }, label = { Text("Third") })
             }
 
             // Mirrors "appBar": back chevron leading + one settings action.

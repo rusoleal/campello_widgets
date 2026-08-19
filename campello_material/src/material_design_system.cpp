@@ -745,8 +745,18 @@ namespace systems::leal::campello_widgets
         row->cross_axis_alignment = CrossAxisAlignment::center;
         row->children = std::move(item_widgets);
 
+        // Real M3 NavigationBar uses the surfaceContainer tonal role, not
+        // plain surface — confirmed by sampling a real Compose capture
+        // (light: #F3EDF7, dark: #211F26), same values already used by
+        // buildPopupMenuButton()'s DropdownMenu panel above. Without this,
+        // the bar rendered with no visible background at all since
+        // c.surface is indistinguishable from the page background.
+        const Color surface_container = (tokens_.brightness == Brightness::dark)
+            ? Color::fromARGB(0xFF211F26)
+            : Color::fromARGB(0xFFF3EDF7);
+
         auto container = std::make_shared<Container>();
-        container->color = c.surface;
+        container->color = surface_container;
         container->child = row;
         return container;
     }
