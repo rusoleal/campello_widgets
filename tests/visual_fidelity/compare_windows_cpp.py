@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Compare android_fidelity_reference's real M3 Expressive screenshots
-(android_fidelity_reference/output) against campello_widgets C++ rendered
-screenshots (tests/visual_fidelity/cpp_output), for the expressive_light/
-expressive_dark themes.
+Compare windows_fidelity_reference's real Fluent 2 (WinUI 3) screenshots
+(windows_fidelity_reference/output) against campello_widgets C++ rendered
+screenshots (tests/visual_fidelity/cpp_output), for the fluent_light/
+fluent_dark themes.
 
 Produces:
 - tests/visual_fidelity/diffs/<theme>/<name>_diff.png
 - tests/visual_fidelity/reports/<theme>.json
 - tests/visual_fidelity/reports/<theme>.md
 
-Mirrors compare_ios_cpp.py's structure/metrics; unlike the iOS side, both
-captures are already the same size (both harnesses render at the exact same
-Pixel 7 canvas — 1080x2400 physical, real-device crop already applied at
-export time in android_fidelity_reference/export_references.sh), so no
-size-reconciliation step is needed here.
+Mirrors compare_android_cpp.py's structure/metrics; like the Android side
+(and unlike iOS), both captures are already the same fixed canvas size —
+themed_component_harness.cpp's renderFluentCase() and
+windows_fidelity_reference's reference app both render at the exact same
+480x360 logical / DPR 2.0 window — so no size-reconciliation step is needed.
 """
 
 import json
@@ -23,34 +23,12 @@ import numpy as np
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-REF_DIR = ROOT / "android_fidelity_reference" / "output"
+REF_DIR = ROOT / "windows_fidelity_reference" / "output"
 CPP_DIR = ROOT / "tests" / "visual_fidelity" / "cpp_output"
 DIFF_DIR = ROOT / "tests" / "visual_fidelity" / "diffs"
 REPORT_DIR = ROOT / "tests" / "visual_fidelity" / "reports"
 
 TOLERANCE = 8  # per-channel difference (0-255)
-
-# android_fidelity_reference/export_references.sh crops the real device's
-# status bar (136px) and navigation bar (63px) off its raw screencap before
-# saving — real chrome, not app content (see that script's comment; exact
-# values from `adb shell dumpsys window displays`' statusBars/
-# navigationBars InsetsSource frames on the campello_m3_expressive_test
-# emulator). The C++ side renders the full 1080x2400 canvas since it has no
-# OS chrome to begin with, but still *centers* its content within that full
-# height — matching how Compose's fillMaxSize()+Alignment.Center centers
-# relative to the whole screen regardless of system bars drawn on top of it
-# — so cropping the same margins here keeps both sides' centering reference
-# frame identical, the same reconciliation approach used for the iOS side.
-STATUS_BAR_PX = 136
-NAV_BAR_PX = 63
-
-
-def crop_cpp_to_match(cpp_img: Image.Image, ref_size: tuple[int, int]) -> Image.Image:
-    if cpp_img.size == ref_size:
-        return cpp_img
-    w, h = cpp_img.size
-    cropped = cpp_img.crop((0, STATUS_BAR_PX, w, h - NAV_BAR_PX))
-    return cropped
 
 
 def ensure_dirs():
@@ -127,7 +105,7 @@ def process_theme(theme: str):
             continue
 
         ref_img = load_image(ref_path)
-        cpp_img = crop_cpp_to_match(load_image(cpp_path), ref_img.size)
+        cpp_img = load_image(cpp_path)
         if ref_img.size != cpp_img.size:
             print(f"WARNING: size mismatch for {name}: ref={ref_img.size} cpp={cpp_img.size}")
             results.append({
@@ -175,7 +153,7 @@ def process_theme(theme: str):
 
 def main():
     ensure_dirs()
-    themes = ["expressive_light", "expressive_dark"]
+    themes = ["fluent_light", "fluent_dark"]
     for theme in themes:
         process_theme(theme)
 

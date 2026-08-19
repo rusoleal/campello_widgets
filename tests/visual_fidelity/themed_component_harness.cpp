@@ -5,15 +5,18 @@
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_cupertino/cupertino_design_system.hpp>
 #include <campello_material/material_design_system.hpp>
+#include <campello_fluent/fluent_design_system.hpp>
 #include "visual_fidelity.hpp"
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture.hpp>
 #include <campello_image/image.hpp>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <string>
 #include <vector>
@@ -93,6 +96,19 @@ static constexpr float kIpadBottomInsetLiquidGlassPhysical = 40.0f;
 static constexpr float kIpadRailWidthCompactPhysical  = 199.0f;
 static constexpr float kIpadRailWidthExtendedPhysical = 520.0f;
 
+// windows_fidelity_reference's WinUI 3 app window: a fixed moderate size
+// (not this machine's full monitor — capturing single small components at
+// full desktop resolution would be wasteful and isn't how a real WinUI3 app
+// would realistically size a window for this content) at this machine's
+// real DPI scaling (192/96 = 2.0, confirmed via GetDpiForWindow — see
+// run_app.cpp's identical dpi/96.0f calculation), so text/stroke rendering
+// is genuinely comparable between the two sides.
+static constexpr float kFluentDevicePixelRatio = 2.0f;
+static constexpr float kFluentLogicalWidth     = 480.0f;
+static constexpr float kFluentLogicalHeight    = 360.0f;
+static constexpr float kFluentPhysicalWidth    = kFluentLogicalWidth  * kFluentDevicePixelRatio;
+static constexpr float kFluentPhysicalHeight   = kFluentLogicalHeight * kFluentDevicePixelRatio;
+
 struct Case {
     std::string theme;
     std::string builder;
@@ -142,12 +158,17 @@ static std::vector<std::string> builderStates(const std::string& builder)
 static std::vector<std::string> themes()
 {
     return {"cupertino_light", "cupertino_dark", "liquid_glass_light", "liquid_glass_dark",
-            "expressive_light", "expressive_dark"};
+            "expressive_light", "expressive_dark", "fluent_light", "fluent_dark"};
 }
 
 static bool isAndroidTheme(const std::string& theme)
 {
     return theme == "expressive_light" || theme == "expressive_dark";
+}
+
+static bool isFluentTheme(const std::string& theme)
+{
+    return theme == "fluent_light" || theme == "fluent_dark";
 }
 
 // Only the builders android_fidelity_reference/ComponentCatalog.kt actually
@@ -194,6 +215,21 @@ static std::vector<std::string> builders()
     };
 }
 
+// builders() minus "confirmationDialog" — that case's buildWidget() branch
+// does an unconditional static_cast<const CupertinoDesignSystem&>(ds) (it
+// calls Cupertino-specific buildConfirmationDialog()/tokens() directly,
+// with no equivalent on the base DesignSystem interface), which is
+// undefined behavior for any ds that isn't actually a CupertinoDesignSystem.
+// Safe for cupertino_light/dark/liquid_glass_* (the only themes that used
+// the full builders() list before Fluent support existed); Fluent must use
+// this filtered list instead.
+static std::vector<std::string> fluentBuilders()
+{
+    auto all = builders();
+    all.erase(std::remove(all.begin(), all.end(), "confirmationDialog"), all.end());
+    return all;
+}
+
 static std::string fileName(const Case& c)
 {
     return c.builder + "_" + c.state;
@@ -207,12 +243,40 @@ static std::shared_ptr<cw::DesignSystem> makeDesignSystem(const std::string& the
     if (theme == "liquid_glass_dark")  return std::make_shared<cw::CupertinoDesignSystem>(cw::CupertinoDesignSystem::liquidGlass(true));
     if (theme == "expressive_light")   return std::make_shared<cw::MaterialDesignSystem>(cw::MaterialDesignSystem::expressiveLight());
     if (theme == "expressive_dark")    return std::make_shared<cw::MaterialDesignSystem>(cw::MaterialDesignSystem::expressiveDark());
+    if (theme == "fluent_light")       return std::make_shared<cw::FluentDesignSystem>(cw::FluentDesignSystem::light());
+    if (theme == "fluent_dark")        return std::make_shared<cw::FluentDesignSystem>(cw::FluentDesignSystem::dark());
     return nullptr;
 }
 
 static cw::WidgetRef text(const std::string& str, const cw::TextStyle& style = cw::TextStyle{})
 {
     return std::make_shared<cw::Text>(str, style);
+}
+
+// text()'s default TextStyle color is Color::black() — fine against the
+// light-ish canvases most themes render on, but there is no
+// DefaultTextStyle/InheritedWidget mechanism anywhere in campello_widgets
+// that retints a plain Text based on the ambient Theme (confirmed: Theme
+// only propagates the DesignSystem pointer, nothing merges text color).
+// Builders that draw their own surface behind arbitrary passed-in content
+// (Card/DataTable/ListTile/Dialog/ActionSheet/BottomSheet/ExpansionTile/
+// Banner) render that content completely unchanged — so under a dark theme,
+// plain text() content is black-on-dark and nearly unreadable. Confirmed via
+// fluent_dark's report/screenshots (card_filled, dataTable_default). Use
+// this instead of text() for any content flowing into those builders.
+static cw::WidgetRef surfaceText(const cw::DesignSystem& ds, const std::string& str,
+                                  cw::TextStyle style = cw::TextStyle{})
+{
+    style.color = ds.tokens().colors.on_surface;
+    return std::make_shared<cw::Text>(str, style);
+}
+
+// Simple "★" placeholder, unrelated to the real-icon loading below — kept
+// for builders (e.g. Fluent's with_icon states) that don't need a
+// platform-accurate glyph, just a stand-in.
+static cw::WidgetRef icon(const std::string& /*name*/)
+{
+    return text("★");
 }
 
 // Real SF Symbol (iOS)/Material Symbol (Android) template PNGs, sourced
@@ -315,7 +379,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "card") {
         CardConfig cfg;
-        cfg.child = text("Card content");
+        cfg.child = surfaceText(ds, "Card content");
         if (state == "elevated") cfg.priority = CardPriority::elevated;
         if (state == "filled")   cfg.priority = CardPriority::filled;
         if (state == "outlined") cfg.priority = CardPriority::outlined;
@@ -331,8 +395,8 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "listTile") {
         ListTileConfig cfg;
-        cfg.title = text("Title");
-        if (state == "two_line")  cfg.subtitle = text("Subtitle");
+        cfg.title = surfaceText(ds, "Title");
+        if (state == "two_line")  cfg.subtitle = surfaceText(ds, "Subtitle");
         if (state == "with_icon") cfg.leading = icon(ds, "star");
         cfg.on_tap = [] {};
         return ds.buildListTile(cfg);
@@ -366,8 +430,8 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "dialog") {
         DialogConfig cfg;
-        cfg.title = text("Title");
-        cfg.content = text("Message");
+        cfg.title = surfaceText(ds, "Title");
+        cfg.content = surfaceText(ds, "Message");
         // UIAlertController always visually places a .cancel-style action
         // last, regardless of the order actions were added in — confirmed
         // against a real-captured reference screenshot (RealCapture.swift's
@@ -391,7 +455,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
     if (builder == "popupMenuButton") {
         PopupMenuConfig cfg;
         cfg.items = {{"One", [] {}}, {"Two", [] {}}};
-        cfg.child = ds.buildButton(ButtonConfig{.label = text("Open Menu"), .priority = ButtonPriority::tertiary, .on_pressed = [] {}});
+        cfg.child = ds.buildButton(ButtonConfig{.label = text("Open Menu"), .on_pressed = [] {}, .priority = ButtonPriority::tertiary});
         cfg.on_selected = [](size_t) {};
         return ds.buildPopupMenuButton(cfg);
     }
@@ -441,7 +505,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "bottomSheet") {
         BottomSheetConfig cfg;
-        cfg.child = text("Sheet content");
+        cfg.child = surfaceText(ds, "Sheet content");
         cfg.show_drag_handle = true;
         return ds.buildBottomSheet(cfg);
     }
@@ -478,7 +542,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "actionSheet") {
         ActionSheetConfig cfg;
-        cfg.title = text("Title");
+        cfg.title = surfaceText(ds, "Title");
         cfg.actions = {{"Save", [] {}, false}, {"Delete", [] {}, true}};
         cfg.on_cancel = [] {};
         return ds.buildActionSheet(cfg);
@@ -513,8 +577,8 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "expansionTile") {
         ExpansionTileConfig cfg;
-        cfg.title = text("Settings");
-        cfg.children_content = text("Expanded content goes here.");
+        cfg.title = surfaceText(ds, "Settings");
+        cfg.children_content = surfaceText(ds, "Expanded content goes here.");
         cfg.on_expansion_changed = [](bool) {};
         if (state == "expanded") cfg.expanded = true;
         return ds.buildExpansionTile(cfg);
@@ -529,7 +593,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
 
     if (builder == "banner") {
         BannerConfig cfg;
-        cfg.content = text("A banner message");
+        cfg.content = surfaceText(ds, "A banner message");
         return ds.buildBanner(cfg);
     }
 
@@ -544,7 +608,7 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
     if (builder == "dataTable") {
         DataTableConfig cfg;
         cfg.columns = {"Name", "Age"};
-        cfg.rows = {{text("Alice"), text("30")}, {text("Bob"), text("25")}};
+        cfg.rows = {{surfaceText(ds, "Alice"), surfaceText(ds, "30")}, {surfaceText(ds, "Bob"), surfaceText(ds, "25")}};
         return ds.buildDataTable(cfg);
     }
 
@@ -707,7 +771,8 @@ static bool isLiquidGlass(const std::string& theme)
 
 static bool isDarkTheme(const std::string& theme)
 {
-    return theme == "cupertino_dark" || theme == "liquid_glass_dark" || theme == "expressive_dark";
+    return theme == "cupertino_dark" || theme == "liquid_glass_dark" || theme == "expressive_dark" ||
+           theme == "fluent_dark";
 }
 
 static cw::WidgetRef wrapForViewport(const cw::DesignSystem& ds, cw::WidgetRef widget,
@@ -1403,25 +1468,102 @@ static bool renderAndroidCase(const cw::DesignSystem& ds, const Case& c, const s
                                       outPath.string());
 }
 
+// Mirrors renderAndroidCase() exactly: a Windows desktop app has no
+// "mockup" convention either (no shared background image, no red alignment
+// border — those are iOS-mockup-specific), so windows_fidelity_reference's
+// captures are a plain component centered on a solid ds.tokens().colors.
+// background fill, same as android_fidelity_reference. Unlike iOS,
+// "dialog"/"actionSheet" need no special real-capture framing here either —
+// buildWidget() already returns their bare widget (ds.buildDialog()/
+// ds.buildActionSheet()) directly, which centers/backgrounds identically to
+// every other builder; the iOS-only renderDialogCase()/renderActionSheetCase()
+// exist specifically to match a real UIAlertController's full-screen-scrim
+// positioning, which windows_fidelity_reference's references don't attempt
+// to replicate.
+static bool renderFluentCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
+{
+    using namespace cw;
+
+    auto widget = buildWidget(ds, c.builder, c.state);
+    if (!widget) {
+        std::cerr << "Unknown builder: " << c.builder << "\n";
+        return false;
+    }
+
+    // Same rationale as renderAndroidCase()'s identical block: slider/
+    // divider/listTile expand to fill whatever width they're given, but
+    // Center() hands them only a loose max-width constraint with no
+    // minimum, so left unwrapped they collapse instead of expanding.
+    if (c.builder == "slider" || c.builder == "divider" || c.builder == "listTile") {
+        widget = SizedBox::from_width(280.0f, widget);
+    }
+
+    // bottomSheet/actionSheet/dataTable/expansionTile/navigationRail/
+    // searchField hit a different problem: their outer Column uses
+    // CrossAxisAlignment::stretch (matching MaterialDesignSystem's own
+    // identical pattern for these same builders) or an Expanded child,
+    // which fills to the *maximum* extent of a loose constraint rather
+    // than hugging content — fine under wrapForViewport()'s fixed 360pt
+    // container (what Cupertino/Material's own dialog/bottomSheet/etc.
+    // actually render through), but renderFluentCase()'s bare Center()
+    // hands them a loose 0..480x0..360 constraint with no upper bound of
+    // its own, so they expand to fill the entire canvas.
+    //
+    // SizedBox::from_width is the *wrong* fix here — per its own doc
+    // comment it fixes width but makes height expand to fill, which is
+    // exactly the bug for these Column-based widgets (confirmed: it
+    // shrank bottomSheet_partial's width correctly but left it still
+    // filling the full canvas height). ConstrainedBox bounds only max
+    // width, leaving height unconstrained/loose so Column's
+    // MainAxisSize::min can still shrink-wrap its content vertically.
+    if (c.builder == "bottomSheet" || c.builder == "actionSheet" || c.builder == "dataTable" ||
+        c.builder == "expansionTile" || c.builder == "navigationRail" || c.builder == "searchField") {
+        auto constrained = std::make_shared<ConstrainedBox>();
+        constrained->additional_constraints = BoxConstraints{0.0f, 280.0f, 0.0f, std::numeric_limits<float>::infinity()};
+        constrained->child = widget;
+        widget = constrained;
+    }
+
+    auto centered = std::make_shared<Center>();
+    centered->child = widget;
+
+    auto background = std::make_shared<Container>();
+    background->color = ds.tokens().colors.background;
+    background->child = centered;
+
+    auto rootWidget = std::make_shared<SizedBox>(kFluentLogicalWidth, kFluentLogicalHeight, background);
+
+    auto root = mountAndLayout(ds, rootWidget, kFluentLogicalWidth, kFluentLogicalHeight);
+    if (!root) return false;
+
+    auto outPath = outDir / (fileName(c) + ".png");
+    return cwt::captureRenderBoxToPng(root, kFluentPhysicalWidth, kFluentPhysicalHeight,
+                                      kFluentDevicePixelRatio, ds.tokens().colors.background,
+                                      outPath.string());
+}
+
 static bool renderCase(const cw::DesignSystem& ds, const Case& c, const std::filesystem::path& outDir)
 {
-    if (c.builder == "dialog" && !isAndroidTheme(c.theme)) {
-        return renderDialogCase(ds, c, outDir);
-    }
-    if (c.builder == "actionSheet" && !isAndroidTheme(c.theme)) {
-        return renderActionSheetCase(ds, c, outDir);
-    }
-    if (c.builder == "searchField" && !isAndroidTheme(c.theme)) {
-        return renderSearchFieldCase(ds, c, outDir);
-    }
-    if (c.builder == "navigationBar" && !isAndroidTheme(c.theme)) {
-        return renderNavigationBarCase(ds, c, outDir);
-    }
-    if (c.builder == "navigationRail" && !isAndroidTheme(c.theme)) {
-        return renderNavigationRailCase(ds, c, outDir);
-    }
     if (isAndroidTheme(c.theme)) {
         return renderAndroidCase(ds, c, outDir);
+    }
+    if (isFluentTheme(c.theme)) {
+        return renderFluentCase(ds, c, outDir);
+    }
+    if (c.builder == "dialog") {
+        return renderDialogCase(ds, c, outDir);
+    }
+    if (c.builder == "actionSheet") {
+        return renderActionSheetCase(ds, c, outDir);
+    }
+    if (c.builder == "searchField") {
+        return renderSearchFieldCase(ds, c, outDir);
+    }
+    if (c.builder == "navigationBar") {
+        return renderNavigationBarCase(ds, c, outDir);
+    }
+    if (c.builder == "navigationRail") {
+        return renderNavigationRailCase(ds, c, outDir);
     }
 
     auto widget = buildWidget(ds, c.builder, c.state);
@@ -1467,7 +1609,10 @@ int main(int argc, char* argv[])
         std::filesystem::create_directories(themeDir);
 
         bool isAndroid = isAndroidTheme(themeName);
-        for (const auto& builderName : (isAndroid ? androidBuilders() : builders())) {
+        auto themeBuilders = isAndroid ? androidBuilders()
+                             : isFluentTheme(themeName) ? fluentBuilders()
+                             : builders();
+        for (const auto& builderName : themeBuilders) {
             for (const auto& state : (isAndroid ? androidBuilderStates(builderName) : builderStates(builderName))) {
                 Case c{themeName, builderName, state};
                 std::cout << "Rendering " << themeName << "/" << fileName(c) << "\n";

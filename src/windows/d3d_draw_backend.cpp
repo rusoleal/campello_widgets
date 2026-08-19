@@ -1622,10 +1622,10 @@ std::shared_ptr<GPU::BindGroup> D3DDrawBackend::lookupOrCreateSourceBindGroup(
 
     auto it = blur_source_bind_group_cache_.find(tex.get());
     if (it != blur_source_bind_group_cache_.end())
+    {
+        it->second.last_used_frame = frame_counter_;
         return it->second.bind_group;
-
-    if (blur_source_bind_group_cache_.size() >= kMaxSourceBindGroupCacheSize)
-        blur_source_bind_group_cache_.clear();
+    }
 
     GPU::BindGroupDescriptor bgDesc{};
     bgDesc.layout  = quad_tex_bgl_;
@@ -1636,8 +1636,20 @@ std::shared_ptr<GPU::BindGroup> D3DDrawBackend::lookupOrCreateSourceBindGroup(
     auto bindGroup = device_->createBindGroup(bgDesc);
     if (!bindGroup) return nullptr;
 
-    blur_source_bind_group_cache_.emplace(tex.get(), SourceBindGroupCacheEntry{ tex, bindGroup });
+    blur_source_bind_group_cache_.emplace(tex.get(),
+        SourceBindGroupCacheEntry{ tex, bindGroup, frame_counter_ });
     return bindGroup;
+}
+
+void D3DDrawBackend::evictStaleSourceBindGroups()
+{
+    for (auto it = blur_source_bind_group_cache_.begin(); it != blur_source_bind_group_cache_.end(); )
+    {
+        if (frame_counter_ - it->second.last_used_frame > kMaxSourceBindGroupCacheAgeFrames)
+            it = blur_source_bind_group_cache_.erase(it);
+        else
+            ++it;
+    }
 }
 
 std::shared_ptr<GPU::Texture> D3DDrawBackend::blurTexture(

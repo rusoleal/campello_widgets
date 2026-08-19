@@ -151,11 +151,11 @@ def process_theme(theme: str):
     results.sort(key=lambda r: (-r.get("diff_percent", 0), r["name"]))
 
     json_path = REPORT_DIR / f"{theme}.json"
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
     md_path = REPORT_DIR / f"{theme}.md"
-    with open(md_path, "w") as f:
+    with open(md_path, "w", encoding="utf-8") as f:
         f.write(f"# Fidelity Report: {theme}\n\n")
         f.write(f"Tolerance: {TOLERANCE}/255 per channel\n\n")
         f.write("| Rank | Component | Diff % | Pixels | Max Δ | Avg Δ | Status |\n")

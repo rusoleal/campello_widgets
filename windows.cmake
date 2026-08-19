@@ -43,6 +43,11 @@ target_link_libraries(campello_widgets
         winhttp
         dwmapi
         imm32
+        mfplat
+        mfreadwrite
+        mfuuid
+        ole32
+        propsys
 )
 
 target_compile_options(campello_widgets PRIVATE /W4)

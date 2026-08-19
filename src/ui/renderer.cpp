@@ -17,6 +17,7 @@
 #include <utility>
 
 #include <campello_gpu/device.hpp>
+#include <campello_gpu/fence.hpp>
 #include <campello_gpu/command_encoder.hpp>
 #include <campello_gpu/render_pass_encoder.hpp>
 #include <campello_gpu/texture.hpp>
@@ -434,7 +435,7 @@ namespace systems::leal::campello_widgets
             // this drops one frame instead of freezing the app.
             auto cmd_buffer = encoder->finish();
             if (cmd_buffer) {
-                device_->submit(std::move(cmd_buffer));
+                submitWithRetirement(std::move(cmd_buffer));
             }
             return false;
         }
@@ -475,7 +476,7 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<GPU::CommandBuffer> cmd_buffer_for_timing =
             measure_gpu_time ? cmd_buffer : nullptr;
 
-        device_->submit(std::move(cmd_buffer));
+        submitWithRetirement(std::move(cmd_buffer));
         markSubPhase("submit");
 
         if (cmd_buffer_for_timing) {
@@ -700,17 +701,17 @@ namespace systems::leal::campello_widgets
 
         // Stack of active CacheReplayBeginCmd/EndCmd regions — see
         // CacheReplayBeginCmd's doc comment and clip_shape_gpu_cache_'s.
-        // .first = region_id, .second = next bracket index to assign.
-        // A fresh stack local to this flushDrawList() call correctly
-        // handles nested replay regions: the recursive flushDrawList()
-        // calls inside applyClipShape()/applyShaderMask() (for the
-        // offscreen child-content pass) each get their own local stack, so
-        // a CacheReplayBeginCmd/EndCmd pair nested inside an accumulating
-        // clip-shape/shader-mask bracket's child_cmds — preserved verbatim
-        // by the accumulation branches below, which never special-case
-        // these markers — is only ever interpreted by the recursive call
-        // that actually re-walks that nested content.
-        std::vector<std::pair<const void*, size_t>> replay_region_stack;
+        // Elements are (region_id, incarnation_id, next bracket index to
+        // assign). A fresh stack local to this flushDrawList() call
+        // correctly handles nested replay regions: the recursive
+        // flushDrawList() calls inside applyClipShape()/applyShaderMask()
+        // (for the offscreen child-content pass) each get their own local
+        // stack, so a CacheReplayBeginCmd/EndCmd pair nested inside an
+        // accumulating clip-shape/shader-mask bracket's child_cmds —
+        // preserved verbatim by the accumulation branches below, which
+        // never special-case these markers — is only ever interpreted by
+        // the recursive call that actually re-walks that nested content.
+        std::vector<std::tuple<const void*, uint64_t, size_t>> replay_region_stack;
 
         // Per-draw-command-type timing breakdown (diagnostic only — see
         // DebugFlags::printRasterSubPhaseTimings doc comment).
@@ -746,16 +747,19 @@ namespace systems::leal::campello_widgets
                     {
                         in_shader_mask = false;
                         const void* rid  = nullptr;
+                        uint64_t    rinc = 0;
                         size_t      ridx = 0;
                         if (!replay_region_stack.empty())
                         {
-                            rid  = replay_region_stack.back().first;
-                            ridx = replay_region_stack.back().second++;
+                            auto& top = replay_region_stack.back();
+                            rid  = std::get<0>(top);
+                            rinc = std::get<1>(top);
+                            ridx = std::get<2>(top)++;
                         }
                         timeDraw(shader_mask_stats, [&] {
                             applyShaderMask(shader_mask_info, shader_mask_cmds,
                                             rpe, target_view, viewport_width, viewport_height, dpr,
-                                            current_transform, current_clip, rid, ridx);
+                                            current_transform, current_clip, rid, rinc, ridx);
                         });
                         shader_mask_cmds.clear();
                     }
@@ -774,15 +778,18 @@ namespace systems::leal::campello_widgets
                     {
                         in_save_layer = false;
                         const void* rid  = nullptr;
+                        uint64_t    rinc = 0;
                         size_t      ridx = 0;
                         if (!replay_region_stack.empty())
                         {
-                            rid  = replay_region_stack.back().first;
-                            ridx = replay_region_stack.back().second++;
+                            auto& top = replay_region_stack.back();
+                            rid  = std::get<0>(top);
+                            rinc = std::get<1>(top);
+                            ridx = std::get<2>(top)++;
                         }
                         applySaveLayer(save_layer_info, save_layer_cmds,
                                        rpe, target_view, viewport_width, viewport_height, dpr,
-                                       current_transform, current_clip, rid, ridx);
+                                       current_transform, current_clip, rid, rinc, ridx);
                         save_layer_cmds.clear();
                     }
                     else
@@ -810,17 +817,20 @@ namespace systems::leal::campello_widgets
                         {
                             in_clip_shape = false;
                             const void* rid  = nullptr;
+                            uint64_t    rinc = 0;
                             size_t      ridx = 0;
                             if (!replay_region_stack.empty())
                             {
-                                rid  = replay_region_stack.back().first;
-                                ridx = replay_region_stack.back().second++;
+                                auto& top = replay_region_stack.back();
+                                rid  = std::get<0>(top);
+                                rinc = std::get<1>(top);
+                                ridx = std::get<2>(top)++;
                             }
                             timeDraw(clip_shape_stats, [&] {
                                 applyClipShape(clip_shape_bounds, clip_shape_corner_r,
                                                clip_shape_is_oval, clip_shape_cmds,
                                                rpe, target_view, viewport_width, viewport_height, dpr,
-                                               current_transform, current_clip, rid, ridx);
+                                               current_transform, current_clip, rid, rinc, ridx);
                             });
                             clip_shape_cmds.clear();
                         }
@@ -1015,7 +1025,7 @@ namespace systems::leal::campello_widgets
                 }
                 else if constexpr (std::is_same_v<T, CacheReplayBeginCmd>)
                 {
-                    replay_region_stack.push_back({c.region_id, size_t{0}});
+                    replay_region_stack.push_back({c.region_id, c.incarnation_id, size_t{0}});
                 }
                 else if constexpr (std::is_same_v<T, CacheReplayEndCmd>)
                 {
@@ -1025,15 +1035,18 @@ namespace systems::leal::campello_widgets
                 else if constexpr (std::is_same_v<T, DrawShadowCmd>)
                 {
                     const void* rid  = nullptr;
+                    uint64_t    rinc = 0;
                     size_t      ridx = 0;
                     if (!replay_region_stack.empty())
                     {
-                        rid  = replay_region_stack.back().first;
-                        ridx = replay_region_stack.back().second++;
+                        auto& top = replay_region_stack.back();
+                        rid  = std::get<0>(top);
+                        rinc = std::get<1>(top);
+                        ridx = std::get<2>(top)++;
                     }
                     timeDraw(shadow_stats, [&] {
                         applyBoxShadow(c, rpe, target_view, viewport_width, viewport_height,
-                                       dpr, current_transform, current_clip, rid, ridx);
+                                       dpr, current_transform, current_clip, rid, rinc, ridx);
                     });
                 }
 
@@ -1077,6 +1090,7 @@ namespace systems::leal::campello_widgets
         const Matrix4& transform,
         const Rect&    clip,
         const void*    replay_region_id,
+        uint64_t       replay_incarnation_id,
         size_t         replay_bracket_index)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
@@ -1087,7 +1101,8 @@ namespace systems::leal::campello_widgets
         // unchanged — see shader_mask_gpu_cache_'s doc comment. Reuse the
         // cached texture directly, skipping the capture-and-composite work
         // below entirely.
-        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        const std::tuple<const void*, uint64_t, size_t> cache_key{
+            replay_region_id, replay_incarnation_id, replay_bracket_index};
         if (replay_region_id != nullptr)
         {
             auto it = shader_mask_gpu_cache_.find(cache_key);
@@ -1193,13 +1208,15 @@ namespace systems::leal::campello_widgets
         const Matrix4& transform,
         const Rect&    clip,
         const void*    replay_region_id,
+        uint64_t       replay_incarnation_id,
         size_t         replay_bracket_index)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
 
         // Cache-hit path — see applyShaderMask()'s identical comment and
         // clip_shape_gpu_cache_'s doc comment.
-        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        const std::tuple<const void*, uint64_t, size_t> cache_key{
+            replay_region_id, replay_incarnation_id, replay_bracket_index};
         if (replay_region_id != nullptr)
         {
             auto it = clip_shape_gpu_cache_.find(cache_key);
@@ -1292,13 +1309,15 @@ namespace systems::leal::campello_widgets
         const Matrix4& transform,
         const Rect&    clip,
         const void*    replay_region_id,
+        uint64_t       replay_incarnation_id,
         size_t         replay_bracket_index)
     {
         if (!draw_backend_ || !frame_encoder_) return;
 
         // Cache-hit path — see applyClipShape()'s identical comment and
         // shadow_gpu_cache_'s doc comment.
-        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        const std::tuple<const void*, uint64_t, size_t> cache_key{
+            replay_region_id, replay_incarnation_id, replay_bracket_index};
         if (replay_region_id != nullptr)
         {
             auto it = shadow_gpu_cache_.find(cache_key);
@@ -1467,11 +1486,13 @@ namespace systems::leal::campello_widgets
         const Matrix4& transform,
         const Rect&    clip,
         const void*    replay_region_id,
+        uint64_t       replay_incarnation_id,
         size_t         replay_bracket_index)
     {
         if (!draw_backend_ || !frame_encoder_ || child_cmds.empty()) return;
 
-        const std::pair<const void*, size_t> cache_key{replay_region_id, replay_bracket_index};
+        const std::tuple<const void*, uint64_t, size_t> cache_key{
+            replay_region_id, replay_incarnation_id, replay_bracket_index};
         if (replay_region_id != nullptr)
         {
             auto it = save_layer_gpu_cache_.find(cache_key);
@@ -1534,14 +1555,72 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void Renderer::retireTexture(std::shared_ptr<campello_gpu::Texture> texture)
+    {
+        if (texture)
+            pending_retire_textures_.push_back(std::move(texture));
+    }
+
+    void Renderer::retireBindGroup(std::shared_ptr<campello_gpu::BindGroup> bind_group)
+    {
+        if (bind_group)
+            pending_retire_bind_groups_.push_back(std::move(bind_group));
+    }
+
+    void Renderer::submitWithRetirement(std::shared_ptr<campello_gpu::CommandBuffer> cmd_buffer)
+    {
+        if (pending_retire_textures_.empty() && pending_retire_bind_groups_.empty())
+        {
+            device_->submit(std::move(cmd_buffer));
+        }
+        else
+        {
+            // Fenced overload: non-blocking, same as the plain one above —
+            // see retireTexture()'s/pending_retire_textures_'s doc comment
+            // for why this frame's evicted resources can't be freed until
+            // this specific submission's Fence confirms the GPU is done.
+            auto fence = device_->createFence();
+            device_->submit(std::move(cmd_buffer), fence);
+
+            RetiredGpuBatch batch;
+            batch.fence       = std::move(fence);
+            batch.textures    = std::move(pending_retire_textures_);
+            batch.bind_groups = std::move(pending_retire_bind_groups_);
+            retired_gpu_batches_.push_back(std::move(batch));
+
+            pending_retire_textures_.clear();
+            pending_retire_bind_groups_.clear();
+        }
+
+        reclaimSignaledRetirements();
+    }
+
+    void Renderer::reclaimSignaledRetirements()
+    {
+        for (auto it = retired_gpu_batches_.begin(); it != retired_gpu_batches_.end(); )
+        {
+            // isSignaled() is a non-blocking poll — safe to call every
+            // frame. Erasing here is what actually drops the last
+            // shared_ptr to each retired Texture/BindGroup, now provably
+            // safe since the GPU confirmed it's done with them.
+            if (it->fence->isSignaled())
+                it = retired_gpu_batches_.erase(it);
+            else
+                ++it;
+        }
+    }
+
     void Renderer::evictReplayCacheEntries(const void* region_id) noexcept
     {
         auto eraseByRegion = [&](auto& cache)
         {
             for (auto it = cache.begin(); it != cache.end(); )
             {
-                if (it->first.first == region_id)
+                if (std::get<0>(it->first) == region_id)
+                {
+                    retireTexture(std::move(it->second.texture));
                     it = cache.erase(it);
+                }
                 else
                     ++it;
             }
@@ -1559,7 +1638,10 @@ namespace systems::leal::campello_widgets
             for (auto it = cache.begin(); it != cache.end(); )
             {
                 if (frame_counter_ - it->second.last_used_frame > max_age)
+                {
+                    retireTexture(std::move(it->second.texture));
                     it = cache.erase(it);
+                }
                 else
                     ++it;
             }
@@ -1568,7 +1650,18 @@ namespace systems::leal::campello_widgets
         sweep(shader_mask_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(shadow_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(save_layer_gpu_cache_, kClipShapeCacheMaxAgeFrames);
-        sweep(text_texture_cache_, kTextTextureCacheMaxAgeFrames);
+
+        for (auto it = text_texture_cache_.begin(); it != text_texture_cache_.end(); )
+        {
+            if (frame_counter_ - it->second.last_used_frame > kTextTextureCacheMaxAgeFrames)
+            {
+                retireTexture(std::move(it->second.texture));
+                retireBindGroup(std::move(it->second.bind_group));
+                it = text_texture_cache_.erase(it);
+            }
+            else
+                ++it;
+        }
     }
 
     void Renderer::drawCachedText(

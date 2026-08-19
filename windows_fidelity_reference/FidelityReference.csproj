@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>FidelityReference</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- Unpackaged (no MSIX) + self-contained Windows App SDK — this app
+         always runs directly out of the build tree during export_references.ps1,
+         never redistributed, same "dev-only, no installer" convention
+         examples/gallery/windows/CMakeLists.txt uses for the C++ side.
+         Self-contained avoids depending on a separately-installed Windows
+         App Runtime being present on whatever machine builds this. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+
+    <!-- Build with VS's own MSBuild.exe (VS Community's "Windows application
+         development" workload), not the standalone dotnet CLI — several
+         WindowsAppSDK build targets (PRI/resource-index generation among
+         them) hard-require Visual Studio's own AppxPackage MSBuild tooling
+         with no clean opt-out, and PRI generation specifically can't be
+         disabled without breaking XamlControlsResources' default control
+         templates at runtime (confirmed: disabling it produced a build that
+         crashes with STATUS_HEAP_CORRUPTION on startup). -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250108002" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+</Project>

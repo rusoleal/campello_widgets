@@ -291,6 +291,18 @@ static uint32_t windowsModifiersToKeyModifiers()
 // Window procedure
 // ---------------------------------------------------------------------------
 
+// WM_MOUSEMOVE/WM_*BUTTONDOWN/UP/WM_MOUSEWHEEL coordinates are always
+// reported in physical client-area pixels, regardless of the process's DPI
+// awareness — but the widget tree hit-tests in logical/DIP coordinates
+// (the same space WM_PAINT's `renderer->setDevicePixelRatio(dpi / 96.0f)`
+// scales into). Dividing by that same ratio here is what keeps a click's
+// dispatched position aligned with what's actually rendered on a
+// non-100%-scaled monitor.
+static float windowDpr(HWND hwnd)
+{
+    return static_cast<float>(GetDpiForWindow(hwnd)) / 96.0f;
+}
+
 static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam)
 {
     WindowState* state = reinterpret_cast<WindowState*>(
@@ -357,9 +369,10 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         // Mouse events
         case WM_MOUSEMOVE: {
             if (state && state->dispatcher) {
-                int x = GET_X_LPARAM(lparam);
-                int y = GET_Y_LPARAM(lparam);
-                
+                const float dpr = windowDpr(hwnd);
+                float x = static_cast<float>(GET_X_LPARAM(lparam)) / dpr;
+                float y = static_cast<float>(GET_Y_LPARAM(lparam)) / dpr;
+
                 if (!state->mouse_tracking) {
                     // Start tracking mouse leave
                     TRACKMOUSEEVENT tme = {};
@@ -373,7 +386,7 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
                 state->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::move,
                     0,  // pointer_id
-                    { static_cast<float>(x), static_cast<float>(y) },
+                    { x, y },
                     1.0f
                 });
             }
@@ -389,13 +402,14 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         case WM_RBUTTONDOWN:
         case WM_MBUTTONDOWN: {
             if (state && state->dispatcher) {
-                int x = GET_X_LPARAM(lparam);
-                int y = GET_Y_LPARAM(lparam);
+                const float dpr = windowDpr(hwnd);
+                float x = static_cast<float>(GET_X_LPARAM(lparam)) / dpr;
+                float y = static_cast<float>(GET_Y_LPARAM(lparam)) / dpr;
                 SetCapture(hwnd);
                 state->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::down,
                     0,
-                    { static_cast<float>(x), static_cast<float>(y) },
+                    { x, y },
                     1.0f
                 });
             }
@@ -406,13 +420,14 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         case WM_RBUTTONUP:
         case WM_MBUTTONUP: {
             if (state && state->dispatcher) {
-                int x = GET_X_LPARAM(lparam);
-                int y = GET_Y_LPARAM(lparam);
+                const float dpr = windowDpr(hwnd);
+                float x = static_cast<float>(GET_X_LPARAM(lparam)) / dpr;
+                float y = static_cast<float>(GET_Y_LPARAM(lparam)) / dpr;
                 ReleaseCapture();
                 state->dispatcher->handlePointerEvent({
                     Widgets::PointerEventKind::up,
                     0,
-                    { static_cast<float>(x), static_cast<float>(y) },
+                    { x, y },
                     0.0f
                 });
             }
@@ -421,14 +436,15 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
         case WM_MOUSEWHEEL: {
             if (state && state->dispatcher) {
+                const float dpr = windowDpr(hwnd);
                 int x = GET_X_LPARAM(lparam);
                 int y = GET_Y_LPARAM(lparam);
                 float delta = static_cast<float>(GET_WHEEL_DELTA_WPARAM(wparam)) / WHEEL_DELTA;
-                
+
                 Widgets::PointerEvent e;
                 e.kind = Widgets::PointerEventKind::scroll;
                 e.pointer_id = 0;
-                e.position = { static_cast<float>(x), static_cast<float>(y) };
+                e.position = { static_cast<float>(x) / dpr, static_cast<float>(y) / dpr };
                 e.pressure = 0.0f;
                 e.scroll_delta_x = 0.0f;
                 e.scroll_delta_y = delta * 40.0f;  // Convert to logical pixels
@@ -723,6 +739,17 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
 
 int runApp(const std::string& title, int width, int height, WidgetRef root_widget, bool resizable)
 {
+    // Must run before createWindow() below. Without this, the process is
+    // DPI-unaware: Windows renders it as if every monitor were 96 DPI and
+    // then bitmap-stretches that output to fill the real display — which is
+    // what actually produces blurry/pixelated text and UI on a high-DPI
+    // ("Retina"-class, e.g. 200%-scaled) monitor, not a text-rendering bug.
+    // It's also what makes GetDpiForWindow() below (in WM_PAINT and
+    // elsewhere) always read back 96 regardless of the monitor's real
+    // scale, silently defeating the dpr-based crisp-render path that
+    // already assumes it's getting the true value.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     SetUnhandledExceptionFilter(crashDiagnosticFilter);
 
     gRootWidget = std::move(root_widget);

@@ -213,6 +213,7 @@ public:
         offscreen_texture_pool_.evictStale(frame_counter_);
         blur_texture_pool_.beginFrame();
         blur_texture_pool_.evictStale(frame_counter_);
+        evictStaleSourceBindGroups();
     }
 
     void setViewportSize(float w, float h) noexcept override
@@ -601,21 +602,49 @@ private:
     // Keyed by raw Texture* for lookup, but the map ALSO holds a strong
     // shared_ptr<Texture> reference so a cached entry can never dangle even
     // if OffscreenTexturePool's own bookkeeping considers that texture
-    // evicted — worst case this keeps a texture's GPU memory alive a bit
-    // past when the pool would otherwise drop it, bounded by kMaxSourceBindGroupCacheSize.
+    // evicted.
+    //
+    // Eviction is age-based (kMaxSourceBindGroupCacheAgeFrames), NOT a
+    // hard-size clear like this cache used to do. A size-triggered
+    // `.clear()` mid-frame is a real correctness bug, not just a perf
+    // tradeoff: campello_gpu's DirectX BindGroup::~BindGroup() frees its
+    // shader-visible descriptor slot for *reuse by a later allocation in
+    // the very same not-yet-submitted command list* (descriptor tables are
+    // read by the GPU at execution time, not at recording time — see
+    // DeviceData::allocSrvIndex()'s doc comment upstream). A GridView with
+    // many same-sized ClipRRect cells calls this once per cell, all within
+    // one frame — clearing at a small fixed count (this used to be 16)
+    // destroys still-referenced BindGroups whose composite draw call was
+    // already recorded earlier in this same frame but hasn't executed yet,
+    // so a later cell's fresh BindGroup can steal that freed slot before
+    // the GPU ever reads the earlier cell's descriptor — the earlier cell
+    // then renders whatever the later cell wrote there instead of its own
+    // content. Confirmed via tracing: CPU-side bounds/color/text/texture
+    // were all correct and unique per cell, but on-screen content past the
+    // eviction threshold repeated an earlier cell's — i.e. a live-slot
+    // stomp, not a logic error in what was recorded. Age-based eviction
+    // (matching clip_shape_gpu_cache_/OffscreenTexturePool elsewhere in
+    // this codebase) only ever drops entries unused for many frames, so it
+    // can never evict something a same-frame draw call still depends on.
     struct SourceBindGroupCacheEntry
     {
         std::shared_ptr<campello_gpu::Texture>   texture;
         std::shared_ptr<campello_gpu::BindGroup> bind_group;
+        uint64_t                                 last_used_frame = 0;
     };
-    static constexpr size_t kMaxSourceBindGroupCacheSize = 16;
+    static constexpr uint64_t kMaxSourceBindGroupCacheAgeFrames = 120;
     std::unordered_map<const campello_gpu::Texture*, SourceBindGroupCacheEntry> blur_source_bind_group_cache_;
 
+    // Drops any blur_source_bind_group_cache_ entry unused for more than
+    // kMaxSourceBindGroupCacheAgeFrames frames — called once per real frame
+    // (setViewport()), mirroring OffscreenTexturePool::evictStale().
+    void evictStaleSourceBindGroups();
+
     // Looks up (or builds and caches) the texture@0/sampler@1 BindGroup for
-    // `tex` against quad_tex_bgl_. Clears the whole cache first if it would
-    // exceed kMaxSourceBindGroupCacheSize — a crude but simple bound; in
-    // steady state the cache never grows past OffscreenTexturePool's own
-    // rotation depth per distinct BackdropFilter/blur size on screen.
+    // `tex` against quad_tex_bgl_. Never evicts synchronously — see
+    // blur_source_bind_group_cache_'s doc comment for why a same-frame
+    // size-triggered clear was a real correctness bug, not just a perf
+    // tradeoff. Stale entries are dropped only by evictStaleSourceBindGroups().
     std::shared_ptr<campello_gpu::BindGroup> lookupOrCreateSourceBindGroup(
         const std::shared_ptr<campello_gpu::Texture>& tex);
 

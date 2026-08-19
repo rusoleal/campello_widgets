@@ -1,7 +1,4 @@
 # campello_fluent — Microsoft Fluent 2 DesignSystem implementation.
-# Sketch: not yet wired into the root build. To enable it, add
-#     add_subdirectory(campello_fluent)
-# to the top-level CMakeLists.txt and link targets against campello_fluent.
 
 file(GLOB_RECURSE CAMPELLO_FLUENT_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 
@@ -17,7 +14,11 @@ target_include_directories(campello_fluent
 
 target_link_libraries(campello_fluent PUBLIC campello_widgets)
 
-target_compile_options(campello_fluent PRIVATE -Wall -Wextra)
+if(MSVC)
+    target_compile_options(campello_fluent PRIVATE /W4)
+else()
+    target_compile_options(campello_fluent PRIVATE -Wall -Wextra)
+endif()
 
 if(BUILD_TESTS)
     file(GLOB_RECURSE CAMPELLO_FLUENT_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")
