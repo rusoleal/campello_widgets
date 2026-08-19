@@ -541,6 +541,15 @@ namespace systems::leal::campello_widgets
 
     WidgetRef MaterialDesignSystem::buildListTile(const ListTileConfig& cfg) const
     {
+        const auto& c = tokens_.colors;
+        // Same fg-discard pattern found and fixed repeatedly this session:
+        // cfg.leading arrives as plain caller content — real M3 ListItem
+        // colors its leading icon onSurfaceVariant.
+        WidgetRef leading = cfg.leading;
+        if (auto asIcon = std::dynamic_pointer_cast<const Icon>(leading)) {
+            leading = Icon::create(asIcon->texture, asIcon->size, c.on_surface_variant);
+        }
+
         WidgetRef text_section;
         if (cfg.subtitle) {
             auto col  = std::make_shared<Column>();
@@ -553,8 +562,8 @@ namespace systems::leal::campello_widgets
         }
 
         std::vector<WidgetRef> row_children;
-        if (cfg.leading) {
-            row_children.push_back(cfg.leading);
+        if (leading) {
+            row_children.push_back(leading);
             row_children.push_back(SizedBox::from_width(16.0f));
         }
         row_children.push_back(std::make_shared<Expanded>(WidgetRef(text_section)));
@@ -623,9 +632,22 @@ namespace systems::leal::campello_widgets
     WidgetRef MaterialDesignSystem::buildAppBar(const AppBarConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+
+        // Same fg-discard pattern found and fixed repeatedly this session:
+        // cfg.leading/actions arrive as plain caller content with no
+        // expectation of being pre-tinted — real M3 TopAppBar colors its
+        // navigation icon onSurface and its action icons
+        // onSurfaceVariant.
+        auto tint_icon = [](WidgetRef w, Color tint) -> WidgetRef {
+            if (auto asIcon = std::dynamic_pointer_cast<const Icon>(w)) {
+                return Icon::create(asIcon->texture, asIcon->size, tint);
+            }
+            return w;
+        };
+
         std::vector<WidgetRef> row_children;
         if (cfg.leading) {
-            row_children.push_back(cfg.leading);
+            row_children.push_back(tint_icon(cfg.leading, c.on_surface));
             row_children.push_back(SizedBox::from_width(12.0f));
         }
         if (cfg.title) {
@@ -635,7 +657,7 @@ namespace systems::leal::campello_widgets
         }
         for (const auto& action : cfg.actions) {
             row_children.push_back(SizedBox::from_width(8.0f));
-            row_children.push_back(action);
+            row_children.push_back(tint_icon(action, c.on_surface_variant));
         }
 
         auto row = std::make_shared<Row>();
@@ -1003,7 +1025,15 @@ namespace systems::leal::campello_widgets
 
         WidgetRef content;
         if (cfg.icon) {
-            content = cfg.icon;
+            // Same fg-discard pattern found and fixed repeatedly this
+            // session: cfg.icon arrives as plain caller content — real
+            // M3 FAB icon color is onPrimaryContainer, matching the
+            // fallback "+" glyph's own color just below.
+            if (auto asIcon = std::dynamic_pointer_cast<const Icon>(cfg.icon)) {
+                content = Icon::create(asIcon->texture, asIcon->size, c.on_primary_container);
+            } else {
+                content = cfg.icon;
+            }
         } else if (cfg.label) {
             content = cfg.label;
         } else {

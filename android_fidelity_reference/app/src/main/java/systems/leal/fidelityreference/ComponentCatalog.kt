@@ -10,16 +10,24 @@ import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.TopAppBar
 import androidx.compose.foundation.layout.Box
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
@@ -53,6 +61,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
 /**
@@ -113,11 +122,11 @@ object ComponentCatalog {
                 modifier = Modifier.width(280.dp).padding(start = 16.dp, end = 16.dp)
             )
 
-            // "listTile_with_icon" intentionally omitted: the C++ side's
-            // icon() helper is a "★" text placeholder (no real Icon widget
-            // yet — see themed_component_harness.cpp's TODO), so comparing
-            // it against a real Compose icon would test icon-glyph fidelity
-            // rather than the ListItem/ListTile chrome this pass covers.
+            "listTile_with_icon" -> ListItem(
+                headlineContent = { Text("Title") },
+                leadingContent = { Icon(Icons.Filled.Star, null) },
+                modifier = Modifier.width(280.dp)
+            )
             "listTile_one_line" -> ListItem(
                 headlineContent = { Text("Title") },
                 modifier = Modifier.width(280.dp)
@@ -255,6 +264,27 @@ object ComponentCatalog {
                 NavigationRailItem(selected = false, onClick = {}, icon = { Icon(Icons.Filled.Search, null) }, label = { Text("Search") })
                 NavigationRailItem(selected = false, onClick = {}, icon = { Icon(Icons.Filled.Person, null) }, label = { Text("Profile") })
             }
+
+            // Mirrors "appBar": back chevron leading + one settings action.
+            // "default" -> Text("Navigation") (start-aligned title, real
+            // TopAppBar's default); "center_title" -> Text("Title")
+            // (center-aligned, CenterAlignedTopAppBar).
+            "appBar_default" -> TopAppBar(
+                title = { Text("Navigation") },
+                navigationIcon = { IconButton(onClick = {}) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                actions = { IconButton(onClick = {}) { Icon(Icons.Filled.Settings, null) } }
+            )
+            "appBar_center_title" -> CenterAlignedTopAppBar(
+                title = { Text("Title") },
+                navigationIcon = { IconButton(onClick = {}) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
+                actions = { IconButton(onClick = {}) { Icon(Icons.Filled.Settings, null) } }
+            )
+
+            // Mirrors "primaryActionButton": real M3 FAB defaults to
+            // primaryContainer, matching buildPrimaryActionButton()'s own
+            // deco.color choice.
+            "primaryActionButton_icon" -> FloatingActionButton(onClick = {}) { Icon(Icons.Filled.Add, null) }
+            "primaryActionButton_label" -> FloatingActionButton(onClick = {}) { Text("+") }
 
             "popupMenuButton_closed" -> OutlinedButton(onClick = {}) { Text("Open Menu") }
             "popupMenuButton_open" -> {

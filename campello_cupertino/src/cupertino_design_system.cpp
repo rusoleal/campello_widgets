@@ -596,6 +596,15 @@ namespace systems::leal::campello_widgets
 
     WidgetRef CupertinoDesignSystem::buildListTile(const ListTileConfig& cfg) const
     {
+        const auto& c = tokens_.colors;
+        // Same fg-discard pattern found and fixed repeatedly this session:
+        // cfg.leading arrives as plain caller content — real iOS list row
+        // glyphs render in secondaryLabel gray by default.
+        WidgetRef leading = cfg.leading;
+        if (auto asIcon = std::dynamic_pointer_cast<const Icon>(leading)) {
+            leading = Icon::create(asIcon->texture, asIcon->size, c.on_surface_variant);
+        }
+
         WidgetRef text_section;
         if (cfg.subtitle) {
             auto col  = std::make_shared<Column>();
@@ -608,8 +617,8 @@ namespace systems::leal::campello_widgets
         }
 
         std::vector<WidgetRef> row_children;
-        if (cfg.leading) {
-            row_children.push_back(cfg.leading);
+        if (leading) {
+            row_children.push_back(leading);
             row_children.push_back(SizedBox::from_width(12.0f));
         }
         row_children.push_back(std::make_shared<Expanded>(WidgetRef(text_section)));
@@ -678,9 +687,22 @@ namespace systems::leal::campello_widgets
     WidgetRef CupertinoDesignSystem::buildAppBar(const AppBarConfig& cfg) const
     {
         const auto& c = tokens_.colors;
+
+        // Same fg-discard pattern found and fixed repeatedly this session:
+        // cfg.leading/actions arrive as plain caller content — real
+        // UINavigationBar tints its back chevron and bar button items
+        // with the app's tintColor (the accent color), not a neutral
+        // gray.
+        auto tint_icon = [&](WidgetRef w) -> WidgetRef {
+            if (auto asIcon = std::dynamic_pointer_cast<const Icon>(w)) {
+                return Icon::create(asIcon->texture, asIcon->size, c.primary);
+            }
+            return w;
+        };
+
         std::vector<WidgetRef> row_children;
         if (cfg.leading) {
-            row_children.push_back(cfg.leading);
+            row_children.push_back(tint_icon(cfg.leading));
             row_children.push_back(SizedBox::from_width(12.0f));
         }
         if (cfg.title) {
@@ -690,7 +712,7 @@ namespace systems::leal::campello_widgets
         }
         for (const auto& action : cfg.actions) {
             row_children.push_back(SizedBox::from_width(8.0f));
-            row_children.push_back(action);
+            row_children.push_back(tint_icon(action));
         }
 
         auto row = std::make_shared<Row>();
@@ -1243,14 +1265,22 @@ namespace systems::leal::campello_widgets
         const float el       = tokens_.elevation.level2;
 
         WidgetRef content;
+        const Color fab_icon_tint = material_ == CupertinoMaterial::liquidGlass ? c.primary : c.on_primary;
         if (cfg.icon) {
-            content = cfg.icon;
+            // Same fg-discard pattern found and fixed repeatedly this
+            // session: cfg.icon arrives as plain caller content — real
+            // tint matches the fallback "+" glyph's own color right
+            // below.
+            if (auto asIcon = std::dynamic_pointer_cast<const Icon>(cfg.icon)) {
+                content = Icon::create(asIcon->texture, asIcon->size, fab_icon_tint);
+            } else {
+                content = cfg.icon;
+            }
         } else if (cfg.label) {
             content = cfg.label;
         } else {
             content = std::make_shared<Text>("+",
-                TextStyle{}.withFontSize(24.0f).withColor(
-                    material_ == CupertinoMaterial::liquidGlass ? c.primary : c.on_primary));
+                TextStyle{}.withFontSize(24.0f).withColor(fab_icon_tint));
         }
 
         // Align must be the *inner* widget, SizedBox outermost — see
