@@ -899,12 +899,17 @@ namespace systems::leal::campello_widgets
             // alerts render side by side with no special treatment).
             const bool bold_last_action = cfg.actions.size() >= 3;
 
-            // iOS alert buttons sit on a light gray surface, centered. A
-            // fixed 44pt height matches a single row of side-by-side
-            // actions (<=2), but a stacked column of 3+ actions needs its
-            // natural (unforced) height or the extra rows clip/overlap.
+            // The whole card (title/content/actions) is one continuous
+            // blurred panel — confirmed against a real capture that the
+            // actions row carries no extra opaque tint of its own, just
+            // the hairline divider above it, so this Container is left
+            // uncolored (transparent) rather than painting a flat
+            // c.surface_variant that would occlude the dialog's own
+            // blur/tint in that region. A fixed 44pt height matches a
+            // single row of side-by-side actions (<=2), but a stacked
+            // column of 3+ actions needs its natural (unforced) height or
+            // the extra rows clip/overlap.
             auto action_bg = std::make_shared<Container>();
-            action_bg->color = c.surface_variant;
 
             if (cfg.actions.size() <= 2) {
                 std::vector<WidgetRef> row_children;
@@ -964,29 +969,54 @@ namespace systems::leal::campello_widgets
         // pure black (matching .systemBackground) and the card needs the
         // lighter c.surface_variant instead, or it disappears into the root.
         const Color dialog_bg = (tokens_.brightness == Brightness::dark) ? c.surface_variant : c.surface;
+        // Dialog::build() never reads background_color once backdrop_filter
+        // is set (only the filter's own `tint` param applies — see its doc
+        // comment) — kept in sync anyway.
+        //
+        // Not a fixed opacity — calibrated separately per brightness by
+        // sampling a real-captured reference's card-interior brightness
+        // plateau and solving for the tint weight that reproduces it
+        // (light: measured plateau ~210-213/255 -> ~0.75; dark:
+        // ~57/255 -> ~0.54). The two need different values because
+        // dialog_bg's own luminance relative to the blurred backdrop
+        // flips sign between themes: light's near-white c.surface is
+        // *brighter* than the backdrop, so more tint weight brightens
+        // the result; dark's c.surface_variant is *darker* than the
+        // backdrop, so more tint weight darkens it — the same
+        // light/dark asymmetry already found this session for the
+        // dialog scrim and confirmationDialog pill fill.
+        const float tint_opacity = (tokens_.brightness == Brightness::dark) ? 0.54f : 0.75f;
+        dialog->background_color  = withOpacity(dialog_bg, tint_opacity);
         if (material_ == CupertinoMaterial::liquidGlass) {
-            // Dialog::build() never reads background_color once
-            // backdrop_filter is set (only the filter's own `tint` param
-            // applies — see its doc comment) — kept in sync anyway.
-            //
-            // Not a fixed opacity — calibrated separately per brightness by
-            // sampling a real-captured reference's card-interior brightness
-            // plateau and solving for the tint weight that reproduces it
-            // (light: measured plateau ~210-213/255 -> ~0.75; dark:
-            // ~57/255 -> ~0.54). The two need different values because
-            // dialog_bg's own luminance relative to the blurred backdrop
-            // flips sign between themes: light's near-white c.surface is
-            // *brighter* than the backdrop, so more tint weight brightens
-            // the result; dark's c.surface_variant is *darker* than the
-            // backdrop, so more tint weight darkens it — the same
-            // light/dark asymmetry already found this session for the
-            // dialog scrim and confirmationDialog pill fill.
-            const float tint_opacity = (tokens_.brightness == Brightness::dark) ? 0.54f : 0.75f;
-            dialog->background_color  = withOpacity(dialog_bg, tint_opacity);
-            dialog->backdrop_filter   = ImageFilter::liquidGlass(tokens_.shape.radius_lg,
-                                                                   withOpacity(dialog_bg, tint_opacity));
+            dialog->backdrop_filter = ImageFilter::liquidGlass(tokens_.shape.radius_lg,
+                                                                 withOpacity(dialog_bg, tint_opacity));
         } else {
-            dialog->background_color = dialog_bg;
+            // Classic dark tint reuses buildActionSheet()'s
+            // separately-calibrated 0x2C2C2E (tertiarySystemBackground)
+            // rather than this function's own dialog_bg/c.surface_variant
+            // (0x1C1C1E, secondarySystemBackground) — direct pixel-
+            // sampling a real cupertino_dark capture's Cancel button (an
+            // unambiguous flat opaque reference, no blur uncertainty)
+            // confirmed 0x1C1C1E reads visibly too dark. Only the classic
+            // branch changes; Liquid Glass keeps dialog_bg as already
+            // calibrated.
+            const Color classic_dialog_bg = (tokens_.brightness == Brightness::dark)
+                                                 ? Color::fromARGB(0xFF2C2C2E)
+                                                 : dialog_bg;
+            dialog->background_color = withOpacity(classic_dialog_bg, tint_opacity);
+            // Classic UIAlertController has always sat on a translucent
+            // UIBlurEffect(.systemMaterial) vibrancy card, even pre-iOS-26
+            // (confirmed against a real-captured cupertino_light/dark
+            // reference: the colorful backdrop visibly bleeds through the
+            // card at a brightness plateau matching the SAME tint weights
+            // measured above for Liquid Glass — the two materials turn out
+            // calibration-equivalent here). Reuses the liquidGlass filter
+            // machinery (this backend's only tinted-blur compositing path)
+            // with refraction/specular zeroed out, since classic blur has
+            // no glass-bend/rim-highlight, just a flat frosted tint.
+            dialog->backdrop_filter = ImageFilter::liquidGlass(
+                tokens_.shape.radius_lg, withOpacity(classic_dialog_bg, tint_opacity),
+                /*blur_sigma=*/16.0f, /*refraction_strength=*/0.0f, /*specular_intensity=*/0.0f);
         }
         return dialog;
     }
@@ -1917,11 +1947,38 @@ namespace systems::leal::campello_widgets
         // composition as buildCard()/buildDialog() (no ClipRRect; see
         // TODO.md's Liquid Glass entry for why that's a confirmed
         // incompatibility, not an oversight).
-        auto makeSheetCard = [&](WidgetRef content) -> WidgetRef {
-            if (material_ == CupertinoMaterial::liquidGlass) {
+        // blurred=true wraps content in a BackdropFilter (translucent
+        // vibrancy card); blurred=false paints a flat opaque fill. Both
+        // Liquid Glass cards are always blurred, but classic material
+        // splits: confirmed against a real cupertino_light/dark capture
+        // that the grouped actions card sits on real translucent blur
+        // (backdrop colors visibly bleed through) while the separately
+        // detached Cancel button is fully opaque (flat c.surface_variant,
+        // no bleed at all, matching UIAlertController's actual — not
+        // uniform — classic-style material split between the two cards).
+        auto makeSheetCard = [&](WidgetRef content, bool blurred) -> WidgetRef {
+            if (blurred) {
+                // refraction/specular zeroed for classic material — see
+                // buildDialog()'s identical reuse-with-zeroed-glass-terms
+                // pattern and its comment for why. Classic also needs its
+                // own (higher) tint weight than Liquid Glass's 0.45,
+                // confirmed by sampling a real cupertino_light/dark
+                // capture's card-interior brightness the same way
+                // buildDialog() was calibrated — classic's card reads
+                // noticeably less saturated/more washed-out than the iOS
+                // 26 pill style, so it reuses buildDialog()'s own
+                // tint_opacity constants (same UIAlertController family)
+                // rather than Liquid Glass's.
+                const bool dark = tokens_.brightness == Brightness::dark;
+                const Color classic_tint = dark ? c.surface_variant : c.surface;
+                const ImageFilter filter = (material_ == CupertinoMaterial::liquidGlass)
+                    ? ImageFilter::liquidGlass(tokens_.shape.radius_lg, withOpacity(c.surface, 0.45f))
+                    : ImageFilter::liquidGlass(
+                          tokens_.shape.radius_lg, withOpacity(classic_tint, dark ? 0.54f : 0.75f),
+                          /*blur_sigma=*/16.0f, /*refraction_strength=*/0.0f,
+                          /*specular_intensity=*/0.0f);
                 auto bf = std::make_shared<BackdropFilter>();
-                bf->filter = ImageFilter::liquidGlass(tokens_.shape.radius_lg,
-                                                        withOpacity(c.surface, 0.45f));
+                bf->filter = filter;
                 bf->child  = std::move(content);
                 BoxDecoration shadow_deco;
                 shadow_deco.border_radius = tokens_.shape.radius_lg;
@@ -1930,8 +1987,19 @@ namespace systems::leal::campello_widgets
                 shadowed->child      = bf;
                 return shadowed;
             }
+            // c.surface_variant (secondarySystemBackground, 0x1C1C1E) reads
+            // visibly darker than the real detached Cancel button — direct
+            // pixel-sampling a real cupertino_dark capture's (fully
+            // opaque, no-blur-ambiguity) Cancel button measured a flat
+            // (44,44,46), i.e. UIKit's tertiarySystemBackground/systemGray5
+            // (0x2C2C2E), not secondarySystemBackground. No existing token
+            // maps to that exact role, so it's a local literal rather than
+            // repurposing surface_variant and risking every other consumer
+            // of that token elsewhere in dark mode.
             BoxDecoration deco;
-            deco.color         = c.surface;
+            deco.color         = (tokens_.brightness == Brightness::dark)
+                                      ? Color::fromARGB(0xFF2C2C2E)
+                                      : c.surface;
             deco.border_radius = tokens_.shape.radius_lg;
             auto decorated = std::make_shared<DecoratedBox>();
             decorated->decoration = deco;
@@ -1939,7 +2007,7 @@ namespace systems::leal::campello_widgets
             return decorated;
         };
 
-        auto actions_card = makeSheetCard(actions_col);
+        auto actions_card = makeSheetCard(actions_col, /*blurred=*/true);
 
         if (!cfg.on_cancel) return actions_card;
 
@@ -1957,7 +2025,7 @@ namespace systems::leal::campello_widgets
         cancel_gesture->on_tap = cfg.on_cancel;
         cancel_gesture->child  = cancel_padded;
 
-        auto cancel_card = makeSheetCard(cancel_gesture);
+        auto cancel_card = makeSheetCard(cancel_gesture, /*blurred=*/material_ == CupertinoMaterial::liquidGlass);
 
         auto col = std::make_shared<Column>();
         col->main_axis_size = MainAxisSize::min;
