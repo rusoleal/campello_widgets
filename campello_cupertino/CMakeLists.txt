@@ -14,7 +14,11 @@ target_include_directories(campello_cupertino
 
 target_link_libraries(campello_cupertino PUBLIC campello_widgets)
 
-target_compile_options(campello_cupertino PRIVATE -Wall -Wextra)
+if(MSVC)
+    target_compile_options(campello_cupertino PRIVATE /W4)
+else()
+    target_compile_options(campello_cupertino PRIVATE -Wall -Wextra)
+endif()
 
 if(BUILD_TESTS)
     file(GLOB_RECURSE CAMPELLO_CUPERTINO_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp")

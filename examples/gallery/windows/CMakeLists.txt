@@ -18,7 +18,18 @@ target_include_directories(campello_widgets_gallery PRIVATE ${CMAKE_CURRENT_SOUR
 
 target_compile_definitions(campello_widgets_gallery PRIVATE NOMINMAX)
 
-target_link_libraries(campello_widgets_gallery PRIVATE campello_widgets)
+# Dev-only: the gallery runs directly out of the build tree (never
+# redistributed), so a compile-time absolute path to examples/gallery/assets/
+# is simplest — matches macos/CMakeLists.txt's identical definition.
+target_compile_definitions(campello_widgets_gallery PRIVATE
+    CAMPELLO_GALLERY_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../assets")
+
+target_link_libraries(campello_widgets_gallery PRIVATE
+    campello_widgets
+    campello_ui
+    campello_material
+    campello_cupertino
+)
 
 set_target_properties(campello_widgets_gallery PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}

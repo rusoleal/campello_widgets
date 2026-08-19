@@ -9,11 +9,22 @@ endif()
 
 include(FetchContent)
 
-FetchContent_Declare(
-    campello_gpu
-    GIT_REPOSITORY https://github.com/rusoleal/campello_gpu.git
-    GIT_TAG        v0.23.1
-)
+# Temporary local-testing override: if a sibling campello_gpu checkout exists,
+# build against its working tree directly instead of fetching from GitHub.
+set(_campello_gpu_local_dir "${CMAKE_CURRENT_SOURCE_DIR}/../campello_gpu")
+if(EXISTS "${_campello_gpu_local_dir}/CMakeLists.txt")
+    message(STATUS "Using local campello_gpu checkout at ${_campello_gpu_local_dir}")
+    FetchContent_Declare(
+        campello_gpu
+        SOURCE_DIR ${_campello_gpu_local_dir}
+    )
+else()
+    FetchContent_Declare(
+        campello_gpu
+        GIT_REPOSITORY https://github.com/rusoleal/campello_gpu.git
+        GIT_TAG        v0.23.1
+    )
+endif()
 
 if(NOT campello_gpu_POPULATED)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
