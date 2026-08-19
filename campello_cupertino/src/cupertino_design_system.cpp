@@ -268,9 +268,17 @@ namespace systems::leal::campello_widgets
             content = row;
         }
 
+        // width_factor is load-bearing too, not just height_factor: without
+        // it Align reports its own width as the incoming constraint's max
+        // rather than the child's actual width — the same expand-fill
+        // mistake found (and fixed) elsewhere this session, here on the
+        // horizontal axis. Confirmed against a real capture that a
+        // standalone button is a compact, content-sized pill, not a
+        // full-width bar.
         auto centered = std::make_shared<Align>();
         centered->alignment = Alignment::center();
         centered->height_factor = 1.0f;
+        centered->width_factor = 1.0f;
         centered->child = content;
 
         auto padded = std::make_shared<Padding>();
@@ -288,15 +296,15 @@ namespace systems::leal::campello_widgets
             result = decorated;
         }
 
-        // iOS .filled/.tinted buttons expand to fill the available width.
-        auto stretch = std::make_shared<Column>();
-        stretch->main_axis_size       = MainAxisSize::min;
-        stretch->cross_axis_alignment = CrossAxisAlignment::stretch;
-        stretch->children             = {result};
-
+        // A standalone UIButton (.filled()/.tinted()) sizes to its own
+        // content, not to whatever width it's handed — confirmed against a
+        // real capture showing a compact, intrinsically-sized pill, not a
+        // full-width bar (that full-width behavior only applies inside a
+        // UIStackView with .fill distribution, which none of these gallery
+        // cases use).
         auto detector = std::make_shared<GestureDetector>();
         detector->on_tap = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
-        detector->child  = stretch;
+        detector->child  = result;
 
         if (!cfg.enabled || !cfg.on_pressed) {
             auto faded = std::make_shared<Opacity>();
@@ -706,7 +714,24 @@ namespace systems::leal::campello_widgets
             row_children.push_back(SizedBox::from_width(12.0f));
         }
         if (cfg.title) {
-            row_children.push_back(std::make_shared<Expanded>(WidgetRef(cfg.title)));
+            // Real UINavigationBar always centers its (compact/standard)
+            // title, regardless of cfg.center_title — classic UIKit has no
+            // "leading title" style the way Material's AppBar does.
+            // Confirmed against a real capture: both the "default" and
+            // "center_title" states render centered. width/height_factor
+            // are load-bearing (same expand-fill Align footgun found
+            // elsewhere this session): Center() is a bare Align with
+            // neither factor set, so without them it reports its own size
+            // as the incoming constraint's max — which, threaded back up
+            // through this Expanded/Row/Padding chain, balloons the whole
+            // app bar to the full loose height it was handed instead of
+            // shrink-wrapping to the title's own line height.
+            auto centered = std::make_shared<Align>();
+            centered->alignment    = Alignment::center();
+            centered->width_factor  = 1.0f;
+            centered->height_factor = 1.0f;
+            centered->child = cfg.title;
+            row_children.push_back(std::make_shared<Expanded>(WidgetRef(centered)));
         } else {
             row_children.push_back(std::make_shared<Expanded>(WidgetRef(SizedBox::shrink())));
         }
@@ -726,6 +751,17 @@ namespace systems::leal::campello_widgets
         // Edge-to-edge bar, not a floating card — corner_radius 0 so the
         // glass shader shapes it as a flat rect (see buildCard()'s
         // BackdropFilter comment for why there's no enclosing ClipRRect).
+        //
+        // Classic material was tried with the same blur treatment as
+        // buildDialog()/buildActionSheet() (RealCapture.swift's
+        // makeAppBar() mounts a genuine bare UINavigationBar(), whose
+        // default UIBarAppearance is translucent) but reverted: a real
+        // capture shows an uneven *left-to-right* fade (opaque leading
+        // edge, translucent trailing edge) rather than a uniform blur —
+        // apparently an artifact of testing a standalone bar with no host
+        // UINavigationController/scroll context, not reproducible with
+        // this codebase's uniform BackdropFilter, and a uniform blur
+        // measured *worse* against the real capture than staying opaque.
         if (material_ == CupertinoMaterial::liquidGlass) {
             auto bf = std::make_shared<BackdropFilter>();
             bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, 0.45f));
@@ -2042,8 +2078,13 @@ namespace systems::leal::campello_widgets
     {
         const auto& c = tokens_.colors;
 
-        auto icon = std::make_shared<Text>("search",
-            TextStyle{}.withFontSize(12.0f).withColor(c.on_surface_variant));
+        // A real UISearchTextField's leading glyph is a small magnifying-
+        // glass symbol, not the word "search" — confirmed against a real
+        // capture. No icon-asset field on SearchFieldConfig to draw a real
+        // icon from, so this uses the Unicode glyph as the closest
+        // available approximation to the real symbol's size/position.
+        auto icon = std::make_shared<Text>("\xF0\x9F\x94\x8D",
+            TextStyle{}.withFontSize(14.0f).withColor(c.on_surface_variant));
 
         auto controller = std::make_shared<TextEditingController>(cfg.value);
         auto tf = std::make_shared<TextField>(controller, cfg.placeholder);
@@ -2076,6 +2117,12 @@ namespace systems::leal::campello_widgets
         padded->padding = EdgeInsets::symmetric(10.0f, 4.0f);
         padded->child   = row;
 
+        // Classic material blurs too, not just Liquid Glass — same missing-
+        // blur class of bug already found and fixed for buildDialog()/
+        // buildActionSheet(): a real UISearchTextField's fill is a
+        // translucent gray, not an opaque one, confirmed against a real
+        // capture showing the backdrop bleeding through. refraction/
+        // specular zeroed for the same reason as those two.
         WidgetRef surface;
         if (material_ == CupertinoMaterial::liquidGlass) {
             auto bf = std::make_shared<BackdropFilter>();
@@ -2083,13 +2130,18 @@ namespace systems::leal::campello_widgets
             bf->child  = padded;
             surface = bf;
         } else {
-            BoxDecoration deco;
-            deco.color         = c.surface_variant;
-            deco.border_radius = tokens_.shape.radius_md; // rounded rect, not a pill
-            auto decorated = std::make_shared<DecoratedBox>();
-            decorated->decoration = deco;
-            decorated->child      = padded;
-            surface = decorated;
+            // Neutral mid-gray tint (iOS's systemGray, not c.surface_variant
+            // — the latter is a near-white warm tint that, blended over a
+            // saturated backdrop, reads pink rather than the real neutral-
+            // gray fill) at a lower weight, calibrated by eye against a
+            // real capture's more muted/less-saturated card interior.
+            auto bf = std::make_shared<BackdropFilter>();
+            bf->filter = ImageFilter::liquidGlass(tokens_.shape.radius_md,
+                                                   withOpacity(Color::fromARGB(0xFF8E8E93), 0.35f),
+                                                   /*blur_sigma=*/16.0f, /*refraction_strength=*/0.0f,
+                                                   /*specular_intensity=*/0.0f);
+            bf->child  = padded;
+            surface = bf;
         }
 
         if (!cfg.enabled) {
@@ -2397,9 +2449,13 @@ namespace systems::leal::campello_widgets
 
         std::vector<WidgetRef> header_cells;
         for (const auto& col_name : cfg.columns) {
+            // c.on_surface (not the muted on_surface_variant) — confirmed
+            // against a real capture that the grouped-list header text
+            // reads full-strength black/white like the data rows, not
+            // dimmed.
             TextStyle ts;
             ts.font_size = 12.0f;
-            ts.color = c.on_surface_variant;
+            ts.color = c.on_surface;
             header_cells.push_back(makeCell(std::make_shared<Text>(col_name, ts)));
         }
         auto header_row = std::make_shared<Row>();
@@ -2424,13 +2480,12 @@ namespace systems::leal::campello_widgets
         col->cross_axis_alignment = CrossAxisAlignment::stretch;
         col->children = std::move(table_children);
 
-        BoxDecoration outer;
-        outer.color         = c.surface;
-        outer.border_radius = tokens_.shape.radius_md;
-        auto decorated = std::make_shared<DecoratedBox>();
-        decorated->decoration = outer;
-        decorated->child      = col;
-        return decorated;
+        // No card/surface backing — confirmed against a real capture that
+        // the grouped-list table sits directly on the screen's own
+        // backdrop with no fill at all (same "edge-to-edge, no card"
+        // convention as buildAppBar()/buildBottomSheet(), unlike
+        // buildListTile()'s own bounded-card presentation).
+        return col;
     }
 
 } // namespace systems::leal::campello_widgets
