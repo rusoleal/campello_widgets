@@ -14,6 +14,24 @@ enum RealCapture {
     static func present(_ componentCase: ComponentCase, in root: UIViewController, window: UIWindow) {
         let isDark = (componentCase.theme == .cupertinoDark || componentCase.theme == .liquidGlassDark)
         window.overrideUserInterfaceStyle = isDark ? .dark : .light
+        // Deliberately NOT setting root.view.backgroundColor here (unlike
+        // ScreenshotExporter.swift's batch pipeline, which sets
+        // .systemBackground for its VIEW-SNAPSHOT captures). This pipeline
+        // captures the real screen framebuffer via `simctl io screenshot`,
+        // and a real device screenshot shows black behind the shared
+        // backdrop PNG's translucent pixels regardless of app theme —
+        // that's the raw compositor's undrawn-region color, not an
+        // app-drawn one — confirmed by sampling a real-captured reference
+        // at a translucent pixel and solving for the backing color: it
+        // matched black exactly, in both light and dark themes. Forcing a
+        // white/.systemBackground backing here would be *less* accurate,
+        // not more, despite superficially looking "brighter and more
+        // correct" next to the batch-exported (view-snapshot) captures —
+        // see themed_component_harness.cpp's renderDialogCase() for the
+        // C++ side's matching Color::black() clear color and identical
+        // reasoning, independently reached and already relied on by every
+        // fidelity number this whole real-capture category has been
+        // calibrated against.
 
         // navigationRail replaces the window's root controller outright —
         // UISplitViewController only activates its real column-layout
