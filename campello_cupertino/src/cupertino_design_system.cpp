@@ -2368,6 +2368,24 @@ namespace systems::leal::campello_widgets
         // tab items, no pill indicator (HIG doesn't use one here either).
         const auto& c = tokens_.colors;
         std::vector<WidgetRef> item_widgets;
+        // UISplitViewController's own collapse-toggle button — confirmed
+        // against real captures present in *both* classic and Liquid
+        // Glass sidebars, at the very top above the item list, so it's
+        // system chrome (not app content) and rendered unconditionally
+        // whenever the caller supplies an icon for it.
+        if (cfg.toggle_icon) {
+            auto padded = std::make_shared<Padding>();
+            padded->padding = EdgeInsets::symmetric(cfg.extended ? 16.0f : 8.0f, 10.0f);
+            padded->child   = cfg.toggle_icon;
+            WidgetRef entry = padded;
+            if (cfg.on_toggle) {
+                auto gesture = std::make_shared<GestureDetector>();
+                gesture->on_tap = cfg.on_toggle;
+                gesture->child  = padded;
+                entry = gesture;
+            }
+            item_widgets.push_back(entry);
+        }
         for (size_t i = 0; i < cfg.items.size(); ++i) {
             const auto& item = cfg.items[i];
             bool selected = static_cast<int>(i) == cfg.selected_index;
@@ -2433,11 +2451,36 @@ namespace systems::leal::campello_widgets
             // more saturated (75.7 vs 49.4) than this render produced, so
             // a heavier black tint was pushing the wrong direction there.
             const float tint_opacity = (tokens_.brightness == Brightness::dark) ? 0.45f : 0.6f;
+            // blur_sigma scaled by the rail's own width, not a flat 60:
+            // that value was calibrated against the *extended* rail
+            // (~260pt); the compact rail (~100pt) is under half as wide,
+            // and the same absolute blur radius washes out a surface that
+            // narrow far more than it should — confirmed against a real
+            // compact capture showing clearly distinguishable backdrop
+            // color regions, not the near-total wash the flat 60 sigma
+            // produced there.
+            const float blur_sigma = cfg.extended ? 60.0f : 24.0f;
             auto bf = std::make_shared<BackdropFilter>();
-            bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, tint_opacity),
-                                                   /*blur_sigma=*/60.0f);
+            // corner_radius + tint match a real floating rounded pill,
+            // not the previous flush corner_radius=0 rect — confirmed
+            // against a real capture showing genuinely rounded corners on
+            // all four sides.
+            bf->filter = ImageFilter::liquidGlass(16.0f, withOpacity(c.surface, tint_opacity),
+                                                   blur_sigma);
             bf->child  = padded_col;
-            return bf;
+
+            // Left margin only, no right/top/bottom: a real capture's
+            // pixel-level edge scan (raw, uncropped iPad screenshot) found
+            // the card starting at a sharp boundary ~10pt in from the
+            // screen's left edge, then extending flush to exactly the
+            // requested column width (100pt/260pt) with no matching gap
+            // on the other three sides — i.e. the card sits flush against
+            // the split view's own divider, only inset from the true
+            // screen edge.
+            auto margin = std::make_shared<Padding>();
+            margin->padding = EdgeInsets::only(10.0f, 0.0f, 0.0f, 0.0f);
+            margin->child   = bf;
+            return margin;
         }
 
         BoxDecoration outer;

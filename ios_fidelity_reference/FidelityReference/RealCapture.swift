@@ -220,6 +220,22 @@ enum RealCapture {
         // empirically), only replacing the root activates its real
         // column-layout machinery.
         window.rootViewController = split
+
+        // Same visual alignment aid every other reference case gets (see
+        // wrapWithRedBorder() on the C++ side and ReferenceViewControllers
+        // .swift's identical helper) — drawn as an overlay around the
+        // sidebar column's actual on-screen frame after layout settles,
+        // since a real UISplitViewController positions this itself rather
+        // than us placing content inside a hand-built box.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let frameInWindow = sidebarVC.view.convert(sidebarVC.view.bounds, to: window)
+            let border = UIView(frame: frameInWindow.insetBy(dx: -5, dy: -5))
+            border.backgroundColor = .clear
+            border.layer.borderColor = UIColor.red.cgColor
+            border.layer.borderWidth = 1.0
+            border.isUserInteractionEnabled = false
+            window.addSubview(border)
+        }
     }
 }
 

@@ -193,23 +193,19 @@ run_real_capture_case() {
 
     # navigationRail is real screen furniture (a UISplitViewController
     # sidebar), not a full-screen surface — only the rail portion at the
-    # left edge matters, the detail column beside it is discarded. Widths
-    # measured directly from a real capture with the detail column's
-    # backdrop image actually loaded (the first measurement attempt used
-    # a manual test run where that image had silently failed to load,
-    # making the whole screen look uniformly blank/white and hiding the
-    # true sidebar/detail boundary — this re-measurement used the
-    # gray-sidebar-to-colorful-backdrop color transition instead, sampled
-    # at multiple rows well below any icon/toolbar content, and lines up
-    # almost exactly with 2x the requested 100pt/260pt column width
-    # (RealCapture.swift's addNavigationRail), as expected for this
-    # iPad's DPR of 2.
+    # left edge matters, the detail column beside it is discarded. Both
+    # sides now wrap the sidebar in the same red debug border every other
+    # widget capture gets (RealCapture.swift's addNavigationRail draws it
+    # around the real sidebar column's on-screen frame), so the crop
+    # needs to include that border too — measured directly on a raw real
+    # capture at 229px/549px (compact/extended) for the border's right
+    # edge, rounded up for a small safety buffer.
     local right_crop_py="w"
     if [ "${builder}" = "navigationRail" ]; then
         if [ "${state}" = "compact" ]; then
-            right_crop_py="199"
+            right_crop_py="234"
         else
-            right_crop_py="520"
+            right_crop_py="554"
         fi
     fi
 

@@ -382,6 +382,15 @@ namespace systems::leal::campello_widgets
         int selected_index = 0;
         std::function<void(int)> on_tap;
         bool extended = false; ///< show labels beside icons, vs. the default icon-only compact rail
+
+        /// Real iPadOS renders a sidebar-collapse toggle button (the
+        /// "sidebar.left" glyph) above the rail's items, owned by
+        /// UISplitViewController itself rather than app content — present
+        /// in both classic and Liquid Glass captures. Optional here (no
+        /// bundled icon-glyph system in this design system to draw it
+        /// from unprompted) — omit to fall back to the plain item column.
+        WidgetRef toggle_icon;
+        std::function<void()> on_toggle;
     };
 
     /**

@@ -82,19 +82,22 @@ static constexpr float kIpadBottomInsetCupertinoPhysical = 50.0f;
 static constexpr float kIpadTopInsetLiquidGlassPhysical    = 64.0f;
 static constexpr float kIpadBottomInsetLiquidGlassPhysical = 40.0f;
 
-// Real UISplitViewController sidebar width when requested at 100pt
-// (compact, icon-only) / 260pt (extended, icon+label) primary-column
-// width — lines up almost exactly with 2x the request (this iPad's DPR),
-// no extra chrome. Measured from a capture with the detail column's
-// backdrop image actually loaded, using the gray-sidebar-to-colorful-
-// backdrop color transition (an earlier measurement attempt used a
-// manual run where that image had silently failed to load, making the
-// whole screen look uniformly blank and hiding the true boundary).
-// export_references.sh crops the real capture to exactly these widths
-// too, so both sides match without further size-reconciliation logic in
-// compare_ios_cpp.py.
-static constexpr float kIpadRailWidthCompactPhysical  = 199.0f;
-static constexpr float kIpadRailWidthExtendedPhysical = 520.0f;
+// Real UISplitViewController sidebar *card* width when requested at
+// 100pt (compact, icon-only) / 260pt (extended, icon+label) primary-
+// column width — the visible rounded card itself is exactly 2x the
+// request (this iPad's DPR), no extra chrome, confirmed by re-measuring
+// directly against a raw (uncropped) real capture. The two constants
+// below are the *crop* width, not the card width — both sides now wrap
+// the sidebar column in the same red debug border every other widget
+// capture gets (RealCapture.swift draws it around the real sidebar's
+// on-screen frame; the harness wraps the built widget in
+// wrapWithRedBorder()), so the crop needs to include that border too:
+// measured directly on a raw real capture at 229px/549px (compact/
+// extended), rounded up for a small safety buffer. export_references.sh
+// crops the real capture to these same widths, so both sides match
+// without further size-reconciliation logic in compare_ios_cpp.py.
+static constexpr float kIpadRailWidthCompactPhysical  = 234.0f;
+static constexpr float kIpadRailWidthExtendedPhysical = 554.0f;
 
 // windows_fidelity_reference's WinUI 3 app window: a fixed moderate size
 // (not this machine's full monitor — capturing single small components at
@@ -602,6 +605,8 @@ static cw::WidgetRef buildWidget(const cw::DesignSystem& ds, const std::string& 
         cfg.items = {{icon(ds, "house"), "Home"}, {icon(ds, "magnifyingglass"), "Search"}, {icon(ds, "person"), "Profile"}};
         cfg.extended = (state == "extended");
         cfg.on_tap = [](int) {};
+        cfg.toggle_icon = icon(ds, "sidebar.left");
+        cfg.on_toggle = [] {};
         return ds.buildNavigationRail(cfg);
     }
 
@@ -1015,6 +1020,13 @@ static bool renderNavigationRailCase(const cw::DesignSystem& ds, const Case& c, 
         std::cerr << "Unknown builder: " << c.builder << "\n";
         return false;
     }
+    // Same visual alignment aid every other widget capture gets — see
+    // wrapForViewport()'s identical comment. navigationRail previously
+    // skipped this (real capture, no artificial box), but a real
+    // system-positioned rail can still be framed with a border drawn
+    // *around* wherever it actually lands, same as RealCapture.swift now
+    // does for the real side.
+    railWidget = wrapWithRedBorder(std::move(railWidget));
 
     const float railWidthPhysical = (c.state == "compact")
         ? kIpadRailWidthCompactPhysical : kIpadRailWidthExtendedPhysical;
