@@ -863,6 +863,11 @@ static bool renderDialogCase(const cw::DesignSystem& ds, const Case& c, const st
         std::cerr << "Unknown builder: " << c.builder << "\n";
         return false;
     }
+    // Same visual alignment aid every other widget capture gets — see
+    // wrapForViewport()'s identical comment. Real capture cases (this one
+    // included) previously skipped it; RealCapture.swift now draws the
+    // matching border around the real presented alert's own frame.
+    dialogWidget = wrapWithRedBorder(std::move(dialogWidget));
 
     WidgetRef background;
     auto tex = loadBackgroundTexture();
@@ -958,6 +963,11 @@ static bool renderSearchFieldCase(const cw::DesignSystem& ds, const Case& c, con
     // capture was measured/validated at a fixed 280pt presentation width,
     // so apply that here rather than in the shared builder.
     fieldWidget = SizedBox::from_width(280.0f, fieldWidget);
+    // Same visual alignment aid every other widget capture gets — see
+    // wrapForViewport()'s identical comment. Wrapped *around* the fixed
+    // 280pt width (not inside it), matching RealCapture.swift's border
+    // drawn around the real UISearchTextField's own on-screen frame.
+    fieldWidget = wrapWithRedBorder(std::move(fieldWidget));
 
     WidgetRef background;
     auto tex = loadBackgroundTexture();
@@ -1143,6 +1153,12 @@ static bool renderActionSheetCase(const cw::DesignSystem& ds, const Case& c, con
         std::cerr << "Unknown builder: " << c.builder << "\n";
         return false;
     }
+    // Same visual alignment aid every other widget capture gets — see
+    // wrapForViewport()'s identical comment. One border around the whole
+    // composite (actions card + detached Cancel card together), matching
+    // RealCapture.swift's border drawn around the real presented
+    // UIAlertController's own view frame (which also spans both).
+    sheetWidget = wrapWithRedBorder(std::move(sheetWidget));
 
     WidgetRef background;
     auto tex = loadBackgroundTexture();

@@ -73,6 +73,23 @@ enum RealCapture {
         writeSafeArea(window: window)
     }
 
+    // Same visual alignment aid every other reference case gets (see
+    // wrapWithRedBorder() on the C++ side and ReferenceViewControllers
+    // .swift's identical helper) — drawn as a window-level overlay around
+    // a real view's actual on-screen frame, since these four builders
+    // present genuine system chrome the OS positions itself rather than
+    // us placing content inside a hand-built box.
+    private static func addRedBorder(around view: UIView?, in window: UIWindow?) {
+        guard let view, let window else { return }
+        let frameInWindow = view.convert(view.bounds, to: window)
+        let border = UIView(frame: frameInWindow.insetBy(dx: -5, dy: -5))
+        border.backgroundColor = .clear
+        border.layer.borderColor = UIColor.red.cgColor
+        border.layer.borderWidth = 1.0
+        border.isUserInteractionEnabled = false
+        window.addSubview(border)
+    }
+
     // export_references.sh crops the raw full-screen `simctl io
     // screenshot` down to just the content area. Written to a file (not
     // hardcoded in the host script) so the crop is exact for whichever
@@ -105,7 +122,9 @@ enum RealCapture {
         default:
             break
         }
-        root.present(alert, animated: false)
+        root.present(alert, animated: false) {
+            addRedBorder(around: alert.view, in: root.view.window)
+        }
     }
 
     private static func presentActionSheet(state: String, from root: UIViewController) {
@@ -125,7 +144,9 @@ enum RealCapture {
             popover.sourceView = root.view
             popover.sourceRect = CGRect(x: root.view.bounds.midX, y: root.view.bounds.maxY, width: 0, height: 0)
         }
-        root.present(sheet, animated: false)
+        root.present(sheet, animated: false) {
+            addRedBorder(around: sheet.view, in: root.view.window)
+        }
     }
 
     private static func addSearchField(state: String, to root: UIViewController) {
@@ -139,6 +160,10 @@ enum RealCapture {
             field.topAnchor.constraint(equalTo: root.view.safeAreaLayoutGuide.topAnchor, constant: 8),
             field.widthAnchor.constraint(equalToConstant: 280),
         ])
+        DispatchQueue.main.async {
+            root.view.layoutIfNeeded()
+            addRedBorder(around: field, in: root.view.window)
+        }
     }
 
     private static func addTabBar(state: String, to root: UIViewController) {
@@ -221,20 +246,12 @@ enum RealCapture {
         // column-layout machinery.
         window.rootViewController = split
 
-        // Same visual alignment aid every other reference case gets (see
-        // wrapWithRedBorder() on the C++ side and ReferenceViewControllers
-        // .swift's identical helper) — drawn as an overlay around the
-        // sidebar column's actual on-screen frame after layout settles,
-        // since a real UISplitViewController positions this itself rather
-        // than us placing content inside a hand-built box.
+        // Same visual alignment aid every other reference case gets — see
+        // addRedBorder()'s doc comment. UISplitViewController positions
+        // its own column, so this waits for layout to settle rather than
+        // drawing the border immediately.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            let frameInWindow = sidebarVC.view.convert(sidebarVC.view.bounds, to: window)
-            let border = UIView(frame: frameInWindow.insetBy(dx: -5, dy: -5))
-            border.backgroundColor = .clear
-            border.layer.borderColor = UIColor.red.cgColor
-            border.layer.borderWidth = 1.0
-            border.isUserInteractionEnabled = false
-            window.addSubview(border)
+            addRedBorder(around: sidebarVC.view, in: window)
         }
     }
 }
