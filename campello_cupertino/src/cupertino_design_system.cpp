@@ -2416,8 +2416,26 @@ namespace systems::leal::campello_widgets
         // size here — the rail's own height/width stay content-driven,
         // matching this function's existing (non-glass) sizing.
         if (material_ == CupertinoMaterial::liquidGlass) {
+            // blur_sigma way up from the 16px default: a real iPadOS 26
+            // sidebar capture shows an almost featureless wash — circle
+            // boundaries from the backdrop are barely discernible at all —
+            // far stronger than the default's still-fairly-distinct
+            // circles. The rail is also a much larger surface than a
+            // button/dialog (full screen height), which needs a
+            // proportionally bigger sigma to read as "washed out" rather
+            // than "mildly soft."
+            // Light/dark need opposite corrections from the old flat 0.45,
+            // measured against real captures (luminance/saturation-range
+            // sampled directly): light's near-white tint needed *more*
+            // weight (real reads as a washed pastel this render was too
+            // vivid/dark for); dark's near-black tint needed *less* — real
+            // dark measured brighter (55.6 vs 37.8 mean luminance) and
+            // more saturated (75.7 vs 49.4) than this render produced, so
+            // a heavier black tint was pushing the wrong direction there.
+            const float tint_opacity = (tokens_.brightness == Brightness::dark) ? 0.45f : 0.6f;
             auto bf = std::make_shared<BackdropFilter>();
-            bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, 0.45f));
+            bf->filter = ImageFilter::liquidGlass(0.0f, withOpacity(c.surface, tint_opacity),
+                                                   /*blur_sigma=*/60.0f);
             bf->child  = padded_col;
             return bf;
         }

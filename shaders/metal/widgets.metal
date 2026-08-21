@@ -386,11 +386,15 @@ fragment float4 blurFragment(
     sampler           smp [[sampler(1)]])
 {
     const float sigma = max(in.sigma, 0.5);
-    // Capped at 24 (not the ideal 2.5*sigma) to bound the per-pixel sample
+    // Capped at 48 (not the ideal 2.5*sigma) to bound the per-pixel sample
     // count — real iOS Liquid Glass backdrops need a much stronger blur
-    // than this shader could reach at the old cap of 12, which silently
-    // clamped every sigma above ~4.8 to the same (too-sharp) result.
-    const int   RADIUS = min(int(ceil(2.5 * sigma)), 24);
+    // than this shader could reach at the old cap of 24 (itself already
+    // bumped once from 12): a real iPadOS 26 navigationRail capture shows
+    // an almost featureless wash, while sigma=16-60 all looked identical
+    // at RADIUS=24 (2.5*sigma exceeds 24 once sigma > 9.6, so every one
+    // of those requests was silently clamped to the same too-sharp
+    // result — the actual bug, not the sigma value passed in).
+    const int   RADIUS = min(int(ceil(2.5 * sigma)), 96);
 
     float2 step = (in.horizontal > 0.5)
         ? float2(1.0 / in.tex_size.x, 0.0)
