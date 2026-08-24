@@ -2,8 +2,10 @@
 
 #include <campello_widgets/ui/design_tokens.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
+#include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/widgets/widget.hpp>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -31,6 +33,13 @@ namespace systems::leal::campello_widgets
         ButtonPriority priority = ButtonPriority::primary;
         WidgetRef leading_icon;
         WidgetRef trailing_icon;
+
+        // Keyboard focus — optional external node so a caller can drive
+        // (or observe) this button's focus programmatically; leave null to
+        // let the button manage its own. See GestureDetector's focus_node
+        // doc for the full contract.
+        std::shared_ptr<FocusNode> focus_node;
+        bool autofocus = false;
     };
 
     struct SwitchConfig

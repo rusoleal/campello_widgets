@@ -1,5 +1,7 @@
 #include <campello_fluent/fluent_design_system.hpp>
 
+#include "fluent_reveal_response.hpp"
+
 // Widgets
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/center.hpp>
@@ -329,17 +331,21 @@ WidgetRef FluentDesignSystem::buildButton(const ButtonConfig& cfg) const
     box->decoration = deco;
     box->child      = padded;
 
-    auto detector = std::make_shared<GestureDetector>();
-    detector->on_tap = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
-    detector->child  = box;
+    auto reveal = std::make_shared<FluentRevealResponse>();
+    reveal->child         = box;
+    reveal->on_tap        = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
+    reveal->border_radius = tokens_.shape.radius_md; // matches deco.border_radius above
+    reveal->reveal_color  = filled ? fg : accent_;
+    reveal->focus_node    = cfg.focus_node;
+    reveal->autofocus     = cfg.autofocus;
 
     if (!cfg.enabled || !cfg.on_pressed) {
         auto faded = std::make_shared<Opacity>();
         faded->opacity = 0.4f;
-        faded->child   = detector;
+        faded->child   = reveal;
         return faded;
     }
-    return detector;
+    return reveal;
 }
 
 WidgetRef FluentDesignSystem::buildSwitch(const SwitchConfig& cfg) const

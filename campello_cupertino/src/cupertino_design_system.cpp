@@ -1,5 +1,7 @@
 #include <campello_cupertino/cupertino_design_system.hpp>
 
+#include "cupertino_focus_ring.hpp"
+
 // Widgets
 #include <campello_widgets/widgets/align.hpp>
 #include <campello_widgets/widgets/center.hpp>
@@ -302,17 +304,25 @@ namespace systems::leal::campello_widgets
         // full-width bar (that full-width behavior only applies inside a
         // UIStackView with .fill distribution, which none of these gallery
         // cases use).
-        auto detector = std::make_shared<GestureDetector>();
-        detector->on_tap = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
-        detector->child  = result;
+        auto ring = std::make_shared<CupertinoFocusRing>();
+        ring->on_tap        = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
+        ring->child         = result;
+        // 14pt radius regardless of `has_background` -- a plain (borderless)
+        // button still gets a rounded focus ring around its padded content,
+        // matching how a real macOS/iOS focus ring appears around a button
+        // irrespective of its fill style.
+        ring->border_radius = tokens_.shape.radius_lg;
+        ring->focus_color   = c.primary;
+        ring->focus_node    = cfg.focus_node;
+        ring->autofocus     = cfg.autofocus;
 
         if (!cfg.enabled || !cfg.on_pressed) {
             auto faded = std::make_shared<Opacity>();
             faded->opacity = 0.4f;
-            faded->child   = detector;
+            faded->child   = ring;
             return faded;
         }
-        return detector;
+        return ring;
     }
 
     // -----------------------------------------------------------------------

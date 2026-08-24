@@ -7,6 +7,7 @@
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/gesture_arena_manager.hpp>
 #include <campello_widgets/ui/gesture_constants.hpp>
+#include <campello_widgets/ui/focus_node.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -38,6 +39,37 @@ namespace systems::leal::campello_widgets
      *  - on_pan_update — move beyond pan slop while down; called with Offset delta
      *  - on_pan_end    — up/cancel after a pan
      *  - on_scroll     — scroll-wheel / trackpad scroll; called with Offset{dx, dy}
+     *  - on_press_change — fires with true immediately on pointer-down
+     *                    (same eager timing as on_pan_down — before slop or
+     *                    arena resolution, matching Flutter's InkResponse
+     *                    highlighting on tap-down rather than waiting for
+     *                    tap-up), and with false on release, cancel, losing
+     *                    the gesture arena to a competing recognizer (e.g.
+     *                    an ancestor ScrollView), or the gesture
+     *                    reclassifying as a pan. Intended for press-state
+     *                    visual feedback (opacity fade, state-layer
+     *                    overlay, ripple) — a plain on_tap alone can't
+     *                    express "still held down" or "was released
+     *                    without becoming a tap".
+     *
+     * Keyboard focus (opt-in via `focusable`): when true, this detector
+     * registers a FocusNode with the active FocusManager (an externally
+     * supplied one via `focus_node`, or a lazily-created internal one so
+     * every focusable control still participates in Tab traversal without
+     * its caller having to own a FocusNode) — mirroring how TextField
+     * manages its own FocusNode directly rather than going through the
+     * separate `Focus` widget. Space/Enter while focused fires `on_tap`,
+     * matching Flutter's ActivateIntent on a focused button. A successful
+     * tap also requests focus for this detector, same as clicking a
+     * Flutter button focuses it. `on_focus_change` fires whenever this
+     * detector's focus state flips, for a caller to drive a focus-ring
+     * visual (not implemented here — this is plumbing only; painting a
+     * ring per theme is a separate follow-up).
+     *
+     * `focusable` defaults to false: plenty of GestureDetector usages wrap
+     * non-control content (tap-absorption, drag handles, scroll rows) that
+     * must NOT suddenly become Tab stops. Only opt in for actual
+     * button-like controls.
      *
      * Layout and paint pass through to the single child (inherited from RenderBox).
      */
@@ -51,9 +83,25 @@ namespace systems::leal::campello_widgets
         std::function<void(Offset)>     on_pan_update;
         std::function<void()>           on_pan_end;
         std::function<void(Offset)>     on_scroll;
+        std::function<void(bool)>       on_press_change;
+        std::function<void(bool)>       on_focus_change;
 
         RenderGestureDetector();
         ~RenderGestureDetector();
+
+        /**
+         * @brief Configures keyboard focus participation.
+         *
+         * @param node      External FocusNode to register, or nullptr to use
+         *                  (and lazily create) an internal one.
+         * @param autofocus Request focus immediately once registered.
+         * @param focusable Opt-in switch; when false, no FocusNode is
+         *                  registered at all regardless of `node`/`autofocus`.
+         *
+         * Safe to call repeatedly (e.g. every widget rebuild) — swaps
+         * registration only when the effective node actually changes.
+         */
+        void setFocusConfig(std::shared_ptr<FocusNode> node, bool autofocus, bool focusable);
 
         void attach() override;
         void detach() override;
@@ -91,8 +139,20 @@ namespace systems::leal::campello_widgets
         bool exceedsSlop() const noexcept;
         bool exceedsStationaryTolerance() const noexcept;
         void resolveTapOutcome();
+        void setPressed(bool pressed);
+
+        void syncFocusRegistration();
+        bool handleFocusKey(const KeyEvent& event);
 
         Offset   global_offset_;
+
+        // Focus state
+        std::shared_ptr<FocusNode> ext_focus_node_;   // last externally-supplied node (may be null)
+        std::shared_ptr<FocusNode> own_focus_node_;   // lazily-created fallback when focusable && no external node
+        std::shared_ptr<FocusNode> registered_node_;  // node currently registered with FocusManager, if any
+        bool     focusable_ = false;
+        bool     autofocus_ = false;
+        bool     attached_  = false;
 
         // Tap / double-tap state
         bool     has_down_         = false;
@@ -101,6 +161,7 @@ namespace systems::leal::campello_widgets
         bool     won_arena_        = false;
         bool     lost_arena_       = false;
         bool     pending_tap_      = false;
+        bool     pressed_          = false;
         std::optional<GestureArenaEntry> arena_entry_;
         Offset   down_pos_;
         Offset   last_pos_;

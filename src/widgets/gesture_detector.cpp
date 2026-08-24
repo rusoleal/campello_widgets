@@ -15,6 +15,9 @@ namespace systems::leal::campello_widgets
         ro->on_pan_update  = on_pan_update;
         ro->on_pan_end     = on_pan_end;
         ro->on_scroll      = on_scroll;
+        ro->on_press_change = on_press_change;
+        ro->on_focus_change = on_focus_change;
+        ro->setFocusConfig(focus_node, autofocus, focusable);
         return ro;
     }
 
@@ -28,6 +31,9 @@ namespace systems::leal::campello_widgets
         ro.on_pan_update   = on_pan_update;
         ro.on_pan_end      = on_pan_end;
         ro.on_scroll       = on_scroll;
+        ro.on_press_change = on_press_change;
+        ro.on_focus_change = on_focus_change;
+        ro.setFocusConfig(focus_node, autofocus, focusable);
     }
 
 

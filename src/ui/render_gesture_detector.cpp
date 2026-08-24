@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/dirty_region.hpp>
+#include <campello_widgets/ui/focus_manager.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -20,6 +21,13 @@ namespace systems::leal::campello_widgets
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
+        if (registered_node_)
+        {
+            registered_node_->on_key           = nullptr;
+            registered_node_->on_focus_changed = nullptr;
+            if (auto* fm = FocusManager::activeManager())
+                fm->unregisterNode(registered_node_.get());
+        }
     }
 
     void RenderGestureDetector::attach()
@@ -28,6 +36,15 @@ namespace systems::leal::campello_widgets
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
+        }
+        attached_ = true;
+        if (registered_node_)
+        {
+            if (auto* fm = FocusManager::activeManager())
+            {
+                fm->registerNode(registered_node_.get());
+                if (autofocus_) fm->requestFocus(registered_node_.get());
+            }
         }
     }
 
@@ -39,6 +56,82 @@ namespace systems::leal::campello_widgets
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
+        if (registered_node_)
+        {
+            if (auto* fm = FocusManager::activeManager())
+                fm->unregisterNode(registered_node_.get());
+        }
+        attached_ = false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Focus
+    // -------------------------------------------------------------------------
+
+    void RenderGestureDetector::setFocusConfig(std::shared_ptr<FocusNode> node, bool autofocus, bool focusable)
+    {
+        ext_focus_node_ = std::move(node);
+        autofocus_      = autofocus;
+        focusable_      = focusable;
+        syncFocusRegistration();
+    }
+
+    void RenderGestureDetector::syncFocusRegistration()
+    {
+        std::shared_ptr<FocusNode> desired;
+        if (focusable_)
+        {
+            if (ext_focus_node_)
+            {
+                desired = ext_focus_node_;
+            }
+            else
+            {
+                if (!own_focus_node_) own_focus_node_ = std::make_shared<FocusNode>();
+                desired = own_focus_node_;
+            }
+        }
+
+        if (desired.get() == registered_node_.get())
+            return;
+
+        auto* fm = FocusManager::activeManager();
+
+        if (registered_node_)
+        {
+            registered_node_->on_key           = nullptr;
+            registered_node_->on_focus_changed = nullptr;
+            if (attached_ && fm) fm->unregisterNode(registered_node_.get());
+        }
+
+        registered_node_ = desired;
+
+        if (registered_node_)
+        {
+            registered_node_->on_focus_changed = [this](bool has_focus) {
+                if (on_focus_change) on_focus_change(has_focus);
+            };
+            registered_node_->on_key = [this](const KeyEvent& event) -> bool {
+                return handleFocusKey(event);
+            };
+            if (attached_ && fm)
+            {
+                fm->registerNode(registered_node_.get());
+                if (autofocus_) fm->requestFocus(registered_node_.get());
+            }
+        }
+    }
+
+    bool RenderGestureDetector::handleFocusKey(const KeyEvent& event)
+    {
+        // Space/Enter activates a focused control on key-down only — not
+        // on every auto-repeat, which would otherwise fire on_tap
+        // repeatedly for as long as the key is held.
+        if (event.kind != KeyEventKind::down) return false;
+        if (event.key_code != KeyCode::space && event.key_code != KeyCode::enter) return false;
+        if (!on_tap) return false;
+        on_tap();
+        return true;
     }
 
     // -------------------------------------------------------------------------
@@ -49,7 +142,10 @@ namespace systems::leal::campello_widgets
     {
         won_arena_ = true;
         if (has_down_ && !panning_ && exceedsSlop())
+        {
             panning_ = true;
+            setPressed(false); // reclassified as a pan -- see the identical move-case comment
+        }
         if (pending_tap_)
         {
             pending_tap_ = false;
@@ -61,6 +157,18 @@ namespace systems::leal::campello_widgets
     {
         lost_arena_  = true;
         pending_tap_ = false;
+        // Lost the gesture arena to a competing recognizer (e.g. an
+        // ancestor ScrollView) while still held down -- the press visual
+        // must end now, not linger until a pointer-up that may never
+        // resolve as our tap at all.
+        setPressed(false);
+    }
+
+    void RenderGestureDetector::setPressed(bool pressed)
+    {
+        if (pressed_ == pressed) return;
+        pressed_ = pressed;
+        if (on_press_change) on_press_change(pressed_);
     }
 
     bool RenderGestureDetector::exceedsSlop() const noexcept
@@ -88,6 +196,17 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::resolveTapOutcome()
     {
+        // A completed tap (single or double) grabs keyboard focus for this
+        // control, mirroring clicking a Flutter button focusing it -- but
+        // marked as pointer-driven so a theme's focus-ring painter doesn't
+        // draw a ring just because a click happened to also focus this
+        // control (see FocusHighlightMode's doc comment).
+        if (registered_node_)
+        {
+            FocusManager::notePointerInteraction();
+            registered_node_->requestFocus();
+        }
+
         // Check for double-tap — only when something is actually listening.
         // Mirrors Flutter's GestureDetector: with no onDoubleTap callback, no
         // DoubleTapGestureRecognizer is ever armed, so every tap resolves
@@ -145,6 +264,7 @@ namespace systems::leal::campello_widgets
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             if (on_pan_down) on_pan_down(event.local_position);
+            setPressed(true);
 
             // Frames are only produced on demand (see FrameScheduler) — a
             // stationary press doesn't itself invalidate anything, so
@@ -169,6 +289,10 @@ namespace systems::leal::campello_widgets
                         // press) — exceeding slop just reclassifies this as
                         // "not a tap" and is unrelated to arena competition.
                         panning_ = true;
+                        // No longer a tap-in-progress -- matches Flutter's
+                        // InkResponse un-highlighting once a TapGestureRecognizer
+                        // loses to a competing PanGestureRecognizer.
+                        setPressed(false);
                     }
                     else if (arena_entry_)
                     {
@@ -217,6 +341,7 @@ namespace systems::leal::campello_widgets
             has_down_ = false;
             panning_  = false;
             arena_entry_.reset();
+            setPressed(false);
             break;
 
         case PointerEventKind::cancel:
@@ -224,6 +349,7 @@ namespace systems::leal::campello_widgets
             panning_     = false;
             pending_tap_ = false;
             arena_entry_.reset();
+            setPressed(false);
             break;
 
         case PointerEventKind::scroll:

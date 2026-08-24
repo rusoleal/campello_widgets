@@ -12,6 +12,22 @@ namespace systems::leal::campello_widgets
     class FocusNode;
 
     /**
+     * @brief Whether focus is currently being driven by keyboard/traversal
+     * or by a pointer tap.
+     *
+     * Mirrors Flutter's `FocusManager.highlightStrategy`: a focus RING
+     * should only render in `keyboard` mode. Clicking a button also gives
+     * it keyboard focus (so Tab from there continues normally, and Space/
+     * Enter still activates it), but that focus grab shouldn't itself draw
+     * a ring — only an actual keyboard-driven focus change should.
+     */
+    enum class FocusHighlightMode
+    {
+        touch,
+        keyboard,
+    };
+
+    /**
      * @brief Routes keyboard events to the currently focused FocusNode and
      *        manages tab-order focus traversal.
      *
@@ -85,6 +101,24 @@ namespace systems::leal::campello_widgets
         static FocusManager* activeManager() noexcept;
 
         // ------------------------------------------------------------------
+        // Focus highlight mode (see FocusHighlightMode's doc comment)
+        // ------------------------------------------------------------------
+
+        /** @brief Switches highlight mode to `keyboard`. Called for every
+         *  key event reaching handleKeyEvent(). */
+        static void noteKeyboardInteraction() noexcept;
+
+        /** @brief Switches highlight mode to `touch`, suppressing the focus
+         *  ring for the focus grab that's about to follow. Called by a
+         *  pointer-driven focus request (e.g. RenderGestureDetector on a
+         *  completed tap) before requesting focus. */
+        static void notePointerInteraction() noexcept;
+
+        /** @brief The current highlight mode -- theme focus-ring painters
+         *  check this alongside FocusNode::hasFocus() before drawing a ring. */
+        static FocusHighlightMode highlightMode() noexcept;
+
+        // ------------------------------------------------------------------
         // App-level shortcuts
         // ------------------------------------------------------------------
 
@@ -125,6 +159,7 @@ namespace systems::leal::campello_widgets
         std::vector<FocusNode*> focus_order_;
 
         static std::atomic<FocusManager*> s_active_manager_;
+        static std::atomic<FocusHighlightMode> s_highlight_mode_;
 
         static std::mutex                            s_global_handler_mutex_;
         static std::function<bool(const KeyEvent&)>  s_global_key_handler_;

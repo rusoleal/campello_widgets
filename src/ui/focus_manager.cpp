@@ -7,6 +7,7 @@ namespace systems::leal::campello_widgets
 {
 
     std::atomic<FocusManager*> FocusManager::s_active_manager_{nullptr};
+    std::atomic<FocusHighlightMode> FocusManager::s_highlight_mode_{FocusHighlightMode::touch};
     std::mutex                           FocusManager::s_global_handler_mutex_;
     std::function<bool(const KeyEvent&)> FocusManager::s_global_key_handler_;
 
@@ -18,6 +19,21 @@ namespace systems::leal::campello_widgets
     FocusManager* FocusManager::activeManager() noexcept
     {
         return s_active_manager_.load(std::memory_order_acquire);
+    }
+
+    void FocusManager::noteKeyboardInteraction() noexcept
+    {
+        s_highlight_mode_.store(FocusHighlightMode::keyboard, std::memory_order_relaxed);
+    }
+
+    void FocusManager::notePointerInteraction() noexcept
+    {
+        s_highlight_mode_.store(FocusHighlightMode::touch, std::memory_order_relaxed);
+    }
+
+    FocusHighlightMode FocusManager::highlightMode() noexcept
+    {
+        return s_highlight_mode_.load(std::memory_order_relaxed);
     }
 
     void FocusManager::setGlobalKeyHandler(std::function<bool(const KeyEvent&)> handler)
@@ -87,6 +103,12 @@ namespace systems::leal::campello_widgets
     void FocusManager::handleKeyEvent(const KeyEvent& event)
     {
         ThreadChecker::instance().assertOnBoundThread("FocusManager::handleKeyEvent");
+
+        // Any key event reaching here implies the user is currently
+        // interacting via keyboard -- switches focus-ring visibility on
+        // for whatever has (or is about to gain) focus. See
+        // FocusHighlightMode's doc comment.
+        noteKeyboardInteraction();
 
         // App-level shortcuts run first and may consume the event outright
         // regardless of what currently has focus. Copy the handler out

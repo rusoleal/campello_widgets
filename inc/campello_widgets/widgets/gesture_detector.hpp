@@ -1,9 +1,11 @@
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/ui/offset.hpp>
+#include <campello_widgets/ui/focus_node.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -41,6 +43,15 @@ namespace systems::leal::campello_widgets
         std::function<void(Offset)>    on_pan_update;
         std::function<void()>          on_pan_end;
         std::function<void(Offset)>    on_scroll;
+        std::function<void(bool)>      on_press_change;
+
+        // Keyboard focus — opt-in via `focusable` (defaults false, since
+        // most GestureDetector usages wrap non-control content). See
+        // RenderGestureDetector's class doc for the full contract.
+        std::shared_ptr<FocusNode>     focus_node;
+        bool                           autofocus = false;
+        bool                           focusable = false;
+        std::function<void(bool)>      on_focus_change;
 
         GestureDetector() = default;
         explicit GestureDetector(WidgetRef c) { child = std::move(c); }

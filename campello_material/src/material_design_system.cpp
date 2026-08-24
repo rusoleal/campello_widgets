@@ -1,4 +1,5 @@
 #include <campello_material/material_design_system.hpp>
+#include "material_ink_response.hpp"
 
 // Widgets
 #include <campello_widgets/widgets/align.hpp>
@@ -309,17 +310,21 @@ namespace systems::leal::campello_widgets
         decorated->decoration = deco;
         decorated->child      = padded;
 
-        auto detector = std::make_shared<GestureDetector>();
-        detector->on_tap = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
-        detector->child  = decorated;
+        auto ink = std::make_shared<MaterialInkResponse>();
+        ink->child         = decorated;
+        ink->on_tap        = (cfg.enabled && cfg.on_pressed) ? cfg.on_pressed : nullptr;
+        ink->border_radius = tokens_.shape.radius_full; // matches deco.border_radius above
+        ink->overlay_color = fg;
+        ink->focus_node    = cfg.focus_node;
+        ink->autofocus     = cfg.autofocus;
 
         if (!cfg.enabled || !cfg.on_pressed) {
             auto faded = std::make_shared<Opacity>();
             faded->opacity = 0.4f;
-            faded->child   = detector;
+            faded->child   = ink;
             return faded;
         }
-        return detector;
+        return ink;
     }
 
     // -----------------------------------------------------------------------
