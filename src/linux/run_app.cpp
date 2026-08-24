@@ -20,6 +20,7 @@
 #include <campello_gpu/platform/linux_surface.hpp>
 
 #include "ibus_ime.hpp"
+#include "linux_display_backend.hpp"
 #include "../gpu/vulkan/vulkan_draw_backend.hpp"
 
 #include <X11/Xlib.h>
@@ -752,8 +753,10 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     if (wayland_display && wayland_display[0] != '\0') {
 #ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
         std::cerr << "[Linux] Wayland detected (" << wayland_display << "), trying Wayland backend.\n";
+        setRunningUnderWayland(true);
         int result = runAppWayland(title, width, height, gRootWidget, resizable, gAppId);
         if (result != 2) return result; // 2 = GPU init failed, fall back to X11
+        setRunningUnderWayland(false);
         std::cerr << "[Linux] Wayland GPU init failed; falling back to X11 (XWayland).\n";
 #else
         std::cerr << "[Linux] Wayland display detected but Wayland support not compiled in.\n";

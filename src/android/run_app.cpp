@@ -26,6 +26,7 @@
 
 #include "../gpu/vulkan/vulkan_draw_backend.hpp"
 #include "android_text_rasterizer.hpp"
+#include "android_clipboard.hpp"
 
 #include <memory>
 #include <atomic>
@@ -866,6 +867,12 @@ void runApp(android_app* app, WidgetRef root_widget)
     // is not linkable on API < 31, so we pass the VM from android_app directly).
     if (app && app->activity && app->activity->vm)
         setAndroidJavaVM(app->activity->vm);
+
+    // Same reasoning for Clipboard -- it also needs the Activity itself
+    // (for getSystemService(CLIPBOARD_SERVICE)), which isn't cached
+    // anywhere else in this codebase either.
+    if (app && app->activity && app->activity->vm && app->activity->clazz)
+        setAndroidClipboardContext(app->activity->vm, app->activity->clazz);
 
     // Vsync-gated on-demand rendering via AChoreographer (API 24+).
     // AChoreographer_getInstance() must be called on the main thread (the one

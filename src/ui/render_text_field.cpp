@@ -1,5 +1,6 @@
 #include <campello_widgets/ui/render_text_field.hpp>
 #include <campello_widgets/ui/text_editing_controller.hpp>
+#include <campello_widgets/ui/clipboard.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/canvas.hpp>
 #include <campello_widgets/ui/paint.hpp>
@@ -230,8 +231,11 @@ namespace systems::leal::campello_widgets
                     int line_start_pos = char_pos;
                     int line_end_pos = char_pos + static_cast<int>(line.size());
 
-                    // Selection highlight for this line
-                    if (controller && controller->hasSelection())
+                    // Selection highlight for this line -- only while
+                    // focused, matching native single-line text fields
+                    // (NSTextField et al. clear the highlight, rather than
+                    // keep showing it, once focus moves elsewhere).
+                    if (focused && controller && controller->hasSelection())
                     {
                         int sel_start = std::min(controller->selectionStart(), controller->selectionEnd());
                         int sel_end = std::max(controller->selectionStart(), controller->selectionEnd());
@@ -315,8 +319,11 @@ namespace systems::leal::campello_widgets
             }
             else if (!empty)
             {
-                // Selection highlight
-                if (controller && controller->hasSelection())
+                // Selection highlight -- only while focused, matching
+                // native single-line text fields (NSTextField et al. clear
+                // the highlight, rather than keep showing it, once focus
+                // moves elsewhere).
+                if (focused && controller && controller->hasSelection())
                 {
                     int lo = std::min(controller->selectionStart(), controller->selectionEnd());
                     int hi = std::max(controller->selectionStart(), controller->selectionEnd());
@@ -568,6 +575,63 @@ namespace systems::leal::campello_widgets
             {
                 controller->selectAll();
                 resetCursorBlink();
+                return true;
+            }
+            break;
+
+        case KeyCode::z:
+            if (ctrl)
+            {
+                if (shift) controller->redo();
+                else       controller->undo();
+                if (on_changed) {
+                    on_changed(controller->text());
+                    if (!RenderObject::isAlive(this)) return true;
+                }
+                resetCursorBlink();
+                return true;
+            }
+            break;
+
+        case KeyCode::c:
+            if (ctrl && !obscure_text)
+            {
+                if (controller->hasSelection())
+                    Clipboard::setText(controller->selectedText());
+                return true;
+            }
+            break;
+
+        case KeyCode::x:
+            if (ctrl && !obscure_text)
+            {
+                if (controller->hasSelection())
+                {
+                    Clipboard::setText(controller->selectedText());
+                    controller->deleteBackward(); // deletes the whole selection
+                    if (on_changed) {
+                        on_changed(controller->text());
+                        if (!RenderObject::isAlive(this)) return true;
+                    }
+                    resetCursorBlink();
+                }
+                return true;
+            }
+            break;
+
+        case KeyCode::v:
+            if (ctrl)
+            {
+                std::string clip = Clipboard::getText();
+                if (!clip.empty())
+                {
+                    controller->insertText(clip);
+                    if (on_changed) {
+                        on_changed(controller->text());
+                        if (!RenderObject::isAlive(this)) return true;
+                    }
+                    resetCursorBlink();
+                }
                 return true;
             }
             break;

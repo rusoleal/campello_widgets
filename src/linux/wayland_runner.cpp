@@ -31,6 +31,7 @@
 #include <campello_gpu/platform/linux_surface.hpp>
 
 #include "ibus_ime.hpp"
+#include "wayland_clipboard.hpp"
 #include "../gpu/vulkan/vulkan_draw_backend.hpp"
 
 #include <wayland-client.h>
@@ -244,6 +245,36 @@ struct WaylandWindowState
     struct xkb_keymap*    xkb_keymap   = nullptr;
     struct xkb_state*     xkb_state    = nullptr;
 
+    // --- Clipboard (wl_data_device_manager) -- see the "clipboard" section
+    // below frame_listener for the listeners that populate these. ---
+    struct wl_data_device_manager* data_device_manager = nullptr;
+    struct wl_data_device*         data_device          = nullptr;
+    // Serial of the last real key-press event -- wl_data_device_set_selection()
+    // requires one (the protocol ties selection changes to genuine input, to
+    // stop background clients spoofing the clipboard).
+    uint32_t last_key_serial = 0;
+
+    // Outgoing: we're the source. clipboard_text is what we currently offer;
+    // clipboard_source is the wl_data_source object representing that offer
+    // while it's live (until another client takes ownership, or we replace
+    // it with a newer setText() call).
+    std::string             clipboard_text;
+    struct wl_data_source*  clipboard_source = nullptr;
+
+    // Incoming: something else is the source. clipboard_offer is the
+    // wl_data_offer currently active as the system clipboard selection, and
+    // clipboard_offer_mime is which of its advertised MIME types we can
+    // actually use (empty if none are plain text).
+    struct wl_data_offer* clipboard_offer = nullptr;
+    std::string            clipboard_offer_mime;
+
+    // Transient: an offer just introduced via wl_data_device.data_offer,
+    // whose MIME types are still being enumerated via wl_data_offer.offer
+    // events, before wl_data_device.selection confirms whether it's the new
+    // active clipboard offer at all (see data_device_selection()).
+    struct wl_data_offer* pending_offer = nullptr;
+    std::string            pending_offer_mime;
+
     std::shared_ptr<GPU::Device>                device;
     std::shared_ptr<Widgets::Renderer>          renderer;
     std::shared_ptr<Widgets::Element>           root_element;
@@ -274,6 +305,13 @@ struct WaylandWindowState
     int  entered_scale       = 0;
     int  output_scale        = 1;
 };
+
+// WaylandWindowState normally lives only as a local in runAppWayland() --
+// this is the one exception, set right after it's constructed there, so
+// setWaylandClipboardText()/getWaylandClipboardText() (called from
+// clipboard.cpp, a separate TU with no other access to it) have something
+// to reach. Only ever one instance for this process's lifetime.
+static WaylandWindowState* g_wayland_state = nullptr;
 
 // ============================================================================
 // Wayland listeners
@@ -341,6 +379,12 @@ static void registry_global(void* data, struct wl_registry* registry,
             wl_registry_bind(registry, name, &wl_output_interface, bind_version));
         state->outputs.emplace_back(output, 1);
         wl_output_add_listener(output, &output_listener, state);
+    } else if (std::strcmp(interface, wl_data_device_manager_interface.name) == 0) {
+        // Version 1 covers everything Clipboard needs (create_data_source,
+        // get_data_device, offer/receive/selection) -- versions 2+ only add
+        // drag-and-drop actions, which we don't implement.
+        state->data_device_manager = static_cast<struct wl_data_device_manager*>(
+            wl_registry_bind(registry, name, &wl_data_device_manager_interface, 1));
     }
 }
 
@@ -631,6 +675,8 @@ static void keyboard_key(void* data, struct wl_keyboard* keyboard,
     auto* ws = static_cast<WaylandWindowState*>(data);
     if (!ws->focus_manager) return;
 
+    ws->last_key_serial = serial;
+
     xkb_keycode_t keycode = key + 8; // Wayland keycodes are offset by 8
     xkb_keysym_t keysym = xkb_state_key_get_one_sym(ws->xkb_state, keycode);
     Widgets::KeyCode key_code = keysymToKeyCode(keysym);
@@ -726,6 +772,128 @@ static const struct wl_callback_listener frame_listener = {
     frame_done
 };
 
+// --- wl_data_source (we're the clipboard content's source) ---
+
+// Wayland offers content by MIME type; any of the three we advertise in
+// setWaylandClipboardText() below get the same UTF-8 bytes -- we don't
+// distinguish charset/legacy STRING encoding.
+static void data_source_target(void*, struct wl_data_source*, const char*) {}
+
+static void data_source_send(void* data, struct wl_data_source*, const char* /*mime_type*/, int32_t fd)
+{
+    auto* state = static_cast<WaylandWindowState*>(data);
+    const std::string& text = state->clipboard_text;
+
+    // Plain blocking write() -- fine for clipboard-sized text; a fully
+    // event-loop-integrated version would use non-blocking I/O, but that's
+    // not warranted for what's realistically a UI text field's contents,
+    // not a large file transfer.
+    size_t written = 0;
+    while (written < text.size()) {
+        ssize_t n = write(fd, text.data() + written, text.size() - written);
+        if (n <= 0) break; // reader closed early / pipe error -- nothing more we can do
+        written += static_cast<size_t>(n);
+    }
+    close(fd);
+}
+
+static void data_source_cancelled(void* data, struct wl_data_source* source)
+{
+    // We've lost selection ownership (another client copied something, or
+    // we replaced this source with a newer setText() call).
+    auto* state = static_cast<WaylandWindowState*>(data);
+    wl_data_source_destroy(source);
+    if (state->clipboard_source == source)
+        state->clipboard_source = nullptr;
+}
+
+static const struct wl_data_source_listener data_source_listener = {
+    .target    = data_source_target,
+    .send      = data_source_send,
+    .cancelled = data_source_cancelled,
+    // dnd_drop_performed / dnd_finished / action (v3, drag-and-drop only)
+    // left zero-initialized -- same pattern as output_listener's trailing
+    // v4 fields; we only bind wl_data_device_manager at version 1.
+};
+
+// --- wl_data_offer (something else is the clipboard content's source) ---
+
+static void data_offer_offer(void* data, struct wl_data_offer* offer, const char* mime_type)
+{
+    auto* state = static_cast<WaylandWindowState*>(data);
+    if (state->pending_offer != offer) return; // stale -- shouldn't normally happen
+
+    if (state->pending_offer_mime.empty() &&
+        (std::strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
+         std::strcmp(mime_type, "UTF8_STRING") == 0 ||
+         std::strcmp(mime_type, "text/plain") == 0))
+    {
+        state->pending_offer_mime = mime_type;
+    }
+}
+
+static const struct wl_data_offer_listener data_offer_listener = {
+    .offer = data_offer_offer,
+    // source_actions / action (v3, DND only) left zero-initialized.
+};
+
+// --- wl_data_device (the seat's clipboard/DND channel) ---
+
+static void data_device_data_offer(void* data, struct wl_data_device*, struct wl_data_offer* id)
+{
+    // Introduces a new wl_data_offer object -- its offer() events (which
+    // mime types it has) arrive right after this, so the listener must be
+    // attached before returning.
+    auto* state = static_cast<WaylandWindowState*>(data);
+    state->pending_offer = id;
+    state->pending_offer_mime.clear();
+    wl_data_offer_add_listener(id, &data_offer_listener, state);
+}
+
+static void data_device_selection(void* data, struct wl_data_device*, struct wl_data_offer* id)
+{
+    auto* state = static_cast<WaylandWindowState*>(data);
+
+    if (state->clipboard_offer && state->clipboard_offer != id)
+        wl_data_offer_destroy(state->clipboard_offer);
+
+    if (id && id == state->pending_offer)
+    {
+        // Normal case: this is the offer data_device_data_offer() just
+        // introduced, with its MIME types now fully enumerated.
+        state->clipboard_offer      = id;
+        state->clipboard_offer_mime = state->pending_offer_mime;
+        state->pending_offer        = nullptr;
+        state->pending_offer_mime.clear();
+    }
+    else
+    {
+        // id == nullptr: selection was cleared. id != pending_offer: an
+        // offer we weren't tracking became the selection, which the
+        // protocol's data_offer-then-selection ordering makes very unlikely
+        // in practice -- treat it as "nothing usable" either way rather
+        // than guessing at a MIME type we never actually confirmed.
+        state->clipboard_offer = id;
+        state->clipboard_offer_mime.clear();
+    }
+}
+
+// DND-only events on wl_data_device -- we don't implement drag-and-drop.
+static void data_device_enter(void*, struct wl_data_device*, uint32_t, struct wl_surface*,
+                              wl_fixed_t, wl_fixed_t, struct wl_data_offer*) {}
+static void data_device_leave(void*, struct wl_data_device*) {}
+static void data_device_motion(void*, struct wl_data_device*, uint32_t, wl_fixed_t, wl_fixed_t) {}
+static void data_device_drop(void*, struct wl_data_device*) {}
+
+static const struct wl_data_device_listener data_device_listener = {
+    .data_offer = data_device_data_offer,
+    .enter      = data_device_enter,
+    .leave      = data_device_leave,
+    .motion     = data_device_motion,
+    .drop       = data_device_drop,
+    .selection  = data_device_selection,
+};
+
 // ============================================================================
 // Render frame helper
 // ============================================================================
@@ -801,6 +969,7 @@ int runAppWayland(const std::string& title, int width, int height,
     // Get registry and roundtrip to discover globals
     // -------------------------------------------------------------------------
     WaylandWindowState state;
+    g_wayland_state = &state;
     state.display = display;
     state.width   = width;
     state.height  = height;
@@ -882,6 +1051,13 @@ int runAppWayland(const std::string& title, int width, int height,
         if (state.keyboard) {
             state.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
             wl_keyboard_add_listener(state.keyboard, &keyboard_listener, &state);
+        }
+    }
+    if (state.data_device_manager && state.seat) {
+        state.data_device = wl_data_device_manager_get_data_device(
+            state.data_device_manager, state.seat);
+        if (state.data_device) {
+            wl_data_device_add_listener(state.data_device, &data_device_listener, &state);
         }
     }
 
@@ -1231,6 +1407,10 @@ int runAppWayland(const std::string& title, int width, int height,
     // wl_seat version ≥5 requires the release request (not just proxy destroy).
     // We bind version 7, so wl_seat_release is mandatory.
     if (state.seat)         wl_seat_release(state.seat);
+    if (state.clipboard_offer)         wl_data_offer_destroy(state.clipboard_offer);
+    if (state.clipboard_source)        wl_data_source_destroy(state.clipboard_source);
+    if (state.data_device)             wl_data_device_release(state.data_device);
+    if (state.data_device_manager)     wl_data_device_manager_destroy(state.data_device_manager);
     if (state.decor_frame)  libdecor_frame_unref(state.decor_frame);
     if (state.libdecor_ctx) libdecor_unref(state.libdecor_ctx);
     if (state.surface)      wl_surface_destroy(state.surface);
@@ -1238,8 +1418,99 @@ int runAppWayland(const std::string& title, int width, int height,
     if (state.compositor)   wl_compositor_destroy(state.compositor);
     if (state.registry)     wl_registry_destroy(state.registry);
 
+    g_wayland_state = nullptr;
     wl_display_disconnect(display);
     return 0;
+}
+
+// ============================================================================
+// Clipboard bridge -- called from clipboard.cpp when isRunningUnderWayland()
+// ============================================================================
+
+void setWaylandClipboardText(const std::string& text)
+{
+    WaylandWindowState* state = g_wayland_state;
+    if (!state || !state->data_device_manager || !state->data_device) return;
+
+    state->clipboard_text = text;
+
+    // A new wl_data_source per call, rather than trying to reuse one --
+    // matches how most minimal Wayland clipboard implementations handle
+    // repeated copies, and keeps this free of "is the old one still valid"
+    // bookkeeping.
+    if (state->clipboard_source)
+    {
+        wl_data_source_destroy(state->clipboard_source);
+        state->clipboard_source = nullptr;
+    }
+
+    struct wl_data_source* source =
+        wl_data_device_manager_create_data_source(state->data_device_manager);
+    if (!source) return;
+
+    wl_data_source_offer(source, "text/plain;charset=utf-8");
+    wl_data_source_offer(source, "UTF8_STRING");
+    wl_data_source_offer(source, "text/plain");
+    wl_data_source_add_listener(source, &data_source_listener, state);
+
+    // Requires a serial from a real input event per the protocol spec (see
+    // last_key_serial's doc comment on WaylandWindowState) -- an app that's
+    // never had a keypress yet (last_key_serial == 0) will have this
+    // request ignored by a strict compositor, same as any other Wayland
+    // client attempting to claim the selection with no prior input.
+    wl_data_device_set_selection(state->data_device, source, state->last_key_serial);
+
+    state->clipboard_source = source;
+    wl_display_flush(state->display);
+}
+
+std::string getWaylandClipboardText()
+{
+    WaylandWindowState* state = g_wayland_state;
+    if (!state) return {};
+
+    // We're currently the source ourselves -- return what we set directly
+    // rather than round-tripping through the compositor. Compositors don't
+    // consistently deliver a client's own selection back to it via
+    // data_offer/selection events, so this isn't just an optimization, it
+    // sidesteps a real ambiguity.
+    if (state->clipboard_source)
+        return state->clipboard_text;
+
+    if (!state->clipboard_offer || state->clipboard_offer_mime.empty())
+        return {};
+
+    int fds[2];
+    if (pipe(fds) != 0) return {};
+
+    wl_data_offer_receive(state->clipboard_offer, state->clipboard_offer_mime.c_str(), fds[1]);
+    close(fds[1]); // our copy of the write end -- the source client writes via its own fd from this same pipe
+    wl_display_flush(state->display);
+
+    // No native "wait up to N ms" on this handoff -- poll() with a
+    // deadline guards against a source client that never writes/closes.
+    std::string result;
+    char buf[4096];
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
+    for (;;)
+    {
+        auto now = std::chrono::steady_clock::now();
+        if (now >= deadline) break;
+        int timeout_ms = static_cast<int>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
+
+        struct pollfd pfd{fds[0], POLLIN, 0};
+        int pr = poll(&pfd, 1, timeout_ms);
+        if (pr <= 0) break; // timeout or error
+
+        ssize_t n = read(fds[0], buf, sizeof(buf));
+        if (n <= 0) break; // EOF or error
+        result.append(buf, static_cast<size_t>(n));
+    }
+
+    close(fds[0]);
+    return result;
 }
 
 } // namespace systems::leal::campello_widgets

@@ -78,7 +78,19 @@ namespace systems::leal::campello_widgets
         constrained->width = max_width;
         constrained->child = surface;
 
-        return constrained;
+        // Claim taps anywhere on the dialog's own surface, including its
+        // background and any non-interactive gaps between content (a plain
+        // DecoratedBox/Column/Padding's hitTestSelf() defaults to false --
+        // see RenderBox::hitTestSelf()). Without this, showDialog()'s Stack
+        // hit-tests the dialog subtree first (it's the topmost child) but
+        // finds nothing there to claim a tap that isn't on an interactive
+        // child, so the tap falls through to the ModalBarrier behind it
+        // and dismisses the dialog exactly as if it landed outside.
+        auto tapAbsorber = std::make_shared<GestureDetector>();
+        tapAbsorber->child = constrained;
+        tapAbsorber->on_tap = [](){};
+
+        return tapAbsorber;
     }
 
     // -------------------------------------------------------------------------

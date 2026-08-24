@@ -3,6 +3,7 @@
 #include <campello_widgets/ui/render_text_field.hpp>
 #include <campello_widgets/ui/text_editing_controller.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/clipboard.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
@@ -142,7 +143,16 @@ namespace systems::leal::campello_widgets
             // and register/unregister with TextInputManager for IME support
             focus_node_->on_focus_changed = [this](bool has_focus) {
                 setState([this, has_focus]() { focused_ = has_focus; });
-                
+
+                // Track the focused controller so app-level Edit >
+                // Undo/Redo (an OS-level menu key equivalent that never
+                // reaches this field's own key handler) can route to it —
+                // see TextEditingController::focused()'s doc comment.
+                if (has_focus)
+                    TextEditingController::setFocused(ctrl_.get(), widget().obscure_text);
+                else if (TextEditingController::focused() == ctrl_.get())
+                    TextEditingController::setFocused(nullptr);
+
                 // Register/unregister with TextInputManager for IME composition
                 if (auto* tim = TextInputManager::activeManager())
                 {
@@ -199,7 +209,17 @@ namespace systems::leal::campello_widgets
             // unregisterNode() fires on_focus_changed(false); if the callback
             // is still bound it will call setState() on a State that is in the
             // middle of being disposed, which schedules a build on an element
-            // whose render object has already been detached.
+            // whose render object has already been detached. That callback
+            // is also where TextEditingController::setFocused(nullptr)
+            // normally happens on blur, so it needs doing here directly too
+            // -- a field disposed while still focused (e.g. its owning
+            // dialog closes without the field ever losing focus first)
+            // would otherwise leave focused() pointing at a controller
+            // whose widget no longer exists, even if the controller itself
+            // outlives it (externally-owned ctrl_).
+            if (TextEditingController::focused() == ctrl_.get())
+                TextEditingController::setFocused(nullptr);
+
             focus_node_->on_focus_changed = nullptr;
             focus_node_->on_key           = nullptr;
 
@@ -223,12 +243,21 @@ namespace systems::leal::campello_widgets
 
             if (new_ctrl.get() != ctrl_.get())
             {
+                // If this field is focused, its old controller is the one
+                // registered as TextEditingController::focused() -- swap
+                // the registration too, or app-level undo would keep
+                // pointing at a controller this field no longer displays.
+                bool wasFocused = TextEditingController::focused() == ctrl_.get();
+
                 if (ctrl_ && ctrl_listener_id_ != 0)
                     ctrl_->removeListener(ctrl_listener_id_);
                 ctrl_ = new_ctrl;
                 ctrl_listener_id_ = ctrl_->addListener([this]() {
                     setState([](){});
                 });
+
+                if (wasFocused)
+                    TextEditingController::setFocused(ctrl_.get(), widget().obscure_text);
             }
 
             // FocusNode swap
@@ -259,7 +288,12 @@ namespace systems::leal::campello_widgets
                 focus_node_ = new_fn;
                 focus_node_->on_focus_changed = [this](bool has_focus) {
                     setState([this, has_focus]() { focused_ = has_focus; });
-                    
+
+                    if (has_focus)
+                        TextEditingController::setFocused(ctrl_.get(), widget().obscure_text);
+                    else if (TextEditingController::focused() == ctrl_.get())
+                        TextEditingController::setFocused(nullptr);
+
                     // Register/unregister with TextInputManager for IME composition
                     if (auto* tim = TextInputManager::activeManager())
                     {
@@ -496,6 +530,53 @@ namespace systems::leal::campello_widgets
 
             case KeyCode::a:
                 if (ctrl) { ctrl_->selectAll(); return true; }
+                break;
+
+            case KeyCode::z:
+                if (ctrl)
+                {
+                    if (shift) ctrl_->redo();
+                    else       ctrl_->undo();
+                    notifyChanged();
+                    return true;
+                }
+                break;
+
+            case KeyCode::c:
+                // Password/obscured fields never expose their real text to
+                // the clipboard, same as native text fields.
+                if (ctrl && !widget().obscure_text)
+                {
+                    if (ctrl_->hasSelection())
+                        Clipboard::setText(ctrl_->selectedText());
+                    return true;
+                }
+                break;
+
+            case KeyCode::x:
+                if (ctrl && !widget().obscure_text)
+                {
+                    if (ctrl_->hasSelection())
+                    {
+                        Clipboard::setText(ctrl_->selectedText());
+                        ctrl_->deleteBackward(); // deletes the whole selection
+                        notifyChanged();
+                    }
+                    return true;
+                }
+                break;
+
+            case KeyCode::v:
+                if (ctrl)
+                {
+                    std::string clip = Clipboard::getText();
+                    if (!clip.empty())
+                    {
+                        ctrl_->insertText(clip);
+                        notifyChanged();
+                    }
+                    return true;
+                }
                 break;
 
             default:

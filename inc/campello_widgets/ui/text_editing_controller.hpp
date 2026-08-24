@@ -34,6 +34,12 @@ namespace systems::leal::campello_widgets
         TextEditingController() = default;
         explicit TextEditingController(std::string initial_text);
 
+        // Clears focused() if it still points to this instance -- a
+        // TextField can be destroyed (e.g. its owning dialog closes)
+        // without ever losing focus first, which would otherwise leave
+        // s_focused_ dangling.
+        ~TextEditingController();
+
         // Non-copyable — owns listener state.
         TextEditingController(const TextEditingController&)            = delete;
         TextEditingController& operator=(const TextEditingController&) = delete;
@@ -153,6 +159,66 @@ namespace systems::leal::campello_widgets
         void cancelComposing();
 
         // ------------------------------------------------------------------
+        // Undo / redo
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief True if there is a prior edit state to restore.
+         */
+        bool canUndo() const noexcept { return !undo_stack_.empty(); }
+
+        /**
+         * @brief True if undo() has been called and there's a later state
+         *        to restore.
+         */
+        bool canRedo() const noexcept { return !redo_stack_.empty(); }
+
+        /**
+         * @brief Restores the text/selection to before the most recent edit
+         *        (or burst of edits — see insertText()'s coalescing note).
+         *        No-op if canUndo() is false.
+         */
+        void undo();
+
+        /** @brief Re-applies the most recently undone edit. No-op if canRedo() is false. */
+        void redo();
+
+        /**
+         * @brief The TextEditingController currently attached to a focused
+         *        TextField, if any.
+         *
+         * App-level Edit > Undo/Redo commands typically arrive as OS-level
+         * menu key equivalents (Cmd+Z), which are consumed by the menu
+         * system before they ever reach a focused widget's own key
+         * handler. Checking this first lets such a command route to an
+         * in-progress text edit instead of unconditionally hitting
+         * document-level undo. Kept in sync by TextField's FocusNode
+         * focus-change callback — not meant to be set from application code.
+         */
+        static TextEditingController* focused() noexcept { return s_focused_; }
+
+        /**
+         * @brief True if the currently-focused TextField has obscure_text
+         *        set (a password-style field), false if nothing is focused.
+         *
+         * Whether a field is obscured is a widget-level property (the same
+         * TextEditingController could in principle back different fields
+         * over its lifetime), so it's tracked alongside the focused
+         * pointer rather than on the controller itself. App-level
+         * Edit > Cut/Copy should check this before touching the
+         * clipboard — same reasoning a native password field never lets
+         * its real contents get copied.
+         */
+        static bool focusedIsObscured() noexcept { return s_focused_obscured_; }
+
+        /** @brief Sets/clears the focused() controller. Called by TextField's focus handling. */
+        static void setFocused(TextEditingController* controller, bool obscured = false) noexcept
+        {
+            s_focused_          = controller;
+            s_focused_obscured_ = controller ? obscured : false;
+        }
+
+        // ------------------------------------------------------------------
         // Listener API
         // ------------------------------------------------------------------
 
@@ -168,6 +234,19 @@ namespace systems::leal::campello_widgets
     private:
         void notifyListeners();
 
+        /**
+         * @brief Pushes the current (pre-edit) text/selection onto the undo
+         *        stack and clears the redo stack, ready for the caller to
+         *        apply its mutation.
+         *
+         * Edits arriving within kUndoCoalesceWindowMs of the previous call
+         * are merged into the same undo step instead of getting their own
+         * — otherwise every single keystroke would be its own undo entry,
+         * making Cmd+Z nearly useless while typing (mirrors Flutter's
+         * EditableText undo grouping).
+         */
+        void recordUndoSnapshot();
+
         std::string text_;
         int selection_start_ = 0;
         int selection_end_   = 0;
@@ -175,6 +254,21 @@ namespace systems::leal::campello_widgets
         // IME composition state: -1 means not composing
         int composing_start_ = -1;
         int composing_end_   = -1;
+
+        struct EditSnapshot
+        {
+            std::string text;
+            int selection_start;
+            int selection_end;
+        };
+        static constexpr uint64_t kUndoCoalesceWindowMs = 500;
+        static constexpr size_t   kMaxUndoHistory        = 100;
+        std::vector<EditSnapshot> undo_stack_;
+        std::vector<EditSnapshot> redo_stack_;
+        uint64_t last_snapshot_time_ms_ = 0;
+
+        static TextEditingController* s_focused_;
+        static bool s_focused_obscured_;
 
         uint64_t next_listener_id_ = 1;
         std::vector<std::pair<uint64_t, std::function<void()>>> listeners_;

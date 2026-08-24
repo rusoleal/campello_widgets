@@ -1,9 +1,22 @@
 #include <campello_widgets/ui/text_editing_controller.hpp>
 
 #include <algorithm>
+#include <chrono>
 
 namespace systems::leal::campello_widgets
 {
+    namespace
+    {
+        uint64_t nowMs()
+        {
+            using namespace std::chrono;
+            return static_cast<uint64_t>(
+                duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+        }
+    }
+
+    TextEditingController* TextEditingController::s_focused_ = nullptr;
+    bool TextEditingController::s_focused_obscured_ = false;
 
     TextEditingController::TextEditingController(std::string initial_text)
         : text_(std::move(initial_text))
@@ -11,12 +24,24 @@ namespace systems::leal::campello_widgets
         , selection_end_(static_cast<int>(text_.size()))
     {}
 
+    TextEditingController::~TextEditingController()
+    {
+        if (s_focused_ == this)
+            s_focused_ = nullptr;
+    }
+
     void TextEditingController::setText(std::string text)
     {
         if (text_ == text) return;
         text_            = std::move(text);
         selection_start_ = static_cast<int>(text_.size());
         selection_end_   = selection_start_;
+        // A fresh value assigned from application code (e.g. loading a
+        // different document into a reused controller) isn't a "prior
+        // state" of what's now displayed -- undoing into it would jump
+        // into unrelated content.
+        undo_stack_.clear();
+        redo_stack_.clear();
         notifyListeners();
     }
 
@@ -53,6 +78,8 @@ namespace systems::leal::campello_widgets
     {
         if (to_insert.empty()) return;
 
+        recordUndoSnapshot();
+
         int lo = std::min(selection_start_, selection_end_);
         int hi = std::max(selection_start_, selection_end_);
 
@@ -69,7 +96,13 @@ namespace systems::leal::campello_widgets
 
     void TextEditingController::deleteBackward()
     {
-        if (hasSelection())
+        bool hasSel = hasSelection();
+        if (!hasSel && selection_start_ <= 0)
+            return; // nothing to delete, no notification needed
+
+        recordUndoSnapshot();
+
+        if (hasSel)
         {
             int lo = std::min(selection_start_, selection_end_);
             int hi = std::max(selection_start_, selection_end_);
@@ -77,22 +110,24 @@ namespace systems::leal::campello_widgets
             selection_start_ = lo;
             selection_end_   = lo;
         }
-        else if (selection_start_ > 0)
+        else
         {
             text_.erase(static_cast<size_t>(selection_start_ - 1), 1);
             --selection_start_;
             --selection_end_;
-        }
-        else
-        {
-            return; // nothing to delete, no notification needed
         }
         notifyListeners();
     }
 
     void TextEditingController::deleteForward()
     {
-        if (hasSelection())
+        bool hasSel = hasSelection();
+        if (!hasSel && selection_start_ >= static_cast<int>(text_.size()))
+            return; // nothing to delete
+
+        recordUndoSnapshot();
+
+        if (hasSel)
         {
             int lo = std::min(selection_start_, selection_end_);
             int hi = std::max(selection_start_, selection_end_);
@@ -100,13 +135,9 @@ namespace systems::leal::campello_widgets
             selection_start_ = lo;
             selection_end_   = lo;
         }
-        else if (selection_start_ < static_cast<int>(text_.size()))
-        {
-            text_.erase(static_cast<size_t>(selection_start_), 1);
-        }
         else
         {
-            return; // nothing to delete
+            text_.erase(static_cast<size_t>(selection_start_), 1);
         }
         notifyListeners();
     }
@@ -122,6 +153,12 @@ namespace systems::leal::campello_widgets
     void TextEditingController::beginComposing()
     {
         if (isComposing()) return; // Already composing
+
+        // Snapshot before the composition starts, not per-keystroke inside
+        // it -- an IME composition (e.g. building an accented or CJK
+        // character) is one logical edit, undone as a whole back to
+        // whatever text preceded it.
+        recordUndoSnapshot();
 
         // Start composing at current cursor position
         int pos = selection_end_;
@@ -201,6 +238,64 @@ namespace systems::leal::campello_widgets
 
         composing_start_ = -1;
         composing_end_ = -1;
+
+        notifyListeners();
+    }
+
+    void TextEditingController::recordUndoSnapshot()
+    {
+        uint64_t now = nowMs();
+        bool coalesce = !undo_stack_.empty()
+                     && (now - last_snapshot_time_ms_) < kUndoCoalesceWindowMs;
+
+        if (!coalesce)
+        {
+            undo_stack_.push_back({text_, selection_start_, selection_end_});
+            if (undo_stack_.size() > kMaxUndoHistory)
+                undo_stack_.erase(undo_stack_.begin());
+        }
+
+        // Any new edit invalidates the redo future, coalesced or not --
+        // matches standard editor behavior.
+        redo_stack_.clear();
+        last_snapshot_time_ms_ = now;
+    }
+
+    void TextEditingController::undo()
+    {
+        if (undo_stack_.empty()) return;
+
+        redo_stack_.push_back({text_, selection_start_, selection_end_});
+
+        EditSnapshot snap = std::move(undo_stack_.back());
+        undo_stack_.pop_back();
+
+        text_            = std::move(snap.text);
+        selection_start_ = snap.selection_start;
+        selection_end_   = snap.selection_end;
+
+        // Without this, a keystroke landing within the coalescing window
+        // right after an undo would silently merge into the edit that was
+        // just undone instead of starting its own step.
+        last_snapshot_time_ms_ = 0;
+
+        notifyListeners();
+    }
+
+    void TextEditingController::redo()
+    {
+        if (redo_stack_.empty()) return;
+
+        undo_stack_.push_back({text_, selection_start_, selection_end_});
+
+        EditSnapshot snap = std::move(redo_stack_.back());
+        redo_stack_.pop_back();
+
+        text_            = std::move(snap.text);
+        selection_start_ = snap.selection_start;
+        selection_end_   = snap.selection_end;
+
+        last_snapshot_time_ms_ = 0;
 
         notifyListeners();
     }
