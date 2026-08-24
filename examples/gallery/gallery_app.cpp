@@ -2165,7 +2165,7 @@ private:
     {
         const auto& colors = ds_->tokens().colors;
         const bool active  = (i == selected_);
-        const bool hovered = (i == hovered_) && !active;
+        const bool hovered = (i == hovered_ || i == keyboard_focused_) && !active;
         const cw::Color fg = active ? colors.primary : colors.on_surface_variant;
         auto icon = cw::mw<cw::Text>(kSectionIcons[i], ts(16.0f, fg));
 
@@ -2214,8 +2214,17 @@ private:
         }
 
         auto g   = std::make_shared<cw::GestureDetector>();
-        g->on_tap = [this, i] { setState([this, i] { selected_ = i; }); };
-        g->child  = item_bg;
+        g->on_tap     = [this, i] { setState([this, i] { selected_ = i; }); };
+        g->focusable  = true; // D-pad/Tab reachable, matches the content pills
+        // Reuses the hover highlight so keyboard/D-pad focus is visible
+        // even though this hand-built item has no design-system focus ring.
+        g->on_focus_change = [this, i](bool has_focus) {
+            setState([this, i, has_focus] {
+                if (has_focus) keyboard_focused_ = i;
+                else if (keyboard_focused_ == i) keyboard_focused_ = -1;
+            });
+        };
+        g->child      = item_bg;
 
         auto region = std::make_shared<cw::MouseRegion>();
         region->cursor   = cw::SystemMouseCursor::pointer;
@@ -2288,6 +2297,7 @@ private:
 
     int selected_ = 0;
     int hovered_  = -1; ///< Index of the sidebar nav item currently under the pointer, or -1.
+    int keyboard_focused_ = -1; ///< Index of the sidebar nav item with keyboard/D-pad focus, or -1.
     std::shared_ptr<const cw::DesignSystem> ds_;
     GalleryDesignSystemKind kind_ = GalleryDesignSystemKind::campello_ui;
 };

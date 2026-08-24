@@ -1,10 +1,26 @@
 #include <algorithm>
+#include <cmath>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 
 namespace systems::leal::campello_widgets
 {
+
+    namespace
+    {
+        bool directionForKeyCode(KeyCode key_code, FocusDirection& out) noexcept
+        {
+            switch (key_code)
+            {
+                case KeyCode::left:  out = FocusDirection::left;  return true;
+                case KeyCode::right: out = FocusDirection::right; return true;
+                case KeyCode::up:    out = FocusDirection::up;    return true;
+                case KeyCode::down:  out = FocusDirection::down;  return true;
+                default: return false;
+            }
+        }
+    }
 
     std::atomic<FocusManager*> FocusManager::s_active_manager_{nullptr};
     std::atomic<FocusHighlightMode> FocusManager::s_highlight_mode_{FocusHighlightMode::touch};
@@ -132,6 +148,24 @@ namespace systems::leal::campello_widgets
             return;
         }
 
+        // Arrow keys: unlike Tab, these are routinely meaningful to the
+        // focused control itself (TextField cursor movement, Slider value
+        // adjustment, ...), so give it first chance to consume the event.
+        // Only an unconsumed key-down/repeat falls back to directional
+        // (D-pad/TV) focus movement -- a key-up never triggers a focus
+        // move (nothing to reasonably repeat/undo), it's just passed
+        // through in case a consumer cares about it.
+        FocusDirection direction;
+        if (directionForKeyCode(event.key_code, direction))
+        {
+            if (current_focus_ && current_focus_->on_key && current_focus_->on_key(event))
+                return;
+
+            if (event.kind != KeyEventKind::up)
+                moveFocusDirectional(direction);
+            return;
+        }
+
         // Route to focused node.
         if (current_focus_ && current_focus_->on_key)
             current_focus_->on_key(event);
@@ -179,6 +213,62 @@ namespace systems::leal::campello_widgets
         }
 
         requestFocus(*std::prev(it));
+    }
+
+    void FocusManager::moveFocusDirectional(FocusDirection direction)
+    {
+        if (focus_order_.empty()) return;
+
+        if (!current_focus_)
+        {
+            requestFocus(focus_order_.front());
+            return;
+        }
+
+        const Rect src = current_focus_->bounds();
+        const float src_cx = src.x + src.width  * 0.5f;
+        const float src_cy = src.y + src.height * 0.5f;
+
+        // Cross-axis misalignment is penalized more heavily than distance
+        // along the travel axis, so e.g. moving right prefers a same-row
+        // candidate a bit further away over a closer one that's off-row
+        // (mirrors how Android's/Compose's directional focus search
+        // weights candidates).
+        constexpr float kCrossAxisWeight = 3.0f;
+
+        FocusNode* best = nullptr;
+        float      best_score = 0.0f;
+
+        for (FocusNode* candidate : focus_order_)
+        {
+            if (candidate == current_focus_) continue;
+
+            const Rect r = candidate->bounds();
+            if (r.width <= 0.0f || r.height <= 0.0f) continue; // unpainted
+
+            const float cx = r.x + r.width  * 0.5f;
+            const float cy = r.y + r.height * 0.5f;
+
+            float along  = 0.0f; // distance along the travel axis (must be > 0)
+            float cross  = 0.0f; // misalignment on the perpendicular axis
+            switch (direction)
+            {
+                case FocusDirection::right: along = cx - src_cx; cross = cy - src_cy; break;
+                case FocusDirection::left:  along = src_cx - cx; cross = cy - src_cy; break;
+                case FocusDirection::down:  along = cy - src_cy; cross = cx - src_cx; break;
+                case FocusDirection::up:    along = src_cy - cy; cross = cx - src_cx; break;
+            }
+            if (along <= 0.0f) continue; // not in the requested direction
+
+            const float score = along + kCrossAxisWeight * std::abs(cross);
+            if (!best || score < best_score)
+            {
+                best = candidate;
+                best_score = score;
+            }
+        }
+
+        if (best) requestFocus(best);
     }
 
 } // namespace systems::leal::campello_widgets

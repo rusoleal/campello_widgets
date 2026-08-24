@@ -278,6 +278,9 @@ static Widgets::KeyCode androidKeyCodeToKeyCode(int32_t keyCode)
         case AKEYCODE_DPAD_RIGHT:   return Widgets::KeyCode::right;
         case AKEYCODE_DPAD_UP:      return Widgets::KeyCode::up;
         case AKEYCODE_DPAD_DOWN:    return Widgets::KeyCode::down;
+        // TV remote "OK"/center button -- activates the focused control the
+        // same way Enter does (see RenderGestureDetector::handleFocusKey()).
+        case AKEYCODE_DPAD_CENTER:  return Widgets::KeyCode::enter;
         case AKEYCODE_MOVE_HOME:    return Widgets::KeyCode::home;
         case AKEYCODE_MOVE_END:     return Widgets::KeyCode::end;
         case AKEYCODE_PAGE_UP:      return Widgets::KeyCode::page_up;
@@ -778,7 +781,7 @@ static void rebuildMediaQuery(WidgetSession* session)
 static std::atomic<bool> gFramePending{false};
 static std::atomic<WidgetSession*> gActiveSession{nullptr};
 
-static void onVsyncCallback(long frameTimeNanos, void* data)
+static void onVsyncCallback(int64_t frameTimeNanos, void* data)
 {
     // Allow the next scheduleFrame() call to post a new callback.
     gFramePending.store(false, std::memory_order_relaxed);
@@ -884,7 +887,27 @@ void runApp(android_app* app, WidgetRef root_widget)
         // Post at most one pending callback per vsync interval.
         const bool was_pending = gFramePending.exchange(true, std::memory_order_relaxed);
         if (!was_pending)
-            AChoreographer_postFrameCallback(choreographer, onVsyncCallback, gActiveSession.load(std::memory_order_acquire));
+            // The 64 variant is required, not just preferred: the plain
+            // AChoreographer_postFrameCallback()'s callback type takes the
+            // vsync timestamp as `long`, which is 32 bits on this ABI
+            // (armeabi-v7a) — truncating the real 64-bit monotonic
+            // nanosecond timestamp to a *signed* 32-bit value overflows
+            // roughly every 2.1s of device uptime, making frameTimeNanos
+            // jump backward right when that happens. Every ticker/
+            // AnimationController computes elapsed/delta time from this
+            // value, sees non-advancing (or negative) time on that tick,
+            // and skips its update — no crash, no exception, just a
+            // widget tree that silently stops getting marked dirty:
+            // vsync keeps firing forever (confirmed: thousands of
+            // onVsyncCallback calls/sec) but buildFrame() returns nullopt
+            // forever after, so nothing is ever built or submitted again.
+            // Confirmed via logging on a real armeabi-v7a device
+            // (Chromecast with Google TV / Mali GPU) — looked exactly
+            // like a GPU driver hang (frozen frame, idle CPU, no crash)
+            // until the vsync counter gave it away. int64_t is unaffected
+            // on 64-bit ABIs (arm64-v8a, x86_64), which is why this never
+            // reproduced on a 64-bit device.
+            AChoreographer_postFrameCallback64(choreographer, onVsyncCallback, gActiveSession.load(std::memory_order_acquire));
     });
 
     std::unique_ptr<WidgetSession> session;

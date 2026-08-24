@@ -799,10 +799,25 @@ std::shared_ptr<GPU::Buffer> VulkanDrawBackend::UniformBufferPool::acquire(
     size_t idx     = next_index_[current_generation_]++;
 
     if (idx >= buffers.size())
+        // mapWrite forces Device::createBuffer() down its host-visible-only
+        // allocation path (see its needsHostVisible branch) instead of
+        // best-effort probing for a combined DEVICE_LOCAL|HOST_VISIBLE type
+        // and silently falling back to pure DEVICE_LOCAL when the GPU
+        // doesn't expose one for this buffer's memoryTypeBits. That
+        // fallback makes every Buffer::upload() take its device-local path
+        // — a synchronous staging-buffer copy plus vkWaitForFences(...,
+        // UINT64_MAX) — which is fine for a rarely-updated buffer but,
+        // called every single animation frame (this pool backs rotated/
+        // perspective-quad vertex data, re-uploaded whenever the transform
+        // changes), starves the render thread badly enough on at least one
+        // Mali/Vulkan device (Chromecast with Google TV) to look like a
+        // total freeze — confirmed absent on Adreno/UMA hardware, which
+        // already had a combined memory type and so never hit this path.
         buffers.push_back(device.createBuffer(size,
             static_cast<GPU::BufferUsage>(
                 static_cast<int>(GPU::BufferUsage::vertex) |
-                static_cast<int>(GPU::BufferUsage::copyDst)),
+                static_cast<int>(GPU::BufferUsage::copyDst) |
+                static_cast<int>(GPU::BufferUsage::mapWrite)),
             const_cast<void*>(data)));
     else
         buffers[idx]->upload(0, size, const_cast<void*>(data));

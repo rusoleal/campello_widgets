@@ -398,6 +398,9 @@ namespace systems::leal::campello_widgets
             size_.width, size_.height);
         const Rect projected = projectedBounds(ctx.canvas().currentTransform(), local_bounds);
         global_offset_ = { projected.x, projected.y };
+        // Feeds FocusManager::moveFocusDirectional()'s D-pad/TV navigation
+        // — see FocusNode::bounds()'s doc comment.
+        if (registered_node_) registered_node_->bounds_ = projected;
         if (child_) paintChild(ctx, offset);
     }
 

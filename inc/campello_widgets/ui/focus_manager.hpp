@@ -5,11 +5,21 @@
 #include <mutex>
 #include <vector>
 #include <campello_widgets/ui/key_event.hpp>
+#include <campello_widgets/ui/rect.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
     class FocusNode;
+
+    /** @brief A screen-relative direction for D-pad/arrow-key focus movement. */
+    enum class FocusDirection
+    {
+        up,
+        down,
+        left,
+        right,
+    };
 
     /**
      * @brief Whether focus is currently being driven by keyboard/traversal
@@ -42,6 +52,10 @@ namespace systems::leal::campello_widgets
      *  - Tab moves focus forward through registered nodes (in registration order).
      *  - Shift+Tab moves backward.
      *  - Both wrap around.
+     *
+     * Directional traversal (D-pad / arrow keys):
+     *  - Left/Right/Up/Down move focus to the nearest node in that screen
+     *    direction (see moveFocusDirectional()). Does not wrap.
      */
     class FocusManager
     {
@@ -77,9 +91,9 @@ namespace systems::leal::campello_widgets
          *
          * The global key handler (see setGlobalKeyHandler()), if any, is
          * checked first and may consume the event outright. Otherwise,
-         * Tab / Shift+Tab are intercepted for focus traversal before the
-         * event reaches the focused node. All other events are passed to
-         * the focused node's `on_key` handler.
+         * Tab / Shift+Tab and the arrow keys are intercepted for focus
+         * traversal before the event reaches the focused node. All other
+         * events are passed to the focused node's `on_key` handler.
          */
         void handleKeyEvent(const KeyEvent& event);
 
@@ -92,6 +106,32 @@ namespace systems::leal::campello_widgets
 
         /** @brief Moves focus to the previous registered node (wraps around). */
         void moveFocusBackward();
+
+        // ------------------------------------------------------------------
+        // Directional (D-pad / arrow-key) traversal
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Moves focus to the nearest focusable node in the given
+         * screen direction from the currently focused node, using each
+         * node's real on-screen bounds (`FocusNode::bounds()`).
+         *
+         * Candidates are those whose bounds-center lies strictly on the
+         * `direction` side of the current node's bounds-center. Among
+         * those, the nearest by a distance that weights misalignment on
+         * the cross-axis more heavily than distance along the travel
+         * axis — so, e.g., moving right prefers a same-row candidate over
+         * a closer-but-offset one below. Unlike moveFocusForward()/
+         * moveFocusBackward(), this does not wrap: at the edge of the
+         * focusable area, the call is a no-op (matches platform D-pad/TV
+         * conventions — wrapping across the screen is disorienting
+         * spatially in a way wrapping a linear Tab order isn't).
+         *
+         * If nothing is currently focused, focuses the first registered
+         * node (same fallback as moveFocusForward()). Nodes with a zero
+         * (unpainted) bounds are ignored as candidates.
+         */
+        void moveFocusDirectional(FocusDirection direction);
 
         // ------------------------------------------------------------------
         // Global accessor

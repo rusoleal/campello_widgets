@@ -24,6 +24,13 @@ namespace systems::leal::campello_widgets
 
         RenderFocus();
         ~RenderFocus();
+
+        /**
+         * @brief Passes paint through to the child, then records this
+         * node's projected on-screen bounds onto `focus_node` (see
+         * `FocusNode::bounds()`) for directional focus navigation.
+         */
+        void performPaint(PaintContext& context, const Offset& offset) override;
     };
 
 } // namespace systems::leal::campello_widgets
