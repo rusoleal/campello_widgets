@@ -229,19 +229,37 @@ vertex ShapeVertOut shapeVertex(
     uint                 vid [[vertex_id]],
     constant ShapeUniforms &u  [[buffer(0)]])
 {
-    float2 t  = kQuadCorners[vid];
-    float2 px = float2(u.rect.x + t.x * u.rect.z,
-                       u.rect.y + t.y * u.rect.w);
+    // A centered stroke extends stroke_w*0.5 outward from the logical rect
+    // boundary (plus shapeFragment()'s antialiasing band, aa), but the quad
+    // built from kQuadCorners below only ever spans the rect itself. Without
+    // inflating it here, the rasterizer never produces fragments for the
+    // outward half of the stroke at all -- it isn't clipped away by
+    // anything, it's simply outside every triangle this draw call submits.
+    // That reads as the stroke rendering fine on whichever side happens to
+    // fall inside the rect and vanishing on the side that falls outside it
+    // (e.g. a field's bottom border thinning to nothing while the top
+    // renders correctly, purely depending on which way the sub-pixel
+    // rounding falls).
+    const float aa = 0.5;
+    float inflate = (u.stroke_w > 0.0) ? (u.stroke_w * 0.5 + aa) : 0.0;
+
+    float2 t      = kQuadCorners[vid];
+    float2 origin = u.rect.xy - inflate;
+    float2 size   = u.rect.zw + inflate * 2.0;
+    float2 px     = origin + t * size;
+
     float2 ndc = (px / u.viewport) * 2.0 - 1.0;
     ndc.y = -ndc.y;
 
     ShapeVertOut out;
-    out.pos      = float4(ndc, 0.0, 1.0);
-    out.color    = u.color;
-    out.rect_data = u.rect;
-    out.corner_r = u.corner_r;
-    out.stroke_w = u.stroke_w;
-    out.kind     = u.kind;
+    out.pos       = float4(ndc, 0.0, 1.0);
+    out.color     = u.color;
+    out.rect_data = u.rect; // unchanged -- shapeFragment()'s SDF still
+                             // measures distance from the true logical rect,
+                             // only the rasterized quad extent grew.
+    out.corner_r  = u.corner_r;
+    out.stroke_w  = u.stroke_w;
+    out.kind      = u.kind;
     return out;
 }
 

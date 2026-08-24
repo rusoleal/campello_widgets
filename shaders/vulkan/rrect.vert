@@ -17,9 +17,23 @@ const vec2 kQuadCorners[6] = vec2[](
 
 void main()
 {
-    vec2 t  = kQuadCorners[gl_VertexIndex];
-    vec2 px = vec2(u.rect.x + t.x * u.rect.z,
-                   u.rect.y + t.y * u.rect.w);
+    // rrect.frag's stroke is drawn inset from the boundary (the ring
+    // between d=0 and d=-stroke_w), so it never itself extends past the
+    // logical rect -- but the outer edge's antialiasing band (smoothstep
+    // over d in [-0.5, 0.5]) does, and the quad below stops exactly at the
+    // rect boundary. Without inflating it, that outward half of the AA
+    // falloff never gets rasterized -- not clipped, just outside every
+    // triangle this draw call submits, leaving a harder/aliased outer edge
+    // instead of the intended smooth falloff. Same root cause as
+    // shapeVertex() in shaders/metal/widgets.metal (which has centered,
+    // not inset, strokes -- there this also hides half the stroke itself).
+    const float aa = 0.5;
+    float inflate = (u.stroke_w > 0.0) ? (u.stroke_w * 0.5 + aa) : 0.0;
+
+    vec2 t      = kQuadCorners[gl_VertexIndex];
+    vec2 origin = u.rect.xy - inflate;
+    vec2 size   = u.rect.zw + inflate * 2.0;
+    vec2 px     = origin + t * size;
     vec2 ndc = (px / u.viewport) * 2.0 - 1.0;
     gl_Position = vec4(ndc, 0.0, 1.0);
     v_pos = px;

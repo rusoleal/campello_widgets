@@ -37,15 +37,30 @@ struct ShapeVertOut
 
 ShapeVertOut ShapeVS(uint vid : SV_VertexID)
 {
-    float2 t  = kQuadCorners[vid];
-    float2 px = float2(rect.x + t.x * rect.z, rect.y + t.y * rect.w);
+    // A centered stroke extends stroke_w*0.5 outward from the logical rect
+    // boundary (plus ShapePS's antialiasing band, aa), but the quad below
+    // only ever spans the rect itself. Without inflating it here, the
+    // rasterizer never produces pixels for the outward half of the stroke
+    // at all -- it isn't clipped away by anything, it's simply outside
+    // every triangle this draw call submits. See shapeVertex() in
+    // shaders/metal/widgets.metal for the full explanation (this shader
+    // mirrors it).
+    const float aa = 0.5;
+    float inflate = (stroke_w > 0.0) ? (stroke_w * 0.5 + aa) : 0.0;
+
+    float2 t      = kQuadCorners[vid];
+    float2 origin = rect.xy - inflate;
+    float2 size   = rect.zw + inflate * 2.0;
+    float2 px     = origin + t * size;
     float2 ndc = (px / viewport) * 2.0 - 1.0;
     ndc.y = -ndc.y;
 
     ShapeVertOut o;
     o.pos       = float4(ndc, 0.0, 1.0);
     o.color     = color;
-    o.rect_data = rect;
+    o.rect_data = rect; // unchanged -- ShapePS's SDF still measures from
+                         // the true logical rect, only the rasterized
+                         // quad extent grew.
     o.corner_r  = corner_r;
     o.stroke_w  = stroke_w;
     o.kind      = kind;
