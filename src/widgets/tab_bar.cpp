@@ -17,6 +17,7 @@
 #include <campello_widgets/ui/alignment.hpp>
 #include <campello_widgets/ui/text_style.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -142,7 +143,11 @@ namespace systems::leal::campello_widgets
                 auto g         = std::make_shared<GestureDetector>();
                 g->on_tap      = [state_ptr, idx]() { state_ptr->setIndex(idx); };
                 g->child       = col;
-                tab_widgets.push_back(std::make_shared<Expanded>(g));
+
+                auto region    = std::make_shared<MouseRegion>();
+                region->cursor = SystemMouseCursor::pointer;
+                region->child  = g;
+                tab_widgets.push_back(std::make_shared<Expanded>(region));
             } else {
                 tab_widgets.push_back(std::make_shared<Expanded>(col));
             }

@@ -10,6 +10,7 @@
 #include <campello_widgets/widgets/raw_custom_paint.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 
 #include <algorithm>
 
@@ -133,7 +134,11 @@ namespace systems::leal::campello_widgets
                 faded->child   = detector;
                 return faded;
             }
-            return detector;
+
+            auto region    = std::make_shared<MouseRegion>();
+            region->cursor = SystemMouseCursor::pointer;
+            region->child  = detector;
+            return region;
         }
 
     private:

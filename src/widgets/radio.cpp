@@ -8,6 +8,7 @@
 #include <campello_widgets/widgets/raw_custom_paint.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/build_context.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -68,7 +69,13 @@ namespace systems::leal::campello_widgets
             ? std::function<void()>([on_changed, this_value]() { on_changed(this_value); })
             : std::function<void()>{};
         detector->child  = box;
-        return detector;
+
+        if (!on_changed) return detector;
+
+        auto region    = std::make_shared<MouseRegion>();
+        region->cursor = SystemMouseCursor::pointer;
+        region->child  = detector;
+        return region;
     }
 
 } // namespace systems::leal::campello_widgets

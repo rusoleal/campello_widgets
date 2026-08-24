@@ -1,5 +1,6 @@
 #include <campello_widgets/widgets/primary_action_button.hpp>
 #include <campello_widgets/widgets/theme.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -15,7 +16,13 @@ namespace systems::leal::campello_widgets
         cfg.label      = label;
         cfg.enabled    = enabled;
 
-        return ds->buildPrimaryActionButton(cfg);
+        auto rendered = ds->buildPrimaryActionButton(cfg);
+        if (!rendered) return nullptr;
+
+        auto region    = std::make_shared<MouseRegion>();
+        region->cursor = enabled ? SystemMouseCursor::pointer : SystemMouseCursor::arrow;
+        region->child  = rendered;
+        return region;
     }
 
 } // namespace systems::leal::campello_widgets

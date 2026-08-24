@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/text_editing_controller.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/clipboard.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
@@ -360,7 +361,10 @@ namespace systems::leal::campello_widgets
             proxy->on_submitted         = w.on_submitted;
             proxy->on_tap               = [this]() { focus_node_->requestFocus(); };
 
-            return proxy;
+            auto region    = std::make_shared<MouseRegion>();
+            region->cursor = SystemMouseCursor::text;
+            region->child  = proxy;
+            return region;
         }
 
     private:

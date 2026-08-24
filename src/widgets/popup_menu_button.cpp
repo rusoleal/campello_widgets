@@ -23,6 +23,7 @@
 #include <campello_widgets/ui/key.hpp>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/render_dropdown_menu_positioner.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 
 #include <limits>
 
@@ -97,7 +98,11 @@ namespace systems::leal::campello_widgets
             gesture->key    = anchor_key_;
             gesture->on_tap = [this]() { open(); };
             gesture->child  = trigger;
-            return gesture;
+
+            auto region    = std::make_shared<MouseRegion>();
+            region->cursor = SystemMouseCursor::pointer;
+            region->child  = gesture;
+            return region;
         }
 
     private:
@@ -182,7 +187,11 @@ namespace systems::leal::campello_widgets
                         if (selected_fn) selected_fn(i);
                     };
                     g->child  = row;
-                    row_widget = g;
+
+                    auto item_region    = std::make_shared<MouseRegion>();
+                    item_region->cursor = SystemMouseCursor::pointer;
+                    item_region->child  = g;
+                    row_widget = item_region;
                 } else {
                     auto faded     = std::make_shared<Opacity>();
                     faded->opacity = 0.40f;

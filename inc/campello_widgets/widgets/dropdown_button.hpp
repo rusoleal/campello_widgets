@@ -5,6 +5,7 @@
 #include <campello_widgets/widgets/overlay.hpp>
 #include <campello_widgets/widgets/modal_barrier.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 #include <campello_widgets/widgets/decorated_box.hpp>
 #include <campello_widgets/widgets/expanded.hpp>
 #include <campello_widgets/widgets/padding.hpp>
@@ -199,7 +200,10 @@ namespace systems::leal::campello_widgets
                 gesture->on_tap = [this]() { open(); };
                 gesture->child  = decorated;
 
-                return gesture;
+                auto region    = std::make_shared<MouseRegion>();
+                region->cursor = SystemMouseCursor::pointer;
+                region->child  = gesture;
+                return region;
             }
 
         private:
@@ -250,7 +254,11 @@ namespace systems::leal::campello_widgets
                             if (ww.on_changed) ww.on_changed(val);
                         };
                         g->child = padded;
-                        item_widgets.push_back(g);
+
+                        auto item_region    = std::make_shared<MouseRegion>();
+                        item_region->cursor = SystemMouseCursor::pointer;
+                        item_region->child  = g;
+                        item_widgets.push_back(item_region);
                     } else {
                         auto faded     = std::make_shared<Opacity>();
                         faded->opacity = 0.40f;

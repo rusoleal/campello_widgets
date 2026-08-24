@@ -3,6 +3,7 @@
 #include <campello_widgets/ui/render_slider.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 
 #include <algorithm>
 
@@ -91,7 +92,11 @@ namespace systems::leal::campello_widgets
             auto box    = std::make_shared<SizedBox>();
             box->height = w.height;
             box->child  = proxy;
-            return box;
+
+            auto region    = std::make_shared<MouseRegion>();
+            region->cursor = SystemMouseCursor::pointer;
+            region->child  = box;
+            return region;
         }
 
     private:
