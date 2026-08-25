@@ -166,3 +166,59 @@ jobs:
 
       - name: Build
         run: cmake --build build/android_${{ matrix.arch }}_${{ matrix.build_type }} --config ${{ matrix.build_type }}
+
+  # ---------------------------------------------------------------------------
+  # Windows / Microsoft GDK (Gaming.Desktop.x64) — build check only.
+  #
+  # Unlike campello_gpu's equivalent job, this one genuinely needs the GDK
+  # installed: src/gdk/run_app.cpp calls XGameRuntimeInitialize()/
+  # RegisterAppStateChangeNotification() and links xgameplatform.lib/
+  # xgameruntime.lib directly. The public Gaming.Desktop.x64 GDK needs no
+  # Xbox partner/NDA registration and installs unattended via winget
+  # (confirmed against the GDK's own official GitHub README at
+  # github.com/microsoft/GDK). See campello_editor's TODO.md Phase 4.5.
+  #
+  # Build only, no tests: this compiles a partition-restricted DLL that
+  # calls into real Gaming Runtime APIs at load/init time
+  # (XGameRuntimeInitialize) with no actual Xbox/GDK services running in a
+  # CI sandbox -- running anything that touches runApp() here is likely to
+  # fail or hang in ways that aren't debuggable without real hardware, so
+  # this stays a compile-only check like the iOS/Android jobs above.
+  # ---------------------------------------------------------------------------
+  windows-gdk:
+    name: Windows / GDK Gaming.Desktop.x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Microsoft GDK
+        shell: pwsh
+        run: |
+          winget install --id Microsoft.Gaming.GDK -e --silent `
+            --accept-source-agreements --accept-package-agreements --disable-interactivity
+
+      - name: Verify GDK environment
+        shell: pwsh
+        run: |
+          Write-Host "GameDKCoreLatest = $env:GameDKCoreLatest"
+          if (-not $env:GameDKCoreLatest) {
+            Write-Host "::warning::GameDKCoreLatest not set in this step's environment -- the GDK installer may need a fresh shell/runner restart for machine-level env vars to propagate. If the Configure step below fails to locate the GDK, this is why."
+          }
+
+      - name: Cache dependency sources
+        uses: actions/cache@v5
+        with:
+          path: build_gdk/_deps
+          key: deps-gdk-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-gdk-
+
+      - name: Configure
+        shell: bash
+        run: |
+          cmake -S . -B build_gdk \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCAMPELLO_GDK_GAMING_DESKTOP=ON
+
+      - name: Build
+        shell: bash
+        run: cmake --build build_gdk --config Release --target campello_widgets

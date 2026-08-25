@@ -18,6 +18,19 @@ option(BUILD_CUPERTINO "Build the campello_cupertino design system library" ON)
 option(BUILD_UI        "Build the campello_ui design system library"       ON)
 option(BUILD_FLUENT    "Build the campello_fluent design system library"   ON)
 
+# Standalone-build equivalent of campello_editor's CAMPELLO_GDK_GAMING_DESKTOP
+# (see its TODO.md Phase 4.5): when this repo is built as a FetchContent
+# subdirectory of campello_editor's superproject, that project's own
+# cmake/platforms/GDK.cmake sets the directory-scoped PLATFORM_GDK variable
+# before this file ever runs, which the WIN32 branch below already checks.
+# This option exists so campello_widgets is *also* independently GDK-buildable
+# on its own (this repo's own CI, or any other consumer) without needing to be
+# a subdirectory of that superproject.
+option(CAMPELLO_GDK_GAMING_DESKTOP "Build for Microsoft GDK Gaming.Desktop.x64 (see campello_editor's TODO.md Phase 4.5)" OFF)
+if(CAMPELLO_GDK_GAMING_DESKTOP)
+    set(PLATFORM_GDK TRUE)
+endif()
+
 if(BUILD_INTEGRATION_TESTS)
     set(BUILD_TESTS ON)
 endif()
@@ -57,7 +70,13 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
     include(ios.cmake)
 elseif(WIN32)
-    include(windows.cmake)
+    # PLATFORM_GDK is set by campello_editor's cmake/platforms/GDK.cmake
+    # (see TODO.md Phase 4.5) before this subdirectory configures.
+    if(PLATFORM_GDK)
+        include(gdk.cmake)
+    else()
+        include(windows.cmake)
+    endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     include(linux.cmake)
 else()

@@ -1,7 +1,7 @@
 file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
-list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|windows)/.*")
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|windows|gdk)/.*")
 # src/testing/ is fidelity-testing infrastructure (captureToPng, the offscreen
 # GPU capture helpers) that is only compiled into campello_widgets_tests /
 # campello_widgets_thematic_fidelity — linking it into the shipped library
