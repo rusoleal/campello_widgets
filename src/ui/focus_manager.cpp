@@ -138,9 +138,18 @@ namespace systems::leal::campello_widgets
         }
         if (global_handler && global_handler(event)) return;
 
-        // Intercept Tab / Shift+Tab for traversal on key-down only.
+        // Tab / Shift+Tab: same "give the focused node first chance" shape
+        // as the arrow-key case below -- a plain control has no use for
+        // Tab and falls through to traversal (the common case, e.g. every
+        // TextField), but a control that legitimately wants Tab itself
+        // (e.g. RichTextField inserting an indent, matching every real
+        // code editor) can consume it and suppress traversal. Key-down
+        // only, same as before.
         if (event.kind != KeyEventKind::up && event.key_code == KeyCode::tab)
         {
+            if (current_focus_ && current_focus_->on_key && current_focus_->on_key(event))
+                return;
+
             if (event.modifiers & KeyModifiers::shift)
                 moveFocusBackward();
             else
