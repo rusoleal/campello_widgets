@@ -32,6 +32,8 @@ namespace systems::leal::campello_widgets
         float viewport_height = 0.0f;
         float device_pixel_ratio = 1.0f;
         Color clear_color;
+        // See Renderer's constructor doc comment on `clear_target`.
+        bool  clear_target = true;
 
         bool  has_backdrop_filter = false;
         float max_sigma_x = 0.0f;

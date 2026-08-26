@@ -107,10 +107,12 @@ namespace systems::leal::campello_widgets
     Renderer::Renderer(
         std::shared_ptr<campello_gpu::Device> device,
         std::shared_ptr<RenderBox>            root_render_object,
-        Color                                 clear_color)
+        Color                                 clear_color,
+        bool                                  clear_target)
         : device_(std::move(device))
         , root_(std::move(root_render_object))
         , clear_color_(clear_color)
+        , clear_target_(clear_target)
     {
         detail::currentRenderer().store(this, std::memory_order_release);
     }
@@ -269,6 +271,7 @@ namespace systems::leal::campello_widgets
         package.viewport_height     = viewport_height;
         package.device_pixel_ratio  = device_pixel_ratio_;
         package.clear_color         = clear_color_;
+        package.clear_target        = clear_target_;
         package.has_backdrop_filter = needs_backdrop_capture;
         package.max_sigma_x         = max_sigma_x_;
         package.max_sigma_y         = max_sigma_y_;
@@ -406,7 +409,7 @@ namespace systems::leal::campello_widgets
         // ------------------------------------------------------------------
         GPU::ColorAttachment main_ca{};
         main_ca.view          = target;
-        main_ca.loadOp        = GPU::LoadOp::clear;
+        main_ca.loadOp        = package.clear_target ? GPU::LoadOp::clear : GPU::LoadOp::load;
         main_ca.storeOp       = GPU::StoreOp::store;
         main_ca.clearValue[0] = package.clear_color.r;
         main_ca.clearValue[1] = package.clear_color.g;

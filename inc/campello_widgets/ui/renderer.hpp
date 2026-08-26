@@ -91,11 +91,30 @@ namespace systems::leal::campello_widgets
          * @param device              The campello_gpu device to render with.
          * @param root_render_object  Root of the RenderBox tree to render.
          * @param clear_color         Background clear color for each frame.
+         *                            Ignored when `clear_target` is false.
+         * @param clear_target        When true (the default), the main pass's
+         *                            color attachment uses `LoadOp::clear`
+         *                            (the normal "I own this target" case --
+         *                            a full window/view). When false, it uses
+         *                            `LoadOp::load` instead, preserving
+         *                            whatever a caller already rendered into
+         *                            `target` before this `rasterFrame()`
+         *                            call -- for compositing this tree's
+         *                            content (an overlay, a HUD, 2D sprites)
+         *                            on top of another renderer's output in
+         *                            the same frame, e.g. a 3D scene already
+         *                            drawn by `campello_renderer::Renderer`
+         *                            into the same `TextureView`. The caller
+         *                            is responsible for sequencing: this
+         *                            `Renderer`'s command buffer must be
+         *                            submitted after the one that produced
+         *                            the content being preserved.
          */
         Renderer(
             std::shared_ptr<campello_gpu::Device> device,
             std::shared_ptr<RenderBox>            root_render_object,
-            Color                                 clear_color = Color::black());
+            Color                                 clear_color = Color::black(),
+            bool                                  clear_target = true);
 
         ~Renderer();
 
@@ -632,6 +651,7 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<campello_gpu::Device> device_;
         std::shared_ptr<RenderBox>            root_;
         Color                                 clear_color_;
+        bool                                  clear_target_;
         std::unique_ptr<IDrawBackend>         draw_backend_;
 
         // --- performance overlay state ---
