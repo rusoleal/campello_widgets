@@ -1111,13 +1111,26 @@ static float macosScreenRefreshHz(NSScreen* screen)
         // Get the content view's safeAreaInsets
         // These are in logical points already; no need to multiply by scale
         NSEdgeInsets safeInsets = _window.contentView.safeAreaInsets;
-        
+
         insets.left   = static_cast<float>(safeInsets.left);
         insets.top    = static_cast<float>(safeInsets.top);
         insets.right  = static_cast<float>(safeInsets.right);
         insets.bottom = static_cast<float>(safeInsets.bottom);
     }
-    
+
+    // An app that has made its title bar transparent (fullSizeContentView
+    // + titlebarAppearsTransparent, e.g. to draw its own toolbar flush
+    // with the traffic lights like Xcode) has explicitly opted into
+    // owning that space itself. Continuing to report it here as inset
+    // would defeat that: Renderer::layoutPass()/generateDrawList() apply
+    // view_insets_ as an unconditional, renderer-level canvas shrink and
+    // paint-origin offset *before* any widget (including a SafeArea with
+    // top=false) gets a chance to opt out -- so once reported, it's a
+    // permanently unreclaimable blank strip no widget tree can undo.
+    if (_window.titlebarAppearsTransparent) {
+        insets.top = 0.0f;
+    }
+
     _renderer->setViewInsets(insets);
 }
 

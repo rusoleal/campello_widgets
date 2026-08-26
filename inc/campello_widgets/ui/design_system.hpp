@@ -493,6 +493,17 @@ namespace systems::leal::campello_widgets
         /** @brief The raw design tokens used by this implementation. */
         virtual const DesignTokens& tokens() const = 0;
 
+        /**
+         * @brief Whether interactive controls (buttons, etc.) should show
+         * the pointing-hand cursor on hover. True for every theme except
+         * Cupertino: real AppKit controls (Xcode, Finder, System
+         * Settings, ...) keep the plain arrow cursor over buttons/popups/
+         * other clickable controls -- the pointing-hand-on-hover
+         * convention is a web/Material one, not part of the macOS HIG.
+         * See Button::build() and CupertinoDesignSystem's override.
+         */
+        virtual bool prefersPointerCursorOnHover() const { return true; }
+
         // Component builders
         virtual WidgetRef buildButton(const ButtonConfig&) const = 0;
         virtual WidgetRef buildSwitch(const SwitchConfig&) const = 0;

@@ -68,6 +68,8 @@ namespace systems::leal::campello_widgets
 
         const DesignTokens& tokens() const override { return tokens_; }
 
+        bool prefersPointerCursorOnHover() const override { return false; }
+
         /** @brief Which material this instance renders surfaces with. */
         CupertinoMaterial material() const noexcept { return material_; }
 

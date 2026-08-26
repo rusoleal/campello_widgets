@@ -1,7 +1,6 @@
 #include "cupertino_focus_ring.hpp"
 
 #include <campello_widgets/widgets/gesture_detector.hpp>
-#include <campello_widgets/widgets/mouse_region.hpp>
 #include <campello_widgets/widgets/clip_rrect.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/positioned.hpp>
@@ -11,7 +10,6 @@
 #include <campello_widgets/ui/paint.hpp>
 #include <campello_widgets/ui/rect.hpp>
 #include <campello_widgets/ui/rrect.hpp>
-#include <campello_widgets/ui/system_mouse_cursor.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 
 #include <algorithm>
@@ -95,11 +93,14 @@ namespace systems::leal::campello_widgets
                 setState([](){});
             };
 
-            auto hoverable      = std::make_shared<MouseRegion>();
-            hoverable->cursor   = SystemMouseCursor::pointer;
-            hoverable->child    = gesture;
-
-            return hoverable;
+            // No pointer/hand cursor on hover: real AppKit controls (Xcode,
+            // Finder, System Settings, ...) keep the plain arrow cursor
+            // over buttons, popups, and other clickable controls -- the
+            // pointing-hand-on-hover convention is a web/Material one,
+            // not a Cupertino/macOS HIG one. MouseRegion's own default
+            // (SystemMouseCursor::arrow) already matches that, so no
+            // MouseRegion wrapper is needed here at all.
+            return gesture;
         }
 
     private:

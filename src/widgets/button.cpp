@@ -23,10 +23,15 @@ namespace systems::leal::campello_widgets
 
         // Wrapped once here rather than per DesignSystem -- every
         // buildButton() implementation (Material/Cupertino/Fluent/UI)
-        // funnels through this same Button::build(), so the hover cursor
-        // stays uniform across themes without touching any of them.
+        // funnels through this same Button::build(). The cursor itself is
+        // still theme-aware (see DesignSystem::prefersPointerCursorOnHover()
+        // -- false for Cupertino, matching real AppKit controls), just
+        // decided in one place instead of duplicated across every
+        // buildButton() implementation.
         auto region    = std::make_shared<MouseRegion>();
-        region->cursor = enabled ? SystemMouseCursor::pointer : SystemMouseCursor::arrow;
+        region->cursor = (enabled && ds->prefersPointerCursorOnHover())
+            ? SystemMouseCursor::pointer
+            : SystemMouseCursor::arrow;
         region->child  = rendered;
         return region;
     }
