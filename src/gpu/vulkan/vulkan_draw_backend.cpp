@@ -1,5 +1,6 @@
 #include "vulkan_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
+#include "gpu/stroke_geometry.hpp"
 #include "text_rasterizer.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/text_span.hpp>
@@ -115,10 +116,10 @@ struct alignas(16) ClipShapeUniforms
 struct alignas(16) ShaderMaskUniforms
 {
     float viewport[2];    // framebuffer width, height
-    float gradient_type;  // 0 = linear, 1 = radial
-    float _pad0;
-    float gradient_p1[4]; // linear: begin.xy; radial: center.xy (pixels)
-    float gradient_p2[4]; // linear: end.xy;   radial: radius in .x (pixels)
+    float gradient_type;  // 0 = linear, 1 = radial, 2 = sweep
+    float tile_mode;      // 0 = clamp, 1 = repeated, 2 = mirror
+    float gradient_p1[4]; // linear: begin.xy; radial/sweep: center.xy (pixels)
+    float gradient_p2[4]; // linear: end.xy; radial: radius in .x; sweep: start/end angle in .xy (radians)
     float blend_mode;     // 0 = srcIn, 1 = modulate
     float _pad1[3];
 };
@@ -356,6 +357,22 @@ VulkanDrawBackend::VulkanDrawBackend(
         desc.lodMaxClamp = 1000.0;
         desc.maxAnisotropy = 1.0;
         linear_sampler_ = device_->createSampler(desc);
+    }
+
+    // Nearest-neighbor sampler — used only by drawImage()/drawTintedImage()
+    // when FilterQuality::none is requested; linear_sampler_ stays the
+    // shared default for every other texture-sampling draw.
+    {
+        GPU::SamplerDescriptor desc{};
+        desc.magFilter = GPU::FilterMode::fmNearest;
+        desc.minFilter = GPU::FilterMode::fmNearest;
+        desc.addressModeU = GPU::WrapMode::clampToEdge;
+        desc.addressModeV = GPU::WrapMode::clampToEdge;
+        desc.addressModeW = GPU::WrapMode::clampToEdge;
+        desc.lodMinClamp = 0.0;
+        desc.lodMaxClamp = 1000.0;
+        desc.maxAnisotropy = 1.0;
+        nearest_sampler_ = device_->createSampler(desc);
     }
 
     // Text rasterizer (platform-specific: JNI on Android, FreeType+HarfBuzz on Linux)
@@ -860,32 +877,18 @@ void VulkanDrawBackend::drawRect(
     const float h = max_y - min_y;
     if (w <= 0.0f || h <= 0.0f) return;
 
-    // Stroke: decompose into 4 thin filled edge rects.
+    // Stroke: the 4 corners as a closed polyline through strokePolyline() —
+    // correctly handles rotation (unlike the old always-axis-aligned
+    // 4-separate-rects approach) and gets real caps/joins for free. Local
+    // (pre-transform) corners: strokePolyline() applies `transform` itself.
     if (cmd.paint.style == PaintStyle::stroke) {
-        const float sw = std::max(1.0f, cmd.paint.stroke_width);
-        const struct { float x, y, w, h; } edges[4] = {
-            { min_x,        min_y,        w,  sw }, // top
-            { min_x,        max_y - sw,   w,  sw }, // bottom
-            { min_x,        min_y,        sw, h  }, // left
-            { max_x - sw,   min_y,        sw, h  }, // right
+        const std::vector<Offset> corners{
+            {cmd.rect.left(),  cmd.rect.top()},
+            {cmd.rect.right(), cmd.rect.top()},
+            {cmd.rect.right(), cmd.rect.bottom()},
+            {cmd.rect.left(),  cmd.rect.bottom()},
         };
-        for (const auto& e : edges) {
-            if (e.w <= 0.0f || e.h <= 0.0f) continue;
-            RectUniforms u{};
-            u.rect[0] = e.x; u.rect[1] = e.y; u.rect[2] = e.w; u.rect[3] = e.h;
-            u.color[0] = cmd.paint.color.r; u.color[1] = cmd.paint.color.g;
-            u.color[2] = cmd.paint.color.b; u.color[3] = cmd.paint.color.a;
-            u.viewport[0] = vp_w_; u.viewport[1] = vp_h_;
-            applyScissor(clip, encoder);
-            encoder.setPipeline(pipelineForBlendMode(
-                cmd.paint.blend_mode, rect_pipeline_, rect_blend_pipelines_));
-            encoder.setPushConstants(
-                static_cast<GPU::ShaderStage>(
-                    static_cast<int>(GPU::ShaderStage::vertex) |
-                    static_cast<int>(GPU::ShaderStage::fragment)),
-                0, sizeof(RectUniforms), &u);
-            encoder.draw(6);
-        }
+        strokePolyline(corners, /*closed=*/true, cmd.paint, clip, transform, encoder);
         return;
     }
 
@@ -926,7 +929,6 @@ void VulkanDrawBackend::drawRect(
     // Rotated / perspective quad — upload per-vertex projected positions.
     if (!colored_quad_pipeline_) return;
 
-    struct ColoredQuadVertex { float x, y, w; };
     ColoredQuadVertex verts[6] = {
         { c00.x(), c00.y(), c00.w() },
         { c10.x(), c10.y(), c10.w() },
@@ -1109,6 +1111,212 @@ void VulkanDrawBackend::drawOval(
 }
 
 // ---------------------------------------------------------------------------
+// Stroke primitives — see this backend's header for the overall design.
+// ---------------------------------------------------------------------------
+
+void VulkanDrawBackend::drawStrokeSegmentBody(
+    const Offset& p0, const Offset& p1, float half_width,
+    const Paint& paint, const Matrix4& transform,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!line_pipeline_) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    auto tp0 = transform * vm::Vector4<float>(p0.x, p0.y, 0.0f, 1.0f);
+    auto tp1 = transform * vm::Vector4<float>(p1.x, p1.y, 0.0f, 1.0f);
+    auto tv  = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+
+    LineUniforms u{};
+    u.p1[0]       = tp0.x();
+    u.p1[1]       = tp0.y();
+    u.p2[0]       = tp1.x();
+    u.p2[1]       = tp1.y();
+    u.color[0]    = paint.color.r;
+    u.color[1]    = paint.color.g;
+    u.color[2]    = paint.color.b;
+    u.color[3]    = paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.stroke_w    = std::max(1.0f, half_width * 2.0f * scale);
+
+    encoder.setPipeline(pipelineForBlendMode(
+        paint.blend_mode, line_pipeline_, line_blend_pipelines_));
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(LineUniforms), &u);
+    encoder.draw(6);
+}
+
+void VulkanDrawBackend::drawStrokeRoundPrimitive(
+    const Offset& center, float half_width,
+    const Paint& paint, const Matrix4& transform,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rrect_pipeline_) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    auto tc = transform * vm::Vector4<float>(center.x, center.y, 0.0f, 1.0f);
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r = half_width * scale;
+
+    RRectUniforms u{};
+    u.rect[0]     = tc.x() - r;
+    u.rect[1]     = tc.y() - r;
+    u.rect[2]     = r * 2.0f;
+    u.rect[3]     = r * 2.0f;
+    u.color[0]    = paint.color.r;
+    u.color[1]    = paint.color.g;
+    u.color[2]    = paint.color.b;
+    u.color[3]    = paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.radius      = r; // corner radius = r -> perfect circle via roundedBox SDF
+    u.stroke_w    = 0.0f; // fill
+
+    encoder.setPipeline(pipelineForBlendMode(
+        paint.blend_mode, rrect_pipeline_, rrect_blend_pipelines_));
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(RRectUniforms), &u);
+    encoder.draw(6);
+}
+
+void VulkanDrawBackend::strokePolyline(
+    const std::vector<Offset>& points, bool closed,
+    const Paint& paint, const Rect& clip, const Matrix4& transform,
+    GPU::RenderPassEncoder& encoder)
+{
+    applyScissor(clip, encoder);
+
+    const float half_width = std::max(0.5f, paint.stroke_width * 0.5f);
+    auto geo = buildStrokeGeometry(points, closed, half_width,
+                                    paint.stroke_cap, paint.stroke_join, paint.stroke_miter_limit);
+
+    for (const auto& seg : geo.segments)
+        drawStrokeSegmentBody(seg.p0, seg.p1, half_width, paint, transform, encoder);
+
+    for (const auto& c : geo.circles)
+        drawStrokeRoundPrimitive(c.center, half_width, paint, transform, encoder);
+
+    if (!geo.wedges.empty() && colored_quad_pipeline_)
+    {
+        namespace vm = systems::leal::vector_math;
+        std::vector<ColoredQuadVertex> verts;
+        verts.reserve(geo.wedges.size() * 6);
+        auto pushPt = [&](const Offset& o) {
+            auto p = transform * vm::Vector4<float>(o.x, o.y, 0.0f, 1.0f);
+            verts.push_back({p.x(), p.y(), p.w()});
+        };
+        for (const auto& w : geo.wedges)
+        {
+            if (w.has_miter_point)
+            {
+                pushPt(w.hub); pushPt(w.outer_a); pushPt(w.miter_point);
+                pushPt(w.hub); pushPt(w.miter_point); pushPt(w.outer_b);
+            }
+            else
+            {
+                pushPt(w.hub); pushPt(w.outer_a); pushPt(w.outer_b);
+            }
+        }
+
+        auto vbuf = colored_quad_vertex_pool_.acquire(*device_, verts.size() * sizeof(ColoredQuadVertex), verts.data());
+        if (vbuf)
+        {
+            RectUniforms u{};
+            u.color[0]    = paint.color.r;
+            u.color[1]    = paint.color.g;
+            u.color[2]    = paint.color.b;
+            u.color[3]    = paint.color.a;
+            u.viewport[0] = vp_w_;
+            u.viewport[1] = vp_h_;
+
+            encoder.setPipeline(pipelineForBlendMode(
+                paint.blend_mode, colored_quad_pipeline_, colored_quad_blend_pipelines_));
+            encoder.setPushConstants(
+                static_cast<GPU::ShaderStage>(
+                    static_cast<int>(GPU::ShaderStage::vertex) |
+                    static_cast<int>(GPU::ShaderStage::fragment)),
+                0, sizeof(RectUniforms), &u);
+            encoder.setVertexBuffer(0, vbuf);
+            encoder.draw(static_cast<uint32_t>(verts.size()));
+        }
+    }
+}
+
+void VulkanDrawBackend::appendStrokePolylineBatched(
+    const std::vector<Offset>& points, bool closed,
+    const Paint& paint, const Matrix4& transform,
+    std::vector<ColoredQuadVertex>& verts)
+{
+    namespace vm = systems::leal::vector_math;
+
+    const float half_width = std::max(0.5f, paint.stroke_width * 0.5f);
+    auto geo = buildStrokeGeometry(points, closed, half_width,
+                                    paint.stroke_cap, paint.stroke_join, paint.stroke_miter_limit);
+
+    auto pushPt = [&](const Offset& o) {
+        auto p = transform * vm::Vector4<float>(o.x, o.y, 0.0f, 1.0f);
+        verts.push_back({p.x(), p.y(), p.w()});
+    };
+
+    // Segment bodies: 2 triangles per segment (same shape the pre-existing
+    // per-segment loop built, just now sourced from buildStrokeGeometry()).
+    for (const auto& seg : geo.segments)
+    {
+        const float dx  = seg.p1.x - seg.p0.x;
+        const float dy  = seg.p1.y - seg.p0.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-4f) continue;
+        const float nx = -dy / len * half_width;
+        const float ny =  dx / len * half_width;
+        const Offset a{seg.p0.x + nx, seg.p0.y + ny};
+        const Offset b{seg.p0.x - nx, seg.p0.y - ny};
+        const Offset c{seg.p1.x + nx, seg.p1.y + ny};
+        const Offset d{seg.p1.x - nx, seg.p1.y - ny};
+        pushPt(b); pushPt(a); pushPt(d);
+        pushPt(d); pushPt(a); pushPt(c);
+    }
+
+    // Round caps/joins: approximated as a small triangle fan -- no SDF
+    // available in this flat/batched context (see this method's header doc).
+    constexpr int kFanSegments = 12;
+    for (const auto& circ : geo.circles)
+    {
+        for (int i = 0; i < kFanSegments; ++i)
+        {
+            const float a0 = (2.0f * static_cast<float>(M_PI) * i) / kFanSegments;
+            const float a1 = (2.0f * static_cast<float>(M_PI) * (i + 1)) / kFanSegments;
+            pushPt(circ.center);
+            pushPt({circ.center.x + half_width * std::cos(a0), circ.center.y + half_width * std::sin(a0)});
+            pushPt({circ.center.x + half_width * std::cos(a1), circ.center.y + half_width * std::sin(a1)});
+        }
+    }
+
+    // Bevel/miter join wedges.
+    for (const auto& w : geo.wedges)
+    {
+        if (w.has_miter_point)
+        {
+            pushPt(w.hub); pushPt(w.outer_a); pushPt(w.miter_point);
+            pushPt(w.hub); pushPt(w.miter_point); pushPt(w.outer_b);
+        }
+        else
+        {
+            pushPt(w.hub); pushPt(w.outer_a); pushPt(w.outer_b);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // drawLine
 // ---------------------------------------------------------------------------
 
@@ -1118,39 +1326,10 @@ void VulkanDrawBackend::drawLine(
     const Rect&                      clip,
     GPU::RenderPassEncoder&          encoder)
 {
-    if (!line_pipeline_) return;
-
-    namespace vm = systems::leal::vector_math;
-
-    auto tp1 = transform * vm::Vector4<float>(cmd.p1.x, cmd.p1.y, 0.0f, 1.0f);
-    auto tp2 = transform * vm::Vector4<float>(cmd.p2.x, cmd.p2.y, 0.0f, 1.0f);
-    // Scale stroke width
-    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
-    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
-    float sw = std::max(1.0f, cmd.paint.stroke_width * scale);
-
-    LineUniforms u{};
-    u.p1[0]       = tp1.x();
-    u.p1[1]       = tp1.y();
-    u.p2[0]       = tp2.x();
-    u.p2[1]       = tp2.y();
-    u.color[0]    = cmd.paint.color.r;
-    u.color[1]    = cmd.paint.color.g;
-    u.color[2]    = cmd.paint.color.b;
-    u.color[3]    = cmd.paint.color.a;
-    u.viewport[0] = vp_w_;
-    u.viewport[1] = vp_h_;
-    u.stroke_w    = sw;
-
-    applyScissor(clip, encoder);
-    encoder.setPipeline(pipelineForBlendMode(
-        cmd.paint.blend_mode, line_pipeline_, line_blend_pipelines_));
-    encoder.setPushConstants(
-        static_cast<GPU::ShaderStage>(
-            static_cast<int>(GPU::ShaderStage::vertex) |
-            static_cast<int>(GPU::ShaderStage::fragment)),
-        0, sizeof(LineUniforms), &u);
-    encoder.draw(6);
+    // A line is just a 2-point open polyline -- strokePolyline() gives it
+    // real caps (butt/round/square) for free; a plain 2-point stroke has no
+    // interior vertex, so stroke_join never applies here.
+    strokePolyline({cmd.p1, cmd.p2}, /*closed=*/false, cmd.paint, clip, transform, encoder);
 }
 
 // ---------------------------------------------------------------------------
@@ -1196,13 +1375,13 @@ void VulkanDrawBackend::drawPoints(
             if (cmd.points.size() < 2) break;
             Paint p = cmd.paint;
             p.style = PaintStyle::stroke;
-            for (size_t i = 0; i + 1 < cmd.points.size(); ++i)
-            {
-                DrawLineCmd line{cmd.points[i], cmd.points[i + 1], p};
-                drawLine(line, transform, clip, encoder);
-            }
-            DrawLineCmd close{cmd.points.back(), cmd.points.front(), p};
-            drawLine(close, transform, clip, encoder);
+            // Real joins at every vertex, including the closing corner, via
+            // strokePolyline() -- see PointMode::polygon's doc comment
+            // ("Lines connecting all points in a loop") for why this is
+            // closed, unlike PointMode::lines' independent segment pairs
+            // below (which stay per-pair drawLine() calls -- disjoint
+            // segments have no shared vertex to join).
+            strokePolyline(cmd.points, /*closed=*/true, p, clip, transform, encoder);
             break;
         }
     }
@@ -1232,7 +1411,6 @@ void VulkanDrawBackend::drawArc(
     const float abs_sweep = std::abs(cmd.sweep_angle);
     const int   segments  = std::max(3, static_cast<int>(abs_sweep * 20.0f));
 
-    struct ColoredQuadVertex { float x, y, w; };
     std::vector<ColoredQuadVertex> verts;
     verts.reserve(static_cast<size_t>(segments) * 6);
 
@@ -1340,40 +1518,30 @@ void VulkanDrawBackend::drawPath(
     auto contours = buildPathContours(cmd.path);
     if (contours.empty()) return;
 
-    struct ColoredQuadVertex { float x, y, w; };
     std::vector<ColoredQuadVertex> verts;
-
-    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
-    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
 
     if (cmd.paint.style == PaintStyle::stroke)
     {
-        float half_sw = std::max(0.5f, cmd.paint.stroke_width * scale * 0.5f);
         for (const auto& contour : contours)
         {
-            for (size_t i = 0; i + 1 < contour.size(); ++i)
+            std::vector<Offset> pts;
+            pts.reserve(contour.size());
+            for (const auto& v : contour) pts.push_back({v.x, v.y});
+
+            // buildPathContours() appends an explicit closing duplicate
+            // point when the source Path has a close() command --
+            // buildStrokeGeometry() expects "closed=true, N distinct
+            // points" (see its doc comment), so detect and let it strip
+            // the duplicate itself; just tell it whether one is present.
+            bool closed = false;
+            if (pts.size() > 2)
             {
-                const auto& a = contour[i];
-                const auto& b = contour[i + 1];
-                float dx = b.x - a.x;
-                float dy = b.y - a.y;
-                float len = std::sqrt(dx * dx + dy * dy);
-                if (len < 1e-4f) continue;
-                float nx = -dy / len * half_sw;
-                float ny =  dx / len * half_sw;
-
-                auto p00 = transform * vm::Vector4<float>(a.x + nx, a.y + ny, 0.0f, 1.0f);
-                auto p01 = transform * vm::Vector4<float>(a.x - nx, a.y - ny, 0.0f, 1.0f);
-                auto p10 = transform * vm::Vector4<float>(b.x + nx, b.y + ny, 0.0f, 1.0f);
-                auto p11 = transform * vm::Vector4<float>(b.x - nx, b.y - ny, 0.0f, 1.0f);
-
-                verts.push_back({p01.x(), p01.y(), p01.w()});
-                verts.push_back({p00.x(), p00.y(), p00.w()});
-                verts.push_back({p11.x(), p11.y(), p11.w()});
-                verts.push_back({p11.x(), p11.y(), p11.w()});
-                verts.push_back({p00.x(), p00.y(), p00.w()});
-                verts.push_back({p10.x(), p10.y(), p10.w()});
+                const float dx = pts.front().x - pts.back().x;
+                const float dy = pts.front().y - pts.back().y;
+                closed = (dx * dx + dy * dy) < 1e-6f;
             }
+
+            appendStrokePolylineBatched(pts, closed, cmd.paint, transform, verts);
         }
     }
     else
@@ -1430,10 +1598,12 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
     const Rect&                     clip,
     GPU::RenderPassEncoder&         encoder,
     std::shared_ptr<GPU::BindGroup> cached_bind_group,
-    bool                            persistent)
+    bool                            persistent,
+    std::shared_ptr<GPU::Sampler>   sampler)
 {
     if (!quad_pipeline_ || !quad_bgl_ || !linear_sampler_) return nullptr;
     if (!texture) return nullptr;
+    if (!sampler) sampler = linear_sampler_;
 
     std::shared_ptr<GPU::BindGroup> bind_group;
     if (cached_bind_group) {
@@ -1443,7 +1613,7 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTexturedQuad(
         bg_desc.layout  = quad_bgl_;
         bg_desc.entries = {
             { 1, texture },
-            { 2, linear_sampler_ }
+            { 2, sampler }
         };
         bind_group = device_->createBindGroup(bg_desc, persistent);
         if (!bind_group) return nullptr;
@@ -1544,7 +1714,10 @@ void VulkanDrawBackend::drawImage(
         {c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.opacity,
         clip,
-        encoder);
+        encoder,
+        /*cached_bind_group=*/nullptr,
+        /*persistent=*/false,
+        cmd.filter_quality == FilterQuality::none ? nearest_sampler_ : linear_sampler_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1576,7 +1749,8 @@ void VulkanDrawBackend::drawTintedImage(
         cmd.tint,
         cmd.opacity,
         clip,
-        encoder);
+        encoder,
+        cmd.filter_quality == FilterQuality::none ? nearest_sampler_ : linear_sampler_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1593,16 +1767,18 @@ void VulkanDrawBackend::drawTintedTexturedQuad(
     const Color&                    tint,
     float                           opacity,
     const Rect&                     clip,
-    GPU::RenderPassEncoder&         encoder)
+    GPU::RenderPassEncoder&         encoder,
+    std::shared_ptr<GPU::Sampler>   sampler)
 {
     if (!icon_pipeline_ || !quad_bgl_ || !linear_sampler_) return;
     if (!texture) return;
+    if (!sampler) sampler = linear_sampler_;
 
     GPU::BindGroupDescriptor bg_desc{};
     bg_desc.layout  = quad_bgl_;
     bg_desc.entries = {
         { 1, texture },
-        { 2, linear_sampler_ }
+        { 2, sampler }
     };
     auto bind_group = device_->createBindGroup(bg_desc);
     if (!bind_group) return;
@@ -1995,6 +2171,18 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::buildGradientLUT(
 {
     if (colors.empty()) return nullptr;
 
+    // `stops` must be the same size as `colors` to index safely below; an
+    // omitted or mismatched-size list falls back to evenly-spaced stops
+    // (matches Flutter's Gradient.stops semantics) rather than indexing OOB.
+    std::vector<float> even_stops;
+    if (colors.size() > 1 && stops.size() != colors.size())
+    {
+        even_stops.resize(colors.size());
+        for (size_t i = 0; i < colors.size(); ++i)
+            even_stops[i] = static_cast<float>(i) / static_cast<float>(colors.size() - 1);
+    }
+    const std::vector<float>& use_stops = even_stops.empty() ? stops : even_stops;
+
     constexpr int kLutSize = 256;
     std::vector<uint8_t> data(kLutSize * 4);
 
@@ -2003,7 +2191,7 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::buildGradientLUT(
         const float t = static_cast<float>(i) / static_cast<float>(kLutSize - 1);
 
         Color c;
-        if (colors.size() == 1 || stops.empty())
+        if (colors.size() == 1)
         {
             c = colors[0];
         }
@@ -2011,17 +2199,17 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::buildGradientLUT(
         {
             int lo = 0;
             int hi = static_cast<int>(colors.size()) - 1;
-            for (int s = 0; s < static_cast<int>(stops.size()) - 1; ++s)
+            for (int s = 0; s < static_cast<int>(use_stops.size()) - 1; ++s)
             {
-                if (t >= stops[s] && t <= stops[s + 1])
+                if (t >= use_stops[s] && t <= use_stops[s + 1])
                 {
                     lo = s;
                     hi = s + 1;
                     break;
                 }
             }
-            const float range = stops[hi] - stops[lo];
-            const float f     = (range > 0.0001f) ? (t - stops[lo]) / range : 0.0f;
+            const float range = use_stops[hi] - use_stops[lo];
+            const float f     = (range > 0.0001f) ? (t - use_stops[lo]) / range : 0.0f;
             const Color& ca   = colors[lo];
             const Color& cb   = colors[hi];
             c = Color::fromRGBA(
@@ -2083,6 +2271,7 @@ void VulkanDrawBackend::drawShaderMaskComposite(
     // Build gradient LUT and parameters from shader variant.
     std::shared_ptr<GPU::Texture> lut_tex;
     float gradient_type = 0.0f;
+    float tile_mode      = 0.0f;
     float p1[2] = {0.0f, 0.0f};
     float p2[2] = {0.0f, 0.0f};
 
@@ -2098,6 +2287,7 @@ void VulkanDrawBackend::drawShaderMaskComposite(
             p1[1] = tp1.y();
             p2[0] = tp2.x();
             p2[1] = tp2.y();
+            tile_mode = static_cast<float>(s.tile_mode);
             lut_tex = buildGradientLUT(s.colors, s.stops);
         } else if constexpr (std::is_same_v<S, RadialGradient>) {
             gradient_type = 1.0f;
@@ -2109,6 +2299,17 @@ void VulkanDrawBackend::drawShaderMaskComposite(
             p1[1] = tc.y();
             p2[0] = s.radius * sc;
             p2[1] = 0.0f;
+            tile_mode = static_cast<float>(s.tile_mode);
+            lut_tex = buildGradientLUT(s.colors, s.stops);
+        } else if constexpr (std::is_same_v<S, SweepGradient>) {
+            gradient_type = 2.0f;
+            auto tc = transform * vm::Vector4<float>(cmd.bounds.x + s.center.x,
+                                                      cmd.bounds.y + s.center.y, 0.0f, 1.0f);
+            p1[0] = tc.x();
+            p1[1] = tc.y();
+            p2[0] = s.start_angle;
+            p2[1] = s.end_angle;
+            tile_mode = static_cast<float>(s.tile_mode);
             lut_tex = buildGradientLUT(s.colors, s.stops);
         }
     }, cmd.shader);
@@ -2119,6 +2320,7 @@ void VulkanDrawBackend::drawShaderMaskComposite(
     u.viewport[0]    = vp_w_;
     u.viewport[1]    = vp_h_;
     u.gradient_type  = gradient_type;
+    u.tile_mode      = tile_mode;
     u.gradient_p1[0] = p1[0];
     u.gradient_p1[1] = p1[1];
     u.gradient_p1[2] = 0.0f;

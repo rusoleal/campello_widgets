@@ -15,10 +15,10 @@
 cbuffer ShaderMaskUniforms : register(b0)
 {
     float2 viewport;      // framebuffer width, height
-    float  gradient_type; // 0 = linear, 1 = radial
-    float  _pad0;
-    float4 gradient_p1;   // linear: begin.xy; radial: center.xy (pixels)
-    float4 gradient_p2;   // linear: end.xy;   radial: radius in .x (pixels)
+    float  gradient_type; // 0 = linear, 1 = radial, 2 = sweep
+    float  tile_mode;     // 0 = clamp, 1 = repeated, 2 = mirror
+    float4 gradient_p1;   // linear: begin.xy; radial/sweep: center.xy (pixels)
+    float4 gradient_p2;   // linear: end.xy; radial: radius in .x; sweep: start/end angle in .xy (radians)
     float  blend_mode;    // 0 = srcIn, 1 = modulate
     float3 _pad1;
 };
@@ -41,6 +41,7 @@ struct ShaderMaskVertOut
     float4 gradient_p1   : TEXCOORD2;
     float4 gradient_p2   : TEXCOORD3;
     float  blend_mode    : TEXCOORD4;
+    float  tile_mode     : TEXCOORD5;
 };
 
 ShaderMaskVertOut ShaderMaskVS(ShaderMaskVertexIn input)
@@ -55,6 +56,7 @@ ShaderMaskVertOut ShaderMaskVS(ShaderMaskVertexIn input)
     o.gradient_p1   = gradient_p1;
     o.gradient_p2   = gradient_p2;
     o.blend_mode    = blend_mode;
+    o.tile_mode     = tile_mode;
     return o;
 }
 
@@ -72,13 +74,38 @@ float4 ShaderMaskPS(ShaderMaskVertOut input) : SV_TARGET
         float  len2 = dot(dir, dir);
         t = (len2 > 0.0001) ? dot(pos - p1, dir) / len2 : 0.0;
     }
-    else
+    else if (input.gradient_type < 1.5)
     {
         float2 center = input.gradient_p1.xy;
         float  radius = input.gradient_p2.x;
         t = (radius > 0.0001) ? length(pos - center) / radius : 0.0;
     }
-    t = saturate(t);
+    else
+    {
+        // Sweep gradient: angle from center, normalized to [start, end].
+        float2 center      = input.gradient_p1.xy;
+        float  start_angle = input.gradient_p2.x;
+        float  end_angle   = input.gradient_p2.y;
+        float2 d           = pos - center;
+        float  angle       = atan2(d.y, d.x);
+        if (angle < 0.0) angle += 2.0 * 3.14159265358979323846;
+        float span = end_angle - start_angle;
+        t = (abs(span) > 0.0001) ? (angle - start_angle) / span : 0.0;
+    }
+
+    if (input.tile_mode < 0.5)
+    {
+        t = saturate(t); // clamp
+    }
+    else if (input.tile_mode < 1.5)
+    {
+        t = frac(t); // repeated
+    }
+    else
+    {
+        float period = t - 2.0 * floor(t * 0.5); // mirror: triangle wave, period 2
+        t = (period > 1.0) ? (2.0 - period) : period;
+    }
 
     float4 mask_color = gLutTex.Sample(gSmp, float2(t, 0.5));
 

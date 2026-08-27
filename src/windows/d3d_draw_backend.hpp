@@ -268,28 +268,75 @@ private:
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
-    void drawFilledRect(
-        float x, float y, float w, float h,
-        const Color& color,
-        campello_gpu::RenderPassEncoder& encoder);
-
     void drawShape(
         float x, float y, float w, float h,
         float corner_r, float stroke_w, float kind,
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
+    // ------------------------------------------------------------------
+    // Stroke primitives — GPU-side cap/join expansion (see
+    // src/gpu/stroke_geometry.hpp's doc comment for the overall design:
+    // buildStrokeGeometry() does O(1)-per-element CPU vector math to decide
+    // *what* to draw; these methods do the actual antialiased GPU rendering).
+    // Points are in local (pre-transform) space, matching drawLine()/
+    // drawRect()/drawPath()'s existing convention. Mirrors
+    // MetalDrawBackend's methods of the same name field-for-field — D3D's
+    // line_pipeline_/shape_pipeline_/rect_pipeline_ each use a single
+    // hardcoded blend state (like Metal, unlike Vulkan), so no blend-mode
+    // selection is needed here.
+    // ------------------------------------------------------------------
+
+    // One antialiased, butt-ended segment body via line_pipeline_.
+    void drawStrokeSegmentBody(
+        const Offset& p0, const Offset& p1, float half_width,
+        const Color& color, const Matrix4& transform,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // One antialiased round cap/join, as a filled circle via drawShape().
+    void drawStrokeRoundPrimitive(
+        const Offset& center, float half_width,
+        const Color& color, const Matrix4& transform,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Strokes a polyline as individual GPU draw calls (segment bodies +
+    // round caps/joins via drawShape() + bevel/miter wedges via
+    // drawFilledVertices()). For drawLine()/drawRect() stroke, where point
+    // count is always small — same "one shape = a few draw calls" cost
+    // class as every other shape primitive in this backend.
+    void strokePolyline(
+        const std::vector<Offset>& points, bool closed,
+        const Paint& paint, const Rect& clip, const Matrix4& transform,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Same decomposition as strokePolyline(), but appends flat (non-AA)
+    // triangles to `verts` instead of issuing per-primitive draw calls —
+    // preserves drawPath()'s existing "one draw call regardless of segment
+    // count" property for potentially long flattened curves. Round caps/
+    // joins are approximated as a small triangle fan (no SDF available in
+    // this batched context).
+    void appendStrokePolylineBatched(
+        const std::vector<Offset>& points, bool closed,
+        const Paint& paint, const Matrix4& transform,
+        std::vector<RectVertex>& verts);
+
     // Returns the BindGroup actually used — either `cached_bind_group`
     // passed straight through, or a freshly built one (nullptr if drawing
     // was aborted, e.g. missing pipeline). Callers that want to skip
     // rebuilding it next time should keep it and pass it back in.
+    // `sampler`: nullptr (default) uses quad_sampler_ (linear), matching
+    // every existing call site's behavior unchanged. drawImage() passes
+    // nearest_sampler_ explicitly when the caller requests
+    // FilterQuality::none. Only takes effect when `cached_bind_group` is
+    // null (a supplied cache already has its own sampler baked in).
     std::shared_ptr<campello_gpu::BindGroup> drawTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>  texture,
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
         float opacity,
         campello_gpu::RenderPassEncoder&        encoder,
-        std::shared_ptr<campello_gpu::BindGroup> cached_bind_group = nullptr);
+        std::shared_ptr<campello_gpu::BindGroup> cached_bind_group = nullptr,
+        std::shared_ptr<campello_gpu::Sampler>   sampler = nullptr);
 
     // Mirrors drawTexturedQuad() exactly, but binds icon_pipeline_ (which
     // samples only the source texture's alpha channel and recolors with
@@ -297,13 +344,15 @@ private:
     // its own method rather than adding a tint parameter to
     // drawTexturedQuad() so every existing call site is untouched — same
     // rationale as MetalDrawBackend::drawTintedTexturedQuad().
+    // `sampler`: see drawTexturedQuad()'s doc comment.
     void drawTintedTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>  texture,
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
         const Color& tint,
         float opacity,
-        campello_gpu::RenderPassEncoder&        encoder);
+        campello_gpu::RenderPassEncoder&        encoder,
+        std::shared_ptr<campello_gpu::Sampler>   sampler = nullptr);
 
     // Runs a single-pass blur render (horizontal or vertical) from src into
     // dst — see blurTexture(), which chains two of these. `src_bind_group`
@@ -553,6 +602,11 @@ private:
     std::shared_ptr<campello_gpu::BindGroupLayout>  shader_mask_bgl_;         // child@0, lut@1, sampler@2 (bind group 1)
 
     std::shared_ptr<campello_gpu::Sampler>          quad_sampler_;
+
+    // Nearest-neighbor counterpart to quad_sampler_ (linear), selected by
+    // drawImage()/drawTintedImage() only, per-draw, when the caller passes
+    // FilterQuality::none.
+    std::shared_ptr<campello_gpu::Sampler>          nearest_sampler_;
 
     // Blur scratch textures — see blurTexture(). Acquired per-call from a
     // dedicated OffscreenTexturePool (same size-keyed/generation-rotated

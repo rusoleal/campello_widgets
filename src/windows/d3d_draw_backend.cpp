@@ -1,5 +1,6 @@
 #include "d3d_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
+#include "gpu/stroke_geometry.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
@@ -117,10 +118,10 @@ struct alignas(16) ClipShapeUniforms
 struct alignas(16) ShaderMaskUniforms
 {
     float viewport[2];    // framebuffer width, height
-    float gradient_type;  // 0 = linear, 1 = radial
-    float _pad0;
-    float gradient_p1[4]; // linear: begin.xy; radial: center.xy (pixels)
-    float gradient_p2[4]; // linear: end.xy;   radial: radius in .x (pixels)
+    float gradient_type;  // 0 = linear, 1 = radial, 2 = sweep
+    float tile_mode;      // 0 = clamp, 1 = repeated, 2 = mirror
+    float gradient_p1[4]; // linear: begin.xy; radial/sweep: center.xy (pixels)
+    float gradient_p2[4]; // linear: end.xy; radial: radius in .x; sweep: start/end angle in .xy (radians)
     float blend_mode;     // 0 = srcIn, 1 = modulate
     float _pad1[3];
 };
@@ -797,6 +798,23 @@ D3DDrawBackend::D3DDrawBackend(
         sd.maxAnisotropy = 1.0;
         quad_sampler_ = device_->createSampler(sd);
     }
+
+    // --- Nearest-neighbor sampler (clamp-to-edge) --- used only by
+    // drawImage()/drawTintedImage() when FilterQuality::none is requested;
+    // quad_sampler_ (linear) stays the shared default for every other
+    // texture-sampling draw.
+    {
+        GPU::SamplerDescriptor sd{};
+        sd.addressModeU  = GPU::WrapMode::clampToEdge;
+        sd.addressModeV  = GPU::WrapMode::clampToEdge;
+        sd.addressModeW  = GPU::WrapMode::clampToEdge;
+        sd.magFilter     = GPU::FilterMode::fmNearest;
+        sd.minFilter     = GPU::FilterMode::fmNearest;
+        sd.lodMinClamp   = 0.0;
+        sd.lodMaxClamp   = 1000.0;
+        sd.maxAnisotropy = 1.0;
+        nearest_sampler_ = device_->createSampler(sd);
+    }
 }
 
 D3DDrawBackend::~D3DDrawBackend()
@@ -847,7 +865,7 @@ bool D3DDrawBackend::applyScissor(const Rect& clip, GPU::RenderPassEncoder& enco
 }
 
 // ---------------------------------------------------------------------------
-// drawFilledQuad / drawFilledRect / drawRect
+// drawFilledQuad / drawRect
 // ---------------------------------------------------------------------------
 
 void D3DDrawBackend::drawFilledQuad(
@@ -880,17 +898,6 @@ void D3DDrawBackend::drawFilledQuad(
     encoder.setBindGroup(0, slot.bind_group);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(6);
-}
-
-void D3DDrawBackend::drawFilledRect(
-    float x, float y, float w, float h,
-    const Color& color,
-    GPU::RenderPassEncoder& encoder)
-{
-    drawFilledQuad(
-        ProjectedCorner{x,     y,     1.0f, 0.0f, 0.0f}, ProjectedCorner{x + w, y,     1.0f, 0.0f, 0.0f},
-        ProjectedCorner{x,     y + h, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x + w, y + h, 1.0f, 0.0f, 0.0f},
-        color, encoder);
 }
 
 void D3DDrawBackend::drawFilledVertices(
@@ -945,19 +952,18 @@ void D3DDrawBackend::drawRect(
     }
     else
     {
-        const float min_x = std::min({c00.x(), c10.x(), c01.x(), c11.x()});
-        const float min_y = std::min({c00.y(), c10.y(), c01.y(), c11.y()});
-        const float max_x = std::max({c00.x(), c10.x(), c01.x(), c11.x()});
-        const float max_y = std::max({c00.y(), c10.y(), c01.y(), c11.y()});
-
-        const float sw = cmd.paint.stroke_width;
-        const float w  = max_x - min_x;
-        const float h  = max_y - min_y;
-
-        drawFilledRect(min_x,      min_y,      w,  sw, cmd.paint.color, encoder);
-        drawFilledRect(min_x,      max_y - sw, w,  sw, cmd.paint.color, encoder);
-        drawFilledRect(min_x,      min_y + sw, sw, h - 2.0f * sw, cmd.paint.color, encoder);
-        drawFilledRect(max_x - sw, min_y + sw, sw, h - 2.0f * sw, cmd.paint.color, encoder);
+        // Stroke: the 4 corners as a closed polyline through
+        // strokePolyline() — correctly handles rotation (unlike the old
+        // always-axis-aligned 4-separate-rects approach) and gets real
+        // caps/joins for free. Local (pre-transform) corners:
+        // strokePolyline() applies `transform` itself.
+        const std::vector<Offset> corners{
+            {cmd.rect.left(),  cmd.rect.top()},
+            {cmd.rect.right(), cmd.rect.top()},
+            {cmd.rect.right(), cmd.rect.bottom()},
+            {cmd.rect.left(),  cmd.rect.bottom()},
+        };
+        strokePolyline(corners, /*closed=*/true, cmd.paint, clip, transform, encoder);
     }
 }
 
@@ -994,6 +1000,161 @@ void D3DDrawBackend::drawShape(
     encoder.setPipeline(shape_pipeline_);
     encoder.setBindGroup(0, slot.bind_group);
     encoder.draw(6);
+}
+
+// ---------------------------------------------------------------------------
+// Stroke primitives — see this backend's header for the overall design.
+// ---------------------------------------------------------------------------
+
+void D3DDrawBackend::drawStrokeSegmentBody(
+    const Offset& p0, const Offset& p1, float half_width,
+    const Color& color, const Matrix4& transform,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!line_pipeline_ || !line_bgl_) return;
+
+    auto tp0 = transform * vm::Vector4<float>(p0.x, p0.y, 0.0f, 1.0f);
+    auto tp1 = transform * vm::Vector4<float>(p1.x, p1.y, 0.0f, 1.0f);
+    auto tv  = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+
+    LineUniforms u{};
+    u.p1[0]       = tp0.x();
+    u.p1[1]       = tp0.y();
+    u.p2[0]       = tp1.x();
+    u.p2[1]       = tp1.y();
+    u.color[0]    = color.r;
+    u.color[1]    = color.g;
+    u.color[2]    = color.b;
+    u.color[3]    = color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.stroke_w    = std::max(1.0f, half_width * 2.0f * scale);
+
+    auto slot = line_uniform_pool_.acquire(*device_, line_bgl_, sizeof(LineUniforms), &u);
+    if (!slot.bind_group) return;
+
+    encoder.setPipeline(line_pipeline_);
+    encoder.setBindGroup(0, slot.bind_group);
+    encoder.draw(6);
+}
+
+void D3DDrawBackend::drawStrokeRoundPrimitive(
+    const Offset& center, float half_width,
+    const Color& color, const Matrix4& transform,
+    GPU::RenderPassEncoder& encoder)
+{
+    auto tc = transform * vm::Vector4<float>(center.x, center.y, 0.0f, 1.0f);
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r = half_width * scale;
+    drawShape(tc.x() - r, tc.y() - r, r * 2.0f, r * 2.0f,
+              0.0f, 0.0f, 1.0f /*kind=circle*/, color, encoder);
+}
+
+void D3DDrawBackend::strokePolyline(
+    const std::vector<Offset>& points, bool closed,
+    const Paint& paint, const Rect& clip, const Matrix4& transform,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!applyScissor(clip, encoder)) return;
+
+    const float half_width = std::max(0.5f, paint.stroke_width * 0.5f);
+    auto geo = buildStrokeGeometry(points, closed, half_width,
+                                    paint.stroke_cap, paint.stroke_join, paint.stroke_miter_limit);
+
+    for (const auto& seg : geo.segments)
+        drawStrokeSegmentBody(seg.p0, seg.p1, half_width, paint.color, transform, encoder);
+
+    for (const auto& c : geo.circles)
+        drawStrokeRoundPrimitive(c.center, half_width, paint.color, transform, encoder);
+
+    if (!geo.wedges.empty())
+    {
+        std::vector<RectVertex> verts;
+        verts.reserve(geo.wedges.size() * 6);
+        auto pushPt = [&](const Offset& o) {
+            auto p = transform * vm::Vector4<float>(o.x, o.y, 0.0f, 1.0f);
+            verts.push_back({p.x(), p.y(), p.w()});
+        };
+        for (const auto& w : geo.wedges)
+        {
+            if (w.has_miter_point)
+            {
+                pushPt(w.hub); pushPt(w.outer_a); pushPt(w.miter_point);
+                pushPt(w.hub); pushPt(w.miter_point); pushPt(w.outer_b);
+            }
+            else
+            {
+                pushPt(w.hub); pushPt(w.outer_a); pushPt(w.outer_b);
+            }
+        }
+        drawFilledVertices(verts, paint.color, encoder);
+    }
+}
+
+void D3DDrawBackend::appendStrokePolylineBatched(
+    const std::vector<Offset>& points, bool closed,
+    const Paint& paint, const Matrix4& transform,
+    std::vector<RectVertex>& verts)
+{
+    const float half_width = std::max(0.5f, paint.stroke_width * 0.5f);
+    auto geo = buildStrokeGeometry(points, closed, half_width,
+                                    paint.stroke_cap, paint.stroke_join, paint.stroke_miter_limit);
+
+    auto pushPt = [&](const Offset& o) {
+        auto p = transform * vm::Vector4<float>(o.x, o.y, 0.0f, 1.0f);
+        verts.push_back({p.x(), p.y(), p.w()});
+    };
+
+    // Segment bodies: 2 triangles per segment (same shape the pre-existing
+    // per-segment loop built, just now sourced from buildStrokeGeometry()).
+    for (const auto& seg : geo.segments)
+    {
+        const float dx  = seg.p1.x - seg.p0.x;
+        const float dy  = seg.p1.y - seg.p0.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-4f) continue;
+        const float nx = -dy / len * half_width;
+        const float ny =  dx / len * half_width;
+        const Offset a{seg.p0.x + nx, seg.p0.y + ny};
+        const Offset b{seg.p0.x - nx, seg.p0.y - ny};
+        const Offset c{seg.p1.x + nx, seg.p1.y + ny};
+        const Offset d{seg.p1.x - nx, seg.p1.y - ny};
+        pushPt(b); pushPt(a); pushPt(d);
+        pushPt(d); pushPt(a); pushPt(c);
+    }
+
+    // Round caps/joins: approximated as a small triangle fan -- no SDF
+    // available in this flat/batched context (see this method's header doc).
+    constexpr int   kFanSegments = 12;
+    constexpr float kTwoPi       = 6.28318530717958647692f; // avoids relying on M_PI, which MSVC's
+                                                              // <cmath> only defines under _USE_MATH_DEFINES
+    for (const auto& circ : geo.circles)
+    {
+        for (int i = 0; i < kFanSegments; ++i)
+        {
+            const float a0 = (kTwoPi * i) / kFanSegments;
+            const float a1 = (kTwoPi * (i + 1)) / kFanSegments;
+            pushPt(circ.center);
+            pushPt({circ.center.x + half_width * std::cos(a0), circ.center.y + half_width * std::sin(a0)});
+            pushPt({circ.center.x + half_width * std::cos(a1), circ.center.y + half_width * std::sin(a1)});
+        }
+    }
+
+    // Bevel/miter join wedges.
+    for (const auto& w : geo.wedges)
+    {
+        if (w.has_miter_point)
+        {
+            pushPt(w.hub); pushPt(w.outer_a); pushPt(w.miter_point);
+            pushPt(w.hub); pushPt(w.miter_point); pushPt(w.outer_b);
+        }
+        else
+        {
+            pushPt(w.hub); pushPt(w.outer_a); pushPt(w.outer_b);
+        }
+    }
 }
 
 void D3DDrawBackend::drawCircle(
@@ -1060,34 +1221,10 @@ void D3DDrawBackend::drawLine(
     const Rect&             clip,
     GPU::RenderPassEncoder& encoder)
 {
-    if (!line_pipeline_ || !line_bgl_) return;
-    if (!applyScissor(clip, encoder)) return;
-
-    auto tp1 = transform * vm::Vector4<float>(cmd.p1.x, cmd.p1.y, 0.0f, 1.0f);
-    auto tp2 = transform * vm::Vector4<float>(cmd.p2.x, cmd.p2.y, 0.0f, 1.0f);
-    auto tv  = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
-    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
-    float sw = std::max(1.0f, cmd.paint.stroke_width * scale);
-
-    LineUniforms u{};
-    u.p1[0]       = tp1.x();
-    u.p1[1]       = tp1.y();
-    u.p2[0]       = tp2.x();
-    u.p2[1]       = tp2.y();
-    u.color[0]    = cmd.paint.color.r;
-    u.color[1]    = cmd.paint.color.g;
-    u.color[2]    = cmd.paint.color.b;
-    u.color[3]    = cmd.paint.color.a;
-    u.viewport[0] = vp_w_;
-    u.viewport[1] = vp_h_;
-    u.stroke_w    = sw;
-
-    auto slot = line_uniform_pool_.acquire(*device_, line_bgl_, sizeof(LineUniforms), &u);
-    if (!slot.bind_group) return;
-
-    encoder.setPipeline(line_pipeline_);
-    encoder.setBindGroup(0, slot.bind_group);
-    encoder.draw(6);
+    // A line is just a 2-point open polyline -- strokePolyline() gives it
+    // real caps (butt/round/square) for free; a plain 2-point stroke has no
+    // interior vertex, so stroke_join never applies here.
+    strokePolyline({cmd.p1, cmd.p2}, /*closed=*/false, cmd.paint, clip, transform, encoder);
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,37 +1323,28 @@ void D3DDrawBackend::drawPath(
 
     std::vector<RectVertex> verts;
 
-    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
-    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
-
     if (cmd.paint.style == PaintStyle::stroke)
     {
-        float half_sw = std::max(0.5f, cmd.paint.stroke_width * scale * 0.5f);
         for (const auto& contour : contours)
         {
-            for (size_t i = 0; i + 1 < contour.size(); ++i)
+            std::vector<Offset> pts;
+            pts.reserve(contour.size());
+            for (const auto& v : contour) pts.push_back({v.x, v.y});
+
+            // buildPathContours() appends an explicit closing duplicate
+            // point when the source Path has a close() command --
+            // buildStrokeGeometry() expects "closed=true, N distinct
+            // points" (see its doc comment), so detect and let it strip
+            // the duplicate itself; just tell it whether one is present.
+            bool closed = false;
+            if (pts.size() > 2)
             {
-                const auto& a = contour[i];
-                const auto& b = contour[i + 1];
-                float dx = b.x - a.x;
-                float dy = b.y - a.y;
-                float len = std::sqrt(dx * dx + dy * dy);
-                if (len < 1e-4f) continue;
-                float nx = -dy / len * half_sw;
-                float ny =  dx / len * half_sw;
-
-                auto p00 = transform * vm::Vector4<float>(a.x + nx, a.y + ny, 0.0f, 1.0f);
-                auto p01 = transform * vm::Vector4<float>(a.x - nx, a.y - ny, 0.0f, 1.0f);
-                auto p10 = transform * vm::Vector4<float>(b.x + nx, b.y + ny, 0.0f, 1.0f);
-                auto p11 = transform * vm::Vector4<float>(b.x - nx, b.y - ny, 0.0f, 1.0f);
-
-                verts.push_back({p01.x(), p01.y(), p01.w()});
-                verts.push_back({p00.x(), p00.y(), p00.w()});
-                verts.push_back({p11.x(), p11.y(), p11.w()});
-                verts.push_back({p11.x(), p11.y(), p11.w()});
-                verts.push_back({p00.x(), p00.y(), p00.w()});
-                verts.push_back({p10.x(), p10.y(), p10.w()});
+                const float dx = pts.front().x - pts.back().x;
+                const float dy = pts.front().y - pts.back().y;
+                closed = (dx * dx + dy * dy) < 1e-6f;
             }
+
+            appendStrokePolylineBatched(pts, closed, cmd.paint, transform, verts);
         }
     }
     else
@@ -1281,13 +1409,13 @@ void D3DDrawBackend::drawPoints(
             if (cmd.points.size() < 2) break;
             Paint p = cmd.paint;
             p.style = PaintStyle::stroke;
-            for (size_t i = 0; i + 1 < cmd.points.size(); ++i)
-            {
-                DrawLineCmd line{cmd.points[i], cmd.points[i + 1], p};
-                drawLine(line, transform, clip, encoder);
-            }
-            DrawLineCmd close{cmd.points.back(), cmd.points.front(), p};
-            drawLine(close, transform, clip, encoder);
+            // Real joins at every vertex, including the closing corner, via
+            // strokePolyline() -- see PointMode::polygon's doc comment
+            // ("Lines connecting all points in a loop") for why this is
+            // closed, unlike PointMode::lines' independent segment pairs
+            // below (which stay per-pair drawLine() calls -- disjoint
+            // segments have no shared vertex to join).
+            strokePolyline(cmd.points, /*closed=*/true, p, clip, transform, encoder);
             break;
         }
     }
@@ -1332,9 +1460,11 @@ std::shared_ptr<GPU::BindGroup> D3DDrawBackend::drawTexturedQuad(
     const ProjectedCorner& c01, const ProjectedCorner& c11,
     float opacity,
     GPU::RenderPassEncoder&        encoder,
-    std::shared_ptr<GPU::BindGroup> cached_bind_group)
+    std::shared_ptr<GPU::BindGroup> cached_bind_group,
+    std::shared_ptr<GPU::Sampler>   sampler)
 {
     if (!quad_pipeline_ || !quad_uniform_bgl_ || !quad_tex_bgl_ || !quad_sampler_) return nullptr;
+    if (!sampler) sampler = quad_sampler_;
 
     // Bind group 1: texture@0/sampler@1 — reuse the caller-supplied cached
     // bind group if there is one (e.g. Renderer's text_texture_cache_),
@@ -1348,7 +1478,7 @@ std::shared_ptr<GPU::BindGroup> D3DDrawBackend::drawTexturedQuad(
         bgDesc.layout  = quad_tex_bgl_;
         bgDesc.entries = {
             GPU::BindGroupEntryDescriptor{ 0, texture },
-            GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
+            GPU::BindGroupEntryDescriptor{ 1, sampler },
         };
         texBindGroup = device_->createBindGroup(bgDesc);
         if (!texBindGroup) return nullptr;
@@ -1408,7 +1538,9 @@ void D3DDrawBackend::drawImage(
         ProjectedCorner{c01.x(), c01.y(), c01.w(), su0, sv1},
         ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.opacity,
-        encoder);
+        encoder,
+        /*cached_bind_group=*/nullptr,
+        cmd.filter_quality == FilterQuality::none ? nearest_sampler_ : quad_sampler_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1441,7 +1573,8 @@ void D3DDrawBackend::drawTintedImage(
         ProjectedCorner{c11.x(), c11.y(), c11.w(), su1, sv1},
         cmd.tint,
         cmd.opacity,
-        encoder);
+        encoder,
+        cmd.filter_quality == FilterQuality::none ? nearest_sampler_ : quad_sampler_);
 }
 
 // ---------------------------------------------------------------------------
@@ -1454,15 +1587,17 @@ void D3DDrawBackend::drawTintedTexturedQuad(
     const ProjectedCorner& c01, const ProjectedCorner& c11,
     const Color& tint,
     float opacity,
-    GPU::RenderPassEncoder&        encoder)
+    GPU::RenderPassEncoder&        encoder,
+    std::shared_ptr<GPU::Sampler>  sampler)
 {
     if (!icon_pipeline_ || !icon_uniform_bgl_ || !quad_tex_bgl_ || !quad_sampler_) return;
+    if (!sampler) sampler = quad_sampler_;
 
     GPU::BindGroupDescriptor bgDesc{};
     bgDesc.layout  = quad_tex_bgl_;
     bgDesc.entries = {
         GPU::BindGroupEntryDescriptor{ 0, texture },
-        GPU::BindGroupEntryDescriptor{ 1, quad_sampler_ },
+        GPU::BindGroupEntryDescriptor{ 1, sampler },
     };
     auto texBindGroup = device_->createBindGroup(bgDesc);
     if (!texBindGroup) return;
@@ -1796,6 +1931,18 @@ std::shared_ptr<GPU::Texture> D3DDrawBackend::buildGradientLUT(
 {
     if (colors.empty()) return nullptr;
 
+    // `stops` must be the same size as `colors` to index safely below; an
+    // omitted or mismatched-size list falls back to evenly-spaced stops
+    // (matches Flutter's Gradient.stops semantics) rather than indexing OOB.
+    std::vector<float> even_stops;
+    if (colors.size() > 1 && stops.size() != colors.size())
+    {
+        even_stops.resize(colors.size());
+        for (size_t i = 0; i < colors.size(); ++i)
+            even_stops[i] = static_cast<float>(i) / static_cast<float>(colors.size() - 1);
+    }
+    const std::vector<float>& use_stops = even_stops.empty() ? stops : even_stops;
+
     constexpr int kLutSize = 256;
     std::vector<uint8_t> data(kLutSize * 4);
 
@@ -1804,7 +1951,7 @@ std::shared_ptr<GPU::Texture> D3DDrawBackend::buildGradientLUT(
         const float t = static_cast<float>(i) / static_cast<float>(kLutSize - 1);
 
         Color c;
-        if (colors.size() == 1 || stops.empty())
+        if (colors.size() == 1)
         {
             c = colors[0];
         }
@@ -1812,17 +1959,17 @@ std::shared_ptr<GPU::Texture> D3DDrawBackend::buildGradientLUT(
         {
             int lo = 0;
             int hi = static_cast<int>(colors.size()) - 1;
-            for (int s = 0; s < static_cast<int>(stops.size()) - 1; ++s)
+            for (int s = 0; s < static_cast<int>(use_stops.size()) - 1; ++s)
             {
-                if (t >= stops[s] && t <= stops[s + 1])
+                if (t >= use_stops[s] && t <= use_stops[s + 1])
                 {
                     lo = s;
                     hi = s + 1;
                     break;
                 }
             }
-            const float range = stops[hi] - stops[lo];
-            const float f     = (range > 0.0001f) ? (t - stops[lo]) / range : 0.0f;
+            const float range = use_stops[hi] - use_stops[lo];
+            const float f     = (range > 0.0001f) ? (t - use_stops[lo]) / range : 0.0f;
             const Color& ca   = colors[lo];
             const Color& cb   = colors[hi];
             c = Color::fromRGBA(
@@ -1879,6 +2026,7 @@ void D3DDrawBackend::drawShaderMaskComposite(
 
     std::shared_ptr<GPU::Texture> lut_tex;
     float gradient_type = 0.0f;
+    float tile_mode      = 0.0f;
     float p1[2] = {0.0f, 0.0f};
     float p2[2] = {0.0f, 0.0f};
 
@@ -1894,6 +2042,7 @@ void D3DDrawBackend::drawShaderMaskComposite(
             p1[1] = tp1.y();
             p2[0] = tp2.x();
             p2[1] = tp2.y();
+            tile_mode = static_cast<float>(s.tile_mode);
             lut_tex = buildGradientLUT(s.colors, s.stops);
         } else if constexpr (std::is_same_v<S, RadialGradient>) {
             gradient_type = 1.0f;
@@ -1905,6 +2054,17 @@ void D3DDrawBackend::drawShaderMaskComposite(
             p1[1] = tc.y();
             p2[0] = s.radius * sc;
             p2[1] = 0.0f;
+            tile_mode = static_cast<float>(s.tile_mode);
+            lut_tex = buildGradientLUT(s.colors, s.stops);
+        } else if constexpr (std::is_same_v<S, SweepGradient>) {
+            gradient_type = 2.0f;
+            auto tc = transform * vm::Vector4<float>(cmd.bounds.x + s.center.x,
+                                                      cmd.bounds.y + s.center.y, 0.0f, 1.0f);
+            p1[0] = tc.x();
+            p1[1] = tc.y();
+            p2[0] = s.start_angle;
+            p2[1] = s.end_angle;
+            tile_mode = static_cast<float>(s.tile_mode);
             lut_tex = buildGradientLUT(s.colors, s.stops);
         }
     }, cmd.shader);
@@ -1915,6 +2075,7 @@ void D3DDrawBackend::drawShaderMaskComposite(
     u.viewport[0]    = vp_w_;
     u.viewport[1]    = vp_h_;
     u.gradient_type  = gradient_type;
+    u.tile_mode      = tile_mode;
     u.gradient_p1[0] = p1[0];
     u.gradient_p1[1] = p1[1];
     u.gradient_p1[2] = 0.0f;

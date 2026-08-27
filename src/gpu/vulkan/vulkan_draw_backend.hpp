@@ -235,6 +235,13 @@ public:
     // Per-vertex projected position + UV — mirrors Metal's ProjectedCorner.
     struct QuadCorner { float x, y, w, u, v; };
 
+    // Per-vertex projected position (no UV) for colored_quad_pipeline_ —
+    // was previously redefined identically as a local struct inside
+    // drawRect()/drawArc()/drawPath(); hoisted here so
+    // appendStrokePolylineBatched() can share it with drawPath()'s own
+    // vertex vector.
+    struct ColoredQuadVertex { float x, y, w; };
+
     // ------------------------------------------------------------------
     // Uniform buffer pool — mirrors MetalDrawBackend::UniformBufferPool
     // exactly (see its doc comment). drawFilledQuad/drawTexturedQuad/
@@ -283,6 +290,50 @@ private:
         const std::shared_ptr<campello_gpu::RenderPipeline>& base,
         const std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>>& variants) const;
 
+    // ------------------------------------------------------------------
+    // Stroke primitives — see src/gpu/stroke_geometry.hpp's doc comment for
+    // the overall design: buildStrokeGeometry() does O(1)-per-element CPU
+    // vector math to decide *what* to draw; these methods do the actual
+    // antialiased GPU rendering. Points are in local (pre-transform) space,
+    // matching drawLine()/drawRect()/drawPath()'s existing convention. Each
+    // respects `paint.blend_mode` via pipelineForBlendMode(), unlike
+    // Metal's equivalents (that backend's line/rect pipelines are srcOver-
+    // only today).
+    // ------------------------------------------------------------------
+
+    // One antialiased, butt-ended segment body via line_pipeline_.
+    void drawStrokeSegmentBody(
+        const Offset& p0, const Offset& p1, float half_width,
+        const Paint& paint, const Matrix4& transform,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // One antialiased round cap/join, as a filled circle via rrect_pipeline_
+    // (same mechanism as drawCircle()).
+    void drawStrokeRoundPrimitive(
+        const Offset& center, float half_width,
+        const Paint& paint, const Matrix4& transform,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Strokes a polyline as individual GPU draw calls (segment bodies +
+    // round caps/joins via rrect_pipeline_ + bevel/miter wedges via
+    // colored_quad_pipeline_). For drawLine()/drawRect() stroke, where
+    // point count is always small.
+    void strokePolyline(
+        const std::vector<Offset>& points, bool closed,
+        const Paint& paint, const Rect& clip, const Matrix4& transform,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Same decomposition as strokePolyline(), but appends flat (non-AA)
+    // triangles to `verts` instead of issuing per-primitive draw calls —
+    // preserves drawPath()'s existing "one draw call regardless of segment
+    // count" property for potentially long flattened curves. Round caps/
+    // joins are approximated as a small triangle fan (no SDF available in
+    // this batched context).
+    void appendStrokePolylineBatched(
+        const std::vector<Offset>& points, bool closed,
+        const Paint& paint, const Matrix4& transform,
+        std::vector<ColoredQuadVertex>& verts);
+
     void runBlurPass(
         std::shared_ptr<campello_gpu::Texture> src,
         std::shared_ptr<campello_gpu::Texture> dst,
@@ -301,6 +352,11 @@ private:
     // (nullptr if drawing was aborted, e.g. missing pipeline). Callers that
     // want to skip rebuilding it next time should keep it and pass it back
     // in.
+    // `sampler`: nullptr (default) uses linear_sampler_, matching every
+    // existing call site's behavior unchanged. drawImage() passes
+    // nearest_sampler_ explicitly when the caller requests
+    // FilterQuality::none. Only takes effect when `cached_bind_group` is
+    // null (a supplied cache already has its own sampler baked in).
     std::shared_ptr<campello_gpu::BindGroup> drawTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>    texture,
         const QuadCorner&                         c00,
@@ -311,13 +367,15 @@ private:
         const Rect&                               clip,
         campello_gpu::RenderPassEncoder&          encoder,
         std::shared_ptr<campello_gpu::BindGroup>  cached_bind_group = nullptr,
-        bool                                      persistent        = false);
+        bool                                      persistent        = false,
+        std::shared_ptr<campello_gpu::Sampler>    sampler            = nullptr);
 
     // Mirrors drawTexturedQuad() (the non-axis-aligned, vertex-buffer path
     // only — icons are drawn few-per-frame, so the axis-aligned push-
     // constant-only fast path isn't worth a second variant), but binds
     // icon_pipeline_ (samples only the source texture's alpha channel and
     // recolors with `tint` — see icon.frag) instead of quad_pipeline_.
+    // `sampler`: see drawTexturedQuad()'s doc comment.
     void drawTintedTexturedQuad(
         std::shared_ptr<campello_gpu::Texture>    texture,
         const QuadCorner&                         c00,
@@ -327,7 +385,8 @@ private:
         const Color&                               tint,
         float                                     opacity,
         const Rect&                               clip,
-        campello_gpu::RenderPassEncoder&          encoder);
+        campello_gpu::RenderPassEncoder&          encoder,
+        std::shared_ptr<campello_gpu::Sampler>    sampler = nullptr);
 
     std::shared_ptr<campello_gpu::Device>         device_;
     Color                                          bg_color_;
@@ -371,6 +430,11 @@ private:
     std::shared_ptr<campello_gpu::PipelineLayout>  quad_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  shader_mask_layout_;
     std::shared_ptr<campello_gpu::Sampler>          linear_sampler_;
+
+    // Nearest-neighbor counterpart to linear_sampler_, selected by
+    // drawImage()/drawTintedImage() only, per-draw, when the caller passes
+    // FilterQuality::none.
+    std::shared_ptr<campello_gpu::Sampler>          nearest_sampler_;
     // Two pools, one per fixed vertex-struct size — see UniformBufferPool's
     // doc comment. colored_quad_vertex_pool_ backs drawFilledQuad()'s
     // ColoredQuadVertex; quad_vertex_pool_ backs drawTexturedQuad()'s and

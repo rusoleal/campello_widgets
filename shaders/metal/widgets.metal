@@ -312,34 +312,86 @@ struct LineUniforms {
     float  _pad;
 };
 
-vertex RectVertOut lineVertex(
+// Segment body: a butt-ended (r=0) rotated box, antialiased via an SDF —
+// caps (round/square) and joins (round/bevel/miter) are separate primitives
+// layered on top by the backend (round = a filled circle via shapeFragment,
+// reused as-is; square = the backend extends this segment's own p1/p2 by
+// half_w before building it, no shader change needed; bevel/miter = 1-2
+// flat triangles via rectFragment) — see MetalDrawBackend::strokePolyline().
+struct LineVertOut {
+    float4 pos    [[position]];
+    float4 color  [[flat]];
+    float2 p1     [[flat]];
+    float2 p2     [[flat]];
+    float  half_w [[flat]];
+};
+
+vertex LineVertOut lineVertex(
     uint               vid [[vertex_id]],
     constant LineUniforms &u [[buffer(0)]])
 {
     float2 dir = u.p2.xy - u.p1.xy;
     float  len = length(dir);
     if (len > 0.0001) dir /= len; else dir = float2(1.0, 0.0);
-    float2 perp = float2(-dir.y, dir.x) * (u.stroke_w * 0.5);
+    float2 perp = float2(-dir.y, dir.x);
 
-    // 4 corners: [p1-perp, p1+perp, p2+perp, p2-perp]
+    // Inflate both perpendicular to the segment (half-width) and along its
+    // axis (past p1/p2) by the AA band -- same reasoning as shapeVertex's
+    // `inflate`: the SDF below still measures distance from the true p1/p2/
+    // half_w box, but the rasterized quad must extend past it or there are
+    // no fragments left to antialias into (the butt end would clip hard).
+    const float aa    = 0.5;
+    float half_w      = u.stroke_w * 0.5;
+    float2 perp_off   = perp * (half_w + aa);
+    float2 along_off  = dir  * aa;
+
+    // 4 corners: [p1-perp-along, p1+perp-along, p2+perp+along, p2-perp+along]
     uint   idx[6]     = {0, 1, 3, 1, 2, 3};
     float2 corners[4] = {
-        u.p1.xy - perp,
-        u.p1.xy + perp,
-        u.p2.xy + perp,
-        u.p2.xy - perp,
+        u.p1.xy - perp_off - along_off,
+        u.p1.xy + perp_off - along_off,
+        u.p2.xy + perp_off + along_off,
+        u.p2.xy - perp_off + along_off,
     };
 
     float2 px  = corners[idx[vid]];
     float2 ndc = (px / u.viewport) * 2.0 - 1.0;
     ndc.y = -ndc.y;
 
-    RectVertOut out;
-    out.pos   = float4(ndc, 0.0, 1.0);
-    out.color = u.color;
+    LineVertOut out;
+    out.pos    = float4(ndc, 0.0, 1.0);
+    out.color  = u.color;
+    out.p1     = u.p1.xy;
+    out.p2     = u.p2.xy;
+    out.half_w = half_w;
     return out;
 }
-// lineFragment reuses rectFragment — same premultiplied solid-colour output.
+
+fragment float4 lineFragment(LineVertOut in [[stage_in]])
+{
+    float2 dir = in.p2 - in.p1;
+    float  len = length(dir);
+    float2 dir_n  = (len > 0.0001) ? dir / len : float2(1.0, 0.0);
+    float2 perp_n = float2(-dir_n.y, dir_n.x);
+
+    // Rotate the fragment position into the segment's local frame (axis =
+    // x, perpendicular = y), then evaluate a plain box SDF (r=0 case of the
+    // same rounded-box formula shapeFragment uses) — a butt-ended rectangle
+    // of length `len` and width `2*half_w` centered on the segment.
+    float2 rel   = in.pos.xy - (in.p1 + in.p2) * 0.5;
+    float  along = dot(rel, dir_n);
+    float  perp  = dot(rel, perp_n);
+
+    float2 q = float2(abs(along) - len * 0.5, abs(perp) - in.half_w);
+    float  d = length(max(q, float2(0.0))) + min(max(q.x, q.y), 0.0);
+
+    const float aa = 0.5;
+    float alpha = 1.0 - smoothstep(-aa, aa, d);
+
+    float4 col = in.color;
+    col.a *= alpha;
+    return float4(col.rgb * col.a, col.a);   // premultiplied output
+}
 
 
 // ---------------------------------------------------------------------------
@@ -650,10 +702,10 @@ struct ShaderMaskVertexIn {
 
 struct ShaderMaskUniforms {
     float2 viewport;       // framebuffer width, height
-    float  gradient_type;  // 0 = linear, 1 = radial
-    float  _pad0;
-    float4 gradient_p1;    // linear: begin.xy; radial: center.xy (pixels)
-    float4 gradient_p2;    // linear: end.xy;   radial: radius in .x (pixels)
+    float  gradient_type;  // 0 = linear, 1 = radial, 2 = sweep
+    float  tile_mode;      // 0 = clamp, 1 = repeated, 2 = mirror
+    float4 gradient_p1;    // linear: begin.xy; radial/sweep: center.xy (pixels)
+    float4 gradient_p2;    // linear: end.xy; radial: radius in .x; sweep: start/end angle in .xy (radians)
     float  blend_mode;     // 0 = srcIn (child * mask.a), 1 = modulate (* mask.rgb)
     float3 _pad1;
 };
@@ -662,6 +714,7 @@ struct ShaderMaskVertOut {
     float4 pos           [[position]];
     float2 uv;
     float  gradient_type [[flat]];
+    float  tile_mode     [[flat]];
     float4 gradient_p1   [[flat]];
     float4 gradient_p2   [[flat]];
     float  blend_mode    [[flat]];
@@ -679,6 +732,7 @@ vertex ShaderMaskVertOut shaderMaskVertex(
     out.pos           = float4(clip_x, clip_y, 0.0, in.posw.z);
     out.uv             = in.uv;
     out.gradient_type  = u.gradient_type;
+    out.tile_mode      = u.tile_mode;
     out.gradient_p1    = u.gradient_p1;
     out.gradient_p2    = u.gradient_p2;
     out.blend_mode     = u.blend_mode;
@@ -710,13 +764,32 @@ fragment float4 shaderMaskFragment(
         float2 dir = p2 - p1;
         float  len2 = dot(dir, dir);
         t = (len2 > 0.0001) ? dot(pos - p1, dir) / len2 : 0.0;
-    } else {
+    } else if (in.gradient_type < 1.5) {
         // Radial gradient
         float2 center = in.gradient_p1.xy;
         float  radius = in.gradient_p2.x;
         t = (radius > 0.0001) ? length(pos - center) / radius : 0.0;
+    } else {
+        // Sweep gradient: angle from center, normalized to [start, end].
+        float2 center      = in.gradient_p1.xy;
+        float  start_angle = in.gradient_p2.x;
+        float  end_angle   = in.gradient_p2.y;
+        float2 d           = pos - center;
+        float  angle       = atan2(d.y, d.x);
+        if (angle < 0.0) angle += 2.0 * M_PI_F;
+        float span = end_angle - start_angle;
+        t = (abs(span) > 0.0001) ? (angle - start_angle) / span : 0.0;
     }
-    t = clamp(t, 0.0, 1.0);
+
+    // Apply tile mode.
+    if (in.tile_mode < 0.5) {
+        t = clamp(t, 0.0, 1.0); // clamp
+    } else if (in.tile_mode < 1.5) {
+        t = t - floor(t); // repeated
+    } else {
+        float period = t - 2.0 * floor(t * 0.5); // mirror: triangle wave, period 2
+        t = (period > 1.0) ? (2.0 - period) : period;
+    }
 
     float4 mask_color = lut.sample(smp, float2(t, 0.5));
 
