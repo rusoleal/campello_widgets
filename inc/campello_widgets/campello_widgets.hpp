@@ -170,6 +170,8 @@
 #include <campello_widgets/ui/render_opacity.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
 #include <campello_widgets/widgets/animated_opacity.hpp>
+#include <campello_widgets/ui/render_offstage.hpp>
+#include <campello_widgets/widgets/offstage.hpp>
 
 // Transform
 #include <campello_widgets/ui/render_transform.hpp>
