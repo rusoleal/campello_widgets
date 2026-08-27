@@ -13,6 +13,33 @@ namespace systems::leal::campello_widgets
     };
 
     /**
+     * @brief How the two open ends of a stroked line/path are drawn.
+     * Mirrors Flutter's `StrokeCap`. Only meaningful for `PaintStyle::stroke`
+     * and only at ends that aren't shared with another segment (a closed
+     * path/rect has none).
+     */
+    enum class StrokeCap
+    {
+        butt,   ///< Ends exactly at the segment's endpoint (default).
+        round,  ///< A semicircle of radius `stroke_width / 2` past the endpoint.
+        square, ///< A square extension of `stroke_width / 2` past the endpoint.
+    };
+
+    /**
+     * @brief How two stroked segments meet at a shared vertex. Mirrors
+     * Flutter's `StrokeJoin`. Only meaningful for `PaintStyle::stroke` and
+     * only where a path/rect outline has an interior vertex (a `drawLine()`
+     * has none).
+     */
+    enum class StrokeJoin
+    {
+        miter, ///< Segments' outer edges extended to meet at a point (default),
+               ///< falling back to `bevel` past `stroke_miter_limit`.
+        round, ///< A filled circle of radius `stroke_width / 2` at the vertex.
+        bevel, ///< A flat triangle directly connecting the two outer corners.
+    };
+
+    /**
      * @brief Blend modes for compositing colors.
      * 
      * These are a subset of Flutter's BlendMode enum.
@@ -95,6 +122,19 @@ namespace systems::leal::campello_widgets
          * `Canvas::drawImage()`/`drawTintedImage()` directly.
          */
         FilterQuality filter_quality = FilterQuality::high;
+
+        /** @brief Cap style for the open ends of a stroke. See `StrokeCap`. */
+        StrokeCap stroke_cap = StrokeCap::butt;
+
+        /** @brief Join style where a stroke's segments meet. See `StrokeJoin`. */
+        StrokeJoin stroke_join = StrokeJoin::miter;
+
+        /**
+         * @brief Miter join length limit, as a multiple of `stroke_width / 2`.
+         * A `miter` join whose point would extend past this falls back to
+         * `bevel`. Matches Flutter's `Paint.strokeMiterLimit` default (4.0).
+         */
+        float stroke_miter_limit = 4.0f;
 
         // ------------------------------------------------------------------
         // Named constructors

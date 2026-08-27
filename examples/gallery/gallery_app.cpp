@@ -6,6 +6,7 @@
 #include <campello_cupertino/cupertino_design_system.hpp>
 
 #include <cmath>
+#include <functional>
 #include <string>
 #include <vector>
 #include <sstream>
@@ -1159,6 +1160,105 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// LambdaCustomPainter — wraps a plain draw function as a CustomPainter, so a
+// handful of small one-off Canvas demos (see the STROKE CAPS & JOINS samples
+// below) don't each need their own subclass. Static content only, so
+// shouldRepaint() always returns false — nothing here ever animates.
+// ---------------------------------------------------------------------------
+class LambdaCustomPainter : public cw::CustomPainter
+{
+public:
+    explicit LambdaCustomPainter(std::function<void(cw::Canvas&, cw::Size)> draw)
+        : draw_(std::move(draw)) {}
+
+    void paint(cw::Canvas& canvas, cw::Size size) override { draw_(canvas, size); }
+    bool shouldRepaint(const cw::CustomPainter&) const override { return false; }
+
+private:
+    std::function<void(cw::Canvas&, cw::Size)> draw_;
+};
+
+// A labeled Canvas demo cell: fixed-size RawCustomPaint over `draw`, with a
+// caption underneath — mirrors fitSample()'s box+label composition below.
+static cw::WidgetRef strokeSample(
+    const std::string& label, float w, float h,
+    std::function<void(cw::Canvas&, cw::Size)> draw, cw::Color label_color)
+{
+    auto painter = std::make_shared<LambdaCustomPainter>(std::move(draw));
+    auto canvas_box = std::make_shared<cw::SizedBox>(w, h, cw::RawCustomPaint::create(painter));
+
+    return cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+        cw::WidgetList{
+            canvas_box,
+            vspace(6.0f),
+            cw::mw<cw::Text>(label, ts(11.0f, label_color)),
+        });
+}
+
+static cw::Paint strokeDemoPaint(
+    cw::Color color, float width, cw::StrokeCap cap, cw::StrokeJoin join, float miter_limit = 4.0f)
+{
+    cw::Paint p;
+    p.style             = cw::PaintStyle::stroke;
+    p.color             = color;
+    p.stroke_width       = width;
+    p.stroke_cap         = cap;
+    p.stroke_join        = join;
+    p.stroke_miter_limit = miter_limit;
+    return p;
+}
+
+// A thick horizontal stroke with thin white tick marks at its true (logical)
+// endpoints, so the cap style's effect beyond/at those endpoints is visible:
+// butt stops exactly on the tick, round/square extend past it.
+static std::function<void(cw::Canvas&, cw::Size)> strokeCapDemo(cw::StrokeCap cap, cw::Color color)
+{
+    return [cap, color](cw::Canvas& canvas, cw::Size size) {
+        const cw::Offset p1{28.0f, size.height * 0.5f};
+        const cw::Offset p2{size.width - 28.0f, size.height * 0.5f};
+        canvas.drawLine(p1, p2, strokeDemoPaint(color, 26.0f, cap, cw::StrokeJoin::miter));
+
+        const cw::Paint tick = strokeDemoPaint(cw::Color::white(), 2.0f, cw::StrokeCap::butt, cw::StrokeJoin::miter);
+        canvas.drawLine({p1.x, p1.y - 20.0f}, {p1.x, p1.y + 20.0f}, tick);
+        canvas.drawLine({p2.x, p2.y - 20.0f}, {p2.x, p2.y + 20.0f}, tick);
+    };
+}
+
+// A two-segment corner (a "V" opening upward from a hub near the bottom),
+// stroked with the given join style. `interior_deg` is the corner's own
+// interior angle at the hub — smaller means sharper, which is what pushes
+// a miter join's spike length past `miter_limit` (see buildStrokeGeometry()'s
+// miter-limit fallback in src/gpu/stroke_geometry.cpp).
+static std::function<void(cw::Canvas&, cw::Size)> strokeJoinDemo(
+    cw::StrokeJoin join, cw::Color color, float interior_deg, float miter_limit = 4.0f)
+{
+    return [join, color, interior_deg, miter_limit](cw::Canvas& canvas, cw::Size size) {
+        const cw::Offset hub{size.width * 0.5f, size.height * 0.78f};
+        const float half_rad = (interior_deg * 0.5f) * (3.14159265f / 180.0f);
+        const float arm      = size.height * 0.62f;
+
+        cw::Path path;
+        path.moveTo(hub.x - arm * std::sin(half_rad), hub.y - arm * std::cos(half_rad));
+        path.lineTo(hub);
+        path.lineTo(hub.x + arm * std::sin(half_rad), hub.y - arm * std::cos(half_rad));
+
+        canvas.drawPath(path, strokeDemoPaint(color, 20.0f, cw::StrokeCap::butt, join, miter_limit));
+    };
+}
+
+static void strokeRotatedRectDemo(cw::Canvas& canvas, cw::Size size)
+{
+    canvas.save();
+    canvas.translate(size.width * 0.5f, size.height * 0.5f);
+    canvas.rotate(30.0f * (3.14159265f / 180.0f));
+    const float half = std::min(size.width, size.height) * 0.30f;
+    canvas.drawRect(
+        cw::Rect::fromLTWH(-half, -half, half * 2.0f, half * 2.0f),
+        strokeDemoPaint(kBlue, 14.0f, cw::StrokeCap::butt, cw::StrokeJoin::round));
+    canvas.restore();
+}
+
+// ---------------------------------------------------------------------------
 // 7. CLIPPING & FX — ClipRRect, ClipOval, DecoratedBox, Opacity, BackdropFilter
 // ---------------------------------------------------------------------------
 class ClippingSection : public cw::StatelessWidget
@@ -1291,6 +1391,39 @@ public:
         auto gradient_borders_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
             cw::WidgetList{ linear_border_box, hspace(16.0f), sweep_border_box, hspace(16.0f), repeated_border_box });
 
+        // Stroke caps & joins — Paint::stroke_cap / stroke_join / stroke_miter_limit,
+        // rendered via RawCustomPaint + raw Canvas calls (drawLine/drawPath/drawRect
+        // with PaintStyle::stroke), exercising the GPU-side cap/join expansion in
+        // src/gpu/stroke_geometry.hpp across all three backends.
+        auto stroke_caps_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Butt cap",   150.0f, 90.0f, strokeCapDemo(cw::StrokeCap::butt,   kBlue),   colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Round cap",  150.0f, 90.0f, strokeCapDemo(cw::StrokeCap::round,  kGreen),  colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Square cap", 150.0f, 90.0f, strokeCapDemo(cw::StrokeCap::square, kOrange), colors.on_surface_variant),
+            });
+
+        auto stroke_joins_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Miter join", 150.0f, 110.0f, strokeJoinDemo(cw::StrokeJoin::miter, kPurple, 70.0f), colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Round join", 150.0f, 110.0f, strokeJoinDemo(cw::StrokeJoin::round, kTeal, 70.0f), colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Bevel join", 150.0f, 110.0f, strokeJoinDemo(cw::StrokeJoin::bevel, kRed, 70.0f), colors.on_surface_variant),
+            });
+
+        auto stroke_advanced_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Miter, limit 4\n(falls back to bevel)", 170.0f, 110.0f,
+                    strokeJoinDemo(cw::StrokeJoin::miter, kAmber, 16.0f, 4.0f), colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Miter, limit 20\n(spike preserved)", 170.0f, 110.0f,
+                    strokeJoinDemo(cw::StrokeJoin::miter, kAmber, 16.0f, 20.0f), colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Rotated stroked rect", 150.0f, 110.0f, strokeRotatedRectDemo, colors.on_surface_variant),
+            });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -1387,6 +1520,15 @@ public:
                     vspace(20.0f),
                     subheading("GRADIENT BORDERS — BoxBorder::gradientBorder()", colors.on_surface_variant),
                     card(gradient_borders_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("STROKE CAPS — Paint::stroke_cap (white ticks mark the true endpoints)", colors.on_surface_variant),
+                    card(stroke_caps_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("STROKE JOINS — Paint::stroke_join", colors.on_surface_variant),
+                    card(stroke_joins_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("STROKE MITER LIMIT + ROTATION — Paint::stroke_miter_limit, drawRect() stroke under rotation", colors.on_surface_variant),
+                    card(stroke_advanced_row, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),
