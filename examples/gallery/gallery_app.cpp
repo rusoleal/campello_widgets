@@ -1197,6 +1197,100 @@ public:
         fancy_box->child = cw::mw<cw::Padding>(cw::EdgeInsets::all(20.0f),
             cw::mw<cw::Text>("DecoratedBox\nborder + dual shadow", ts(13.0f, kBlue)));
 
+        // Gradient fills — Linear / Radial / Sweep BoxGradient
+        auto linear_grad_box = std::make_shared<cw::Container>();
+        linear_grad_box->width  = 140.0f;
+        linear_grad_box->height = 90.0f;
+        linear_grad_box->decoration = cw::BoxDecoration{
+            .gradient = cw::LinearBoxGradient{
+                .begin  = cw::Alignment::topLeft(),
+                .end    = cw::Alignment::bottomRight(),
+                .colors = {kBlue, kPurple},
+            },
+            .border_radius = 12.0f,
+        };
+        linear_grad_box->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Linear", ts(13.0f, cw::Color::white())));
+
+        auto radial_grad_box = std::make_shared<cw::Container>();
+        radial_grad_box->width  = 140.0f;
+        radial_grad_box->height = 90.0f;
+        radial_grad_box->decoration = cw::BoxDecoration{
+            .gradient = cw::RadialBoxGradient{
+                .colors = {cw::Color::white(), kOrange},
+            },
+            .border_radius = 12.0f,
+        };
+        radial_grad_box->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Radial", ts(13.0f, cw::Color::fromRGB(0.3f, 0.15f, 0.0f))));
+
+        auto sweep_grad_box = std::make_shared<cw::Container>();
+        sweep_grad_box->width  = 140.0f;
+        sweep_grad_box->height = 90.0f;
+        sweep_grad_box->decoration = cw::BoxDecoration{
+            .gradient = cw::SweepBoxGradient{
+                .colors = {kGreen, kTeal, kBlue, kPurple, kGreen},
+            },
+            .border_radius = 12.0f,
+        };
+        sweep_grad_box->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Sweep", ts(13.0f, cw::Color::white())));
+
+        auto gradient_fills_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{ linear_grad_box, hspace(16.0f), radial_grad_box, hspace(16.0f), sweep_grad_box });
+
+        // Gradient borders — BoxBorder::gradientBorder()
+        auto linear_border_box = std::make_shared<cw::Container>();
+        linear_border_box->width  = 140.0f;
+        linear_border_box->height = 90.0f;
+        linear_border_box->decoration = cw::BoxDecoration{
+            .color         = colors.surface,
+            .border_radius = 16.0f,
+            .border        = cw::BoxBorder::gradientBorder(
+                cw::LinearBoxGradient{
+                    .begin  = cw::Alignment::centerLeft(),
+                    .end    = cw::Alignment::centerRight(),
+                    .colors = {kRed, kAmber},
+                }, 4.0f),
+        };
+        linear_border_box->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Linear border", ts(12.0f, colors.on_surface)));
+
+        auto sweep_border_box = std::make_shared<cw::Container>();
+        sweep_border_box->width  = 140.0f;
+        sweep_border_box->height = 90.0f;
+        sweep_border_box->decoration = cw::BoxDecoration{
+            .color         = colors.surface,
+            .border_radius = 45.0f,
+            .border        = cw::BoxBorder::gradientBorder(
+                cw::SweepBoxGradient{
+                    .colors = {kBlue, kGreen, kAmber, kRed, kBlue},
+                }, 5.0f),
+        };
+        sweep_border_box->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Sweep border", ts(12.0f, colors.on_surface)));
+
+        // Repeated tile mode — short gradient span tiled across the border.
+        auto repeated_border_box = std::make_shared<cw::Container>();
+        repeated_border_box->width  = 140.0f;
+        repeated_border_box->height = 90.0f;
+        repeated_border_box->decoration = cw::BoxDecoration{
+            .color         = colors.surface,
+            .border_radius = 16.0f,
+            .border        = cw::BoxBorder::gradientBorder(
+                cw::LinearBoxGradient{
+                    .begin     = cw::Alignment::topLeft(),
+                    .end       = cw::Alignment{-0.6f, -0.6f},
+                    .colors    = {kPurple, cw::Color::white()},
+                    .tile_mode = cw::TileMode::repeated,
+                }, 4.0f),
+        };
+        repeated_border_box->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Repeated border", ts(12.0f, colors.on_surface)));
+
+        auto gradient_borders_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{ linear_border_box, hspace(16.0f), sweep_border_box, hspace(16.0f), repeated_border_box });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -1287,6 +1381,12 @@ public:
                     vspace(20.0f),
                     subheading("DECORATED BOX — border + shadow", colors.on_surface_variant),
                     card(fancy_box, 0.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("GRADIENT FILLS — Linear / Radial / Sweep BoxGradient", colors.on_surface_variant),
+                    card(gradient_fills_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("GRADIENT BORDERS — BoxBorder::gradientBorder()", colors.on_surface_variant),
+                    card(gradient_borders_row, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),

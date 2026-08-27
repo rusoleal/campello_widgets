@@ -2,6 +2,7 @@
 #include <campello_widgets/ui/render_constrained_box.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
+#include <cmath>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -26,6 +27,30 @@ TEST(RenderConstrainedBox, NoChildEmptyAdditional)
     box.layout(cw::BoxConstraints::loose(300, 300));
     EXPECT_FLOAT_EQ(box.size().width,  0.0f);
     EXPECT_FLOAT_EQ(box.size().height, 0.0f);
+}
+
+TEST(RenderConstrainedBox, NoChildInfiniteAdditionalConstraintsNeverProducesInfiniteSize)
+{
+    // Regression test: additional_constraints = BoxConstraints::expand()
+    // has min == max == infinity on both axes. Naively intersecting that
+    // with a *bounded* incoming max (max(0,inf)=inf for min, min(300,inf)=
+    // 300 for max) used to produce an invalid {min: inf, max: 300}
+    // constraints (min > max), which then hit std::clamp's lo <= hi
+    // precondition (UB) in Size::constrain() and silently resolved to an
+    // infinite reported size. This exact shape is also what Container's
+    // own empty-box fallback constructs (LimitedBox{0,0,
+    // ConstrainedBox{expand()}}) -- see RenderLimitedBox's
+    // FillsBoundedAxisCollapsesUnboundedAxisWithExpandingChild test.
+    cw::RenderConstrainedBox box;
+    box.additional_constraints = cw::BoxConstraints::expand();
+    box.layout(cw::BoxConstraints::loose(300.0f, 200.0f));
+
+    EXPECT_TRUE(std::isfinite(box.size().width));
+    EXPECT_TRUE(std::isfinite(box.size().height));
+    // expand() intersected with a bounded parent should become tight at
+    // that bounded max -- i.e. "fill available space".
+    EXPECT_FLOAT_EQ(box.size().width,  300.0f);
+    EXPECT_FLOAT_EQ(box.size().height, 200.0f);
 }
 
 // -----------------------------------------------------------------------

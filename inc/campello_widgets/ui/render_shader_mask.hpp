@@ -16,9 +16,9 @@ namespace systems::leal::campello_widgets
      * gradient is evaluated as a mask (via a 256-entry LUT), and the two are
      * composited using `blend_mode`.
      *
-     * **Note:** The mask evaluates the gradient in *viewport* coordinates, not
-     * local coordinates.  Shift `shader.begin` / `shader.end` (or center/radius
-     * for radial) by the widget's offset if local-space behaviour is needed.
+     * **Note:** `shader.begin`/`shader.end` (or `center`/`radius` for radial)
+     * are in the widget's own local coordinate space — the GPU backend adds
+     * this widget's paint offset before evaluating the gradient.
      */
     class RenderShaderMask final : public RenderBox
     {

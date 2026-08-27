@@ -190,6 +190,7 @@
 
 // Phase 13 — Decoration
 #include <campello_widgets/ui/box_shadow.hpp>
+#include <campello_widgets/ui/box_gradient.hpp>
 #include <campello_widgets/ui/box_border.hpp>
 #include <campello_widgets/ui/box_decoration.hpp>
 #include <campello_widgets/ui/render_decorated_box.hpp>
@@ -198,6 +199,7 @@
 // Phase 13 — Layout widgets
 #include <campello_widgets/ui/wrap_properties.hpp>
 #include <campello_widgets/ui/render_constrained_box.hpp>
+#include <campello_widgets/ui/render_limited_box.hpp>
 #include <campello_widgets/ui/render_aspect_ratio.hpp>
 #include <campello_widgets/ui/render_fractionally_sized_box.hpp>
 #include <campello_widgets/ui/render_intrinsic_width.hpp>
@@ -209,6 +211,7 @@
 #include <campello_widgets/ui/render_clip_path.hpp>
 #include <campello_widgets/ui/render_repaint_boundary.hpp>
 #include <campello_widgets/widgets/constrained_box.hpp>
+#include <campello_widgets/widgets/limited_box.hpp>
 #include <campello_widgets/widgets/aspect_ratio.hpp>
 #include <campello_widgets/widgets/fractionally_sized_box.hpp>
 #include <campello_widgets/widgets/intrinsic_width.hpp>

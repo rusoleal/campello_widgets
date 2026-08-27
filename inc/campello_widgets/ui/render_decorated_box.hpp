@@ -15,6 +15,20 @@ namespace systems::leal::campello_widgets
     };
 
     /**
+     * @brief Whether painting `decoration` needs the offscreen-composite
+     * path (box shadow blur, or a gradient fill/border via
+     * `Canvas::beginShaderMask()`) rather than being a cheap direct draw.
+     * See `RenderDecoratedBox`'s doc comment for why this drives its
+     * `isRepaintBoundary()`/OffsetLayer-caching decision.
+     */
+    inline bool needsOffsetLayerFor(const BoxDecoration& decoration) noexcept
+    {
+        return !decoration.box_shadow.empty()
+            || decoration.gradient.has_value()
+            || (decoration.border.has_value() && decoration.border->gradient.has_value());
+    }
+
+    /**
      * @brief Paints a BoxDecoration around (or in front of) its child.
      *
      * Layout is pass-through: the child receives the full parent constraints and
@@ -31,17 +45,21 @@ namespace systems::leal::campello_widgets
      * steps 1–3.
      *
      * Self-boundaring (see `RenderClipRRect`'s doc comment for the general
-     * mechanism/rationale), but only when `decoration.box_shadow` is
-     * non-empty: `Renderer::applyBoxShadow()` runs its own offscreen
-     * blur composite per shadow (a texture allocation plus two extra
-     * render-pass restarts on the enclosing pass) — as expensive as
-     * `applyClipShape()` and with the exact same problem, since plain
-     * `RenderObject::paint()` re-runs `performPaint()` unconditionally on
-     * every visit from an animating ancestor. Plain decorations (color/
-     * border only, no shadow) are cheap direct draws and skip the
-     * OffsetLayer machinery entirely — `isRepaintBoundary()`/`paint()`
-     * both check `decoration.box_shadow` fresh each call, so a widget
-     * that starts adding a shadow later picks up the caching immediately.
+     * mechanism/rationale), but only when `needsOffsetLayerFor(decoration)`
+     * is true: `Renderer::applyBoxShadow()` (box shadows) and
+     * `Canvas::beginShaderMask()` (gradient fill/border — resolved to a
+     * `Shader` and composited via `applyShaderMask()`) both run their own
+     * offscreen composite (a texture allocation plus two extra render-pass
+     * restarts on the enclosing pass, and for gradients a from-scratch LUT
+     * texture rebuild on top) — as expensive as `applyClipShape()` and with
+     * the exact same problem, since plain `RenderObject::paint()` re-runs
+     * `performPaint()` unconditionally on every visit from an animating
+     * ancestor. Plain decorations (solid color/border only, no shadow, no
+     * gradient) are cheap direct draws and skip the OffsetLayer machinery
+     * entirely — `isRepaintBoundary()`/`paint()` both recompute
+     * `needsOffsetLayerFor(decoration)` fresh each call, so a widget that
+     * starts adding a shadow or gradient later picks up the caching
+     * immediately.
      */
     class RenderDecoratedBox : public RenderBox
     {
@@ -52,7 +70,7 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         void paint(PaintContext& context, const Offset& offset) override;
-        bool isRepaintBoundary() const noexcept override { return !decoration.box_shadow.empty(); }
+        bool isRepaintBoundary() const noexcept override { return needsOffsetLayerFor(decoration); }
 
     private:
         void paintDecoration(Canvas& canvas, const Offset& offset) const;

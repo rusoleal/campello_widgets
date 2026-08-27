@@ -31,10 +31,13 @@ endif()
 if(UNIVERSAL_TEST_SOURCES)
     add_executable(campello_widgets_tests ${UNIVERSAL_TEST_SOURCES} ${TESTING_SOURCES})
     
-    # Include directories for stb headers
+    # Include directories for stb headers, plus src/ itself so tests can
+    # reach backend-internal-but-pure-logic headers (e.g. gpu/stroke_geometry.hpp)
+    # the same way src/gpu/*.cpp already includes them ("gpu/foo.hpp").
     target_include_directories(campello_widgets_tests PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/../src/testing"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../src"
     )
     
     target_link_libraries(campello_widgets_tests PRIVATE
