@@ -36,6 +36,24 @@ namespace systems::leal::campello_widgets
     };
 
     /**
+     * @brief Sampling/mipmapping quality for texture-based draws.
+     *
+     * Mirrors Flutter's `FilterQuality`. `none` selects nearest-neighbor
+     * sampling (crisp, blocky when scaled); `low`/`medium`/`high` all
+     * currently select bilinear sampling -- this engine has no mipmapping
+     * or anisotropic filtering yet, so those three are indistinguishable
+     * today. The enum keeps the full Flutter surface for API familiarity
+     * and so a future mipmap/anisotropic implementation has where to land.
+     */
+    enum class FilterQuality
+    {
+        none,   ///< Nearest-neighbor.
+        low,    ///< Bilinear (same as medium/high today).
+        medium, ///< Bilinear (same as low/high today).
+        high,   ///< Bilinear (same as low/medium today).
+    };
+
+    /**
      * @brief Describes how a shape should be drawn.
      *
      * Passed to PaintContext drawing operations to control color,
@@ -55,18 +73,48 @@ namespace systems::leal::campello_widgets
         /** @brief Blend mode for compositing (default: srcOver). */
         BlendMode blend_mode = BlendMode::srcOver;
 
+        /**
+         * @brief Whether to invert `color` before drawing (e.g. red -> cyan).
+         *
+         * Applied once, on the CPU, when the draw command is recorded
+         * (`Canvas::drawRect()` etc.) -- correct and free for these solid-
+         * color shape fills/strokes, since inverting a single flat color is
+         * identical whether done before or after rasterization. Does not
+         * apply to `Canvas::drawImage()`/`drawTintedImage()` (per-pixel
+         * texture content can't be inverted this way) or to `saveLayer()`'s
+         * Paint (the layer's contents aren't a single color) -- those would
+         * need real per-pixel GPU support, not implemented yet.
+         */
+        bool invert_colors = false;
+
+        /**
+         * @brief Sampling quality; currently unused by solid-color shape
+         * draws (fill/stroke are analytic, not texture-sampled). Kept here
+         * for when `Paint` gains a `shader` field (image/gradient fills);
+         * until then, use the `filter_quality` parameter on
+         * `Canvas::drawImage()`/`drawTintedImage()` directly.
+         */
+        FilterQuality filter_quality = FilterQuality::high;
+
         // ------------------------------------------------------------------
         // Named constructors
         // ------------------------------------------------------------------
 
         static Paint filled(Color color) noexcept
         {
-            return {color, PaintStyle::fill, 0.0f, BlendMode::srcOver};
+            Paint p;
+            p.color = color;
+            p.style = PaintStyle::fill;
+            return p;
         }
 
         static Paint stroked(Color color, float width = 1.0f) noexcept
         {
-            return {color, PaintStyle::stroke, width, BlendMode::srcOver};
+            Paint p;
+            p.color        = color;
+            p.style        = PaintStyle::stroke;
+            p.stroke_width = width;
+            return p;
         }
 
         bool operator==(const Paint&) const noexcept = default;

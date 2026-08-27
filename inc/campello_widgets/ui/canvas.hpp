@@ -101,15 +101,21 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Draws a GPU texture into a destination rectangle.
          *
-         * @param texture  Source texture.
-         * @param src_rect Normalised source rect [0,1]×[0,1].
-         *                 Pass Rect::fromLTWH(0,0,1,1) for the full texture.
-         * @param dst_rect Destination in local coordinates.
+         * @param texture       Source texture.
+         * @param src_rect      Normalised source rect [0,1]×[0,1].
+         *                      Pass Rect::fromLTWH(0,0,1,1) for the full texture.
+         * @param dst_rect      Destination in local coordinates.
+         * @param filter_quality Sampling quality (Flutter's `Paint.filterQuality`,
+         *                      exposed as a direct parameter since this draw
+         *                      doesn't take a full `Paint`); `none` selects
+         *                      nearest-neighbor, anything else bilinear —
+         *                      see `FilterQuality`'s doc comment.
          */
         void drawImage(
             std::shared_ptr<campello_gpu::Texture> texture,
             const Rect& src_rect,
-            const Rect& dst_rect);
+            const Rect& dst_rect,
+            FilterQuality filter_quality = FilterQuality::high);
 
         /**
          * @brief Draws a "template" texture recolored to an arbitrary tint.
@@ -122,12 +128,14 @@ namespace systems::leal::campello_widgets
          * @param src_rect Normalised source rect [0,1]×[0,1].
          * @param dst_rect Destination in local coordinates.
          * @param tint     Straight-alpha recolor applied via the texture's alpha.
+         * @param filter_quality Sampling quality -- see `drawImage()`.
          */
         void drawTintedImage(
             std::shared_ptr<campello_gpu::Texture> texture,
             const Rect& src_rect,
             const Rect& dst_rect,
-            const Color& tint);
+            const Color& tint,
+            FilterQuality filter_quality = FilterQuality::high);
 
         /** @brief Fills the canvas with the given paint. */
         void drawPaint(const Paint& paint);

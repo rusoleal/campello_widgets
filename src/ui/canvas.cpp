@@ -42,6 +42,25 @@ namespace systems::leal::campello_widgets
         return m;
     }
 
+    // Resolves `invert_colors` (color -> 1-color) and per-canvas opacity into
+    // `p.color` once, on the CPU, when a draw command is recorded. Correct
+    // for these solid-color fills/strokes: inverting one flat color is
+    // identical whether done before or after rasterization, so this needs
+    // no backend/shader changes at all -- see Paint::invert_colors's doc
+    // comment for the (deliberate) scope boundary: this does not apply to
+    // drawImage()/drawTintedImage() (per-pixel texture content) or
+    // saveLayer()'s Paint (the layer's contents aren't a single color).
+    static void resolvePaint(Paint& p, float opacity)
+    {
+        if (p.invert_colors)
+        {
+            p.color = Color::fromRGBA(1.0f - p.color.r, 1.0f - p.color.g, 1.0f - p.color.b, p.color.a);
+            p.invert_colors = false;
+        }
+        if (opacity < 1.0f)
+            p.color.a *= opacity;
+    }
+
     Canvas::Canvas(float viewport_width, float viewport_height)
         : current_transform_(Matrix4::identity())
         , current_clip_(Rect::fromLTWH(0.0f, 0.0f, viewport_width, viewport_height))
@@ -54,16 +73,9 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawRect(const Rect& rect, const Paint& paint)
     {
-        if (current_opacity_ >= 1.0f)
-        {
-            commands_.push_back(DrawRectCmd{rect, paint});
-        }
-        else
-        {
-            Paint p = paint;
-            p.color.a *= current_opacity_;
-            commands_.push_back(DrawRectCmd{rect, p});
-        }
+        Paint p = paint;
+        resolvePaint(p, current_opacity_);
+        commands_.push_back(DrawRectCmd{rect, p});
     }
 
     void Canvas::drawText(const TextSpan& span, const Offset& origin)
@@ -83,18 +95,20 @@ namespace systems::leal::campello_widgets
     void Canvas::drawImage(
         std::shared_ptr<campello_gpu::Texture> texture,
         const Rect& src_rect,
-        const Rect& dst_rect)
+        const Rect& dst_rect,
+        FilterQuality filter_quality)
     {
-        commands_.push_back(DrawImageCmd{std::move(texture), src_rect, dst_rect, current_opacity_});
+        commands_.push_back(DrawImageCmd{std::move(texture), src_rect, dst_rect, current_opacity_, filter_quality});
     }
 
     void Canvas::drawTintedImage(
         std::shared_ptr<campello_gpu::Texture> texture,
         const Rect& src_rect,
         const Rect& dst_rect,
-        const Color& tint)
+        const Color& tint,
+        FilterQuality filter_quality)
     {
-        commands_.push_back(DrawTintedImageCmd{std::move(texture), src_rect, dst_rect, tint, current_opacity_});
+        commands_.push_back(DrawTintedImageCmd{std::move(texture), src_rect, dst_rect, tint, current_opacity_, filter_quality});
     }
 
     // ------------------------------------------------------------------
@@ -104,46 +118,36 @@ namespace systems::leal::campello_widgets
     void Canvas::drawCircle(const Offset& center, float radius, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawCircleCmd{center, radius, p});
     }
 
     void Canvas::drawOval(const Rect& rect, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawOvalCmd{rect, p});
     }
 
-    void Canvas::drawArc(const Rect& rect, float start_angle, float sweep_angle, 
+    void Canvas::drawArc(const Rect& rect, float start_angle, float sweep_angle,
                          bool use_center, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawArcCmd{rect, start_angle, sweep_angle, use_center, p});
     }
 
     void Canvas::drawLine(const Offset& p1, const Offset& p2, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawLineCmd{p1, p2, p});
     }
 
     void Canvas::drawRRect(const RRect& rrect, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawRRectCmd{rrect, p});
     }
 
@@ -160,18 +164,14 @@ namespace systems::leal::campello_widgets
     void Canvas::drawPath(const Path& path, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawPathCmd{path, p});
     }
 
     void Canvas::drawPoints(PointMode mode, const std::vector<Offset>& points, const Paint& paint)
     {
         Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
+        resolvePaint(p, current_opacity_);
         commands_.push_back(DrawPointsCmd{mode, points, p});
     }
 
@@ -183,12 +183,9 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawPaint(const Paint& paint)
     {
-        Paint p = paint;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
-        // Draw a rect covering the entire viewport
-        drawRect(current_clip_, p);
+        // drawRect() itself resolves opacity/invert_colors -- applying
+        // opacity here too would double-count it (color.a *= opacity twice).
+        drawRect(current_clip_, paint);
     }
 
     void Canvas::drawColor(const Color& color, BlendMode blend_mode)
@@ -196,9 +193,6 @@ namespace systems::leal::campello_widgets
         Paint p;
         p.color = color;
         p.blend_mode = blend_mode;
-        if (current_opacity_ < 1.0f) {
-            p.color.a *= current_opacity_;
-        }
         drawRect(current_clip_, p);
     }
 

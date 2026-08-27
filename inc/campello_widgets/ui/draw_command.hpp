@@ -210,6 +210,7 @@ namespace systems::leal::campello_widgets
         Rect  src_rect;
         Rect  dst_rect;
         float opacity = 1.0f;
+        FilterQuality filter_quality = FilterQuality::high;
     };
 
     /**
@@ -234,6 +235,7 @@ namespace systems::leal::campello_widgets
         Rect  dst_rect;
         Color tint;
         float opacity = 1.0f;
+        FilterQuality filter_quality = FilterQuality::high;
     };
 
     /** @brief Push a new clip rectangle onto the clip stack (intersects with current). */
