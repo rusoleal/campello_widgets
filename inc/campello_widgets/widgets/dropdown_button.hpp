@@ -111,6 +111,17 @@ namespace systems::leal::campello_widgets
         float                            elevation      = 8.0f;
 
         /**
+         * @brief Padding around the closed trigger's label+chevron row.
+         *
+         * Default matches Material's normal-density trigger. Override for a
+         * more compact trigger when embedding in a space with a fixed,
+         * limited height (e.g. a toolbar) -- the default's 12px vertical
+         * inset alone, plus the label's own line height, naturally wants
+         * ~32-34px, taller than a typical compact toolbar row.
+         */
+        EdgeInsets                       content_padding = EdgeInsets::symmetric(12.0f, 8.0f);
+
+        /**
          * @brief When set, the dropdown menu renders as a frosted/liquid-
          * glass panel — see `PopupMenuButton::backdrop_filter`'s doc for the
          * same mechanism.
@@ -179,7 +190,7 @@ namespace systems::leal::campello_widgets
                 row->children = {std::make_shared<Expanded>(label), arrow};
 
                 auto padded = std::make_shared<Padding>();
-                padded->padding = EdgeInsets::symmetric(12.0f, 8.0f);
+                padded->padding = w.content_padding;
                 padded->child   = row;
 
                 // Real M3 ExposedDropdownMenuBox's closed trigger is an
