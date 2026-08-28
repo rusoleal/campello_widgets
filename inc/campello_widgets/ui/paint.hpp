@@ -1,6 +1,8 @@
 #pragma once
 
 #include <campello_widgets/ui/color.hpp>
+#include <campello_widgets/ui/shader.hpp>
+#include <optional>
 
 namespace systems::leal::campello_widgets
 {
@@ -116,12 +118,34 @@ namespace systems::leal::campello_widgets
 
         /**
          * @brief Sampling quality; currently unused by solid-color shape
-         * draws (fill/stroke are analytic, not texture-sampled). Kept here
-         * for when `Paint` gains a `shader` field (image/gradient fills);
-         * until then, use the `filter_quality` parameter on
+         * draws (fill/stroke are analytic, not texture-sampled). For image
+         * sampling quality, use the `filter_quality` parameter on
          * `Canvas::drawImage()`/`drawTintedImage()` directly.
          */
         FilterQuality filter_quality = FilterQuality::high;
+
+        /**
+         * @brief Gradient shader to paint the shape with, overriding `color`.
+         *
+         * Mirrors (a subset of) Flutter's `Paint.shader`. Supported by
+         * `Canvas::drawRect()`/`drawCircle()`/`drawOval()`/`drawRRect()`/
+         * `drawPath()`/`drawArc()`/`drawLine()`; NOT yet supported by
+         * `drawDRRect()` or `drawPoints()` (both ignore it and fall back to
+         * `color`). Implemented by wrapping the draw in a `beginShaderMask()`
+         * / `endShaderMask()` scope internally -- the same mechanism
+         * `BoxDecoration`'s own gradient fill/border use -- so it costs one
+         * offscreen capture pass per shader-painted draw call, same as those.
+         *
+         * The gradient's own `Offset` coordinates (`begin`/`end`/`center`)
+         * are relative to the drawn shape's own tight bounding box (its
+         * top-left corner is the origin), not absolute canvas coordinates --
+         * e.g. a `LinearGradient{.begin = {0,0}, .end = {w,0}}` always spans
+         * the shape's own bounding box left-to-right, regardless of where
+         * that shape is actually drawn. Only `color`'s alpha channel is
+         * still honored as an overall opacity multiplier on top of the
+         * shader; its RGB is ignored.
+         */
+        std::optional<Shader> shader;
 
         /** @brief Cap style for the open ends of a stroke. See `StrokeCap`. */
         StrokeCap stroke_cap = StrokeCap::butt;

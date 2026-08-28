@@ -118,3 +118,140 @@ TEST(CanvasPaint, DrawTintedImagePassesThroughRequestedFilterQuality)
     const auto& cmd = std::get<cw::DrawTintedImageCmd>(canvas.commands()[0]);
     EXPECT_EQ(cmd.filter_quality, cw::FilterQuality::none);
 }
+
+// -----------------------------------------------------------------------
+// Paint::shader — general gradient fills for any drawXxx() call, wrapped in
+// a beginShaderMask()/endShaderMask() scope internally.
+// -----------------------------------------------------------------------
+
+TEST(CanvasPaintShader, DrawRectWithShaderEmitsMaskBeginRectEndSequence)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Paint p = cw::Paint::filled(cw::Color::black());
+    p.shader = cw::Shader{cw::LinearGradient{
+        .begin = {0.0f, 0.0f}, .end = {10.0f, 0.0f}, .colors = {cw::Color::red(), cw::Color::blue()}}};
+    canvas.drawRect(cw::Rect::fromLTWH(5, 5, 10, 10), p);
+
+    ASSERT_EQ(canvas.commands().size(), 3u);
+    const auto& begin = std::get<cw::DrawShaderMaskBeginCmd>(canvas.commands()[0]);
+    const auto& rect   = std::get<cw::DrawRectCmd>(canvas.commands()[1]);
+    EXPECT_TRUE(std::holds_alternative<cw::DrawShaderMaskEndCmd>(canvas.commands()[2]));
+
+    EXPECT_EQ(begin.blend_mode, cw::BlendMode::modulate);
+    EXPECT_FLOAT_EQ(begin.bounds.x, 5.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.y, 5.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.width, 10.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.height, 10.0f);
+
+    // The masked draw uses an opaque white fill (RGB replaced, original
+    // alpha preserved) and no longer carries a shader (avoids re-wrapping).
+    EXPECT_FLOAT_EQ(rect.paint.color.r, 1.0f);
+    EXPECT_FLOAT_EQ(rect.paint.color.g, 1.0f);
+    EXPECT_FLOAT_EQ(rect.paint.color.b, 1.0f);
+    EXPECT_FLOAT_EQ(rect.paint.color.a, 1.0f);
+    EXPECT_FALSE(rect.paint.shader.has_value());
+}
+
+TEST(CanvasPaintShader, FillBoundsAreNotInsetAndShaderOriginUnshifted)
+{
+    // A fill (PaintStyle::fill) has no stroke to clip -- the capture bounds
+    // must exactly equal the shape's own bounds, and the shader's own
+    // Offset coordinates must be passed through unchanged.
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Paint p = cw::Paint::filled(cw::Color::black());
+    p.shader = cw::Shader{cw::LinearGradient{
+        .begin = {1.0f, 2.0f}, .end = {8.0f, 2.0f}, .colors = {cw::Color::red(), cw::Color::blue()}}};
+    canvas.drawRect(cw::Rect::fromLTWH(20, 30, 10, 10), p);
+
+    const auto& begin = std::get<cw::DrawShaderMaskBeginCmd>(canvas.commands()[0]);
+    EXPECT_FLOAT_EQ(begin.bounds.x, 20.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.y, 30.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.width, 10.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.height, 10.0f);
+
+    const auto& grad = std::get<cw::LinearGradient>(begin.shader);
+    EXPECT_FLOAT_EQ(grad.begin.x, 1.0f);
+    EXPECT_FLOAT_EQ(grad.begin.y, 2.0f);
+    EXPECT_FLOAT_EQ(grad.end.x, 8.0f);
+    EXPECT_FLOAT_EQ(grad.end.y, 2.0f);
+}
+
+TEST(CanvasPaintShader, StrokeBoundsAreInsetByHalfStrokeWidthAndShaderShifted)
+{
+    // A PaintStyle::stroke draw's visible pixels extend stroke_width/2 past
+    // the shape's own bounds -- the capture region must grow by that amount
+    // (so the outer half of the stroke isn't clipped), and the shader's own
+    // coordinates must shift by the same amount so they stay anchored to
+    // the *unstroked* bounds, not the grown capture region.
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Paint p = cw::Paint::stroked(cw::Color::black(), /*width=*/8.0f);
+    p.shader = cw::Shader{cw::RadialGradient{
+        .center = {5.0f, 5.0f}, .radius = 5.0f, .colors = {cw::Color::red(), cw::Color::blue()}}};
+    canvas.drawRect(cw::Rect::fromLTWH(20, 30, 10, 10), p);
+
+    const auto& begin = std::get<cw::DrawShaderMaskBeginCmd>(canvas.commands()[0]);
+    // inset = stroke_width / 2 = 4.
+    EXPECT_FLOAT_EQ(begin.bounds.x, 16.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.y, 26.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.width, 18.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.height, 18.0f);
+
+    const auto& grad = std::get<cw::RadialGradient>(begin.shader);
+    EXPECT_FLOAT_EQ(grad.center.x, 9.0f);  // 5 + inset(4)
+    EXPECT_FLOAT_EQ(grad.center.y, 9.0f);
+    EXPECT_FLOAT_EQ(grad.radius, 5.0f);    // radius itself is untouched
+
+    const auto& rect_paint = std::get<cw::DrawRectCmd>(canvas.commands()[1]).paint;
+    EXPECT_EQ(rect_paint.style, cw::PaintStyle::stroke);
+    EXPECT_FLOAT_EQ(rect_paint.stroke_width, 8.0f);
+}
+
+TEST(CanvasPaintShader, PreservesColorAlphaAsOverallOpacityMultiplier)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Paint p = cw::Paint::filled(cw::Color::fromRGBA(0.2f, 0.4f, 0.6f, 0.3f));
+    p.shader = cw::Shader{cw::LinearGradient{
+        .begin = {0, 0}, .end = {10, 0}, .colors = {cw::Color::red(), cw::Color::blue()}}};
+    canvas.drawCircle({5, 5}, 5.0f, p);
+
+    const auto& circle = std::get<cw::DrawCircleCmd>(canvas.commands()[1]);
+    // RGB forced to white, alpha carried through from the original color.
+    EXPECT_FLOAT_EQ(circle.paint.color.r, 1.0f);
+    EXPECT_FLOAT_EQ(circle.paint.color.a, 0.3f);
+}
+
+TEST(CanvasPaintShader, DrawLineInsetsByHalfStrokeWidthRegardlessOfPaintStyle)
+{
+    // A line has no fill concept -- it must always be treated as
+    // effectively stroked width-wise, even if the caller left
+    // paint.style at its PaintStyle::fill default.
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Paint p;
+    p.color        = cw::Color::black();
+    p.stroke_width = 6.0f; // style left at the default (fill)
+    p.shader       = cw::Shader{cw::LinearGradient{
+        .begin = {0, 0}, .end = {10, 0}, .colors = {cw::Color::red(), cw::Color::blue()}}};
+    canvas.drawLine({10, 10}, {20, 10}, p);
+
+    const auto& begin = std::get<cw::DrawShaderMaskBeginCmd>(canvas.commands()[0]);
+    // inset = stroke_width / 2 = 3; line bbox is [10,20]x[10,10].
+    EXPECT_FLOAT_EQ(begin.bounds.x, 7.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.y, 7.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.width, 16.0f);
+    EXPECT_FLOAT_EQ(begin.bounds.height, 6.0f);
+}
+
+TEST(CanvasPaintShader, NoShaderTakesTheNormalPath)
+{
+    // Sanity check: unset shader means no extra ShaderMask commands at all.
+    cw::Canvas canvas(400.0f, 300.0f);
+    canvas.drawRect(cw::Rect::fromLTWH(0, 0, 10, 10), cw::Paint::filled(cw::Color::black()));
+
+    ASSERT_EQ(canvas.commands().size(), 1u);
+    EXPECT_TRUE(std::holds_alternative<cw::DrawRectCmd>(canvas.commands()[0]));
+}

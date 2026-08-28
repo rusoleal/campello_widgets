@@ -1258,6 +1258,64 @@ static void strokeRotatedRectDemo(cw::Canvas& canvas, cw::Size size)
     canvas.restore();
 }
 
+// A 5-pointed star, alternating outer/inner radius -- an arbitrary path
+// shape (as opposed to a rect/circle) to prove Paint::shader's bounds
+// (path.getBounds(), not a hand-picked rect) drive the gradient correctly.
+static cw::Path starPath(cw::Offset center, float outer_r, float inner_r, int points = 5)
+{
+    cw::Path path;
+    const float step = 3.14159265f / static_cast<float>(points);
+    for (int i = 0; i < points * 2; ++i)
+    {
+        const float r = (i % 2 == 0) ? outer_r : inner_r;
+        const float a = -3.14159265f * 0.5f + static_cast<float>(i) * step;
+        const float x = center.x + r * std::cos(a);
+        const float y = center.y + r * std::sin(a);
+        if (i == 0) path.moveTo(x, y); else path.lineTo(x, y);
+    }
+    path.close();
+    return path;
+}
+
+// Paint::shader — a general gradient fill for drawCircle(), independent of
+// BoxDecoration: no widget-level gradient wrapper involved here at all.
+static void paintShaderCircleDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float radius = std::min(size.width, size.height) * 0.42f;
+    cw::Paint p = cw::Paint::filled(cw::Color::black());
+    p.shader = cw::Shader{cw::LinearGradient{
+        .begin = {0.0f, 0.0f}, .end = {radius * 2.0f, 0.0f}, .colors = {kBlue, kPurple}}};
+    canvas.drawCircle(center, radius, p);
+}
+
+// Paint::shader on drawPath() -- the gradient's bounds come from
+// path.getBounds(), not a caller-supplied rect.
+static void paintShaderPathDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float outer_r = std::min(size.width, size.height) * 0.44f;
+    const cw::Path star = starPath(center, outer_r, outer_r * 0.42f);
+    cw::Paint p = cw::Paint::filled(cw::Color::black());
+    p.shader = cw::Shader{cw::SweepGradient{.center = center, .colors = {kGreen, kTeal, kBlue, kPurple, kGreen}}};
+    canvas.drawPath(star, p);
+}
+
+// Paint::shader on a *stroked* drawRRect() -- proves the stroke-width
+// capture inset (Canvas::paintWithShaderIfPresent()) keeps the whole ring
+// visible instead of clipping its outer half.
+static void paintShaderStrokedRRectDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const float inset = 14.0f;
+    const cw::Rect rect = cw::Rect::fromLTWH(inset, inset, size.width - 2.0f * inset, size.height - 2.0f * inset);
+    cw::Paint p = cw::Paint::stroked(cw::Color::black(), 10.0f);
+    p.shader = cw::Shader{cw::RadialGradient{
+        .center = {rect.width * 0.5f, rect.height * 0.5f},
+        .radius = std::max(rect.width, rect.height) * 0.65f,
+        .colors = {kAmber, kRed}}};
+    canvas.drawRRect(cw::RRect{rect, 16.0f}, p);
+}
+
 // ---------------------------------------------------------------------------
 // 7. CLIPPING & FX — ClipRRect, ClipOval, DecoratedBox, Opacity, BackdropFilter
 // ---------------------------------------------------------------------------
@@ -1424,6 +1482,18 @@ public:
                 strokeSample("Rotated stroked rect", 150.0f, 110.0f, strokeRotatedRectDemo, colors.on_surface_variant),
             });
 
+        // Paint::shader — general gradient fills for any Canvas draw call,
+        // independent of BoxDecoration (no widget-level gradient wrapper
+        // involved in any of these three).
+        auto paint_shader_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("drawCircle + LinearGradient", 150.0f, 110.0f, paintShaderCircleDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("drawPath + SweepGradient", 150.0f, 110.0f, paintShaderPathDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("stroked drawRRect + RadialGradient", 170.0f, 110.0f, paintShaderStrokedRRectDemo, colors.on_surface_variant),
+            });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -1529,6 +1599,9 @@ public:
                     vspace(20.0f),
                     subheading("STROKE MITER LIMIT + ROTATION — Paint::stroke_miter_limit, drawRect() stroke under rotation", colors.on_surface_variant),
                     card(stroke_advanced_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("PAINT.SHADER — gradient fills for any Canvas draw call (not just BoxDecoration)", colors.on_surface_variant),
+                    card(paint_shader_row, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),

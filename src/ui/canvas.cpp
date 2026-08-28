@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <type_traits>
 
 namespace systems::leal::campello_widgets
 {
@@ -61,6 +62,77 @@ namespace systems::leal::campello_widgets
             p.color.a *= opacity;
     }
 
+    // Shifts a Shader's own anchor Offset(s) (LinearGradient's begin/end,
+    // RadialGradient/SweepGradient's center) by (dx, dy) -- used below to
+    // keep Paint::shader's coordinates anchored to a shape's *unstroked*
+    // bounds even when the shader-mask capture region itself is grown to
+    // avoid clipping a stroke's outer edge. A no-op copy when both are 0.
+    static Shader shiftShaderOrigin(const Shader& shader, float dx, float dy)
+    {
+        if (dx == 0.0f && dy == 0.0f)
+            return shader;
+        return std::visit([&](auto s) -> Shader {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, LinearGradient>)
+            {
+                s.begin.x += dx; s.begin.y += dy;
+                s.end.x   += dx; s.end.y   += dy;
+            }
+            else // RadialGradient, SweepGradient -- both have `center`.
+            {
+                s.center.x += dx; s.center.y += dy;
+            }
+            return s;
+        }, shader);
+    }
+
+    // If `paint.shader` is set, wraps `draw_mask_shape` (a call back into
+    // one of Canvas's own drawXxx() methods, with a plain white mask Paint)
+    // in a beginShaderMask()/endShaderMask() scope so the shape paints with
+    // the shader instead of a solid color -- the same "opaque white shape,
+    // modulate-blend by the gradient" technique BoxDecoration's own gradient
+    // fill/border use (see render_decorated_box.cpp): drawing fully-opaque
+    // white and multiplying (`modulate`) by the gradient's own premultiplied
+    // output reproduces the gradient's color exactly, masked to the shape's
+    // (antialiased) coverage.
+    //
+    // `bounds` is the shape's own tight/fill bounding box -- see
+    // Paint::shader's doc comment for why the shader's coordinates are
+    // relative to it. When `paint.style == PaintStyle::stroke`, the actual
+    // painted pixels extend `stroke_width / 2` past `bounds`; the capture
+    // region is grown by that amount so the stroke's outer half isn't
+    // clipped at its edge, with the shader's own coordinates shifted by the
+    // same amount so they stay anchored to `bounds`, not the grown capture
+    // region (mirroring the *effect* of render_decorated_box.cpp's gradient
+    // border inset, but by growing the capture instead of shrinking the
+    // geometry, since these coordinates are user-authored here, not
+    // auto-resolved from a widget's own size).
+    //
+    // Returns true if a shader was present and handled -- the caller must
+    // not also record its own normal draw command in that case.
+    template <typename DrawMaskFn>
+    static bool paintWithShaderIfPresent(
+        Canvas& canvas, const Rect& bounds, const Paint& paint, DrawMaskFn&& draw_mask_shape)
+    {
+        if (!paint.shader.has_value())
+            return false;
+
+        const float inset = (paint.style == PaintStyle::stroke) ? paint.stroke_width * 0.5f : 0.0f;
+        const Rect capture_bounds = Rect::fromLTWH(
+            bounds.x - inset, bounds.y - inset,
+            bounds.width + 2.0f * inset, bounds.height + 2.0f * inset);
+        const Shader shifted = shiftShaderOrigin(*paint.shader, inset, inset);
+
+        Paint mask = paint;
+        mask.shader.reset();
+        mask.color = Color::fromRGBA(1.0f, 1.0f, 1.0f, paint.color.a);
+
+        canvas.beginShaderMask(capture_bounds, shifted, BlendMode::modulate);
+        draw_mask_shape(mask);
+        canvas.endShaderMask();
+        return true;
+    }
+
     Canvas::Canvas(float viewport_width, float viewport_height)
         : current_transform_(Matrix4::identity())
         , current_clip_(Rect::fromLTWH(0.0f, 0.0f, viewport_width, viewport_height))
@@ -73,6 +145,10 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawRect(const Rect& rect, const Paint& paint)
     {
+        if (paintWithShaderIfPresent(*this, rect, paint,
+                [&](const Paint& mask) { drawRect(rect, mask); }))
+            return;
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawRectCmd{rect, p});
@@ -117,6 +193,11 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawCircle(const Offset& center, float radius, const Paint& paint)
     {
+        const Rect bounds{center.x - radius, center.y - radius, radius * 2.0f, radius * 2.0f};
+        if (paintWithShaderIfPresent(*this, bounds, paint,
+                [&](const Paint& mask) { drawCircle(center, radius, mask); }))
+            return;
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawCircleCmd{center, radius, p});
@@ -124,6 +205,10 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawOval(const Rect& rect, const Paint& paint)
     {
+        if (paintWithShaderIfPresent(*this, rect, paint,
+                [&](const Paint& mask) { drawOval(rect, mask); }))
+            return;
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawOvalCmd{rect, p});
@@ -132,6 +217,10 @@ namespace systems::leal::campello_widgets
     void Canvas::drawArc(const Rect& rect, float start_angle, float sweep_angle,
                          bool use_center, const Paint& paint)
     {
+        if (paintWithShaderIfPresent(*this, rect, paint,
+                [&](const Paint& mask) { drawArc(rect, start_angle, sweep_angle, use_center, mask); }))
+            return;
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawArcCmd{rect, start_angle, sweep_angle, use_center, p});
@@ -139,6 +228,23 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawLine(const Offset& p1, const Offset& p2, const Paint& paint)
     {
+        if (paint.shader.has_value())
+        {
+            // A line is always effectively "stroked" width-wise regardless
+            // of paint.style (there's no fill concept for a zero-area
+            // segment) -- force the stroke-width capture inset unconditionally
+            // by routing through PaintStyle::stroke, rather than relying on
+            // paintWithShaderIfPresent()'s paint.style check.
+            const Rect bounds = Rect::fromLTRB(
+                std::min(p1.x, p2.x), std::min(p1.y, p2.y),
+                std::max(p1.x, p2.x), std::max(p1.y, p2.y));
+            Paint stroke_paint = paint;
+            stroke_paint.style = PaintStyle::stroke;
+            if (paintWithShaderIfPresent(*this, bounds, stroke_paint,
+                    [&](const Paint& mask) { drawLine(p1, p2, mask); }))
+                return;
+        }
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawLineCmd{p1, p2, p});
@@ -146,6 +252,10 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawRRect(const RRect& rrect, const Paint& paint)
     {
+        if (paintWithShaderIfPresent(*this, rrect.rect, paint,
+                [&](const Paint& mask) { drawRRect(rrect, mask); }))
+            return;
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawRRectCmd{rrect, p});
@@ -163,6 +273,10 @@ namespace systems::leal::campello_widgets
 
     void Canvas::drawPath(const Path& path, const Paint& paint)
     {
+        if (paintWithShaderIfPresent(*this, path.getBounds(), paint,
+                [&](const Paint& mask) { drawPath(path, mask); }))
+            return;
+
         Paint p = paint;
         resolvePaint(p, current_opacity_);
         commands_.push_back(DrawPathCmd{path, p});
