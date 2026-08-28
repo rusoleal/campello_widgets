@@ -43,12 +43,70 @@ namespace systems::leal::campello_widgets
         return m;
     }
 
-    // Resolves `invert_colors` (color -> 1-color) and per-canvas opacity into
-    // `p.color` once, on the CPU, when a draw command is recorded. Correct
-    // for these solid-color fills/strokes: inverting one flat color is
-    // identical whether done before or after rasterization, so this needs
-    // no backend/shader changes at all -- see Paint::invert_colors's doc
-    // comment for the (deliberate) scope boundary: this does not apply to
+    // Blends `src` over `dst` using the Porter-Duff Fa/Fb formula for
+    // `mode` (`modulate` is the one exception -- not a Porter-Duff formula,
+    // a plain component-wise product, matching this codebase's own
+    // shader-mask "modulate" blend -- see widgets.metal's
+    // shaderMaskFragment). Both inputs and the result are straight
+    // (non-premultiplied) alpha, matching Color's own convention; the
+    // Fa/Fb math itself runs on premultiplied values, per the standard
+    // Porter-Duff derivation. See Paint::color_filter's doc comment for
+    // why this is exact everywhere for some modes and only edge-pixel-
+    // approximate for others.
+    static Color blendColors(const Color& src, const Color& dst, BlendMode mode)
+    {
+        const float sr = src.r * src.a, sg = src.g * src.a, sb = src.b * src.a, sa = src.a;
+        const float dr = dst.r * dst.a, dg = dst.g * dst.a, db = dst.b * dst.a, da = dst.a;
+
+        if (mode == BlendMode::modulate)
+        {
+            const float a = sa * da;
+            return (a > 1e-5f)
+                ? Color::fromRGBA(sr * dr / a, sg * dg / a, sb * db / a, a)
+                : Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.0f);
+        }
+
+        float fa = 1.0f, fb = 0.0f;
+        switch (mode)
+        {
+            case BlendMode::clear:   fa = 0.0f;      fb = 0.0f;      break;
+            case BlendMode::src:     fa = 1.0f;      fb = 0.0f;      break;
+            case BlendMode::dst:     fa = 0.0f;      fb = 1.0f;      break;
+            case BlendMode::srcOver: fa = 1.0f;      fb = 1.0f - sa; break;
+            case BlendMode::dstOver: fa = 1.0f - da; fb = 1.0f;      break;
+            case BlendMode::srcIn:   fa = da;        fb = 0.0f;      break;
+            case BlendMode::dstIn:   fa = 0.0f;      fb = sa;        break;
+            case BlendMode::srcOut:  fa = 1.0f - da; fb = 0.0f;      break;
+            case BlendMode::dstOut:  fa = 0.0f;      fb = 1.0f - sa; break;
+            case BlendMode::srcATop: fa = da;        fb = 1.0f - sa; break;
+            case BlendMode::dstATop: fa = 1.0f - da; fb = sa;        break;
+            case BlendMode::xorMode: fa = 1.0f - da; fb = 1.0f - sa; break;
+            case BlendMode::plus:    fa = 1.0f;      fb = 1.0f;      break;
+            case BlendMode::modulate: break; // handled above
+        }
+
+        float r = sr * fa + dr * fb;
+        float g = sg * fa + dg * fb;
+        float b = sb * fa + db * fb;
+        float a = sa * fa + da * fb;
+        if (mode == BlendMode::plus)
+        {
+            r = std::min(r, 1.0f); g = std::min(g, 1.0f);
+            b = std::min(b, 1.0f); a = std::min(a, 1.0f);
+        }
+
+        return (a > 1e-5f)
+            ? Color::fromRGBA(r / a, g / a, b / a, a)
+            : Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.0f);
+    }
+
+    // Resolves `invert_colors` (color -> 1-color), `color_filter`, and
+    // per-canvas opacity into `p.color` once, on the CPU, when a draw
+    // command is recorded. Correct for these solid-color fills/strokes:
+    // both operations commute with rasterization the same way inverting a
+    // flat color does, so this needs no backend/shader changes at all --
+    // see Paint::invert_colors's/Paint::color_filter's doc comments for
+    // their (deliberate) scope boundaries: neither applies to
     // drawImage()/drawTintedImage() (per-pixel texture content) or
     // saveLayer()'s Paint (the layer's contents aren't a single color).
     static void resolvePaint(Paint& p, float opacity)
@@ -57,6 +115,11 @@ namespace systems::leal::campello_widgets
         {
             p.color = Color::fromRGBA(1.0f - p.color.r, 1.0f - p.color.g, 1.0f - p.color.b, p.color.a);
             p.invert_colors = false;
+        }
+        if (p.color_filter)
+        {
+            p.color = blendColors(p.color_filter->color, p.color, p.color_filter->blend_mode);
+            p.color_filter.reset();
         }
         if (opacity < 1.0f)
             p.color.a *= opacity;

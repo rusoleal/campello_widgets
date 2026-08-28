@@ -883,9 +883,37 @@ namespace systems::leal::campello_widgets
                 }
 
                 // ── Main dispatch ────────────────────────────────────────
+                // Shared by every Paint::mask_blur_sigma branch below --
+                // same replay_region_stack -> (region_id, incarnation_id,
+                // bracket_index++) computation the other offscreen-capture
+                // commands each already do inline (see e.g. DrawShadowCmd
+                // below) -- factored out here since it would otherwise
+                // repeat 4 times in this one dispatch block.
+                auto currentReplayKey = [&]() -> std::tuple<const void*, uint64_t, size_t>
+                {
+                    if (replay_region_stack.empty()) return {nullptr, uint64_t{0}, size_t{0}};
+                    auto& top = replay_region_stack.back();
+                    return {std::get<0>(top), std::get<1>(top), std::get<2>(top)++};
+                };
+
                 if constexpr (std::is_same_v<T, DrawRectCmd>)
                 {
-                    timeDraw(rect_stats, [&] { draw_backend_->drawRect(c, current_transform, current_clip, *rpe); });
+                    if (c.paint.mask_blur_sigma.has_value())
+                    {
+                        auto [rid, rinc, ridx] = currentReplayKey();
+                        timeDraw(rect_stats, [&] {
+                            applyMaskFilterBlur(c.rect, *c.paint.mask_blur_sigma,
+                                [&](const Matrix4& t, const Rect& cl, GPU::RenderPassEncoder& enc) {
+                                    draw_backend_->drawRect(c, t, cl, enc);
+                                },
+                                rpe, target_view, viewport_width, viewport_height, dpr,
+                                current_transform, current_clip, rid, rinc, ridx);
+                        });
+                    }
+                    else
+                    {
+                        timeDraw(rect_stats, [&] { draw_backend_->drawRect(c, current_transform, current_clip, *rpe); });
+                    }
                 }
                 else if constexpr (std::is_same_v<T, DrawTextCmd>)
                 {
@@ -901,15 +929,62 @@ namespace systems::leal::campello_widgets
                 }
                 else if constexpr (std::is_same_v<T, DrawCircleCmd>)
                 {
-                    timeDraw(circle_stats, [&] { draw_backend_->drawCircle(c, current_transform, current_clip, *rpe); });
+                    if (c.paint.mask_blur_sigma.has_value())
+                    {
+                        const Rect bounds{c.center.x - c.radius, c.center.y - c.radius,
+                                          c.radius * 2.0f, c.radius * 2.0f};
+                        auto [rid, rinc, ridx] = currentReplayKey();
+                        timeDraw(circle_stats, [&] {
+                            applyMaskFilterBlur(bounds, *c.paint.mask_blur_sigma,
+                                [&](const Matrix4& t, const Rect& cl, GPU::RenderPassEncoder& enc) {
+                                    draw_backend_->drawCircle(c, t, cl, enc);
+                                },
+                                rpe, target_view, viewport_width, viewport_height, dpr,
+                                current_transform, current_clip, rid, rinc, ridx);
+                        });
+                    }
+                    else
+                    {
+                        timeDraw(circle_stats, [&] { draw_backend_->drawCircle(c, current_transform, current_clip, *rpe); });
+                    }
                 }
                 else if constexpr (std::is_same_v<T, DrawOvalCmd>)
                 {
-                    timeDraw(oval_stats, [&] { draw_backend_->drawOval(c, current_transform, current_clip, *rpe); });
+                    if (c.paint.mask_blur_sigma.has_value())
+                    {
+                        auto [rid, rinc, ridx] = currentReplayKey();
+                        timeDraw(oval_stats, [&] {
+                            applyMaskFilterBlur(c.rect, *c.paint.mask_blur_sigma,
+                                [&](const Matrix4& t, const Rect& cl, GPU::RenderPassEncoder& enc) {
+                                    draw_backend_->drawOval(c, t, cl, enc);
+                                },
+                                rpe, target_view, viewport_width, viewport_height, dpr,
+                                current_transform, current_clip, rid, rinc, ridx);
+                        });
+                    }
+                    else
+                    {
+                        timeDraw(oval_stats, [&] { draw_backend_->drawOval(c, current_transform, current_clip, *rpe); });
+                    }
                 }
                 else if constexpr (std::is_same_v<T, DrawRRectCmd>)
                 {
-                    timeDraw(rrect_stats, [&] { draw_backend_->drawRRect(c, current_transform, current_clip, *rpe); });
+                    if (c.paint.mask_blur_sigma.has_value())
+                    {
+                        auto [rid, rinc, ridx] = currentReplayKey();
+                        timeDraw(rrect_stats, [&] {
+                            applyMaskFilterBlur(c.rrect.rect, *c.paint.mask_blur_sigma,
+                                [&](const Matrix4& t, const Rect& cl, GPU::RenderPassEncoder& enc) {
+                                    draw_backend_->drawRRect(c, t, cl, enc);
+                                },
+                                rpe, target_view, viewport_width, viewport_height, dpr,
+                                current_transform, current_clip, rid, rinc, ridx);
+                        });
+                    }
+                    else
+                    {
+                        timeDraw(rrect_stats, [&] { draw_backend_->drawRRect(c, current_transform, current_clip, *rpe); });
+                    }
                 }
                 else if constexpr (std::is_same_v<T, DrawLineCmd>)
                 {
@@ -1478,6 +1553,134 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void Renderer::applyMaskFilterBlur(
+        const Rect&                                        bounds,
+        float                                               sigma,
+        const std::function<void(const Matrix4&, const Rect&, campello_gpu::RenderPassEncoder&)>& draw_shape,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
+        float dpr,
+        const Matrix4& transform,
+        const Rect&    clip,
+        const void*    replay_region_id,
+        uint64_t       replay_incarnation_id,
+        size_t         replay_bracket_index)
+    {
+        if (!draw_backend_ || !frame_encoder_) return;
+
+        // Cache-hit path — see applyClipShape()'s identical comment and
+        // mask_blur_gpu_cache_'s doc comment.
+        const std::tuple<const void*, uint64_t, size_t> cache_key{
+            replay_region_id, replay_incarnation_id, replay_bracket_index};
+        if (replay_region_id != nullptr)
+        {
+            auto it = mask_blur_gpu_cache_.find(cache_key);
+            if (it != mask_blur_gpu_cache_.end())
+            {
+                it->second.last_used_frame = frame_counter_;
+                const Rect& cb = it->second.bounds;
+                const float cm = it->second.margin;
+                DrawImageCmd img_cmd{
+                    it->second.texture,
+                    Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
+                    Rect::fromLTWH(cb.x - cm, cb.y - cm,
+                                   cb.width + 2.0f * cm, cb.height + 2.0f * cm),
+                    1.0f };
+                draw_backend_->drawImage(img_cmd, transform, clip, *rpe);
+                return;
+            }
+        }
+
+        if (!std::isfinite(bounds.width) || !std::isfinite(bounds.height) ||
+            bounds.width <= 0.0f || bounds.height <= 0.0f)
+            return;
+
+        // Same padding/downsample recipe as applyBoxShadow() -- see its
+        // identical comments for the full rationale (the device
+        // measurement behind downsampling applies equally here, this is
+        // the same blur pass).
+        const float margin = std::min(sigma * 3.0f, 48.0f);
+
+        const float padded_w = bounds.width  + 2.0f * margin;
+        const float padded_h = bounds.height + 2.0f * margin;
+
+        const float downsample    = (sigma >= 1.5f) ? 2.0f : 1.0f;
+        const float effective_dpr = dpr / downsample;
+
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(padded_w * effective_dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(padded_h * effective_dpr));
+        if (tw == 0 || th == 0) return;
+
+        // See applyClipShape()'s identical comment: a texture that will be
+        // stashed in mask_blur_gpu_cache_ for future identity-replay reuse
+        // must not come from the backend's size-keyed rotating pool.
+        auto shape_tex = (replay_region_id != nullptr)
+            ? draw_backend_->createDedicatedOffscreenTexture(tw, th)
+            : draw_backend_->createOffscreenTexture(tw, th);
+        if (!shape_tex) return;
+
+        rpe->end();
+
+        std::shared_ptr<campello_gpu::Texture> blurred;
+        auto shape_rpe = draw_backend_->beginOffscreenPass(shape_tex, *frame_encoder_);
+        if (shape_rpe)
+        {
+            draw_backend_->setViewportSize(static_cast<float>(tw), static_cast<float>(th));
+
+            // Draw the shape itself (its own real Paint -- fill or stroke,
+            // whichever it already is) padded by `margin` on every side so
+            // the blur has room to spread without clipping against the
+            // texture edge. See applyBoxShadow()'s identical comment for
+            // why the transform must carry effective_dpr.
+            Matrix4 dpr_scale = Matrix4::identity();
+            dpr_scale.data[0] = effective_dpr;
+            dpr_scale.data[5] = effective_dpr;
+            const Rect texture_clip = Rect::fromLTWH(0.0f, 0.0f, padded_w, padded_h);
+
+            // Shift so `bounds`' own top-left lands at (margin, margin) in
+            // the padded texture -- draw_shape() draws in the shape's
+            // original local coordinate space, so the shift is folded into
+            // the transform rather than the geometry itself.
+            Matrix4 shift = Matrix4::translate({margin - bounds.x, margin - bounds.y, 0.0f});
+            Matrix4 local_transform = dpr_scale * shift;
+
+            draw_shape(local_transform, texture_clip, *shape_rpe);
+
+            shape_rpe->end();
+
+            // See applyBoxShadow()'s identical comment for why sigma scales
+            // down by the same factor as the texture resolution.
+            const float blur_sigma = sigma / downsample;
+            blurred = draw_backend_->blurTexture(shape_tex, blur_sigma, blur_sigma, *frame_encoder_);
+
+            draw_backend_->setViewportSize(viewport_width, viewport_height);
+        }
+
+        rpe = restartRenderPass(target_view);
+
+        if (blurred)
+        {
+            DrawImageCmd img_cmd{
+                blurred,
+                Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
+                Rect::fromLTWH(bounds.x - margin, bounds.y - margin, padded_w, padded_h),
+                1.0f };
+            draw_backend_->drawImage(img_cmd, transform, clip, *rpe);
+
+            if (replay_region_id != nullptr)
+            {
+                ShadowGpuCacheEntry entry;
+                entry.texture         = blurred;
+                entry.bounds          = bounds;
+                entry.margin          = margin;
+                entry.last_used_frame = frame_counter_;
+                mask_blur_gpu_cache_[cache_key] = std::move(entry);
+            }
+        }
+    }
+
     void Renderer::applySaveLayer(
         const SaveLayerCmd&                                cmd,
         const DrawList&                                    child_cmds,
@@ -1632,6 +1835,7 @@ namespace systems::leal::campello_widgets
         eraseByRegion(shader_mask_gpu_cache_);
         eraseByRegion(shadow_gpu_cache_);
         eraseByRegion(save_layer_gpu_cache_);
+        eraseByRegion(mask_blur_gpu_cache_);
     }
 
     void Renderer::evictStaleGpuCaches()
@@ -1653,6 +1857,7 @@ namespace systems::leal::campello_widgets
         sweep(shader_mask_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(shadow_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(save_layer_gpu_cache_, kClipShapeCacheMaxAgeFrames);
+        sweep(mask_blur_gpu_cache_, kClipShapeCacheMaxAgeFrames);
 
         for (auto it = text_texture_cache_.begin(); it != text_texture_cache_.end(); )
         {

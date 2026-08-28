@@ -566,6 +566,36 @@ namespace systems::leal::campello_widgets
             uint64_t       replay_incarnation_id  = 0,
             size_t         replay_bracket_index    = 0);
 
+        // Applies Paint::mask_blur_sigma for a single drawRect()/drawCircle()/
+        // drawOval()/drawRRect() call: fills `bounds` (in *local*, pre-
+        // transform space) into a padded offscreen texture via `draw_shape`
+        // (which the caller supplies as a thin wrapper around the matching
+        // draw_backend_->drawXxx() call, so this method stays shape-agnostic),
+        // runs it through the existing two-pass Gaussian blur, and composites
+        // the result into the main pass in place of the shape's normal
+        // appearance -- structurally identical to applyBoxShadow() (padding/
+        // downsample/blur/composite all mirror it exactly), just without a
+        // shadow offset or separate shadow color: the shape's own real Paint
+        // (fill or stroke) is what gets captured and blurred. See
+        // applyShaderMask() for `replay_region_id`/`replay_incarnation_id`/
+        // `replay_bracket_index` -- same cache-gating mechanism, backed by
+        // mask_blur_gpu_cache_ below (reuses ShadowGpuCacheEntry's shape:
+        // texture + padded bounds + margin, identical caching need).
+        void applyMaskFilterBlur(
+            const Rect&    bounds,
+            float          sigma,
+            const std::function<void(const Matrix4&, const Rect&, campello_gpu::RenderPassEncoder&)>& draw_shape,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
+            float viewport_width,
+            float viewport_height,
+            float dpr,
+            const Matrix4& transform,
+            const Rect&    clip,
+            const void*    replay_region_id       = nullptr,
+            uint64_t       replay_incarnation_id  = 0,
+            size_t         replay_bracket_index    = 0);
+
         // Applies a SaveLayer region: renders child commands to an offscreen
         // texture, then composites the texture back into the main pass using
         // the layer paint's opacity (and, eventually, blend mode / color
@@ -839,6 +869,12 @@ namespace systems::leal::campello_widgets
             shadow_gpu_cache_;
         std::unordered_map<std::tuple<const void*, uint64_t, size_t>, SaveLayerGpuCacheEntry, ReplayKeyHash>
             save_layer_gpu_cache_;
+        // Same rationale as shadow_gpu_cache_ above, for
+        // Renderer::applyMaskFilterBlur() -- reuses ShadowGpuCacheEntry's
+        // shape (texture + padded bounds + margin) since the caching need
+        // is identical.
+        std::unordered_map<std::tuple<const void*, uint64_t, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
+            mask_blur_gpu_cache_;
 
         // Platform-independent text-rasterization cache. GDI/CoreText/
         // FreeType+HarfBuzz rasterization plus GPU texture allocation/

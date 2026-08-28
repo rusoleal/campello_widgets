@@ -65,6 +65,23 @@ namespace systems::leal::campello_widgets
     };
 
     /**
+     * @brief Blends a fixed color against a shape's own drawn color, using
+     * one of the existing `BlendMode` values. Mirrors Flutter's
+     * `ColorFilter.mode(color, blendMode)` -- the general 4x5 color-matrix
+     * filter is not implemented.
+     *
+     * See `Paint::color_filter`'s doc comment for how/where this resolves
+     * and its exactness caveats.
+     */
+    struct ColorFilterMode
+    {
+        Color     color;
+        BlendMode blend_mode = BlendMode::srcIn;
+
+        bool operator==(const ColorFilterMode&) const noexcept = default;
+    };
+
+    /**
      * @brief Sampling/mipmapping quality for texture-based draws.
      *
      * Mirrors Flutter's `FilterQuality`. `none` selects nearest-neighbor
@@ -147,6 +164,30 @@ namespace systems::leal::campello_widgets
          */
         std::optional<Shader> shader;
 
+        /**
+         * @brief Blends `color_filter->color` against this shape's own
+         * drawn color using `color_filter->blend_mode`, overriding `color`.
+         * Mirrors (a subset of) Flutter's `Paint.colorFilter` -- see
+         * `ColorFilterMode`'s doc comment for the exact scope.
+         *
+         * Resolved entirely on the CPU when the draw command is recorded
+         * (`Canvas::drawRect()` etc., same as `invert_colors`) -- correct
+         * and free, since `ColorFilter.mode` blends against the shape's own
+         * color, not the framebuffer's, so the result is a single known
+         * value at record time for any solid-color fill/stroke. Exact
+         * everywhere in a shape's opaque interior; only an approximation at
+         * antialiased edge pixels for blend modes whose true alpha isn't a
+         * pure multiplicative function of coverage (`srcOver`/`plus`/
+         * `xorMode` and similar -- `srcIn`/`dstIn`/`modulate`/`clear`/
+         * `dst`/`srcOut` are exact everywhere).
+         *
+         * Has no effect when `shader` is also set on the same `Paint` (the
+         * shader path resolves its own white mask paint's color separately
+         * -- a documented no-op, not a crash) or on `Canvas::drawImage()`/
+         * `drawTintedImage()` (no `Paint` parameter there to carry it).
+         */
+        std::optional<ColorFilterMode> color_filter;
+
         /** @brief Cap style for the open ends of a stroke. See `StrokeCap`. */
         StrokeCap stroke_cap = StrokeCap::butt;
 
@@ -159,6 +200,25 @@ namespace systems::leal::campello_widgets
          * `bevel`. Matches Flutter's `Paint.strokeMiterLimit` default (4.0).
          */
         float stroke_miter_limit = 4.0f;
+
+        /**
+         * @brief Gaussian blur sigma (logical pixels) applied to this
+         * shape's own drawn appearance, replacing its normal sharp edge
+         * with a soft one. Mirrors Flutter's `MaskFilter.blur(BlurStyle
+         * .normal, sigma)` -- the `solid`/`outer`/`inner` edge-clipping
+         * styles are not implemented, only the default `normal` style.
+         *
+         * Supported by `Canvas::drawRect()`/`drawCircle()`/`drawOval()`/
+         * `drawRRect()` only (fill or stroke, whichever `style` already
+         * says); NOT supported by `drawPath()`/`drawLine()`/`drawArc()`/
+         * `drawPoints()`/`drawImage()`/`drawTintedImage()`, and undefined
+         * if `shader` is also set on the same `Paint`. Implemented by
+         * capturing the shape into a padded offscreen texture and running
+         * the existing Gaussian blur pass over it (the same mechanism
+         * `BoxShadow` rendering already uses) -- costs one offscreen
+         * capture-and-blur pass per blurred draw call.
+         */
+        std::optional<float> mask_blur_sigma;
 
         // ------------------------------------------------------------------
         // Named constructors

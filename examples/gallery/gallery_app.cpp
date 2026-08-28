@@ -1382,6 +1382,58 @@ static void pathFillAADiagonalDemo(cw::Canvas& canvas, cw::Size size)
     canvas.drawPath(tri, cw::Paint::filled(kTeal));
 }
 
+// Paint::color_filter -- a circle drawn with an arbitrary base color, but
+// srcIn always replaces the RGB with the filter color entirely (the
+// dominant real-world use: icon-style tinting), regardless of what the
+// base color was.
+static void colorFilterSrcInDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float radius = std::min(size.width, size.height) * 0.4f;
+    cw::Paint p = cw::Paint::filled(kBlue); // base color -- fully overridden by srcIn below
+    p.color_filter = cw::ColorFilterMode{kRed, cw::BlendMode::srcIn};
+    canvas.drawCircle(center, radius, p);
+}
+
+// Paint::color_filter with BlendMode::modulate -- component-wise product
+// of the filter color and the shape's own base color, visibly different
+// from srcIn's "replace entirely" behavior.
+static void colorFilterModulateDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float radius = std::min(size.width, size.height) * 0.4f;
+    cw::Paint p = cw::Paint::filled(cw::Color::fromRGB(1.0f, 1.0f, 0.3f)); // warm yellow base
+    p.color_filter = cw::ColorFilterMode{cw::Color::fromRGB(0.3f, 0.5f, 1.0f), cw::BlendMode::modulate};
+    canvas.drawCircle(center, radius, p);
+}
+
+// Paint::mask_blur_sigma -- three filled circles with increasing blur, to
+// show the soft edge growing with sigma.
+static void maskFilterFillDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const float cy = size.height * 0.5f;
+    const float r  = 22.0f;
+    const float sigmas[3] = {0.0f, 6.0f, 14.0f};
+    for (int i = 0; i < 3; ++i)
+    {
+        const float cx = size.width * (0.2f + 0.3f * static_cast<float>(i));
+        cw::Paint p = cw::Paint::filled(kOrange);
+        if (sigmas[i] > 0.0f) p.mask_blur_sigma = sigmas[i];
+        canvas.drawCircle({cx, cy}, r, p);
+    }
+}
+
+// Paint::mask_blur_sigma on a *stroked* rounded rect -- confirms the blur
+// captures the shape's own stroke appearance (a ring), not just fills.
+static void maskFilterStrokeDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const float inset = 22.0f;
+    const cw::Rect rect = cw::Rect::fromLTWH(inset, inset, size.width - 2.0f * inset, size.height - 2.0f * inset);
+    cw::Paint p = cw::Paint::stroked(kPurple, 8.0f);
+    p.mask_blur_sigma = 6.0f;
+    canvas.drawRRect(cw::RRect{rect, 16.0f}, p);
+}
+
 // ---------------------------------------------------------------------------
 // 7. CLIPPING & FX — ClipRRect, ClipOval, DecoratedBox, Opacity, BackdropFilter
 // ---------------------------------------------------------------------------
@@ -1569,6 +1621,25 @@ public:
                 strokeSample("Shallow diagonal edge", 170.0f, 130.0f, pathFillAADiagonalDemo, colors.on_surface_variant),
             });
 
+        // Paint::color_filter -- ColorFilter.mode(color, blendMode), resolved
+        // entirely on the CPU at record time (see Canvas::resolvePaint()).
+        auto color_filter_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("srcIn (icon-tint style)", 150.0f, 110.0f, colorFilterSrcInDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("modulate", 150.0f, 110.0f, colorFilterModulateDemo, colors.on_surface_variant),
+            });
+
+        // Paint::mask_blur_sigma -- MaskFilter.blur(BlurStyle.normal, sigma),
+        // reusing the same offscreen-capture-then-blur mechanism BoxShadow
+        // rendering already uses (Renderer::applyMaskFilterBlur()).
+        auto mask_filter_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Fill, sigma 0/6/14", 170.0f, 110.0f, maskFilterFillDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Stroked RRect, sigma 6", 170.0f, 110.0f, maskFilterStrokeDemo, colors.on_surface_variant),
+            });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -1680,6 +1751,12 @@ public:
                     vspace(20.0f),
                     subheading("DRAWPATH FILL ANTIALIASING — smooth silhouette edges, no jagged staircase", colors.on_surface_variant),
                     card(path_fill_aa_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("PAINT.COLOR_FILTER — ColorFilter.mode(color, blendMode), CPU-resolved", colors.on_surface_variant),
+                    card(color_filter_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("PAINT.MASK_BLUR_SIGMA — MaskFilter.blur(BlurStyle.normal, sigma)", colors.on_surface_variant),
+                    card(mask_filter_row, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),
