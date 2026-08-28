@@ -65,13 +65,28 @@ namespace systems::leal::campello_widgets
             }
             for (int idx : to_remove) item_elements_.erase(idx);
 
-            // Mount items newly in view.
+            // Mount items newly in view, and refresh already-mounted ones
+            // with this build's fresh builder() output. A ListView whose
+            // row *content* (not just count/order) can change for an index
+            // that stays continuously visible needs this refresh every
+            // performBuild(), not just on first mount -- skipping
+            // already-mounted indices (the old behavior here) left rows
+            // frozen at whatever content existed the first time that index
+            // ever became visible, confirmed via a real bug: a diagnostics
+            // panel whose row text kept changing while continuously
+            // visible showed permanently stale text per row. updateChild()
+            // itself already does the right thing either way -- reuses the
+            // element in place via child->update() when the widget type/
+            // key match (the common case here, cheap), or unmounts and
+            // recreates when they don't -- so passing the existing element
+            // through every time is both correct and no more expensive
+            // than the mount-only path for indices that didn't change.
             for (int i = first; i <= last; ++i)
             {
-                if (item_elements_.count(i)) continue; // already mounted
-
                 WidgetRef item_widget = w.builder(*this, i);
-                auto elem = updateChild(nullptr, item_widget, this);
+                auto it = item_elements_.find(i);
+                auto existing = (it != item_elements_.end()) ? it->second : nullptr;
+                auto elem = updateChild(existing, item_widget, this);
                 if (elem)
                 {
                     auto* roe = elem->findDescendantRenderObjectElement();
@@ -82,6 +97,10 @@ namespace systems::leal::campello_widgets
                         if (box) rv.setItemBox(i, std::move(box));
                     }
                     item_elements_[i] = std::move(elem);
+                }
+                else if (it != item_elements_.end())
+                {
+                    item_elements_.erase(it);
                 }
             }
         }
