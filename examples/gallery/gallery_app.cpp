@@ -2097,6 +2097,112 @@ public:
     { return std::make_unique<RotatingTransformRowState>(); }
 };
 
+// ---------------------------------------------------------------------------
+// NinePatchDemo — Canvas.drawImageNine() verification.
+//
+// Resolves the mountains JPEG to a real GPU texture (mirroring
+// ImageWidgetState's own async-load-then-createTexture-on-main-thread
+// pattern in src/widgets/image_widget.cpp) so the demo can hand a genuine
+// `std::shared_ptr<campello_gpu::Texture>` into a raw-Canvas draw closure
+// via strokeSample() -- drawImageNine() needs the texture's real pixel
+// dimensions (texture->getWidth()/getHeight()) to interpret `center`, so
+// unlike the other Canvas demos on this screen it can't just draw shapes.
+// ---------------------------------------------------------------------------
+class NinePatchDemo;
+
+class NinePatchDemoState : public cw::State<NinePatchDemo>
+{
+public:
+    void initState() override
+    {
+        cw::State<NinePatchDemo>::initState();
+        auto provider = std::make_shared<cw::MemoryImage>(
+            std::vector<uint8_t>(
+                cw::gallery_assets::kMountainsJpeg,
+                cw::gallery_assets::kMountainsJpeg + cw::gallery_assets::kMountainsJpegSize));
+        cw::ImageConfiguration config;
+        load_future_ = cw::ImageLoader::instance().loadAsync(provider, config);
+        if (auto* ts = cw::TickerScheduler::active())
+            ticker_id_ = ts->subscribe([this](uint64_t) { checkFuture(); });
+    }
+
+    void dispose() override
+    {
+        if (ticker_id_ != 0) {
+            if (auto* ts = cw::TickerScheduler::active()) ts->unsubscribe(ticker_id_);
+            ticker_id_ = 0;
+        }
+        cw::State<NinePatchDemo>::dispose();
+    }
+
+    cw::WidgetRef build(cw::BuildContext&) override
+    {
+        if (!texture_) {
+            return cw::mw<cw::Center>(
+                cw::SizedBox::square(24.0f, std::make_shared<cw::CircularProgressIndicator>()));
+        }
+
+        auto tex = texture_;
+        const float img_w = static_cast<float>(tex->getWidth());
+        const float img_h = static_cast<float>(tex->getHeight());
+        // 8% margins on every side -- corners stay a modest, non-clamped
+        // size (~77x51px) while the middle absorbs most of the stretch.
+        const cw::Rect center = cw::Rect::fromLTWH(
+            img_w * 0.08f, img_h * 0.08f, img_w * 0.84f, img_h * 0.84f);
+
+        auto naive_stretch = [tex](cw::Canvas& canvas, cw::Size size) {
+            canvas.drawImage(tex, cw::Rect::fromLTWH(0, 0, 1, 1),
+                cw::Rect::fromLTWH(0, 0, size.width, size.height));
+        };
+        auto nine_patch = [tex, center](cw::Canvas& canvas, cw::Size size) {
+            canvas.drawImageNine(tex, center, cw::Rect::fromLTWH(0, 0, size.width, size.height));
+        };
+        auto nine_patch_squeezed = [tex, center](cw::Canvas& canvas, cw::Size size) {
+            canvas.drawImageNine(tex, center, cw::Rect::fromLTWH(0, 0, size.width, size.height));
+        };
+
+        return cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("drawImage (naive stretch)", 220.0f, 140.0f, naive_stretch, kBlue),
+                hspace(20.0f),
+                strokeSample("drawImageNine (corners preserved)", 220.0f, 140.0f, nine_patch, kGreen),
+                hspace(20.0f),
+                strokeSample("drawImageNine\n(narrow dst -- corners clamp)", 60.0f, 140.0f, nine_patch_squeezed, kOrange),
+            });
+    }
+
+private:
+    void checkFuture()
+    {
+        if (done_ || !load_future_.valid()) return;
+        if (load_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        done_ = true;
+        if (auto* ts = cw::TickerScheduler::active()) { ts->unsubscribe(ticker_id_); ticker_id_ = 0; }
+
+        auto result = load_future_.get();
+        if (result.status == cw::ImageLoadStatus::completed && result.image) {
+            if (!result.image->texture) {
+                if (auto* renderer = cw::detail::currentRenderer().load(std::memory_order_acquire))
+                    result.image->createTexture(&renderer->device());
+            }
+            texture_ = result.image->texture;
+        }
+        this->setState([](){});
+    }
+
+    std::shared_future<cw::ImageLoadResult> load_future_;
+    std::shared_ptr<systems::leal::campello_gpu::Texture> texture_;
+    bool     done_      = false;
+    uint64_t ticker_id_ = 0;
+};
+
+class NinePatchDemo : public cw::StatefulWidget
+{
+public:
+    std::unique_ptr<cw::StateBase> createState() const override
+    { return std::make_unique<NinePatchDemoState>(); }
+};
+
 class ImagesSection : public cw::StatelessWidget
 {
 public:
@@ -2198,6 +2304,9 @@ public:
                     vspace(20.0f),
                     subheading("BACKDROP FILTER — blur the photo itself", colors.on_surface_variant),
                     repaintBoundary(blur_container),
+                    vspace(20.0f),
+                    subheading("CANVAS.DRAWIMAGENINE — 9-patch stretch vs. naive stretch", colors.on_surface_variant),
+                    repaintBoundary(card(std::make_shared<NinePatchDemo>(), 16.0f, colors.surface)),
                     vspace(20.0f),
                 }));
 

@@ -1,5 +1,8 @@
 #include <campello_widgets/ui/canvas.hpp>
+#include <campello_gpu/texture.hpp>
 #include <vector_math/vector4.hpp>
+
+#include "ui/nine_patch_geometry.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -238,6 +241,21 @@ namespace systems::leal::campello_widgets
         FilterQuality filter_quality)
     {
         commands_.push_back(DrawImageCmd{std::move(texture), src_rect, dst_rect, current_opacity_, filter_quality});
+    }
+
+    void Canvas::drawImageNine(
+        std::shared_ptr<campello_gpu::Texture> texture,
+        const Rect& center,
+        const Rect& dst_rect,
+        FilterQuality filter_quality)
+    {
+        if (!texture) return;
+
+        const float img_w = static_cast<float>(texture->getWidth());
+        const float img_h = static_cast<float>(texture->getHeight());
+
+        for (const auto& patch : computeNinePatchGeometry(img_w, img_h, center, dst_rect))
+            drawImage(texture, patch.src, patch.dst, filter_quality);
     }
 
     void Canvas::drawTintedImage(

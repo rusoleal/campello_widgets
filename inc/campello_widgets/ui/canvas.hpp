@@ -118,6 +118,42 @@ namespace systems::leal::campello_widgets
             FilterQuality filter_quality = FilterQuality::high);
 
         /**
+         * @brief Draws a 9-slice-scaled texture: `center` splits it into a
+         * 3x3 grid of patches, the 4 corners keep their source pixel size
+         * unscaled, the 4 edges stretch along one axis, and the middle
+         * patch stretches along both -- the classic 9-patch/border-image
+         * technique for stretchy UI chrome (rounded panels, speech
+         * bubbles, ...) without visibly distorting the corners. Mirrors
+         * Flutter's `Canvas.drawImageNine()`.
+         *
+         * Pure CPU geometry on top of the existing `drawImage()` -- issues
+         * up to 9 ordinary `drawImage()` calls (fewer if a patch is
+         * degenerate, e.g. `center` touches an edge of the image), no new
+         * backend/shader work.
+         *
+         * @param texture  Source texture.
+         * @param center   The stretchable middle region, in *source pixel*
+         *                 coordinates (matching Flutter's convention --
+         *                 not normalised [0,1] like `drawImage()`'s
+         *                 `src_rect`). Clamped to the texture's own bounds.
+         * @param dst_rect Destination in local coordinates.
+         * @param filter_quality Sampling quality -- see `drawImage()`.
+         *
+         * If `dst_rect` is smaller than the sum of the (unscaled) corner
+         * sizes on either axis, each corner's destination size is
+         * independently clamped to half of `dst_rect`'s size on that axis
+         * -- correct for the common case (`dst_rect` at least as large as
+         * the corners) but not a full proportional-shrink of every fixed
+         * region the way some other 9-patch implementations handle
+         * extreme over-squeezing.
+         */
+        void drawImageNine(
+            std::shared_ptr<campello_gpu::Texture> texture,
+            const Rect& center,
+            const Rect& dst_rect,
+            FilterQuality filter_quality = FilterQuality::high);
+
+        /**
          * @brief Draws a "template" texture recolored to an arbitrary tint.
          *
          * The source texture's own RGB is ignored; only its alpha channel
