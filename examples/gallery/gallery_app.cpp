@@ -1014,6 +1014,7 @@ public:
         detail_    = "";
         has_interacted_ = false;
         dropped_   = 0;
+        modifier_click_label_ = "Click me (try holding Cmd/Ctrl/Shift/Alt)";
     }
 
     cw::WidgetRef build(cw::BuildContext& ctx) override
@@ -1130,6 +1131,43 @@ public:
                 cw::mw<cw::Text>("→", ts(20.0f, colors.on_surface_variant)),
                 hspace(24.0f), target_widget });
 
+        // HardwareKeyboard::current() — checked at the moment of the tap, the
+        // same pattern Flutter apps use for Cmd+Click (HardwareKeyboard.instance
+        // .isMetaPressed inside onTapDown). Also exercises macOS's flagsChanged:
+        // handler: a *bare* Cmd press (no other key) held before the click still
+        // registers correctly, which a naive KeyEvent-only tracker would miss.
+        auto mod_click_box = std::make_shared<cw::Container>();
+        mod_click_box->height = 70.0f;
+        mod_click_box->color  = modifier_click_had_modifier_ ? kBlue : colors.surface_variant;
+        mod_click_box->child  = cw::mw<cw::Center>(
+            cw::mw<cw::Text>(modifier_click_label_,
+                ts(14.0f, modifier_click_had_modifier_ ? cw::Color::white() : colors.on_surface_variant)));
+        auto mod_click_detector = std::make_shared<cw::GestureDetector>();
+        mod_click_detector->child = mod_click_box;
+        mod_click_detector->on_tap = [this] {
+            auto& kb = cw::HardwareKeyboard::current();
+            std::vector<std::string> held;
+            if (kb.isMetaPressed())    held.push_back("Cmd");
+            if (kb.isControlPressed()) held.push_back("Ctrl");
+            if (kb.isShiftPressed())   held.push_back("Shift");
+            if (kb.isAltPressed())     held.push_back("Alt");
+
+            std::string label;
+            for (size_t i = 0; i < held.size(); ++i)
+            {
+                if (i > 0) label += "+";
+                label += held[i];
+            }
+            const bool had_modifier = !held.empty();
+            if (had_modifier) label += "+Click detected!";
+            else              label = "Plain click (no modifiers)";
+
+            setState([this, label, had_modifier] {
+                modifier_click_label_        = label;
+                modifier_click_had_modifier_ = had_modifier;
+            });
+        };
+
         auto content = cw::mw<cw::Padding>(cw::EdgeInsets::all(20.0f),
             cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
                 cw::WidgetList{
@@ -1138,6 +1176,9 @@ public:
                     vspace(20.0f),
                     subheading("DRAGGABLE + DRAG TARGET", colors.on_surface_variant),
                     card(dnd_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("HARDWARE KEYBOARD — HardwareKeyboard::current() checked at tap time", colors.on_surface_variant),
+                    card(mod_click_detector, 0.0f, colors.surface),
                 }));
 
         auto bg = std::make_shared<cw::Container>();
@@ -1151,6 +1192,8 @@ private:
     cw::Color   zone_color_ = cw::Color::white(), text_color_ = cw::Color::black();
     bool        has_interacted_ = false;
     int         dropped_ = 0;
+    std::string modifier_click_label_;
+    bool        modifier_click_had_modifier_ = false;
 };
 
 class GesturesSection : public cw::StatefulWidget {

@@ -520,7 +520,20 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         // Keyboard events
         case WM_KEYDOWN:
         case WM_SYSKEYDOWN: {
-            if (state && state->focus_manager && wparam != VK_SHIFT && wparam != VK_CONTROL && wparam != VK_MENU) {
+            // VK_SHIFT/VK_CONTROL/VK_MENU are deliberately excluded from the
+            // FocusManager path below (existing behavior, unchanged) -- but
+            // that means a *bare* Shift/Ctrl/Alt press (no other key) would
+            // never update HardwareKeyboard until some other key event
+            // happens, going stale in between (e.g. "hold Shift, then
+            // click"). WM_KEYUP for these three is unconditional (below), so
+            // release already self-corrects; this closes the press side by
+            // updating HardwareKeyboard directly, mirroring macOS's
+            // flagsChanged: handler for the same class of gap.
+            if (wparam == VK_SHIFT || wparam == VK_CONTROL || wparam == VK_MENU) {
+                Widgets::HardwareKeyboard::current().updateModifiers(windowsModifiersToKeyModifiers());
+                return 0;
+            }
+            if (state && state->focus_manager) {
                 Widgets::KeyEvent ke;
                 ke.kind = (lparam & (1 << 30)) ? Widgets::KeyEventKind::repeat : Widgets::KeyEventKind::down;
                 ke.key_code = windowsKeyCodeToKeyCode(wparam);

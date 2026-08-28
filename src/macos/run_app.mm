@@ -366,6 +366,20 @@ static float macosScreenRefreshHz(NSScreen* screen)
     _focusManager->handleKeyEvent(ke);
 }
 
+// A *bare* modifier press/release (Cmd alone, no other key) never reaches
+// keyDown:/keyUp: at all -- AppKit only reports it here. Updates
+// HardwareKeyboard directly rather than synthesizing a KeyEvent: there's no
+// well-defined KeyCode/down-vs-up pairing worth inventing for a bare
+// modifier transition, and nothing besides HardwareKeyboard needs to
+// observe it. See HardwareKeyboard::updateModifiers()'s doc comment for why
+// this handler exists at all -- without it, "hold Cmd, then click" (e.g.
+// Cmd+Click in an editor) would see stale modifier state.
+- (void)flagsChanged:(NSEvent*)event
+{
+    Widgets::HardwareKeyboard::current().updateModifiers(
+        macosModifiersToKeyModifiers(event.modifierFlags));
+}
+
 - (void)scrollWheel:(NSEvent*)event
 {
     if (!_dispatcher) return;

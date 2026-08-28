@@ -2,6 +2,7 @@
 #include <cmath>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
+#include <campello_widgets/ui/hardware_keyboard.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 
 namespace systems::leal::campello_widgets
@@ -119,6 +120,13 @@ namespace systems::leal::campello_widgets
     void FocusManager::handleKeyEvent(const KeyEvent& event)
     {
         ThreadChecker::instance().assertOnBoundThread("FocusManager::handleKeyEvent");
+
+        // Keep HardwareKeyboard::current() live for every branch below
+        // (including early returns) -- see its doc comment. Platform
+        // adapters may also update it directly for modifier transitions
+        // that never reach here as a KeyEvent at all (e.g. macOS's
+        // flagsChanged: for a bare Cmd/Shift/Ctrl/Option press).
+        HardwareKeyboard::current().updateModifiers(event.modifiers);
 
         // Any key event reaching here implies the user is currently
         // interacting via keyboard -- switches focus-ring visibility on

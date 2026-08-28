@@ -131,6 +131,7 @@
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/key_event.hpp>
+#include <campello_widgets/ui/hardware_keyboard.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
