@@ -1316,6 +1316,29 @@ static void paintShaderStrokedRRectDemo(cw::Canvas& canvas, cw::Size size)
     canvas.drawRRect(cw::RRect{rect, 16.0f}, p);
 }
 
+// drawPath() fill antialiasing -- a solid-color star (many diagonal edges
+// at varied angles) so the silhouette's smoothness is easy to judge at a
+// glance. See src/gpu/path_fill_aa.hpp for the technique.
+static void pathFillAAStarDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float outer_r = std::min(size.width, size.height) * 0.44f;
+    const cw::Path star = starPath(center, outer_r, outer_r * 0.42f);
+    canvas.drawPath(star, cw::Paint::filled(kPurple));
+}
+
+// A single long, shallow-angle diagonal edge -- the case where jagged
+// (non-antialiased) triangulation is most visually obvious as a staircase.
+static void pathFillAADiagonalDemo(cw::Canvas& canvas, cw::Size size)
+{
+    cw::Path tri;
+    tri.moveTo(size.width * 0.08f, size.height * 0.85f);
+    tri.lineTo(size.width * 0.92f, size.height * 0.35f);
+    tri.lineTo(size.width * 0.92f, size.height * 0.85f);
+    tri.close();
+    canvas.drawPath(tri, cw::Paint::filled(kTeal));
+}
+
 // ---------------------------------------------------------------------------
 // 7. CLIPPING & FX — ClipRRect, ClipOval, DecoratedBox, Opacity, BackdropFilter
 // ---------------------------------------------------------------------------
@@ -1494,6 +1517,15 @@ public:
                 strokeSample("stroked drawRRect + RadialGradient", 170.0f, 110.0f, paintShaderStrokedRRectDemo, colors.on_surface_variant),
             });
 
+        // drawPath() fill antialiasing -- silhouette edges should be smooth,
+        // not a jagged staircase (see src/gpu/path_fill_aa.hpp).
+        auto path_fill_aa_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Star fill (varied angles)", 170.0f, 130.0f, pathFillAAStarDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Shallow diagonal edge", 170.0f, 130.0f, pathFillAADiagonalDemo, colors.on_surface_variant),
+            });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -1602,6 +1634,9 @@ public:
                     vspace(20.0f),
                     subheading("PAINT.SHADER — gradient fills for any Canvas draw call (not just BoxDecoration)", colors.on_surface_variant),
                     card(paint_shader_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("DRAWPATH FILL ANTIALIASING — smooth silhouette edges, no jagged staircase", colors.on_surface_variant),
+                    card(path_fill_aa_row, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),
