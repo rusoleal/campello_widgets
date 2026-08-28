@@ -23,7 +23,12 @@ namespace systems::leal::campello_widgets
         std::optional<BoxGradient>  gradient;
         float                       width = 1.0f;
 
-        static constexpr BoxBorder all(Color c, float w = 1.0f) noexcept
+        // Not constexpr: BoxBorder contains std::optional<BoxGradient>, and
+        // BoxGradient's variant alternatives hold std::vector<Color> members
+        // -- not a literal type (no constexpr destructor pre-C++23), so a
+        // constexpr-returning factory here is ill-formed. Xcode's clang
+        // doesn't diagnose this; NDK's clang does.
+        static BoxBorder all(Color c, float w = 1.0f) noexcept
         {
             return {c, std::nullopt, w};
         }
