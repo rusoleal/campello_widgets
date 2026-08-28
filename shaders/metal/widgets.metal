@@ -71,6 +71,57 @@ fragment float4 rectFragment(RectVertOut in [[stage_in]])
 }
 
 // ---------------------------------------------------------------------------
+// Rect-AA pipeline (rectAAVertex / rectAAFragment)
+//
+// Identical to the plain rect pipeline above, except each vertex also
+// carries its own alpha (packed as posw_a.w), linearly interpolated by the
+// rasterizer across each triangle. Used for drawPath()'s fill antialiasing
+// "skirt" (see src/gpu/path_fill_aa.hpp): a thin band of triangles hugging
+// a filled path's boundary, with alpha 1.0 on the true edge and 0.0 a
+// fraction of a pixel further out -- the GPU's own interpolation softens
+// what would otherwise be triangulateContour()'s hard, jagged silhouette
+// into an antialiased one, without any new fragment-shader math (no SDF
+// needed here, unlike the shape/line pipelines).
+//
+// A separate pipeline from the plain rect one (rather than adding this
+// alpha attribute there) so every existing rect_pipeline_ call site
+// (drawArc, drawRect fill, stroke-wedge fallback) stays completely
+// unchanged. Shares RectUniforms — the uniform layout (color, viewport) is
+// identical, only the per-vertex data differs.
+// ---------------------------------------------------------------------------
+
+struct RectAAVertexIn {
+    float4 posw_a [[attribute(0)]];  // (x, y, w, alpha)
+};
+
+struct RectAAVertOut {
+    float4 pos   [[position]];
+    float4 color;
+    float  alpha;
+};
+
+vertex RectAAVertOut rectAAVertex(
+    RectAAVertexIn           in [[stage_in]],
+    constant RectUniforms   &u  [[buffer(1)]])
+{
+    float clip_x =  2.0 * in.posw_a.x / u.viewport.x - in.posw_a.z;
+    float clip_y = -(2.0 * in.posw_a.y / u.viewport.y - in.posw_a.z);
+
+    RectAAVertOut out;
+    out.pos   = float4(clip_x, clip_y, 0.0, in.posw_a.z);
+    out.color = u.color;
+    out.alpha = in.posw_a.w;
+    return out;
+}
+
+fragment float4 rectAAFragment(RectAAVertOut in [[stage_in]])
+{
+    float4 c = in.color;
+    c.a *= in.alpha;
+    return float4(c.rgb * c.a, c.a);
+}
+
+// ---------------------------------------------------------------------------
 // Quad (textured) pipeline
 // ---------------------------------------------------------------------------
 

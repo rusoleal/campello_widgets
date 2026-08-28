@@ -242,6 +242,11 @@ public:
     // vertex vector.
     struct ColoredQuadVertex { float x, y, w; };
 
+    // Same layout as ColoredQuadVertex plus a per-vertex alpha, for
+    // rect_aa_pipeline_ — see src/gpu/path_fill_aa.hpp's doc comment and
+    // drawPath()'s fill branch below.
+    struct RectAAVertex { float x, y, w, a; };
+
     // ------------------------------------------------------------------
     // Uniform buffer pool — mirrors MetalDrawBackend::UniformBufferPool
     // exactly (see its doc comment). drawFilledQuad/drawTexturedQuad/
@@ -394,6 +399,7 @@ private:
 
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  colored_quad_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  rect_aa_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rrect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
 
@@ -402,6 +408,7 @@ private:
     // modes fall back to srcOver.
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rect_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> colored_quad_blend_pipelines_;
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rect_aa_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rrect_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> line_blend_pipelines_;
 

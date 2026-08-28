@@ -8,6 +8,7 @@ param(
 
 $csoFiles = @(
     "rect_vs.cso", "rect_ps.cso",
+    "rect_aa_vs.cso", "rect_aa_ps.cso",
     "quad_vs.cso", "quad_ps.cso",
     "shape_vs.cso", "shape_ps.cso",
     "line_vs.cso", "line_ps.cso",

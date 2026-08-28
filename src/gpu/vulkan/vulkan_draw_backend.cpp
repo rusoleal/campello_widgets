@@ -1,6 +1,7 @@
 #include "vulkan_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
 #include "gpu/stroke_geometry.hpp"
+#include "gpu/path_fill_aa.hpp"
 #include "text_rasterizer.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/text_span.hpp>
@@ -257,6 +258,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     auto rect_vert         = loadSpv(device_, shaders::krect_vert_spv,         shaders::krect_vert_spvSize);
     auto rect_frag         = loadSpv(device_, shaders::krect_frag_spv,         shaders::krect_frag_spvSize);
     auto colored_quad_vert = loadSpv(device_, shaders::kcolored_quad_vert_spv, shaders::kcolored_quad_vert_spvSize);
+    auto rect_aa_vert      = loadSpv(device_, shaders::krect_aa_vert_spv,      shaders::krect_aa_vert_spvSize);
+    auto rect_aa_frag      = loadSpv(device_, shaders::krect_aa_frag_spv,      shaders::krect_aa_frag_spvSize);
     auto rrect_vert        = loadSpv(device_, shaders::krrect_vert_spv,        shaders::krrect_vert_spvSize);
     auto rrect_frag        = loadSpv(device_, shaders::krrect_frag_spv,        shaders::krrect_frag_spvSize);
     auto line_vert         = loadSpv(device_, shaders::kline_vert_spv,         shaders::kline_vert_spvSize);
@@ -537,6 +540,52 @@ VulkanDrawBackend::VulkanDrawBackend(
         colored_quad_pipeline_ = device_->createRenderPipeline(desc);
         if (!colored_quad_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] colored_quad_pipeline_ creation FAILED\n");
         buildBlendVariants(desc, colored_quad_blend_pipelines_, colored_quad_pipeline_);
+    }
+
+    // Rect-AA pipeline — same shape as colored_quad_pipeline_ (per-vertex
+    // position, uniform-driven color, shares rect_layout_/RectUniforms),
+    // plus a per-vertex alpha. Used for drawPath()'s fill antialiasing
+    // skirt — see src/gpu/path_fill_aa.hpp. A separate pipeline (not an
+    // addition to colored_quad_pipeline_ itself) so every existing
+    // colored_quad_pipeline_ call site (drawRect fill, stroke-wedge
+    // fallback, drawArc) stays untouched. Not part of the constructor's
+    // fatal shader-load gate above: if this shader fails to load, drawPath()
+    // just skips the AA skirt (checked via rect_aa_pipeline_ == nullptr)
+    // rather than failing the whole backend.
+    if (rect_aa_vert && rect_aa_frag)
+    {
+        // Vertex layout: location 0 = vec4 (x,y,w,alpha), stride 16 bytes.
+        GPU::VertexLayout rectAALayout{};
+        rectAALayout.arrayStride = 4 * sizeof(float);
+        rectAALayout.stepMode    = GPU::StepMode::vertex;
+        {
+            GPU::VertexAttribute posAlphaAttr{};
+            posAlphaAttr.componentType  = GPU::ComponentType::ctFloat;
+            posAlphaAttr.accessorType   = GPU::AccessorType::acVec4;
+            posAlphaAttr.offset         = 0;
+            posAlphaAttr.shaderLocation = 0;
+            rectAALayout.attributes = { posAlphaAttr };
+        }
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.layout      = rect_layout_;
+        desc.topology    = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode    = GPU::CullMode::none;
+        desc.frontFace   = GPU::FrontFace::ccw;
+
+        desc.vertex.module     = rect_aa_vert;
+        desc.vertex.entryPoint = "main";
+        desc.vertex.buffers    = { rectAALayout };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = rect_aa_frag;
+        frag.entryPoint = "main";
+        frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+        desc.fragment   = frag;
+
+        rect_aa_pipeline_ = device_->createRenderPipeline(desc);
+        if (!rect_aa_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] rect_aa_pipeline_ creation FAILED\n");
+        buildBlendVariants(desc, rect_aa_blend_pipelines_, rect_aa_pipeline_);
     }
 
     // RRect pipeline (SDF rounded rectangle)
@@ -1582,6 +1631,50 @@ void VulkanDrawBackend::drawPath(
         0, sizeof(RectUniforms), &u);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(static_cast<uint32_t>(verts.size()));
+
+    // Fill antialiasing "skirt" -- see src/gpu/path_fill_aa.hpp. Interior
+    // fill above is untouched; this adds one further draw call (regardless
+    // of contour/point count) for a thin antialiased band along each
+    // contour's own boundary. Stroke fills don't need this: they're
+    // already antialiased via appendStrokePolylineBatched().
+    if (cmd.paint.style != PaintStyle::stroke && rect_aa_pipeline_)
+    {
+        auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+        const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+        const float aa_width_local = (scale > 1e-4f) ? (1.0f / scale) : 1.0f;
+
+        std::vector<RectAAVertex> aa_verts;
+        for (const auto& contour : contours)
+        {
+            std::vector<Offset> pts;
+            pts.reserve(contour.size());
+            for (const auto& v : contour) pts.push_back({v.x, v.y});
+
+            for (const auto& sv : buildFillAASkirt(pts, aa_width_local))
+            {
+                auto p = transform * vm::Vector4<float>(sv.pos.x, sv.pos.y, 0.0f, 1.0f);
+                aa_verts.push_back({p.x(), p.y(), p.w(), sv.alpha});
+            }
+        }
+
+        if (!aa_verts.empty())
+        {
+            auto aa_vbuf = colored_quad_vertex_pool_.acquire(
+                *device_, aa_verts.size() * sizeof(RectAAVertex), aa_verts.data());
+            if (aa_vbuf)
+            {
+                encoder.setPipeline(pipelineForBlendMode(
+                    cmd.paint.blend_mode, rect_aa_pipeline_, rect_aa_blend_pipelines_));
+                encoder.setPushConstants(
+                    static_cast<GPU::ShaderStage>(
+                        static_cast<int>(GPU::ShaderStage::vertex) |
+                        static_cast<int>(GPU::ShaderStage::fragment)),
+                    0, sizeof(RectUniforms), &u);
+                encoder.setVertexBuffer(0, aa_vbuf);
+                encoder.draw(static_cast<uint32_t>(aa_verts.size()));
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

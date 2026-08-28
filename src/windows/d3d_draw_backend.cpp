@@ -1,6 +1,7 @@
 #include "d3d_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
 #include "gpu/stroke_geometry.hpp"
+#include "gpu/path_fill_aa.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
@@ -331,6 +332,14 @@ D3DDrawBackend::D3DDrawBackend(
 
     auto rect_vs  = loadShader(device_, krect_vs_cso,  krect_vs_csoSize);
     auto rect_ps  = loadShader(device_, krect_ps_cso,  krect_ps_csoSize);
+    // Not part of the fatal shader-load gate below: if this shader isn't
+    // present (dx12_widgets.h regeneration on Windows is required after
+    // adding shaders/dx12/rect_aa.hlsl -- no local compiler exists on this
+    // development machine), drawPath() just skips the fill-AA skirt
+    // (checked via rect_aa_pipeline_ == nullptr) rather than failing the
+    // whole backend. See src/gpu/path_fill_aa.hpp.
+    auto rect_aa_vs = loadShader(device_, krect_aa_vs_cso, krect_aa_vs_csoSize);
+    auto rect_aa_ps = loadShader(device_, krect_aa_ps_cso, krect_aa_ps_csoSize);
     auto quad_vs  = loadShader(device_, kquad_vs_cso,  kquad_vs_csoSize);
     auto quad_ps  = loadShader(device_, kquad_ps_cso,  kquad_ps_csoSize);
     auto shape_vs = loadShader(device_, kshape_vs_cso, kshape_vs_csoSize);
@@ -520,6 +529,49 @@ D3DDrawBackend::D3DDrawBackend(
         desc.layout    = rect_layout;
 
         rect_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Rect-AA pipeline (premultiplied-alpha blend) — same shape as the
+    //     rect pipeline above, plus a per-vertex alpha; see rect_aa.hlsl's
+    //     doc comment and drawFillAA() below. A separate pipeline (not an
+    //     addition to rect_pipeline_ itself) so every existing
+    //     rect_pipeline_ call site stays untouched. Reuses rect_layout/
+    //     rect_bgl_ (identical RectUniforms layout). ---
+    if (rect_aa_vs && rect_aa_ps)
+    {
+        GPU::ColorState colorState{};
+        colorState.format    = pixel_format_;
+        colorState.writeMask = GPU::ColorWrite::all;
+        colorState.blend     = premultipliedAlphaBlend();
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = rect_aa_vs;
+        desc.vertex.entryPoint = "RectAAVS";
+
+        GPU::VertexAttribute posAlphaAttr{};
+        posAlphaAttr.componentType  = GPU::ComponentType::ctFloat;
+        posAlphaAttr.accessorType   = GPU::AccessorType::acVec4;
+        posAlphaAttr.offset         = 0;
+        posAlphaAttr.shaderLocation = 0;
+
+        GPU::VertexLayout layout{};
+        layout.arrayStride = sizeof(RectAAVertex);
+        layout.attributes  = { posAlphaAttr };
+        layout.stepMode    = GPU::StepMode::vertex;
+        desc.vertex.buffers = { layout };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = rect_aa_ps;
+        frag.entryPoint = "RectAAPS";
+        frag.targets.push_back(colorState);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+        desc.layout    = rect_layout;
+
+        rect_aa_pipeline_ = device_->createRenderPipeline(desc);
     }
 
     // --- Quad (textured) pipeline ---
@@ -922,6 +974,35 @@ void D3DDrawBackend::drawFilledVertices(
     if (!slot.bind_group) return;
 
     encoder.setPipeline(rect_pipeline_);
+    encoder.setBindGroup(0, slot.bind_group);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.draw(static_cast<uint32_t>(verts.size()));
+}
+
+void D3DDrawBackend::drawFillAA(
+    const std::vector<RectAAVertex>& verts,
+    const Color& color,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_aa_pipeline_ || !rect_bgl_ || verts.empty()) return;
+
+    auto vbuf = rect_vertex_pool_.acquire(*device_, verts.size() * sizeof(RectAAVertex), verts.data());
+    if (!vbuf) return;
+
+    // RectUniforms layout (color, viewport) is shared with rect_pipeline_ --
+    // see rect_aa.hlsl's doc comment.
+    RectUniforms u{};
+    u.color[0]    = color.r;
+    u.color[1]    = color.g;
+    u.color[2]    = color.b;
+    u.color[3]    = color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    auto slot = rect_uniform_pool_.acquire(*device_, rect_bgl_, sizeof(RectUniforms), &u);
+    if (!slot.bind_group) return;
+
+    encoder.setPipeline(rect_aa_pipeline_);
     encoder.setBindGroup(0, slot.bind_group);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(static_cast<uint32_t>(verts.size()));
@@ -1365,6 +1446,33 @@ void D3DDrawBackend::drawPath(
     if (!applyScissor(clip, encoder)) return;
 
     drawFilledVertices(verts, cmd.paint.color, encoder);
+
+    // Fill antialiasing "skirt" -- see src/gpu/path_fill_aa.hpp. Interior
+    // fill above is untouched; this adds one further draw call (regardless
+    // of contour/point count) for a thin antialiased band along each
+    // contour's own boundary. Stroke fills don't need this: they're
+    // already antialiased via appendStrokePolylineBatched().
+    if (cmd.paint.style != PaintStyle::stroke)
+    {
+        auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+        const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+        const float aa_width_local = (scale > 1e-4f) ? (1.0f / scale) : 1.0f;
+
+        std::vector<RectAAVertex> aa_verts;
+        for (const auto& contour : contours)
+        {
+            std::vector<Offset> pts;
+            pts.reserve(contour.size());
+            for (const auto& v : contour) pts.push_back({v.x, v.y});
+
+            for (const auto& sv : buildFillAASkirt(pts, aa_width_local))
+            {
+                auto p = transform * vm::Vector4<float>(sv.pos.x, sv.pos.y, 0.0f, 1.0f);
+                aa_verts.push_back({p.x(), p.y(), p.w(), sv.alpha});
+            }
+        }
+        drawFillAA(aa_verts, cmd.paint.color, encoder);
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -34,6 +34,13 @@ struct RectVertex {
     float x, y, w;
 };
 
+// Per-vertex data for the rect-AA pipeline (drawFillAA() below) — same
+// layout as RectVertex plus a trailing per-vertex alpha, matching
+// RectAAVertexIn's `posw_a` in widgets.metal.
+struct RectAAVertex {
+    float x, y, w, a;
+};
+
 // Per-vertex data for the liquid glass pipeline — see drawBackdropFilter()'s
 // liquidGlass branch below. `uv` is the backdrop-texture sample coordinate
 // (screen-space, like QuadVertex's); `lu`/`lv` is a plain 0..1 local
@@ -272,6 +279,16 @@ private:
     // a multiple of 3; each vertex carries its own pre-projected (x,y,w).
     void drawFilledVertices(
         const std::vector<RectVertex>& verts,
+        const Color& color,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Same shape as drawFilledVertices(), but via rect_aa_pipeline_: each
+    // vertex also carries its own alpha, multiplied into `color`'s alpha
+    // and linearly interpolated by the rasterizer. Used for drawPath()'s
+    // fill antialiasing skirt — see src/gpu/path_fill_aa.hpp and this
+    // header's RectAAVertex doc comment.
+    void drawFillAA(
+        const std::vector<RectAAVertex>& verts,
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
@@ -533,6 +550,7 @@ private:
     campello_gpu::PixelFormat                      pixel_format_;
 
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  rect_aa_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;

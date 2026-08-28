@@ -255,6 +255,11 @@ private:
     // vector without depending on the .cpp implementation.
     struct RectVertex { float x, y, w; };
 
+    // Same layout as RectVertex plus a per-vertex alpha, for
+    // rect_aa_pipeline_ — see src/gpu/path_fill_aa.hpp's doc comment and
+    // drawFillAA() below.
+    struct RectAAVertex { float x, y, w, a; };
+
     void drawFilledQuad(
         const ProjectedCorner& c00, const ProjectedCorner& c10,
         const ProjectedCorner& c01, const ProjectedCorner& c11,
@@ -265,6 +270,15 @@ private:
     // same RectVertex layout as drawFilledQuad; `count` must be a multiple of 3.
     void drawFilledVertices(
         const std::vector<RectVertex>& verts,
+        const Color& color,
+        campello_gpu::RenderPassEncoder& encoder);
+
+    // Same shape as drawFilledVertices(), but via rect_aa_pipeline_: each
+    // vertex also carries its own alpha, multiplied into `color`'s alpha
+    // and linearly interpolated by the rasterizer. Used for drawPath()'s
+    // fill antialiasing skirt — see src/gpu/path_fill_aa.hpp.
+    void drawFillAA(
+        const std::vector<RectAAVertex>& verts,
         const Color& color,
         campello_gpu::RenderPassEncoder& encoder);
 
@@ -576,6 +590,7 @@ private:
     campello_gpu::PixelFormat                       pixel_format_;
 
     std::shared_ptr<campello_gpu::RenderPipeline>   rect_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>   rect_aa_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   quad_pipeline_;

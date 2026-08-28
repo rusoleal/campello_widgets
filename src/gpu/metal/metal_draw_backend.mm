@@ -1,6 +1,7 @@
 #import "metal_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
 #include "gpu/stroke_geometry.hpp"
+#include "gpu/path_fill_aa.hpp"
 
 #include <iostream>
 
@@ -197,6 +198,52 @@ MetalDrawBackend::MetalDrawBackend(
         desc.frontFace = GPU::FrontFace::ccw;
 
         rect_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Rect-AA pipeline (premultiplied-alpha blend) — same shape as the
+    //     rect pipeline above, plus a per-vertex alpha; see widgets.metal's
+    //     rect-AA pipeline doc comment and drawFillAA() below. A separate
+    //     pipeline (not an addition to rect_pipeline_ itself) so every
+    //     existing rect_pipeline_ call site stays untouched. ---
+    {
+        GPU::ColorState rectAACs{};
+        rectAACs.format    = pixel_format;
+        rectAACs.writeMask = GPU::ColorWrite::all;
+        rectAACs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "rectAAVertex";
+
+        // Real per-vertex (x, y, w, alpha) — see RectAAVertex's doc comment
+        // in metal_draw_backend.hpp and RectAAVertexIn's in widgets.metal.
+        GPU::VertexAttribute rectAAPosAttr{};
+        rectAAPosAttr.componentType  = GPU::ComponentType::ctFloat;
+        rectAAPosAttr.accessorType   = GPU::AccessorType::acVec4;
+        rectAAPosAttr.offset         = 0;
+        rectAAPosAttr.shaderLocation = 0;
+
+        GPU::VertexLayout rectAALayout{};
+        rectAALayout.arrayStride = sizeof(RectAAVertex);
+        rectAALayout.attributes  = {rectAAPosAttr};
+        rectAALayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {rectAALayout};
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "rectAAFragment";
+        frag.targets.push_back(rectAACs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        rect_aa_pipeline_ = device_->createRenderPipeline(desc);
     }
 
     // --- Quad (textured) pipeline — premultiplied-alpha blend ---
@@ -749,6 +796,35 @@ void MetalDrawBackend::drawFilledVertices(
     encoder.draw(static_cast<uint32_t>(verts.size()));
 }
 
+void MetalDrawBackend::drawFillAA(
+    const std::vector<RectAAVertex>& verts,
+    const Color& color,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!rect_aa_pipeline_ || verts.empty()) return;
+
+    auto vbuf = rect_vertex_pool_.acquire(*device_, verts.size() * sizeof(RectAAVertex), verts.data());
+    if (!vbuf) return;
+
+    // RectUniforms layout (color, viewport) is shared with rect_pipeline_ --
+    // see widgets.metal's rect-AA pipeline doc comment.
+    RectUniforms u{};
+    u.color[0]    = color.r;
+    u.color[1]    = color.g;
+    u.color[2]    = color.b;
+    u.color[3]    = color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    auto ubuf = rect_uniform_pool_.acquire(*device_, sizeof(RectUniforms), &u);
+    if (!ubuf) return;
+
+    encoder.setPipeline(rect_aa_pipeline_);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
+    encoder.draw(static_cast<uint32_t>(verts.size()));
+}
+
 void MetalDrawBackend::drawRect(
     const DrawRectCmd&    cmd,
     const Matrix4&        transform,
@@ -1205,6 +1281,33 @@ void MetalDrawBackend::drawPath(
     if (!applyScissor(clip, encoder)) return;
 
     drawFilledVertices(verts, cmd.paint.color, encoder);
+
+    // Fill antialiasing "skirt" -- see src/gpu/path_fill_aa.hpp. Interior
+    // fill above is untouched; this adds one further draw call (regardless
+    // of contour/point count) for a thin antialiased band along each
+    // contour's own boundary. Stroke fills don't need this: they're
+    // already antialiased via strokePolyline()/appendStrokePolylineBatched().
+    if (cmd.paint.style != PaintStyle::stroke)
+    {
+        auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+        const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+        const float aa_width_local = (scale > 1e-4f) ? (1.0f / scale) : 1.0f;
+
+        std::vector<RectAAVertex> aa_verts;
+        for (const auto& contour : contours)
+        {
+            std::vector<Offset> pts;
+            pts.reserve(contour.size());
+            for (const auto& v : contour) pts.push_back({v.x, v.y});
+
+            for (const auto& sv : buildFillAASkirt(pts, aa_width_local))
+            {
+                auto p = transform * vm::Vector4<float>(sv.pos.x, sv.pos.y, 0.0f, 1.0f);
+                aa_verts.push_back({p.x(), p.y(), p.w(), sv.alpha});
+            }
+        }
+        drawFillAA(aa_verts, cmd.paint.color, encoder);
+    }
 }
 
 // ---------------------------------------------------------------------------
