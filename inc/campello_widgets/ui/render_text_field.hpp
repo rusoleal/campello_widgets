@@ -13,6 +13,7 @@
 namespace systems::leal::campello_widgets
 {
     class TextEditingController;
+    class FocusNode;
 
     /**
      * @brief RenderBox that draws a text input (single or multi-line) and handles input.
@@ -68,6 +69,21 @@ namespace systems::leal::campello_widgets
 
         /** Called on pointer-down tap so the owning State can request focus. */
         std::function<void()> on_tap;
+
+        /**
+         * @brief The FocusNode this field is bound to (owned by TextFieldState,
+         * either externally supplied or lazily created). Set via
+         * TextFieldProxy::applyTo(), same as every other property here.
+         * Linked into the ancestor FocusNode chain by attach()/detach() below
+         * -- see RenderFocus::attach() for the pattern this mirrors, and
+         * RenderObject::ownedFocusNode()'s doc comment for why this matters:
+         * without it, an ancestor KeyboardListener/Focus never sees a key
+         * this field's own on_key left unhandled (e.g. Escape).
+         */
+        std::shared_ptr<FocusNode> focus_node;
+
+        /** @brief See RenderObject::ownedFocusNode()'s doc comment. */
+        FocusNode* ownedFocusNode() const noexcept override { return focus_node.get(); }
 
         RenderTextField();
         ~RenderTextField() override;

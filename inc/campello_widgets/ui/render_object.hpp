@@ -12,6 +12,8 @@
 namespace systems::leal::campello_widgets
 {
 
+    class FocusNode;
+
     /**
      * @brief Base class for objects that handle layout and painting.
      *
@@ -215,6 +217,18 @@ namespace systems::leal::campello_widgets
          * whenever it was captured and whenever it's actually used.
          */
         RenderObject* parent() const noexcept { return parent_; }
+
+        /**
+         * @brief The FocusNode this render object owns and keeps registered
+         * with the active FocusManager, if any. Overridden by RenderFocus
+         * and RenderGestureDetector (the only two owners today) -- default
+         * nullptr for every other render object.
+         *
+         * Used to find the nearest ancestor FocusNode for key-event
+         * bubbling (see FocusNode::parent()'s doc comment): walk parent()
+         * calling this until one returns non-null.
+         */
+        virtual FocusNode* ownedFocusNode() const noexcept { return nullptr; }
 
         // ------------------------------------------------------------------
         // Layout-time backend access

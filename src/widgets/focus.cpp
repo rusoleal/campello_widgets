@@ -13,6 +13,7 @@ namespace systems::leal::campello_widgets
 
         if (focus_node)
         {
+            if (scope) focus_node->setScope(true);
             if (auto* m = FocusManager::activeManager())
             {
                 m->registerNode(focus_node.get());
@@ -37,6 +38,7 @@ namespace systems::leal::campello_widgets
                     m->unregisterNode(ro.focus_node.get());
                 if (focus_node)
                 {
+                    if (scope) focus_node->setScope(true);
                     m->registerNode(focus_node.get());
                     if (auto_focus)
                         m->requestFocus(focus_node.get());

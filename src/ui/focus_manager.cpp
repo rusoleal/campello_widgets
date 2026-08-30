@@ -2,6 +2,7 @@
 #include <cmath>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
+#include <campello_widgets/ui/focus_traversal_policy.hpp>
 #include <campello_widgets/ui/hardware_keyboard.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 
@@ -70,6 +71,13 @@ namespace systems::leal::campello_widgets
     void FocusManager::registerNode(FocusNode* node)
     {
         if (!node) return;
+        // Captures whatever held focus right before this scope opened, so
+        // unregisterNode() can restore it when the scope later closes --
+        // see FocusNode::previouslyFocusedOutside()'s doc comment. Must
+        // happen here, before this node's owner can possibly steal focus
+        // (e.g. via auto_focus a moment later in the same mount pass).
+        if (node->isScope())
+            node->setPreviouslyFocusedOutside(current_focus_);
         focus_order_.push_back(node);
     }
 
@@ -77,11 +85,40 @@ namespace systems::leal::campello_widgets
     {
         if (!node) return;
 
+        // Captured before the "clear current_focus_ if it was me" block
+        // below, since a scope can legitimately BE current_focus_ itself
+        // (e.g. auto_focus with no focusable descendant yet) --
+        // nearestEnclosingScope() checks `node` itself first, so this
+        // covers that case too. Safe to walk node->parent() here (not
+        // stale): a scope's own destructor -- and thus this call --
+        // always runs before any focused descendant's, since the whole
+        // removed subtree's RenderObject graph stays fully linked until a
+        // single shared_ptr release at the Stack boundary triggers a
+        // normal top-down member-destructor cascade (verified directly
+        // against Element::unmount()/RenderObjectElement::unmount()/
+        // RenderStack::clearChildren() -- Element-level unmount is
+        // bottom-up but never touches the RenderObject parent/child
+        // links themselves).
+        const bool wasFocusWithinThisScope =
+            node->isScope() && (nearestEnclosingScope(current_focus_) == node);
+
         if (current_focus_ == node)
         {
             node->focused_ = false;
             if (node->on_focus_changed) node->on_focus_changed(false);
             current_focus_ = nullptr;
+        }
+
+        if (wasFocusWithinThisScope)
+            requestFocus(node->previouslyFocusedOutside());
+
+        // Dangling-ref hygiene: any other scope remembering `node` as its
+        // pre-open focus target would otherwise try to restore focus into
+        // an already-destroyed node once it later closes.
+        for (FocusNode* n : focus_order_)
+        {
+            if (n->isScope() && n->previouslyFocusedOutside() == node)
+                n->setPreviouslyFocusedOutside(nullptr);
         }
 
         focus_order_.erase(
@@ -91,7 +128,7 @@ namespace systems::leal::campello_widgets
 
     void FocusManager::requestFocus(FocusNode* node)
     {
-        if (!node || node == current_focus_) return;
+        if (!node || !node->canRequestFocus() || node == current_focus_) return;
 
         // Unfocus current.
         if (current_focus_)
@@ -152,11 +189,13 @@ namespace systems::leal::campello_widgets
         // TextField), but a control that legitimately wants Tab itself
         // (e.g. RichTextField inserting an indent, matching every real
         // code editor) can consume it and suppress traversal. Key-down
-        // only, same as before.
+        // only, same as before. Tried against the whole focus chain (see
+        // dispatchToFocusChain()), not just the leaf, so an ancestor
+        // wrapper gets a chance too if the focused control itself doesn't
+        // want it.
         if (event.kind != KeyEventKind::up && event.key_code == KeyCode::tab)
         {
-            if (current_focus_ && current_focus_->on_key && current_focus_->on_key(event))
-                return;
+            if (dispatchToFocusChain(current_focus_, event)) return;
 
             if (event.modifiers & KeyModifiers::shift)
                 moveFocusBackward();
@@ -175,57 +214,118 @@ namespace systems::leal::campello_widgets
         FocusDirection direction;
         if (directionForKeyCode(event.key_code, direction))
         {
-            if (current_focus_ && current_focus_->on_key && current_focus_->on_key(event))
-                return;
+            if (dispatchToFocusChain(current_focus_, event)) return;
 
             if (event.kind != KeyEventKind::up)
                 moveFocusDirectional(direction);
             return;
         }
 
-        // Route to focused node.
-        if (current_focus_ && current_focus_->on_key)
-            current_focus_->on_key(event);
+        // Route to the focused node, bubbling up through ancestor
+        // FocusNodes if unconsumed (see dispatchToFocusChain()) -- e.g. so
+        // a KeyboardListener wrapping a focused TextField still sees a key
+        // that TextField's own on_key didn't handle.
+        dispatchToFocusChain(current_focus_, event);
+    }
+
+    bool FocusManager::dispatchToFocusChain(FocusNode* node, const KeyEvent& event)
+    {
+        for (; node; node = node->parent())
+        {
+            if (node->on_key && node->on_key(event)) return true;
+        }
+        return false;
+    }
+
+    FocusNode* FocusManager::nearestEnclosingScope(FocusNode* node) noexcept
+    {
+        for (; node; node = node->parent())
+        {
+            if (node->isScope()) return node;
+        }
+        return nullptr;
+    }
+
+    std::vector<FocusNode*> FocusManager::traversalCandidates() const
+    {
+        FocusNode* scope = nearestEnclosingScope(current_focus_);
+        std::vector<FocusNode*> result;
+        result.reserve(focus_order_.size());
+        for (FocusNode* n : focus_order_)
+        {
+            if (n->isScope()) continue; // a scope is a container, never itself a stop
+            if (!n->canRequestFocus()) continue;
+            if (n->skipTraversal()) continue;
+            if (nearestEnclosingScope(n) != scope) continue;
+            result.push_back(n);
+        }
+        return result;
     }
 
     void FocusManager::moveFocusForward()
     {
-        if (focus_order_.empty()) return;
+        std::vector<FocusNode*> candidates = traversalCandidates();
+        if (candidates.empty()) return;
+
+        FocusNode* scope = nearestEnclosingScope(current_focus_);
+        FocusTraversalPolicy* policy = (scope && scope->traversal_policy)
+            ? scope->traversal_policy.get()
+            : nullptr;
+        if (!policy)
+        {
+            if (!default_traversal_policy_)
+                default_traversal_policy_ = std::make_shared<OrderedTraversalPolicy>();
+            policy = default_traversal_policy_.get();
+        }
+        std::vector<FocusNode*> ordered = policy->order(candidates);
 
         if (!current_focus_)
         {
-            requestFocus(focus_order_.front());
+            requestFocus(ordered.front());
             return;
         }
 
-        auto it = std::find(focus_order_.begin(), focus_order_.end(), current_focus_);
-        if (it == focus_order_.end())
+        auto it = std::find(ordered.begin(), ordered.end(), current_focus_);
+        if (it == ordered.end())
         {
-            requestFocus(focus_order_.front());
+            requestFocus(ordered.front());
             return;
         }
 
         ++it;
-        if (it == focus_order_.end())
-            it = focus_order_.begin();
+        if (it == ordered.end())
+            it = ordered.begin();
 
         requestFocus(*it);
     }
 
     void FocusManager::moveFocusBackward()
     {
-        if (focus_order_.empty()) return;
+        std::vector<FocusNode*> candidates = traversalCandidates();
+        if (candidates.empty()) return;
+
+        FocusNode* scope = nearestEnclosingScope(current_focus_);
+        FocusTraversalPolicy* policy = (scope && scope->traversal_policy)
+            ? scope->traversal_policy.get()
+            : nullptr;
+        if (!policy)
+        {
+            if (!default_traversal_policy_)
+                default_traversal_policy_ = std::make_shared<OrderedTraversalPolicy>();
+            policy = default_traversal_policy_.get();
+        }
+        std::vector<FocusNode*> ordered = policy->order(candidates);
 
         if (!current_focus_)
         {
-            requestFocus(focus_order_.back());
+            requestFocus(ordered.back());
             return;
         }
 
-        auto it = std::find(focus_order_.begin(), focus_order_.end(), current_focus_);
-        if (it == focus_order_.end() || it == focus_order_.begin())
+        auto it = std::find(ordered.begin(), ordered.end(), current_focus_);
+        if (it == ordered.end() || it == ordered.begin())
         {
-            requestFocus(focus_order_.back());
+            requestFocus(ordered.back());
             return;
         }
 
@@ -234,11 +334,12 @@ namespace systems::leal::campello_widgets
 
     void FocusManager::moveFocusDirectional(FocusDirection direction)
     {
-        if (focus_order_.empty()) return;
+        std::vector<FocusNode*> candidates = traversalCandidates();
+        if (candidates.empty()) return;
 
         if (!current_focus_)
         {
-            requestFocus(focus_order_.front());
+            requestFocus(candidates.front());
             return;
         }
 
@@ -256,7 +357,7 @@ namespace systems::leal::campello_widgets
         FocusNode* best = nullptr;
         float      best_score = 0.0f;
 
-        for (FocusNode* candidate : focus_order_)
+        for (FocusNode* candidate : candidates)
         {
             if (candidate == current_focus_) continue;
 

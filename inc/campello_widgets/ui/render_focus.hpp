@@ -31,6 +31,22 @@ namespace systems::leal::campello_widgets
          * `FocusNode::bounds()`) for directional focus navigation.
          */
         void performPaint(PaintContext& context, const Offset& offset) override;
+
+        FocusNode* ownedFocusNode() const noexcept override { return focus_node.get(); }
+
+        /**
+         * @brief Links focus_node->parent() to the nearest ancestor
+         * FocusNode (see that method's doc comment) -- registration itself
+         * still happens in the Focus widget's createRenderObject()/
+         * updateRenderObject(), unchanged; this only wires the chain used
+         * for key-event bubbling, which needs parent() to already be set
+         * (guaranteed true here: RenderObject::setParent() always sets
+         * parent_ before calling attach()).
+         */
+        void attach() override;
+
+        /** @brief Clears the link set by attach() above. */
+        void detach() override;
     };
 
 } // namespace systems::leal::campello_widgets

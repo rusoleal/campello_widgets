@@ -106,6 +106,15 @@ namespace systems::leal::campello_widgets
         void attach() override;
         void detach() override;
 
+        /**
+         * @brief The currently-registered FocusNode (external or lazily-
+         * created own_focus_node_), if this detector is focusable() -- see
+         * RenderObject::ownedFocusNode()'s doc comment. Used the same way
+         * RenderFocus uses its own focus_node: to find the nearest ancestor
+         * FocusNode for key-event bubbling.
+         */
+        FocusNode* ownedFocusNode() const noexcept override { return registered_node_.get(); }
+
         // ------------------------------------------------------------------
         // GestureArenaMember
         // ------------------------------------------------------------------

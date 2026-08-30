@@ -1,6 +1,7 @@
 #include <campello_widgets/ui/render_focus.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/dirty_region.hpp>
+#include <cstdio>
 
 namespace systems::leal::campello_widgets
 {
@@ -20,6 +21,16 @@ namespace systems::leal::campello_widgets
             if (auto* m = FocusManager::activeManager())
                 m->unregisterNode(focus_node.get());
         }
+    }
+
+    void RenderFocus::attach()
+    {
+        if (focus_node) focus_node->setOwner(this);
+    }
+
+    void RenderFocus::detach()
+    {
+        if (focus_node) focus_node->setOwner(nullptr);
     }
 
     void RenderFocus::performPaint(PaintContext& context, const Offset& offset)

@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/render_text_field.hpp>
+#include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/text_editing_controller.hpp>
 #include <campello_widgets/ui/clipboard.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
@@ -52,6 +53,10 @@ namespace systems::leal::campello_widgets
             d->addHandler(this,     [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now_ms)        { onTick(now_ms);   });
         }
+
+        // See FocusNode::parent()'s doc comment -- the ancestor chain is
+        // resolved lazily from this owner pointer, not walked here.
+        if (focus_node) focus_node->setOwner(this);
     }
 
     void RenderTextField::detach()
@@ -63,6 +68,8 @@ namespace systems::leal::campello_widgets
             if (pressed_)
                 d->releasePointer(pointer_id_);
         }
+
+        if (focus_node) focus_node->setOwner(nullptr);
     }
 
     // -------------------------------------------------------------------------

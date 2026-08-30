@@ -49,6 +49,7 @@ namespace systems::leal::campello_widgets
         std::function<void(const std::string&)> on_changed;
         std::function<void(const std::string&)> on_submitted;
         std::function<void()>                   on_tap;
+        std::shared_ptr<FocusNode>              focus_node;
 
         std::shared_ptr<RenderObject> createRenderObject() const override
         {
@@ -99,6 +100,7 @@ namespace systems::leal::campello_widgets
             r.on_changed           = on_changed;
             r.on_submitted         = on_submitted;
             r.on_tap               = on_tap;
+            r.focus_node           = focus_node;
         }
     };
 
@@ -360,6 +362,7 @@ namespace systems::leal::campello_widgets
             proxy->on_changed           = w.on_changed;
             proxy->on_submitted         = w.on_submitted;
             proxy->on_tap               = [this]() { focus_node_->requestFocus(); };
+            proxy->focus_node           = focus_node_;
 
             auto region    = std::make_shared<MouseRegion>();
             region->cursor = SystemMouseCursor::text;

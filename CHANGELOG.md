@@ -9,6 +9,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`FocusScope` — Flutter-parity focus containment and restoration**
+  (`inc/campello_widgets/widgets/focus_scope.hpp`) — wrap a modal's content
+  in one so Tab/Shift+Tab and directional (arrow-key) focus movement can
+  no longer walk out of it into the rest of the app, and so closing it
+  automatically restores focus to whatever was focused immediately before
+  it opened. A thin `Focus` subclass (`Focus` itself gained a `scope` bool
+  prop) that auto-creates and flags its own `FocusNode` — no new
+  RenderObject/Element machinery. `FocusNode` gained `isScope()`,
+  `previouslyFocusedOutside()` (scope bookkeeping, `FocusManager`-only),
+  and a `traversal_policy` slot; `FocusManager` gained
+  `nearestEnclosingScope()` and a private `traversalCandidates()` filter
+  used identically by `moveFocusForward()`/`moveFocusBackward()`/
+  `moveFocusDirectional()`. `showDialog()` (`src/widgets/dialog.cpp`) now
+  wraps its content in a `FocusScope` — the single choke point behind all
+  of campello_editor's in-app dialogs — with `auto_focus = true` and
+  Escape wired to the same dismiss path `ModalBarrier`'s tap-dismiss
+  already used (independent of `barrier_dismissible`, which only governs
+  click-outside). Verified against the real subtree-teardown order rather
+  than assumed: a scope's own `unregisterNode()` call is guaranteed to run
+  before any focused descendant's, since a removed subtree's `RenderObject`
+  graph stays fully linked until a single `shared_ptr` release at the tree
+  boundary triggers a normal top-down member-destructor cascade — not
+  Element-level `unmount()`, which is bottom-up but never touches
+  `RenderObject` parent/child links itself. Covered by 22 new unit tests
+  in `tests/universal/test_focus_manager.cpp` (registration/traversal,
+  ancestor key-event bubbling, scope containment, scope open/close
+  restore including nested scopes and dangling-reference cleanup,
+  traversal policies, `Focus`/`FocusScope` widget wiring) — 607/607 tests
+  green.
+
+- **`FocusTraversalPolicy`** (`inc/campello_widgets/ui/focus_traversal_policy.hpp`)
+  — pluggable Tab/Shift+Tab ordering per scope, mirroring Flutter's real
+  `FocusTraversalPolicy`. `OrderedTraversalPolicy` (registration order) is
+  `FocusManager`'s global default — matches every Tab flow already working
+  before `FocusScope` existed, so nothing changes unless a scope opts in.
+  `ReadingOrderTraversalPolicy` sorts by each node's real last-painted
+  `bounds()` (top-to-bottom, then left-to-right), matching Flutter's own
+  default; available via `scope_node->traversal_policy = std::make_shared<
+  ReadingOrderTraversalPolicy>()` but not applied anywhere by default yet.
+
+- **`FocusNode::skipTraversal()`/`canRequestFocus()`** — the remaining two
+  pieces of Flutter-parity `FocusNode` API: `skipTraversal` excludes a
+  node from Tab/directional traversal candidate lists without preventing
+  programmatic `requestFocus()`; `canRequestFocus` (checked once, in
+  `FocusManager::requestFocus()`, covering both traversal-driven and
+  programmatic calls) makes `requestFocus()` an outright no-op. Exposed as
+  primitives; not yet wired into any specific campello_editor call site
+  (no current concrete need identified).
+
 - **`CupertinoDesignSystem::liquidGlass()`** — the first wiring of the
   Liquid Glass rendering primitive into an actual `DesignSystem`. New
   `CupertinoMaterial` enum (`classic`/`liquidGlass`) selects the style,
@@ -91,6 +140,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flat neutral grays.
 
 ### Fixed
+
+- **`FocusManager` never bubbled an unconsumed key event to an ancestor
+  `FocusNode`** — `FocusNode::on_key`'s own doc comment already promised
+  "return false to let it propagate" (matching Flutter's real `FocusNode`
+  behavior), but `FocusManager::handleKeyEvent()` only ever tried the
+  single currently-focused leaf node; there was no ancestor chain to walk
+  at all (`FocusNode` had no `parent()`). Concretely: a `KeyboardListener`
+  wrapping a focused child (e.g. a search bar around a `TextField`) never
+  saw a key the child's own `on_key` didn't consume — found via a real
+  Escape-doesn't-close-the-search-bar bug in campello_editor. Fixed with
+  new `FocusNode::parent()` + `FocusManager::dispatchToFocusChain()`,
+  used identically by the Tab, arrow-key, and general-key-routing paths.
+  `parent()` resolves **lazily**, on demand, by walking the owning
+  `RenderObject`'s `parent()` chain (via a new `RenderObject::
+  ownedFocusNode()` virtual, overridden by `RenderFocus`/
+  `RenderGestureDetector`/`RenderTextField`/campello_editor's
+  `RenderRichTextField`) rather than being cached at `attach()` time — an
+  earlier version of this fix cached it eagerly and was itself wrong: a
+  render object's `attach()` fires as soon as *it* gets a parent, which
+  happens bottom-up while a fresh subtree assembles (e.g.
+  `RenderMouseRegion`, which `TextField`/`RichTextField` both build,
+  adopts its child and fires the child's `attach()` — and thus the walk —
+  *before* `RenderMouseRegion` itself is attached further up), so the walk
+  would see a truncated chain and wrongly conclude there was no ancestor.
+  Computing it lazily instead — only ever consulted from
+  `handleKeyEvent()`, i.e. in response to a real key event, which can only
+  happen once the visible tree has long since finished mounting —
+  sidesteps the ordering problem entirely.
+
+- **`TextField`/`RichTextField`'s `FocusNode` was never actually linked
+  into the ancestor chain above**, even after the bubbling fix — both
+  manage their `FocusNode` at the widget-`State` level (registering
+  directly with `FocusManager`), completely bypassing the render-tree
+  `attach()`/`detach()` lifecycle the bubbling fix relies on to link
+  `parent()`. `RenderTextField` (`render_text_field.cpp`) and
+  campello_editor's `RenderRichTextField` both gained the same
+  `focus_node` field + `ownedFocusNode()` override + `attach()`/`detach()`
+  wiring `RenderFocus` already had, threaded through their proxy widgets
+  from the owning `State`. Found immediately after the bubbling fix above
+  via trace logging (a click-to-place-cursor debug session): the
+  ancestor-chain walk stopped dead at the very first hop.
 
 - **Liquid Glass card showed stale/reflected content from elsewhere on the
   page while scrolling** — `buildCard()`'s liquid-glass branch was the

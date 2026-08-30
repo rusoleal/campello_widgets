@@ -45,6 +45,10 @@ namespace systems::leal::campello_widgets
                 fm->registerNode(registered_node_.get());
                 if (autofocus_) fm->requestFocus(registered_node_.get());
             }
+
+            // See FocusNode::parent()'s doc comment -- the ancestor chain
+            // is resolved lazily from this owner pointer, not walked here.
+            registered_node_->setOwner(this);
         }
     }
 
@@ -60,6 +64,7 @@ namespace systems::leal::campello_widgets
         {
             if (auto* fm = FocusManager::activeManager())
                 fm->unregisterNode(registered_node_.get());
+            registered_node_->setOwner(nullptr);
         }
         attached_ = false;
     }
@@ -101,7 +106,11 @@ namespace systems::leal::campello_widgets
         {
             registered_node_->on_key           = nullptr;
             registered_node_->on_focus_changed = nullptr;
-            if (attached_ && fm) fm->unregisterNode(registered_node_.get());
+            if (attached_)
+            {
+                if (fm) fm->unregisterNode(registered_node_.get());
+                registered_node_->setOwner(nullptr);
+            }
         }
 
         registered_node_ = desired;
@@ -114,10 +123,14 @@ namespace systems::leal::campello_widgets
             registered_node_->on_key = [this](const KeyEvent& event) -> bool {
                 return handleFocusKey(event);
             };
-            if (attached_ && fm)
+            if (attached_)
             {
-                fm->registerNode(registered_node_.get());
-                if (autofocus_) fm->requestFocus(registered_node_.get());
+                if (fm)
+                {
+                    fm->registerNode(registered_node_.get());
+                    if (autofocus_) fm->requestFocus(registered_node_.get());
+                }
+                registered_node_->setOwner(this);
             }
         }
     }

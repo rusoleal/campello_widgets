@@ -33,6 +33,16 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<FocusNode> focus_node;
         bool                       auto_focus = false;
 
+        /**
+         * @brief When true, marks focus_node as a traversal/restoration
+         * scope boundary before it registers -- see
+         * FocusNode::isScope()'s doc comment. Prefer the FocusScope
+         * convenience widget (focus_scope.hpp) for new code, which also
+         * auto-creates focus_node when none is supplied; this flag exists
+         * so an already externally-owned FocusNode can opt in too.
+         */
+        bool scope = false;
+
         std::shared_ptr<RenderObject> createRenderObject() const override;
         void updateRenderObject(RenderObject& render_object) const override;
     };

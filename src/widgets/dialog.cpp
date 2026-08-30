@@ -13,10 +13,12 @@
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/theme.hpp>
+#include <campello_widgets/widgets/focus_scope.hpp>
 #include <campello_widgets/ui/box_decoration.hpp>
 #include <campello_widgets/ui/box_shadow.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
+#include <campello_widgets/ui/key_event.hpp>
 #include <algorithm>
 
 namespace systems::leal::campello_widgets
@@ -214,6 +216,33 @@ namespace systems::leal::campello_widgets
         // Set on_remove callback
         entry->on_remove = nullptr;  // Could add callback here
 
+        // Contain Tab/Shift+Tab and directional focus to the dialog while
+        // it's open, and restore focus to whatever was focused before it
+        // opened once it closes (unmounts) -- see FocusScope's doc
+        // comment. auto_focus so the scope (or, a moment later in the
+        // same mount pass, whichever autofocus field/button inside the
+        // dialog steals focus, correctly overriding it) always ends up
+        // holding focus rather than leaving it stranded on whatever was
+        // focused behind the now-modal dialog.
+        //
+        // Escape is wired here too, on the scope's own on_key -- it
+        // bubbles up from whatever's actually focused inside (see
+        // FocusManager::dispatchToFocusChain()), or fires directly if
+        // nothing inside ever grabbed focus. Deliberately independent of
+        // barrier_dismissible: that only controls click-outside, while
+        // Escape-to-cancel is a separate, always-available convention.
+        auto scope = std::make_shared<FocusScope>();
+        scope->auto_focus = true;
+        scope->focus_node->on_key = [dismiss](const KeyEvent& event) {
+            if (event.kind == KeyEventKind::down && event.key_code == KeyCode::escape)
+            {
+                dismiss();
+                return true;
+            }
+            return false;
+        };
+        scope->child = child;
+
         // Build the dialog stack: barrier + centered dialog
         std::vector<WidgetRef> stack_children;
 
@@ -224,7 +253,7 @@ namespace systems::leal::campello_widgets
         // Centered dialog (on top)
         stack_children.push_back(
             Center::create(
-                Padding::create(EdgeInsets::all(40), child)));
+                Padding::create(EdgeInsets::all(40), scope)));
 
         auto stack = Stack::create(stack_children);
         stack->fit = StackFit::expand;

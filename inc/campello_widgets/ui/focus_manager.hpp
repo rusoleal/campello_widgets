@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <vector>
 #include <campello_widgets/ui/key_event.hpp>
@@ -11,6 +12,7 @@ namespace systems::leal::campello_widgets
 {
 
     class FocusNode;
+    class FocusTraversalPolicy;
 
     /** @brief A screen-relative direction for D-pad/arrow-key focus movement. */
     enum class FocusDirection
@@ -49,9 +51,13 @@ namespace systems::leal::campello_widgets
      *  - The platform adapter calls `handleKeyEvent()` on each key press.
      *
      * Tab traversal:
-     *  - Tab moves focus forward through registered nodes (in registration order).
+     *  - Tab moves focus forward through registered nodes (in registration
+     *    order by default -- see FocusNode::traversal_policy for opting a
+     *    scope into a different order).
      *  - Shift+Tab moves backward.
      *  - Both wrap around.
+     *  - Neither crosses out of the current FocusScope, if any (see
+     *    nearestEnclosingScope()'s doc comment).
      *
      * Directional traversal (D-pad / arrow keys):
      *  - Left/Right/Up/Down move focus to the nearest node in that screen
@@ -134,6 +140,26 @@ namespace systems::leal::campello_widgets
         void moveFocusDirectional(FocusDirection direction);
 
         // ------------------------------------------------------------------
+        // Scopes (Flutter-parity FocusScope)
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief The innermost scope containing `node` (see
+         * FocusNode::isScope()'s doc comment), checking `node` itself
+         * first before walking FocusNode::parent(). Returns nullptr for
+         * the implicit root scope (no enclosing FocusNode has
+         * isScope() == true) -- e.g. `nullptr` for a node with no scope
+         * ancestor at all, and for `nullptr` itself.
+         *
+         * Tab/Shift+Tab and directional traversal both use this to
+         * restrict candidates to whatever scope currently holds focus, so
+         * neither can walk out of an open modal into the rest of the app.
+         * A pure tree walk, computed on demand every call -- no caching,
+         * same reasoning as FocusNode::parent() itself.
+         */
+        static FocusNode* nearestEnclosingScope(FocusNode* node) noexcept;
+
+        // ------------------------------------------------------------------
         // Global accessor
         // ------------------------------------------------------------------
 
@@ -195,8 +221,31 @@ namespace systems::leal::campello_widgets
         static std::function<bool(const KeyEvent&)> globalKeyHandler();
 
     private:
+        // Tries `event` against `node`, then each ancestor in turn (see
+        // FocusNode::parent()'s doc comment), stopping at the first one
+        // whose on_key returns true. Returns true iff something consumed
+        // it. This is what makes FocusNode::on_key's own doc comment
+        // ("return false to let it propagate") literally true -- used by
+        // handleKeyEvent() for Tab, arrow keys, and the general case alike.
+        static bool dispatchToFocusChain(FocusNode* node, const KeyEvent& event);
+
+        // Filters focus_order_ down to nodes that can actually be Tab/
+        // directional-traversal candidates right now: canRequestFocus(),
+        // !skipTraversal(), not themselves a scope (a scope is a
+        // container, never itself a stop), and sharing current_focus_'s
+        // nearestEnclosingScope() -- see that method's doc comment. Used
+        // by moveFocusForward()/moveFocusBackward()/moveFocusDirectional()
+        // alike so none of them can cross a scope boundary.
+        std::vector<FocusNode*> traversalCandidates() const;
+
         FocusNode*              current_focus_ = nullptr;
         std::vector<FocusNode*> focus_order_;
+
+        // Applied to a scope with no traversal_policy of its own (or when
+        // there's no enclosing scope at all) -- registration order,
+        // matching every Tab flow already working before FocusScope
+        // existed.
+        std::shared_ptr<FocusTraversalPolicy> default_traversal_policy_;
 
         static std::atomic<FocusManager*> s_active_manager_;
         static std::atomic<FocusHighlightMode> s_highlight_mode_;
