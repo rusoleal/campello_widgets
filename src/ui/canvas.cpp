@@ -3,6 +3,8 @@
 #include <vector_math/vector4.hpp>
 
 #include "ui/nine_patch_geometry.hpp"
+#include "ui/blend_colors.hpp"
+#include "ui/vertices_geometry.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -25,6 +27,19 @@ namespace systems::leal::campello_widgets
         return m;
     }
 
+    // Builds the affine matrix an RSTransform represents (see its own doc
+    // comment for the formula) -- used by drawAtlas() only. Kept separate
+    // from rotationMatrix() above: this is RSTransform's own fixed
+    // mathematical definition (matching Flutter's), not a decomposition
+    // into a rotation-then-scale pair, so it doesn't reuse that helper.
+    static Matrix4 rsTransformMatrix(const RSTransform& t)
+    {
+        Matrix4 m = Matrix4::identity();
+        m.data[0] = t.scos; m.data[1] = -t.ssin; m.data[3] = t.tx;
+        m.data[4] = t.ssin; m.data[5] =  t.scos; m.data[7] = t.ty;
+        return m;
+    }
+
     // Helper for scale matrix
     static Matrix4 scaleMatrix(float sx, float sy)
     {
@@ -44,63 +59,6 @@ namespace systems::leal::campello_widgets
         m.data[1] = sx;  // Horizontal skew (x' += sx * y)
         m.data[4] = sy;  // Vertical skew (y' += sy * x)
         return m;
-    }
-
-    // Blends `src` over `dst` using the Porter-Duff Fa/Fb formula for
-    // `mode` (`modulate` is the one exception -- not a Porter-Duff formula,
-    // a plain component-wise product, matching this codebase's own
-    // shader-mask "modulate" blend -- see widgets.metal's
-    // shaderMaskFragment). Both inputs and the result are straight
-    // (non-premultiplied) alpha, matching Color's own convention; the
-    // Fa/Fb math itself runs on premultiplied values, per the standard
-    // Porter-Duff derivation. See Paint::color_filter's doc comment for
-    // why this is exact everywhere for some modes and only edge-pixel-
-    // approximate for others.
-    static Color blendColors(const Color& src, const Color& dst, BlendMode mode)
-    {
-        const float sr = src.r * src.a, sg = src.g * src.a, sb = src.b * src.a, sa = src.a;
-        const float dr = dst.r * dst.a, dg = dst.g * dst.a, db = dst.b * dst.a, da = dst.a;
-
-        if (mode == BlendMode::modulate)
-        {
-            const float a = sa * da;
-            return (a > 1e-5f)
-                ? Color::fromRGBA(sr * dr / a, sg * dg / a, sb * db / a, a)
-                : Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.0f);
-        }
-
-        float fa = 1.0f, fb = 0.0f;
-        switch (mode)
-        {
-            case BlendMode::clear:   fa = 0.0f;      fb = 0.0f;      break;
-            case BlendMode::src:     fa = 1.0f;      fb = 0.0f;      break;
-            case BlendMode::dst:     fa = 0.0f;      fb = 1.0f;      break;
-            case BlendMode::srcOver: fa = 1.0f;      fb = 1.0f - sa; break;
-            case BlendMode::dstOver: fa = 1.0f - da; fb = 1.0f;      break;
-            case BlendMode::srcIn:   fa = da;        fb = 0.0f;      break;
-            case BlendMode::dstIn:   fa = 0.0f;      fb = sa;        break;
-            case BlendMode::srcOut:  fa = 1.0f - da; fb = 0.0f;      break;
-            case BlendMode::dstOut:  fa = 0.0f;      fb = 1.0f - sa; break;
-            case BlendMode::srcATop: fa = da;        fb = 1.0f - sa; break;
-            case BlendMode::dstATop: fa = 1.0f - da; fb = sa;        break;
-            case BlendMode::xorMode: fa = 1.0f - da; fb = 1.0f - sa; break;
-            case BlendMode::plus:    fa = 1.0f;      fb = 1.0f;      break;
-            case BlendMode::modulate: break; // handled above
-        }
-
-        float r = sr * fa + dr * fb;
-        float g = sg * fa + dg * fb;
-        float b = sb * fa + db * fb;
-        float a = sa * fa + da * fb;
-        if (mode == BlendMode::plus)
-        {
-            r = std::min(r, 1.0f); g = std::min(g, 1.0f);
-            b = std::min(b, 1.0f); a = std::min(a, 1.0f);
-        }
-
-        return (a > 1e-5f)
-            ? Color::fromRGBA(r / a, g / a, b / a, a)
-            : Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.0f);
     }
 
     // Resolves `invert_colors` (color -> 1-color), `color_filter`, and
@@ -258,6 +216,31 @@ namespace systems::leal::campello_widgets
             drawImage(texture, patch.src, patch.dst, filter_quality);
     }
 
+    void Canvas::drawAtlas(
+        std::shared_ptr<campello_gpu::Texture> atlas,
+        const std::vector<RSTransform>& transforms,
+        const std::vector<Rect>& rects,
+        FilterQuality filter_quality)
+    {
+        if (!atlas || transforms.size() != rects.size()) return;
+
+        const float img_w = static_cast<float>(atlas->getWidth());
+        const float img_h = static_cast<float>(atlas->getHeight());
+        if (img_w <= 0.0f || img_h <= 0.0f) return;
+
+        for (size_t i = 0; i < transforms.size(); ++i)
+        {
+            const Rect& r = rects[i];
+            const Rect src = Rect::fromLTWH(
+                r.x / img_w, r.y / img_h, r.width / img_w, r.height / img_h);
+
+            save();
+            transform(rsTransformMatrix(transforms[i]));
+            drawImage(atlas, src, Rect::fromLTWH(0, 0, r.width, r.height), filter_quality);
+            restore();
+        }
+    }
+
     void Canvas::drawTintedImage(
         std::shared_ptr<campello_gpu::Texture> texture,
         const Rect& src_rect,
@@ -370,7 +353,32 @@ namespace systems::leal::campello_widgets
         commands_.push_back(DrawPointsCmd{mode, points, p});
     }
 
-    void Canvas::drawShadow(const Path& path, const Color& color, float elevation, 
+    void Canvas::drawVertices(const Vertices& vertices, BlendMode blend_mode, const Paint& paint)
+    {
+        if (vertices.positions.empty()) return;
+
+        float min_x = vertices.positions[0].x, max_x = min_x;
+        float min_y = vertices.positions[0].y, max_y = min_y;
+        for (const auto& p : vertices.positions)
+        {
+            min_x = std::min(min_x, p.x); max_x = std::max(max_x, p.x);
+            min_y = std::min(min_y, p.y); max_y = std::max(max_y, p.y);
+        }
+        const Rect bounds = Rect::fromLTRB(min_x, min_y, max_x, max_y);
+
+        if (paintWithShaderIfPresent(*this, bounds, paint,
+                [&](const Paint& mask) { drawVertices(vertices, blend_mode, mask); }))
+            return;
+
+        Paint p = paint;
+        resolvePaint(p, current_opacity_);
+
+        auto built = buildTriangleListVertices(vertices, p.color, blend_mode);
+        if (built.indices.empty()) return;
+        commands_.push_back(DrawVerticesCmd{std::move(built.vertices), std::move(built.indices), p.blend_mode});
+    }
+
+    void Canvas::drawShadow(const Path& path, const Color& color, float elevation,
                             bool transparent_occluder)
     {
         commands_.push_back(DrawShadowCmd{path, color, elevation, transparent_occluder});

@@ -231,6 +231,51 @@ namespace systems::leal::campello_widgets
             const Rect&                      clip,
             campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
 
+        /** @brief Draw an arbitrary triangle mesh (already-blended per-vertex colors). Default: no-op. */
+        virtual void drawVertices(
+            const DrawVerticesCmd&           cmd,
+            const Matrix4&                   transform,
+            const Rect&                      clip,
+            campello_gpu::RenderPassEncoder& encoder) { (void)cmd; (void)transform; (void)clip; (void)encoder; }
+
+        /**
+         * @brief Renders a multi-contour path fill respecting `fill_type`'s
+         * winding rule (`Path::FillType::winding`/`::evenOdd`) via a
+         * stencil-then-cover technique, into a fresh premultiplied-alpha
+         * color texture the caller composites like any other offscreen
+         * result (see `Renderer::applyPathFillWinding()`). Single-contour
+         * fills don't go through this -- see that method's doc comment.
+         *
+         * @param triangles Ear-clipped triangles (3 consecutive points each)
+         *                  from every contour, concatenated -- see
+         *                  `triangulateContour()`. Already shifted/scaled
+         *                  into the *returned texture's own* local pixel
+         *                  space (i.e. the caller has already subtracted
+         *                  the fill's bounds origin and applied the device
+         *                  pixel ratio) -- the backend doesn't need
+         *                  `transform`/`dpr`/`bounds` itself.
+         * @param fill_type Which winding rule to apply.
+         * @param color     The fill's straight-alpha paint color.
+         * @param width     Texture width in physical pixels.
+         * @param height    Texture height in physical pixels.
+         *
+         * Default: returns `nullptr` (backend doesn't support it yet) --
+         * the caller must fall back to the plain concatenated-fill behavior
+         * on a null return, same as every other optional-capability
+         * `nullptr`/no-op default in this interface.
+         */
+        virtual std::shared_ptr<campello_gpu::Texture> renderPathFillWinding(
+            const std::vector<Offset>& triangles,
+            Path::FillType              fill_type,
+            const Color&                color,
+            uint32_t                    width,
+            uint32_t                    height,
+            campello_gpu::CommandEncoder& encoder)
+        {
+            (void)triangles; (void)fill_type; (void)color; (void)width; (void)height; (void)encoder;
+            return nullptr;
+        }
+
         /**
          * @brief Measures the bounding size of a text span using real font metrics.
          *

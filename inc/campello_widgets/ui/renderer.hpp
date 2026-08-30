@@ -581,6 +581,38 @@ namespace systems::leal::campello_widgets
         // `replay_bracket_index` -- same cache-gating mechanism, backed by
         // mask_blur_gpu_cache_ below (reuses ShadowGpuCacheEntry's shape:
         // texture + padded bounds + margin, identical caching need).
+        // Applies Path::fillType() (winding/evenOdd) for a multi-contour
+        // Canvas::drawPath() fill -- the ear-clip-then-concatenate fill this
+        // Renderer otherwise uses for every DrawPathCmd double-fills
+        // overlapping contours (e.g. a donut's outer+inner circle) instead
+        // of the inner one subtracting as a hole. Single-contour fills are
+        // unaffected by fillType and never call this -- see
+        // flushDrawList()'s DrawPathCmd dispatch. Renders into a dedicated
+        // offscreen texture via stencil-then-cover, then composites it like
+        // every other offscreen technique. No blur/padding margin needed
+        // (no GPU post-process pass), so this is structurally simpler than
+        // applyMaskFilterBlur()/applyBoxShadow(): capture straight to a
+        // bounds-sized texture, no restart-then-composite margin math. See
+        // applyShaderMask() for `replay_region_id`/`replay_incarnation_id`/
+        // `replay_bracket_index` and caching rationale -- backed by
+        // path_fill_gpu_cache_ below (reuses ShadowGpuCacheEntry's shape;
+        // `margin` is always 0 here).
+        void applyPathFillWinding(
+            const std::vector<std::vector<Offset>>&            contours,
+            Path::FillType                                     fill_type,
+            const Color&                                        color,
+            std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+            std::shared_ptr<campello_gpu::TextureView>         target_view,
+            float viewport_width,
+            float viewport_height,
+            float dpr,
+            const Matrix4& transform,
+            const Rect&    clip,
+            const DrawPathCmd& fallback_cmd,
+            const void*    replay_region_id       = nullptr,
+            uint64_t       replay_incarnation_id  = 0,
+            size_t         replay_bracket_index    = 0);
+
         void applyMaskFilterBlur(
             const Rect&    bounds,
             float          sigma,
@@ -875,6 +907,20 @@ namespace systems::leal::campello_widgets
         // is identical.
         std::unordered_map<std::tuple<const void*, uint64_t, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
             mask_blur_gpu_cache_;
+        // Same rationale as shadow_gpu_cache_/mask_blur_gpu_cache_ above,
+        // for Renderer::applyPathFillWinding() -- without this, a
+        // multi-contour Path::fillType() fill allocates a fresh GPU
+        // stencil+color texture pair on *every* repaint (e.g. every frame
+        // while its ListView/ScrollView ancestor scrolls, unchanged
+        // content, just a different screen position), which is exactly the
+        // kind of high-frequency raw-allocation churn this codebase's own
+        // OffscreenTexturePool doc comment already documents as a real
+        // measured cost -- and, on at least one Vulkan/Android driver,
+        // visibly worse than that: intermittent single-frame corruption
+        // ("blinking") during continuous scroll repaint, not reproducible
+        // on Metal. `margin` is always 0 here (no blur/padding needed).
+        std::unordered_map<std::tuple<const void*, uint64_t, size_t>, ShadowGpuCacheEntry, ReplayKeyHash>
+            path_fill_gpu_cache_;
 
         // Platform-independent text-rasterization cache. GDI/CoreText/
         // FreeType+HarfBuzz rasterization plus GPU texture allocation/

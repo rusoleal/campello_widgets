@@ -1,6 +1,7 @@
 #include "gallery_app.hpp"
 #include "assets/mountains_jpeg.h"
 #include <campello_widgets/campello_widgets.hpp>
+#include <campello_gpu/texture.hpp>
 #include <campello_ui/campello_design_system.hpp>
 #include <campello_material/material_design_system.hpp>
 #include <campello_cupertino/cupertino_design_system.hpp>
@@ -1434,6 +1435,108 @@ static void maskFilterStrokeDemo(cw::Canvas& canvas, cw::Size size)
     canvas.drawRRect(cw::RRect{rect, 16.0f}, p);
 }
 
+// Canvas.drawVertices() -- the canonical demo: one triangle, three distinct
+// vertex colors (red/green/blue corners), no indices. BlendMode::dst passes
+// the vertex colors straight through unmodified (paint.color, magenta here,
+// is deliberately never visible if this renders correctly).
+static void verticesTriangleDemo(cw::Canvas& canvas, cw::Size size)
+{
+    cw::Vertices v;
+    v.mode = cw::VertexMode::triangles;
+    v.positions = {
+        {size.width * 0.5f, size.height * 0.15f},
+        {size.width * 0.85f, size.height * 0.85f},
+        {size.width * 0.15f, size.height * 0.85f},
+    };
+    v.colors = {cw::Color::red(), cw::Color::green(), cw::Color::blue()};
+
+    canvas.drawVertices(v, cw::BlendMode::dst, cw::Paint::filled(cw::Color::fromRGB(1.0f, 0.0f, 1.0f)));
+}
+
+// Canvas.drawVertices() with VertexMode::triangleStrip -- a 2x2 quad grid
+// (6 vertices, no indices) with a color gradient corner-to-corner, proving
+// strip winding/expansion (not just the trivial 3-vertex triangle case).
+static void verticesStripQuadDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const float inset = 14.0f;
+    const float x0 = inset, x1 = size.width * 0.5f, x2 = size.width - inset;
+    const float y0 = inset, y1 = size.height - inset;
+
+    cw::Vertices v;
+    v.mode = cw::VertexMode::triangleStrip;
+    v.positions = {
+        {x0, y0}, {x0, y1}, {x1, y0}, {x1, y1}, {x2, y0}, {x2, y1},
+    };
+    v.colors = {
+        kBlue, kTeal, kGreen, kAmber, kOrange, kRed,
+    };
+
+    canvas.drawVertices(v, cw::BlendMode::dst, cw::Paint::filled(cw::Color::white()));
+}
+
+// Path::fillType() -- two addOval() circles, same center, one inside the
+// other. addOval() always winds every contour in the same fixed direction,
+// so under `winding` (nonZero) both circles' windings add up and the whole
+// disc stays filled -- no hole. Under `evenOdd`, the inner circle's region
+// is crossed twice (toggled back to "outside"), producing a ring. Drawing
+// both fill types side by side on the *same* two-circle path is the
+// clearest proof the stencil rule is actually being applied, not just an
+// approximation for "nested contours = hole".
+static void pathFillTypeDemo(cw::Canvas& canvas, cw::Size size, cw::Path::FillType fill_type)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float outer_r = std::min(size.width, size.height) * 0.42f;
+    const float inner_r = outer_r * 0.5f;
+
+    cw::Path path;
+    path.addOval(cw::Rect::fromLTWH(center.x - outer_r, center.y - outer_r, outer_r * 2.0f, outer_r * 2.0f));
+    path.addOval(cw::Rect::fromLTWH(center.x - inner_r, center.y - inner_r, inner_r * 2.0f, inner_r * 2.0f));
+    path.setFillType(fill_type);
+
+    canvas.drawPath(path, cw::Paint::filled(kTeal));
+}
+
+static void pathFillTypeEvenOddDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathFillTypeDemo(canvas, size, cw::Path::FillType::evenOdd);
+}
+
+static void pathFillTypeWindingDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathFillTypeDemo(canvas, size, cw::Path::FillType::winding);
+}
+
+// Two overlapping (not nested) same-radius circles, both from addOval() --
+// same fixed winding direction as every addOval() call. `winding`: the
+// overlap region has winding count 2 (nonzero), so it's still just
+// "filled" -- no doubled-opacity artifact, the whole union reads as one
+// flat-colored blob. `evenOdd`: the overlap is crossed twice, so it's
+// punched *out* -- a lens-shaped hole appears where the two circles cross.
+// The clearest possible non-nested disagreement between the two rules.
+static void pathFillTypeOverlapDemo(cw::Canvas& canvas, cw::Size size, cw::Path::FillType fill_type)
+{
+    const float r = std::min(size.width, size.height) * 0.32f;
+    const cw::Offset c1{size.width * 0.42f, size.height * 0.5f};
+    const cw::Offset c2{size.width * 0.58f, size.height * 0.5f};
+
+    cw::Path path;
+    path.addOval(cw::Rect::fromLTWH(c1.x - r, c1.y - r, r * 2.0f, r * 2.0f));
+    path.addOval(cw::Rect::fromLTWH(c2.x - r, c2.y - r, r * 2.0f, r * 2.0f));
+    path.setFillType(fill_type);
+
+    canvas.drawPath(path, cw::Paint::filled(kPurple));
+}
+
+static void pathFillTypeOverlapEvenOddDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathFillTypeOverlapDemo(canvas, size, cw::Path::FillType::evenOdd);
+}
+
+static void pathFillTypeOverlapWindingDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathFillTypeOverlapDemo(canvas, size, cw::Path::FillType::winding);
+}
+
 // ---------------------------------------------------------------------------
 // 7. CLIPPING & FX — ClipRRect, ClipOval, DecoratedBox, Opacity, BackdropFilter
 // ---------------------------------------------------------------------------
@@ -1640,6 +1743,27 @@ public:
                 strokeSample("Stroked RRect, sigma 6", 170.0f, 110.0f, maskFilterStrokeDemo, colors.on_surface_variant),
             });
 
+        // Canvas.drawVertices() -- arbitrary triangle mesh, per-vertex color,
+        // BlendMode::dst passes vertex colors straight through unmodified.
+        auto vertices_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Triangle (RGB corners)", 150.0f, 130.0f, verticesTriangleDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("triangleStrip quad grid", 170.0f, 130.0f, verticesStripQuadDemo, colors.on_surface_variant),
+            });
+
+        // Path::fillType() -- nonZero (winding) vs evenOdd, stencil-then-cover.
+        auto fill_type_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("Nested circles, winding (no hole)", 150.0f, 130.0f, pathFillTypeWindingDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Nested circles, evenOdd (donut)", 150.0f, 130.0f, pathFillTypeEvenOddDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Overlap, winding (solid blob)", 150.0f, 130.0f, pathFillTypeOverlapWindingDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("Overlap, evenOdd (lens hole)", 150.0f, 130.0f, pathFillTypeOverlapEvenOddDemo, colors.on_surface_variant),
+            });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -1757,6 +1881,12 @@ public:
                     vspace(20.0f),
                     subheading("PAINT.MASK_BLUR_SIGMA — MaskFilter.blur(BlurStyle.normal, sigma)", colors.on_surface_variant),
                     card(mask_filter_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("CANVAS.DRAWVERTICES — arbitrary triangle mesh, per-vertex color", colors.on_surface_variant),
+                    card(vertices_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("PATH.FILLTYPE — winding vs evenOdd, GPU stencil-then-cover", colors.on_surface_variant),
+                    card(fill_type_row, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),
@@ -2203,6 +2333,117 @@ public:
     { return std::make_unique<NinePatchDemoState>(); }
 };
 
+// ---------------------------------------------------------------------------
+// AtlasDemo — Canvas.drawAtlas() verification.
+//
+// Same async-texture-resolution shell as NinePatchDemoState above (see its
+// doc comment) -- reused verbatim here since drawAtlas() also needs the
+// atlas texture's real pixel dimensions (to normalise each sprite's
+// atlas-pixel-space Rect into UV space) before it can draw anything.
+// ---------------------------------------------------------------------------
+class AtlasDemo;
+
+class AtlasDemoState : public cw::State<AtlasDemo>
+{
+public:
+    void initState() override
+    {
+        cw::State<AtlasDemo>::initState();
+        auto provider = std::make_shared<cw::MemoryImage>(
+            std::vector<uint8_t>(
+                cw::gallery_assets::kMountainsJpeg,
+                cw::gallery_assets::kMountainsJpeg + cw::gallery_assets::kMountainsJpegSize));
+        cw::ImageConfiguration config;
+        load_future_ = cw::ImageLoader::instance().loadAsync(provider, config);
+        if (auto* ts = cw::TickerScheduler::active())
+            ticker_id_ = ts->subscribe([this](uint64_t) { checkFuture(); });
+    }
+
+    void dispose() override
+    {
+        if (ticker_id_ != 0) {
+            if (auto* ts = cw::TickerScheduler::active()) ts->unsubscribe(ticker_id_);
+            ticker_id_ = 0;
+        }
+        cw::State<AtlasDemo>::dispose();
+    }
+
+    cw::WidgetRef build(cw::BuildContext&) override
+    {
+        if (!texture_) {
+            return cw::mw<cw::Center>(
+                cw::SizedBox::square(24.0f, std::make_shared<cw::CircularProgressIndicator>()));
+        }
+
+        auto tex = texture_;
+        const float img_w = static_cast<float>(tex->getWidth());
+        const float img_h = static_cast<float>(tex->getHeight());
+
+        // 5 sprites, each a different crop of the source photo, each with
+        // its own rotation/scale/translation -- deliberately scattered
+        // (not a grid) so a wrong RSTransform is immediately visible.
+        struct Sprite { cw::Rect atlas_rect; float rotation, scale, tx, ty; };
+        const std::vector<Sprite> sprites = {
+            {cw::Rect::fromLTWH(img_w * 0.05f, img_h * 0.10f, 90.0f, 70.0f),  -0.35f, 1.0f,  30.0f, 40.0f},
+            {cw::Rect::fromLTWH(img_w * 0.40f, img_h * 0.15f, 90.0f, 70.0f),   0.20f, 0.8f, 140.0f, 25.0f},
+            {cw::Rect::fromLTWH(img_w * 0.65f, img_h * 0.05f, 90.0f, 70.0f),   0.0f,  1.3f, 250.0f, 55.0f},
+            {cw::Rect::fromLTWH(img_w * 0.20f, img_h * 0.50f, 90.0f, 70.0f),   0.9f,  0.9f,  80.0f, 115.0f},
+            {cw::Rect::fromLTWH(img_w * 0.55f, img_h * 0.55f, 90.0f, 70.0f),  -0.6f,  1.1f, 210.0f, 120.0f},
+        };
+
+        auto draw = [tex, sprites](cw::Canvas& canvas, cw::Size) {
+            std::vector<cw::RSTransform> transforms;
+            std::vector<cw::Rect> rects;
+            transforms.reserve(sprites.size());
+            rects.reserve(sprites.size());
+            for (const auto& s : sprites)
+            {
+                // Anchor at the sprite's own center so `rotation`/`scale`
+                // pivot around its middle, not its top-left corner.
+                transforms.push_back(cw::RSTransform::fromComponents(
+                    s.rotation, s.scale,
+                    s.atlas_rect.width * 0.5f, s.atlas_rect.height * 0.5f,
+                    s.tx, s.ty));
+                rects.push_back(s.atlas_rect);
+            }
+            canvas.drawAtlas(tex, transforms, rects);
+        };
+
+        return strokeSample("5 sprites, scattered rotation/scale", 320.0f, 190.0f, draw, kBlue);
+    }
+
+private:
+    void checkFuture()
+    {
+        if (done_ || !load_future_.valid()) return;
+        if (load_future_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return;
+        done_ = true;
+        if (auto* ts = cw::TickerScheduler::active()) { ts->unsubscribe(ticker_id_); ticker_id_ = 0; }
+
+        auto result = load_future_.get();
+        if (result.status == cw::ImageLoadStatus::completed && result.image) {
+            if (!result.image->texture) {
+                if (auto* renderer = cw::detail::currentRenderer().load(std::memory_order_acquire))
+                    result.image->createTexture(&renderer->device());
+            }
+            texture_ = result.image->texture;
+        }
+        this->setState([](){});
+    }
+
+    std::shared_future<cw::ImageLoadResult> load_future_;
+    std::shared_ptr<systems::leal::campello_gpu::Texture> texture_;
+    bool     done_      = false;
+    uint64_t ticker_id_ = 0;
+};
+
+class AtlasDemo : public cw::StatefulWidget
+{
+public:
+    std::unique_ptr<cw::StateBase> createState() const override
+    { return std::make_unique<AtlasDemoState>(); }
+};
+
 class ImagesSection : public cw::StatelessWidget
 {
 public:
@@ -2307,6 +2548,9 @@ public:
                     vspace(20.0f),
                     subheading("CANVAS.DRAWIMAGENINE — 9-patch stretch vs. naive stretch", colors.on_surface_variant),
                     repaintBoundary(card(std::make_shared<NinePatchDemo>(), 16.0f, colors.surface)),
+                    vspace(20.0f),
+                    subheading("CANVAS.DRAWATLAS — batched sprites, per-sprite RSTransform", colors.on_surface_variant),
+                    repaintBoundary(card(std::make_shared<AtlasDemo>(), 16.0f, colors.surface)),
                     vspace(20.0f),
                 }));
 

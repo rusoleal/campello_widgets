@@ -8,11 +8,13 @@
 #include <campello_widgets/ui/text_span.hpp>
 #include <campello_widgets/ui/text_style.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
+#include "gpu/path_tessellation.hpp"
 #include <vector_math/vector3.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <limits>
 #include <cstdio>
 #include <utility>
 
@@ -1000,7 +1002,40 @@ namespace systems::leal::campello_widgets
                 }
                 else if constexpr (std::is_same_v<T, DrawPathCmd>)
                 {
-                    timeDraw(circle_stats, [&] { draw_backend_->drawPath(c, current_transform, current_clip, *rpe); });
+                    // fillType only matters when contours can interact --
+                    // see applyPathFillWinding()'s doc comment. A single
+                    // contour renders identically either way, so leave the
+                    // common case on the existing fast path untouched.
+                    bool routed_through_fill_winding = false;
+                    if (c.paint.style == PaintStyle::fill)
+                    {
+                        auto contours_tv = buildPathContours(c.path);
+                        if (contours_tv.size() > 1)
+                        {
+                            std::vector<std::vector<Offset>> contours;
+                            contours.reserve(contours_tv.size());
+                            for (const auto& contour : contours_tv)
+                            {
+                                std::vector<Offset> pts;
+                                pts.reserve(contour.size());
+                                for (const auto& v : contour) pts.push_back({v.x, v.y});
+                                contours.push_back(std::move(pts));
+                            }
+                            auto [rid, rinc, ridx] = currentReplayKey();
+                            timeDraw(circle_stats, [&] {
+                                applyPathFillWinding(contours, c.path.fillType(), c.paint.color,
+                                    rpe, target_view, viewport_width, viewport_height, dpr,
+                                    current_transform, current_clip, c, rid, rinc, ridx);
+                            });
+                            routed_through_fill_winding = true;
+                        }
+                    }
+                    if (!routed_through_fill_winding)
+                        timeDraw(circle_stats, [&] { draw_backend_->drawPath(c, current_transform, current_clip, *rpe); });
+                }
+                else if constexpr (std::is_same_v<T, DrawVerticesCmd>)
+                {
+                    timeDraw(circle_stats, [&] { draw_backend_->drawVertices(c, current_transform, current_clip, *rpe); });
                 }
                 else if constexpr (std::is_same_v<T, PushTransformCmd>)
                 {
@@ -1553,6 +1588,112 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void Renderer::applyPathFillWinding(
+        const std::vector<std::vector<Offset>>&            contours,
+        Path::FillType                                     fill_type,
+        const Color&                                        color,
+        std::shared_ptr<campello_gpu::RenderPassEncoder>& rpe,
+        std::shared_ptr<campello_gpu::TextureView>         target_view,
+        float viewport_width,
+        float viewport_height,
+        float dpr,
+        const Matrix4& transform,
+        const Rect&    clip,
+        const DrawPathCmd& fallback_cmd,
+        const void*    replay_region_id,
+        uint64_t       replay_incarnation_id,
+        size_t         replay_bracket_index)
+    {
+        if (!draw_backend_ || !frame_encoder_) return;
+        (void)viewport_width; (void)viewport_height; // unused: no restart-viewport dance needed (no GPU post-process pass)
+
+        // Cache-hit path — see applyClipShape()'s identical comment and
+        // path_fill_gpu_cache_'s doc comment. Avoids reallocating a fresh
+        // stencil+color texture pair on every repaint of unchanged content
+        // (e.g. every frame while a ListView ancestor scrolls) — see that
+        // doc comment for why this matters beyond raw performance on at
+        // least one Vulkan/Android driver.
+        const std::tuple<const void*, uint64_t, size_t> cache_key{
+            replay_region_id, replay_incarnation_id, replay_bracket_index};
+        if (replay_region_id != nullptr)
+        {
+            auto it = path_fill_gpu_cache_.find(cache_key);
+            if (it != path_fill_gpu_cache_.end())
+            {
+                it->second.last_used_frame = frame_counter_;
+                const Rect& cb = it->second.bounds;
+                DrawImageCmd img_cmd{
+                    it->second.texture,
+                    Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f),
+                    cb, 1.0f };
+                draw_backend_->drawImage(img_cmd, transform, clip, *rpe);
+                return;
+            }
+        }
+
+        float min_x =  std::numeric_limits<float>::max(), max_x = -std::numeric_limits<float>::max();
+        float min_y =  std::numeric_limits<float>::max(), max_y = -std::numeric_limits<float>::max();
+        for (const auto& contour : contours)
+            for (const auto& p : contour)
+            {
+                min_x = std::min(min_x, p.x); max_x = std::max(max_x, p.x);
+                min_y = std::min(min_y, p.y); max_y = std::max(max_y, p.y);
+            }
+        const Rect bounds = Rect::fromLTRB(min_x, min_y, max_x, max_y);
+        if (!std::isfinite(bounds.width) || !std::isfinite(bounds.height) ||
+            bounds.width <= 0.0f || bounds.height <= 0.0f)
+            return;
+
+        const uint32_t tw = static_cast<uint32_t>(std::ceil(bounds.width  * dpr));
+        const uint32_t th = static_cast<uint32_t>(std::ceil(bounds.height * dpr));
+        if (tw == 0 || th == 0) return;
+
+        // Ear-clip every contour (unchanged triangulateContour()), shifted
+        // so `bounds`' own top-left lands at (0,0) in the texture and
+        // scaled by dpr -- the backend draws these triangles directly into
+        // physical-pixel texture space, no further transform needed there.
+        std::vector<Offset> triangles;
+        for (const auto& contour : contours)
+        {
+            PathContour tess_contour;
+            tess_contour.reserve(contour.size());
+            for (const auto& p : contour) tess_contour.push_back({p.x, p.y});
+
+            std::vector<PathTessVertex> tris;
+            triangulateContour(tess_contour, tris);
+            for (const auto& v : tris)
+                triangles.push_back({(v.x - bounds.x) * dpr, (v.y - bounds.y) * dpr});
+        }
+        if (triangles.empty()) return;
+
+        rpe->end();
+        auto tex = draw_backend_->renderPathFillWinding(triangles, fill_type, color, tw, th, *frame_encoder_);
+        rpe = restartRenderPass(target_view);
+
+        if (tex)
+        {
+            DrawImageCmd img_cmd{tex, Rect::fromLTWH(0.0f, 0.0f, 1.0f, 1.0f), bounds, 1.0f};
+            draw_backend_->drawImage(img_cmd, transform, clip, *rpe);
+
+            if (replay_region_id != nullptr)
+            {
+                ShadowGpuCacheEntry entry;
+                entry.texture         = tex;
+                entry.bounds          = bounds;
+                entry.margin          = 0.0f;
+                entry.last_used_frame = frame_counter_;
+                path_fill_gpu_cache_[cache_key] = std::move(entry);
+            }
+        }
+        else
+        {
+            // Backend doesn't support stencil fill yet -- fall back to the
+            // pre-fillType behavior (plain concatenated ear-clip fill, no
+            // hole subtraction) rather than drawing nothing.
+            draw_backend_->drawPath(fallback_cmd, transform, clip, *rpe);
+        }
+    }
+
     void Renderer::applyMaskFilterBlur(
         const Rect&                                        bounds,
         float                                               sigma,
@@ -1836,6 +1977,7 @@ namespace systems::leal::campello_widgets
         eraseByRegion(shadow_gpu_cache_);
         eraseByRegion(save_layer_gpu_cache_);
         eraseByRegion(mask_blur_gpu_cache_);
+        eraseByRegion(path_fill_gpu_cache_);
     }
 
     void Renderer::evictStaleGpuCaches()
@@ -1858,6 +2000,7 @@ namespace systems::leal::campello_widgets
         sweep(shadow_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(save_layer_gpu_cache_, kClipShapeCacheMaxAgeFrames);
         sweep(mask_blur_gpu_cache_, kClipShapeCacheMaxAgeFrames);
+        sweep(path_fill_gpu_cache_, kClipShapeCacheMaxAgeFrames);
 
         for (auto it = text_texture_cache_.begin(); it != text_texture_cache_.end(); )
         {

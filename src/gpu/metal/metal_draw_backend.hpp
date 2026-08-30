@@ -41,6 +41,18 @@ struct RectAAVertex {
     float x, y, w, a;
 };
 
+// Per-vertex data for the vertices (drawVertices()) pipeline — same
+// x,y,w convention as RectAAVertex (CPU-transformed clip-space position),
+// plus a full per-vertex straight-alpha color instead of a single shared
+// alpha, matching VerticesVertexIn's `posw`/`color` in widgets.metal. The
+// color has already been paint-blended (Canvas::drawVertices() ->
+// buildTriangleListVertices()) -- the fragment shader just outputs the
+// GPU-interpolated color directly, no further blend math.
+struct VerticesVertex {
+    float x, y, w;
+    float r, g, b, a;
+};
+
 // Per-vertex data for the liquid glass pipeline — see drawBackdropFilter()'s
 // liquidGlass branch below. `uv` is the backdrop-texture sample coordinate
 // (screen-space, like QuadVertex's); `lu`/`lv` is a plain 0..1 local
@@ -123,6 +135,20 @@ public:
         const Matrix4&                   transform,
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
+
+    void drawVertices(
+        const DrawVerticesCmd&           cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    std::shared_ptr<campello_gpu::Texture> renderPathFillWinding(
+        const std::vector<Offset>& triangles,
+        Path::FillType              fill_type,
+        const Color&                color,
+        uint32_t                    width,
+        uint32_t                    height,
+        campello_gpu::CommandEncoder& encoder) override;
 
     std::shared_ptr<campello_gpu::Texture> rasterizeText(
         const TextSpan& span, float dpr,
@@ -220,6 +246,9 @@ public:
         quad_vertex_pool_.beginFrame();
         icon_uniform_pool_.beginFrame();
         rect_vertex_pool_.beginFrame();
+        vertices_vertex_pool_.beginFrame();
+        vertices_index_pool_.beginFrame();
+        vertices_uniform_pool_.beginFrame();
         clip_shape_uniform_pool_.beginFrame();
         shader_mask_uniform_pool_.beginFrame();
         liquid_glass_uniform_pool_.beginFrame();
@@ -523,6 +552,14 @@ private:
     // per-vertex data (RectVertex arrays — see drawFilledQuad()).
     UniformBufferPool rect_vertex_pool_;
 
+    // drawVertices()'s own vertex (VerticesVertex arrays) and index
+    // (uint32_t arrays) buffers — separate pools since the two hold
+    // different element types/sizes, same reasoning as
+    // quad_vertex_pool_/rect_vertex_pool_ above.
+    UniformBufferPool vertices_vertex_pool_;
+    UniformBufferPool vertices_index_pool_;
+    UniformBufferPool vertices_uniform_pool_;
+
     // ClipShapeUniforms pool — drawClipShapeComposite() previously called
     // device_->createBuffer() directly, unpooled, on every single
     // ClipRRect/ClipOval composite, every frame. Pooled now for the same
@@ -551,6 +588,20 @@ private:
 
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_aa_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  vertices_pipeline_;
+
+    // Path::fillType() stencil-then-cover pipelines -- see
+    // Renderer::applyPathFillWinding()'s doc comment. All three reuse
+    // rectVertex/rectFragment (widgets.metal) and RectVertex/RectUniforms
+    // verbatim -- only the ColorState/depthStencil configuration differs
+    // from rect_pipeline_, so no new shader code at all. The two write
+    // variants only differ in their stencil passOp (incrementWrap/
+    // decrementWrap per front/back face for `winding`, `invert` on both
+    // faces for `evenOdd` -- see renderPathFillWinding()'s doc comment for
+    // why one shared cover pipeline works for both fill types).
+    std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_write_winding_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_write_evenodd_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_cover_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;

@@ -31,6 +31,8 @@ call :compile rect.hlsl  RectVS  vs_5_0 rect_vs.cso
 call :compile rect.hlsl  RectPS  ps_5_0 rect_ps.cso
 call :compile rect_aa.hlsl RectAAVS vs_5_0 rect_aa_vs.cso
 call :compile rect_aa.hlsl RectAAPS ps_5_0 rect_aa_ps.cso
+call :compile vertices.hlsl VerticesVS vs_5_0 vertices_vs.cso
+call :compile vertices.hlsl VerticesPS ps_5_0 vertices_ps.cso
 call :compile quad.hlsl  QuadVS  vs_5_0 quad_vs.cso
 call :compile quad.hlsl  QuadPS  ps_5_0 quad_ps.cso
 call :compile shape.hlsl ShapeVS vs_5_0 shape_vs.cso

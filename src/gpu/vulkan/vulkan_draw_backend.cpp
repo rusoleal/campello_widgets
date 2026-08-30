@@ -76,6 +76,17 @@ struct alignas(16) QuadUniforms
     float _pad;
 };
 
+// drawVertices() -- no shared color (each vertex carries its own), so just
+// the viewport NDC-conversion constant. Rides the first 16 bytes of
+// rect_layout_'s push-constant range (reused, not a dedicated layout --
+// same "prefix of a shared range" pattern quad_layout_'s doc comment
+// describes), same shape as RectUniforms' own viewport field.
+struct alignas(16) VerticesUniforms
+{
+    float viewport[2];  // w, h (physical pixels)
+    float _pad[2];
+};
+
 // Mirrors icon.vert/icon.frag's IconUniforms field-for-field. Visible to
 // both stages (see icon_layout_) since icon.frag reads `tint`.
 struct alignas(16) IconUniforms
@@ -260,6 +271,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     auto colored_quad_vert = loadSpv(device_, shaders::kcolored_quad_vert_spv, shaders::kcolored_quad_vert_spvSize);
     auto rect_aa_vert      = loadSpv(device_, shaders::krect_aa_vert_spv,      shaders::krect_aa_vert_spvSize);
     auto rect_aa_frag      = loadSpv(device_, shaders::krect_aa_frag_spv,      shaders::krect_aa_frag_spvSize);
+    auto vertices_vert     = loadSpv(device_, shaders::kvertices_vert_spv,     shaders::kvertices_vert_spvSize);
+    auto vertices_frag     = loadSpv(device_, shaders::kvertices_frag_spv,     shaders::kvertices_frag_spvSize);
     auto rrect_vert        = loadSpv(device_, shaders::krrect_vert_spv,        shaders::krrect_vert_spvSize);
     auto rrect_frag        = loadSpv(device_, shaders::krrect_frag_spv,        shaders::krrect_frag_spvSize);
     auto line_vert         = loadSpv(device_, shaders::kline_vert_spv,         shaders::kline_vert_spvSize);
@@ -588,6 +601,164 @@ VulkanDrawBackend::VulkanDrawBackend(
         buildBlendVariants(desc, rect_aa_blend_pipelines_, rect_aa_pipeline_);
     }
 
+    // Vertices pipeline (drawVertices()) — per-vertex full RGBA color
+    // instead of rect_aa's shared-uniform color + per-vertex alpha. Not
+    // part of the fatal shader-load gate above: if this shader fails to
+    // load, drawVertices() just no-ops (checked via vertices_pipeline_ ==
+    // nullptr), same non-fatal treatment as rect_aa_pipeline_.
+    if (vertices_vert && vertices_frag)
+    {
+        // Vertex layout: location 0 = vec3 (x,y,w), location 1 = vec4
+        // (r,g,b,a), interleaved, stride 28 bytes.
+        GPU::VertexLayout verticesLayout{};
+        verticesLayout.arrayStride = 7 * sizeof(float);
+        verticesLayout.stepMode    = GPU::StepMode::vertex;
+        {
+            GPU::VertexAttribute posAttr{};
+            posAttr.componentType  = GPU::ComponentType::ctFloat;
+            posAttr.accessorType   = GPU::AccessorType::acVec3;
+            posAttr.offset         = 0;
+            posAttr.shaderLocation = 0;
+
+            GPU::VertexAttribute colorAttr{};
+            colorAttr.componentType  = GPU::ComponentType::ctFloat;
+            colorAttr.accessorType   = GPU::AccessorType::acVec4;
+            colorAttr.offset         = 3 * sizeof(float);
+            colorAttr.shaderLocation = 1;
+
+            verticesLayout.attributes = { posAttr, colorAttr };
+        }
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.layout      = rect_layout_; // reused -- see VerticesUniforms' doc comment
+        desc.topology    = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode    = GPU::CullMode::none;
+        desc.frontFace   = GPU::FrontFace::ccw;
+
+        desc.vertex.module     = vertices_vert;
+        desc.vertex.entryPoint = "main";
+        desc.vertex.buffers    = { verticesLayout };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = vertices_frag;
+        frag.entryPoint = "main";
+        frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+        desc.fragment   = frag;
+
+        vertices_pipeline_ = device_->createRenderPipeline(desc);
+        if (!vertices_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] vertices_pipeline_ creation FAILED\n");
+        buildBlendVariants(desc, vertices_blend_pipelines_, vertices_pipeline_);
+    }
+
+    // Path::fillType() stencil-then-cover pipelines -- see
+    // MetalDrawBackend's identical-in-spirit pipelines' doc comment
+    // (metal_draw_backend.hpp) for the overall technique. Reuses
+    // colored_quad_vert/rect_frag (same shaders colored_quad_pipeline_
+    // uses) and rect_layout_ -- only ColorState/depthStencil differ, no
+    // new shader code. Requires campello_gpu's stencilFront/stencilBack
+    // wiring in Vulkan's createRenderPipeline() (StencilOp -> VkStencilOp
+    // translation) and VK_DYNAMIC_STATE_STENCIL_REFERENCE in its dynamic
+    // state list -- both fixed alongside this feature.
+    if (colored_quad_vert && rect_frag)
+    {
+        GPU::VertexLayout writeLayout{};
+        writeLayout.arrayStride = sizeof(ColoredQuadVertex);
+        writeLayout.stepMode    = GPU::StepMode::vertex;
+        {
+            GPU::VertexAttribute posAttr{};
+            posAttr.componentType  = GPU::ComponentType::ctFloat;
+            posAttr.accessorType   = GPU::AccessorType::acVec3;
+            posAttr.offset         = 0;
+            posAttr.shaderLocation = 0;
+            writeLayout.attributes = { posAttr };
+        }
+
+        GPU::ColorState writeCs{};
+        writeCs.format    = pixel_format_;
+        writeCs.writeMask = static_cast<GPU::ColorWrite>(0); // none -- stencil-only pass
+        writeCs.blend     = blend;
+
+        auto buildWritePipeline = [&](GPU::StencilOp front_pass, GPU::StencilOp back_pass)
+            -> std::shared_ptr<GPU::RenderPipeline>
+        {
+            GPU::RenderPipelineDescriptor desc{};
+            desc.layout      = rect_layout_;
+            desc.topology    = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode    = GPU::CullMode::none;
+            desc.frontFace   = GPU::FrontFace::ccw;
+
+            desc.vertex.module     = colored_quad_vert;
+            desc.vertex.entryPoint = "main";
+            desc.vertex.buffers    = { writeLayout };
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = rect_frag;
+            frag.entryPoint = "main";
+            frag.targets    = { writeCs };
+            desc.fragment   = frag;
+
+            GPU::DepthStencilDescriptor ds{};
+            ds.format            = GPU::PixelFormat::depth24plus_stencil8;
+            ds.depthCompare      = GPU::CompareOp::always;
+            ds.depthWriteEnabled = false;
+            ds.stencilReadMask   = 0xFFFFFFFF;
+            ds.stencilWriteMask  = 0xFFFFFFFF;
+            ds.stencilFront = GPU::StencilDescriptor{
+                GPU::CompareOp::always, GPU::StencilOp::keep, GPU::StencilOp::keep, front_pass};
+            ds.stencilBack = GPU::StencilDescriptor{
+                GPU::CompareOp::always, GPU::StencilOp::keep, GPU::StencilOp::keep, back_pass};
+            desc.depthStencil = ds;
+
+            auto pl = device_->createRenderPipeline(desc);
+            if (!pl) std::fprintf(stderr, "[VulkanDrawBackend] path_fill_stencil_write pipeline creation FAILED\n");
+            return pl;
+        };
+
+        path_fill_stencil_write_winding_pipeline_ =
+            buildWritePipeline(GPU::StencilOp::incrementWrap, GPU::StencilOp::decrementWrap);
+        path_fill_stencil_write_evenodd_pipeline_ =
+            buildWritePipeline(GPU::StencilOp::invert, GPU::StencilOp::invert);
+
+        // Cover pipeline: one shared pipeline for both fill types -- see
+        // MetalDrawBackend's cover pipeline doc comment for why "stencil
+        // != 0" alone is correct for both.
+        GPU::ColorState coverCs{};
+        coverCs.format    = pixel_format_;
+        coverCs.writeMask = GPU::ColorWrite::all;
+        coverCs.blend     = blend;
+
+        GPU::RenderPipelineDescriptor coverDesc{};
+        coverDesc.layout      = rect_layout_;
+        coverDesc.topology    = GPU::PrimitiveTopology::triangleList;
+        coverDesc.cullMode    = GPU::CullMode::none;
+        coverDesc.frontFace   = GPU::FrontFace::ccw;
+
+        coverDesc.vertex.module     = colored_quad_vert;
+        coverDesc.vertex.entryPoint = "main";
+        coverDesc.vertex.buffers    = { writeLayout };
+
+        GPU::FragmentDescriptor coverFrag{};
+        coverFrag.module     = rect_frag;
+        coverFrag.entryPoint = "main";
+        coverFrag.targets    = { coverCs };
+        coverDesc.fragment   = coverFrag;
+
+        GPU::DepthStencilDescriptor coverDs{};
+        coverDs.format            = GPU::PixelFormat::depth24plus_stencil8;
+        coverDs.depthCompare      = GPU::CompareOp::always;
+        coverDs.depthWriteEnabled = false;
+        coverDs.stencilReadMask   = 0xFFFFFFFF;
+        coverDs.stencilWriteMask  = 0xFFFFFFFF;
+        coverDs.stencilFront = GPU::StencilDescriptor{
+            GPU::CompareOp::notEqual, GPU::StencilOp::zero, GPU::StencilOp::zero, GPU::StencilOp::zero};
+        coverDs.stencilBack = coverDs.stencilFront;
+        coverDesc.depthStencil = coverDs;
+
+        path_fill_stencil_cover_pipeline_ = device_->createRenderPipeline(coverDesc);
+        if (!path_fill_stencil_cover_pipeline_)
+            std::fprintf(stderr, "[VulkanDrawBackend] path_fill_stencil_cover_pipeline_ creation FAILED\n");
+    }
+
     // RRect pipeline (SDF rounded rectangle)
     {
         GPU::RenderPipelineDescriptor desc{};
@@ -892,6 +1063,33 @@ std::shared_ptr<GPU::Buffer> VulkanDrawBackend::UniformBufferPool::acquire(
 }
 
 void VulkanDrawBackend::UniformBufferPool::beginFrame() noexcept
+{
+    current_generation_ = (current_generation_ + 1) % kGenerations;
+    next_index_[current_generation_] = 0;
+}
+
+std::shared_ptr<GPU::Buffer> VulkanDrawBackend::IndexBufferPool::acquire(
+    GPU::Device& device, uint64_t size, const void* data)
+{
+    auto&  buffers = generations_[current_generation_];
+    size_t idx     = next_index_[current_generation_]++;
+
+    if (idx >= buffers.size())
+        // Same host-visible-mapWrite reasoning as UniformBufferPool::acquire()
+        // above -- only the usage bit differs (index, not vertex).
+        buffers.push_back(device.createBuffer(size,
+            static_cast<GPU::BufferUsage>(
+                static_cast<int>(GPU::BufferUsage::index) |
+                static_cast<int>(GPU::BufferUsage::copyDst) |
+                static_cast<int>(GPU::BufferUsage::mapWrite)),
+            const_cast<void*>(data)));
+    else
+        buffers[idx]->upload(0, size, const_cast<void*>(data));
+
+    return buffers[idx];
+}
+
+void VulkanDrawBackend::IndexBufferPool::beginFrame() noexcept
 {
     current_generation_ = (current_generation_ + 1) % kGenerations;
     next_index_[current_generation_] = 0;
@@ -1675,6 +1873,168 @@ void VulkanDrawBackend::drawPath(
             }
         }
     }
+}
+
+void VulkanDrawBackend::drawVertices(
+    const DrawVerticesCmd&  cmd,
+    const Matrix4&          transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!vertices_pipeline_ || cmd.vertices.empty() || cmd.indices.empty()) return;
+
+    namespace vm = systems::leal::vector_math;
+
+    std::vector<VerticesVertex> verts;
+    verts.reserve(cmd.vertices.size());
+    for (const auto& v : cmd.vertices)
+    {
+        auto p = transform * vm::Vector4<float>(v.pos.x, v.pos.y, 0.0f, 1.0f);
+        verts.push_back({p.x(), p.y(), p.w(), v.color.r, v.color.g, v.color.b, v.color.a});
+    }
+
+    applyScissor(clip, encoder);
+
+    auto vbuf = vertices_vertex_pool_.acquire(*device_, verts.size() * sizeof(VerticesVertex), verts.data());
+    if (!vbuf) return;
+
+    auto ibuf = vertices_index_pool_.acquire(*device_, cmd.indices.size() * sizeof(uint32_t), cmd.indices.data());
+    if (!ibuf) return;
+
+    VerticesUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    encoder.setPipeline(pipelineForBlendMode(
+        cmd.blend_mode, vertices_pipeline_, vertices_blend_pipelines_));
+    encoder.setPushConstants(
+        static_cast<GPU::ShaderStage>(
+            static_cast<int>(GPU::ShaderStage::vertex) |
+            static_cast<int>(GPU::ShaderStage::fragment)),
+        0, sizeof(VerticesUniforms), &u);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setIndexBuffer(ibuf, GPU::IndexFormat::uint32);
+    encoder.drawIndexed(static_cast<uint32_t>(cmd.indices.size()));
+}
+
+std::shared_ptr<GPU::Texture> VulkanDrawBackend::renderPathFillWinding(
+    const std::vector<Offset>& triangles,
+    Path::FillType              fill_type,
+    const Color&                color,
+    uint32_t                    width,
+    uint32_t                    height,
+    GPU::CommandEncoder&        encoder)
+{
+    if (!path_fill_stencil_cover_pipeline_ || triangles.empty() || width == 0 || height == 0)
+        return nullptr;
+    auto write_pipeline = (fill_type == Path::FillType::evenOdd)
+        ? path_fill_stencil_write_evenodd_pipeline_
+        : path_fill_stencil_write_winding_pipeline_;
+    if (!write_pipeline) return nullptr;
+
+    // Dedicated textures, not pooled -- see this method's declaration
+    // (IDrawBackend) doc comment.
+    auto color_tex = device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copySrc)));
+    if (!color_tex) return nullptr;
+
+    auto stencil_tex = device_->createTexture(
+        GPU::TextureType::tt2d, GPU::PixelFormat::depth24plus_stencil8, width, height, 1, 1, 1,
+        GPU::TextureUsage::renderTarget);
+    if (!stencil_tex) return nullptr;
+
+    auto color_view   = color_tex->createView(pixel_format_, 1);
+    auto stencil_view = stencil_tex->createView(GPU::PixelFormat::depth24plus_stencil8, 1);
+    if (!color_view || !stencil_view) return nullptr;
+
+    // Keep the textures/views alive until the frame's GPU work is actually
+    // done -- see createOffscreenTexture()/beginOffscreenPass()'s identical
+    // reasoning (frame_textures_/frame_views_' doc comments).
+    frame_textures_.push_back(color_tex);
+    frame_textures_.push_back(stencil_tex);
+    frame_views_.push_back(color_view);
+    frame_views_.push_back(stencil_view);
+
+    GPU::ColorAttachment ca{};
+    ca.view          = color_view;
+    ca.loadOp        = GPU::LoadOp::clear;
+    ca.storeOp       = GPU::StoreOp::store;
+    ca.clearValue[0] = ca.clearValue[1] = ca.clearValue[2] = ca.clearValue[3] = 0.0f;
+
+    GPU::DepthStencilAttachment dsa{};
+    dsa.view              = stencil_view;
+    dsa.stencilLoadOp     = GPU::LoadOp::clear;
+    dsa.stencilClearValue = 0;
+    dsa.stencilStoreOp    = GPU::StoreOp::discard;
+    dsa.stencilReadOnly   = false;
+    dsa.depthLoadOp       = GPU::LoadOp::load;
+    dsa.depthStoreOp      = GPU::StoreOp::discard;
+    dsa.depthReadOnly     = true;
+
+    GPU::BeginRenderPassDescriptor desc{};
+    desc.colorAttachments       = {ca};
+    desc.depthStencilAttachment = dsa;
+
+    auto rpe = encoder.beginRenderPass(desc);
+    if (!rpe) return nullptr;
+
+    // Pass 1: stencil-write -- every contour's ear-clipped triangles,
+    // color writes disabled. `triangles` already carries physical-pixel
+    // positions local to this texture (see
+    // Renderer::applyPathFillWinding()'s doc comment).
+    std::vector<ColoredQuadVertex> write_verts;
+    write_verts.reserve(triangles.size());
+    for (const auto& p : triangles) write_verts.push_back({p.x, p.y, 1.0f});
+
+    auto write_vbuf = colored_quad_vertex_pool_.acquire(
+        *device_, write_verts.size() * sizeof(ColoredQuadVertex), write_verts.data());
+    if (write_vbuf)
+    {
+        RectUniforms wu{};
+        wu.viewport[0] = static_cast<float>(width);
+        wu.viewport[1] = static_cast<float>(height);
+
+        rpe->setPipeline(write_pipeline);
+        rpe->setPushConstants(
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(RectUniforms), &wu);
+        rpe->setVertexBuffer(0, write_vbuf);
+        rpe->draw(static_cast<uint32_t>(write_verts.size()));
+    }
+
+    // Pass 2: cover -- one quad spanning the whole texture, painted with
+    // the real fill color, gated + reset by the stencil test.
+    const float w = static_cast<float>(width), h = static_cast<float>(height);
+    const ColoredQuadVertex cover_verts[6] = {
+        {0.0f, 0.0f, 1.0f}, {w, 0.0f, 1.0f}, {0.0f, h, 1.0f},
+        {0.0f, h, 1.0f}, {w, 0.0f, 1.0f}, {w, h, 1.0f},
+    };
+    auto cover_vbuf = colored_quad_vertex_pool_.acquire(*device_, sizeof(cover_verts), cover_verts);
+    if (cover_vbuf)
+    {
+        RectUniforms cu{};
+        cu.color[0] = color.r; cu.color[1] = color.g; cu.color[2] = color.b; cu.color[3] = color.a;
+        cu.viewport[0] = w; cu.viewport[1] = h;
+
+        rpe->setPipeline(path_fill_stencil_cover_pipeline_);
+        rpe->setPushConstants(
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(RectUniforms), &cu);
+        rpe->setVertexBuffer(0, cover_vbuf);
+        rpe->setStencilReference(0);
+        rpe->draw(6);
+    }
+
+    rpe->end();
+    return color_tex;
 }
 
 // ---------------------------------------------------------------------------

@@ -114,6 +114,20 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawVertices(
+        const DrawVerticesCmd&           cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
+    std::shared_ptr<campello_gpu::Texture> renderPathFillWinding(
+        const std::vector<Offset>& triangles,
+        Path::FillType              fill_type,
+        const Color&                color,
+        uint32_t                    width,
+        uint32_t                    height,
+        campello_gpu::CommandEncoder& encoder) override;
+
     std::shared_ptr<campello_gpu::Texture> rasterizeText(
         const TextSpan& span, float dpr,
         uint32_t& out_width, uint32_t& out_height) override;
@@ -157,6 +171,8 @@ public:
         std::swap(prev_frame_views_,     frame_views_);
         colored_quad_vertex_pool_.beginFrame();
         quad_vertex_pool_.beginFrame();
+        vertices_vertex_pool_.beginFrame();
+        vertices_index_pool_.beginFrame();
         setViewportSize(w, h);
     }
 
@@ -247,6 +263,13 @@ public:
     // drawPath()'s fill branch below.
     struct RectAAVertex { float x, y, w, a; };
 
+    // Per-vertex data for vertices_pipeline_ (drawVertices()) — same x,y,w
+    // convention as RectAAVertex (CPU-transformed clip-space position),
+    // plus a full per-vertex straight-alpha color instead of a single
+    // shared alpha. Already paint-blended by the time it reaches here —
+    // see Canvas::drawVertices()'s doc comment.
+    struct VerticesVertex { float x, y, w, r, g, b, a; };
+
     // ------------------------------------------------------------------
     // Uniform buffer pool — mirrors MetalDrawBackend::UniformBufferPool
     // exactly (see its doc comment). drawFilledQuad/drawTexturedQuad/
@@ -276,6 +299,27 @@ public:
             campello_gpu::Device& device, uint64_t size, const void* data);
 
         // Advances to the next ring slot; called once per frame.
+        void beginFrame() noexcept;
+
+    private:
+        static constexpr size_t kGenerations = 4;
+        std::array<std::vector<std::shared_ptr<campello_gpu::Buffer>>, kGenerations> generations_;
+        std::array<size_t, kGenerations>                                              next_index_{};
+        size_t                                                                        current_generation_ = 0;
+    };
+
+    // Same ring-pool shape as UniformBufferPool, but the underlying VkBuffer
+    // is created with BufferUsage::index instead of ::vertex -- Vulkan
+    // requires the index-buffer usage bit explicitly (unlike Metal/D3D,
+    // which don't distinguish buffer "kinds" at creation time), so
+    // UniformBufferPool's vertex-only buffers can't be bound via
+    // setIndexBuffer(). Used by drawVertices() for its triangle-list index
+    // data.
+    class IndexBufferPool
+    {
+    public:
+        std::shared_ptr<campello_gpu::Buffer> acquire(
+            campello_gpu::Device& device, uint64_t size, const void* data);
         void beginFrame() noexcept;
 
     private:
@@ -400,6 +444,13 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  colored_quad_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rect_aa_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  vertices_pipeline_;
+
+    // Path::fillType() stencil-then-cover pipelines -- see their creation
+    // block's doc comment in the constructor.
+    std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_write_winding_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_write_evenodd_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_cover_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rrect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
 
@@ -409,6 +460,7 @@ private:
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rect_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> colored_quad_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rect_aa_blend_pipelines_;
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> vertices_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rrect_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> line_blend_pipelines_;
 
@@ -448,6 +500,12 @@ private:
     // drawClipShapeComposite()'s (shared) QuadVertex.
     UniformBufferPool colored_quad_vertex_pool_;
     UniformBufferPool quad_vertex_pool_;
+
+    // drawVertices()'s own vertex (VerticesVertex arrays) and index
+    // (uint32_t arrays) buffers — see IndexBufferPool's doc comment for why
+    // the index buffer needs its own pool class, not just its own instance.
+    UniformBufferPool vertices_vertex_pool_;
+    IndexBufferPool    vertices_index_pool_;
     // Per-frame resources for the frame currently being recorded.
     std::vector<std::shared_ptr<campello_gpu::Buffer>>      frame_buffers_;
     std::vector<std::shared_ptr<campello_gpu::Texture>>     frame_textures_;

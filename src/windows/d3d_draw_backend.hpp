@@ -114,6 +114,12 @@ public:
         const Rect&                      clip,
         campello_gpu::RenderPassEncoder& encoder) override;
 
+    void drawVertices(
+        const DrawVerticesCmd&           cmd,
+        const Matrix4&                   transform,
+        const Rect&                      clip,
+        campello_gpu::RenderPassEncoder& encoder) override;
+
     std::shared_ptr<campello_gpu::Texture> rasterizeText(
         const TextSpan& span, float dpr,
         uint32_t& out_width, uint32_t& out_height) override;
@@ -206,6 +212,8 @@ public:
         quad_uniform_pool_.beginFrame();
         rect_vertex_pool_.beginFrame();
         quad_vertex_pool_.beginFrame();
+        vertices_vertex_pool_.beginFrame();
+        vertices_index_pool_.beginFrame();
         blur_uniform_pool_.beginFrame();
         clip_shape_uniform_pool_.beginFrame();
         shader_mask_uniform_pool_.beginFrame();
@@ -259,6 +267,13 @@ private:
     // rect_aa_pipeline_ — see src/gpu/path_fill_aa.hpp's doc comment and
     // drawFillAA() below.
     struct RectAAVertex { float x, y, w, a; };
+
+    // Per-vertex data for vertices_pipeline_ (drawVertices()) — same x,y,w
+    // convention as RectAAVertex (CPU-transformed clip-space position),
+    // plus a full per-vertex straight-alpha color instead of a single
+    // shared alpha. Already paint-blended by the time it reaches here —
+    // see Canvas::drawVertices()'s doc comment.
+    struct VerticesVertex { float x, y, w, r, g, b, a; };
 
     void drawFilledQuad(
         const ProjectedCorner& c00, const ProjectedCorner& c10,
@@ -399,6 +414,27 @@ private:
         std::shared_ptr<campello_gpu::Buffer> acquire(
             campello_gpu::Device& device, uint64_t size, const void* data);
 
+        void beginFrame() noexcept;
+
+    private:
+        static constexpr size_t kGenerations = 4;
+        std::array<std::vector<std::shared_ptr<campello_gpu::Buffer>>, kGenerations> generations_;
+        std::array<size_t, kGenerations>                                              next_index_{};
+        size_t                                                                        current_generation_ = 0;
+    };
+
+    // Same ring-pool shape as VertexBufferPool, but the underlying buffer
+    // is created with BufferUsage::index instead of ::vertex -- D3D12's own
+    // resource model doesn't require a distinct usage bit for an index
+    // buffer view, but campello_gpu's cross-backend Buffer abstraction
+    // does (Vulkan does enforce it), so this requests the buffer correctly
+    // through that abstraction rather than relying on D3D12's specific
+    // leniency. Used by drawVertices() for its triangle-list index data.
+    class IndexBufferPool
+    {
+    public:
+        std::shared_ptr<campello_gpu::Buffer> acquire(
+            campello_gpu::Device& device, uint64_t size, const void* data);
         void beginFrame() noexcept;
 
     private:
@@ -583,6 +619,12 @@ private:
     VertexBufferPool rect_vertex_pool_;
     VertexBufferPool quad_vertex_pool_;
 
+    // drawVertices()'s own vertex (VerticesVertex arrays) and index
+    // (uint32_t arrays) buffers — see IndexBufferPool's doc comment for why
+    // the index buffer needs its own pool class, not VertexBufferPool.
+    VertexBufferPool  vertices_vertex_pool_;
+    IndexBufferPool    vertices_index_pool_;
+
     OffscreenTexturePool offscreen_texture_pool_;
 
     std::shared_ptr<campello_gpu::Device>          device_;
@@ -591,6 +633,7 @@ private:
 
     std::shared_ptr<campello_gpu::RenderPipeline>   rect_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   rect_aa_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>   vertices_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   shape_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   quad_pipeline_;

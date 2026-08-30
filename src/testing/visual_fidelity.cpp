@@ -381,6 +381,7 @@ struct DrawCommandVisitor {
     void operator()(const cw::DrawArcCmd&) {}
     void operator()(const cw::DrawPointsCmd&) {}
     void operator()(const cw::DrawPathCmd&) {}
+    void operator()(const cw::DrawVerticesCmd&) {}
     void operator()(const cw::DrawShadowCmd& c) {
         cw::RRect rr;
         if (auto simple = c.path.simpleRRectShape()) {

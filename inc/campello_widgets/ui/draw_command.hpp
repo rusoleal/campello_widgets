@@ -13,6 +13,7 @@
 #include <campello_widgets/ui/rrect.hpp>
 #include <campello_widgets/ui/image_filter.hpp>
 #include <campello_widgets/ui/shader.hpp>
+#include <campello_widgets/ui/color.hpp>
 
 // campello_gpu forward declaration — avoids pulling the full GPU headers
 // into every widget translation unit.
@@ -87,6 +88,40 @@ namespace systems::leal::campello_widgets
         PointMode           mode;
         std::vector<Offset> points;
         Paint               paint;
+    };
+
+    /**
+     * @brief One vertex of a `DrawVerticesCmd` -- position plus its final,
+     * already paint-blended straight-alpha color. See
+     * `buildTriangleListVertices()` (src/ui/vertices_geometry.hpp) for how
+     * the blend is computed once per vertex on the CPU rather than
+     * per-fragment on the GPU.
+     */
+    struct VertexColorPoint
+    {
+        Offset pos;
+        Color  color;
+    };
+
+    /**
+     * @brief Draw an arbitrary triangle mesh (`Canvas::drawVertices()`) --
+     * always a flat triangle list (`indices.size() % 3 == 0`), already
+     * normalised from whatever `VertexMode`/index form the caller used. See
+     * `Canvas::drawVertices()`'s doc comment for scope (per-vertex color
+     * only -- no texture coordinates, no mesh-edge antialiasing).
+     *
+     * `blend_mode` is `Paint::blend_mode` (the GPU framebuffer-compositing
+     * mode every other draw command's `Paint` carries) -- unrelated to
+     * `Canvas::drawVertices()`'s own `blend_mode` *parameter*, which
+     * combines `Paint::color` with each vertex's own color and is already
+     * fully consumed into `vertices`' baked-in colors by the time this
+     * command is recorded.
+     */
+    struct DrawVerticesCmd
+    {
+        std::vector<VertexColorPoint> vertices;
+        std::vector<uint32_t>         indices;
+        BlendMode                     blend_mode = BlendMode::srcOver;
     };
 
     /** @brief Draw a shadow for a path (material elevation). */
@@ -348,6 +383,7 @@ namespace systems::leal::campello_widgets
         // Complex shapes
         DrawPathCmd,
         DrawShadowCmd,
+        DrawVerticesCmd,
 
         // Text and images
         DrawTextCmd,

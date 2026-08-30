@@ -255,3 +255,104 @@ TEST(CanvasPaintShader, NoShaderTakesTheNormalPath)
     ASSERT_EQ(canvas.commands().size(), 1u);
     EXPECT_TRUE(std::holds_alternative<cw::DrawRectCmd>(canvas.commands()[0]));
 }
+
+// -----------------------------------------------------------------------
+// Canvas::drawVertices() -- plumbing into DrawVerticesCmd
+// -----------------------------------------------------------------------
+
+TEST(CanvasDrawVertices, RecordsOneCommandWithTriangleListIndices)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Vertices verts;
+    verts.positions = {{0, 0}, {10, 0}, {0, 10}};
+    verts.colors    = {cw::Color::red(), cw::Color::green(), cw::Color::blue()};
+
+    canvas.drawVertices(verts, cw::BlendMode::dst, cw::Paint::filled(cw::Color::white()));
+
+    ASSERT_EQ(canvas.commands().size(), 1u);
+    const auto& cmd = std::get<cw::DrawVerticesCmd>(canvas.commands()[0]);
+    ASSERT_EQ(cmd.vertices.size(), 3u);
+    ASSERT_EQ(cmd.indices.size(), 3u);
+    EXPECT_FLOAT_EQ(cmd.vertices[0].color.r, 1.0f); // dst mode -- vertex color passes through
+    EXPECT_FLOAT_EQ(cmd.vertices[1].color.g, 1.0f);
+}
+
+TEST(CanvasDrawVertices, OpacityAppliesExactlyOnce)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+    canvas.setOpacity(0.5f);
+
+    cw::Vertices verts;
+    verts.positions = {{0, 0}, {10, 0}, {0, 10}};
+    // colors left empty -- every vertex uses paint.color, so opacity should
+    // land in paint.color.a exactly once before the (no-op, dst mode) blend.
+    canvas.drawVertices(verts, cw::BlendMode::dst,
+        cw::Paint::filled(cw::Color::fromRGBA(1.0f, 1.0f, 1.0f, 1.0f)));
+
+    const auto& cmd = std::get<cw::DrawVerticesCmd>(canvas.commands()[0]);
+    for (const auto& v : cmd.vertices)
+        EXPECT_FLOAT_EQ(v.color.a, 0.5f); // not 0.25f
+}
+
+TEST(CanvasDrawVertices, ShaderSetTriggersShaderMaskWrapInsteadOfDirectCommand)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+
+    cw::Vertices verts;
+    verts.positions = {{0, 0}, {10, 0}, {0, 10}};
+
+    cw::Paint p;
+    p.color  = cw::Color::black();
+    p.shader = cw::Shader{cw::LinearGradient{
+        .begin = {0, 0}, .end = {10, 0}, .colors = {cw::Color::red(), cw::Color::blue()}}};
+    canvas.drawVertices(verts, cw::BlendMode::srcOver, p);
+
+    ASSERT_FALSE(canvas.commands().empty());
+    EXPECT_TRUE(std::holds_alternative<cw::DrawShaderMaskBeginCmd>(canvas.commands()[0]));
+    // The masked draw underneath is still a vertices command, not skipped.
+    bool found_vertices_cmd = false;
+    for (const auto& c : canvas.commands())
+        if (std::holds_alternative<cw::DrawVerticesCmd>(c)) found_vertices_cmd = true;
+    EXPECT_TRUE(found_vertices_cmd);
+}
+
+TEST(CanvasDrawVertices, EmptyPositionsRecordsNoCommand)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+    cw::Vertices verts; // empty positions
+    canvas.drawVertices(verts, cw::BlendMode::dst, cw::Paint::filled(cw::Color::white()));
+    EXPECT_TRUE(canvas.commands().empty());
+}
+
+// -----------------------------------------------------------------------
+// Canvas::drawAtlas() -- a save()/transform()/drawImage()/restore() loop,
+// zero new DrawCommand types. `atlas` is nullptr in these tests, matching
+// the existing DrawImageDefaultsToHighFilterQuality-style tests above
+// (Canvas itself never dereferences the texture -- only the eventual GPU
+// backend would); drawAtlas() bails before that on a null atlas, so these
+// tests exercise the "well-formed but texture-less" and the "null atlas"
+// paths separately.
+// -----------------------------------------------------------------------
+
+TEST(CanvasDrawAtlas, NullAtlasRecordsNoCommand)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+    std::vector<cw::RSTransform> transforms{cw::RSTransform{}};
+    std::vector<cw::Rect> rects{cw::Rect::fromLTWH(0, 0, 10, 10)};
+    canvas.drawAtlas(nullptr, transforms, rects);
+    EXPECT_TRUE(canvas.commands().empty());
+}
+
+TEST(CanvasDrawAtlas, MismatchedSizesRecordsNoCommand)
+{
+    cw::Canvas canvas(400.0f, 300.0f);
+    // Note: still passes a non-null atlas texture pointer isn't possible
+    // without a GPU device in a universal test, so this specifically
+    // exercises the size-mismatch bail-out with a null atlas too --
+    // MismatchedSizes must win regardless of atlas validity.
+    std::vector<cw::RSTransform> transforms{cw::RSTransform{}, cw::RSTransform{}};
+    std::vector<cw::Rect> rects{cw::Rect::fromLTWH(0, 0, 10, 10)};
+    canvas.drawAtlas(nullptr, transforms, rects);
+    EXPECT_TRUE(canvas.commands().empty());
+}

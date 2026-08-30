@@ -162,6 +162,26 @@ void D3DDrawBackend::VertexBufferPool::beginFrame() noexcept
     next_index_[current_generation_] = 0;
 }
 
+std::shared_ptr<GPU::Buffer> D3DDrawBackend::IndexBufferPool::acquire(
+    GPU::Device& device, uint64_t size, const void* data)
+{
+    auto&  buffers = generations_[current_generation_];
+    size_t idx     = next_index_[current_generation_]++;
+
+    if (idx >= buffers.size())
+        buffers.push_back(device.createBuffer(size, GPU::BufferUsage::index, const_cast<void*>(data)));
+    else
+        buffers[idx]->upload(0, size, const_cast<void*>(data));
+
+    return buffers[idx];
+}
+
+void D3DDrawBackend::IndexBufferPool::beginFrame() noexcept
+{
+    current_generation_ = (current_generation_ + 1) % kGenerations;
+    next_index_[current_generation_] = 0;
+}
+
 D3DDrawBackend::UniformBindGroupPool::Slot D3DDrawBackend::UniformBindGroupPool::acquire(
     GPU::Device& device,
     const std::shared_ptr<GPU::BindGroupLayout>& layout,
@@ -340,6 +360,8 @@ D3DDrawBackend::D3DDrawBackend(
     // whole backend. See src/gpu/path_fill_aa.hpp.
     auto rect_aa_vs = loadShader(device_, krect_aa_vs_cso, krect_aa_vs_csoSize);
     auto rect_aa_ps = loadShader(device_, krect_aa_ps_cso, krect_aa_ps_csoSize);
+    auto vertices_vs = loadShader(device_, kvertices_vs_cso, kvertices_vs_csoSize);
+    auto vertices_ps = loadShader(device_, kvertices_ps_cso, kvertices_ps_csoSize);
     auto quad_vs  = loadShader(device_, kquad_vs_cso,  kquad_vs_csoSize);
     auto quad_ps  = loadShader(device_, kquad_ps_cso,  kquad_ps_csoSize);
     auto shape_vs = loadShader(device_, kshape_vs_cso, kshape_vs_csoSize);
@@ -572,6 +594,54 @@ D3DDrawBackend::D3DDrawBackend(
         desc.layout    = rect_layout;
 
         rect_aa_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Vertices pipeline (drawVertices()) — premultiplied-alpha blend,
+    //     per-vertex color instead of rect_aa's shared-uniform color +
+    //     per-vertex alpha; see vertices.hlsl's doc comment. Reuses
+    //     rect_layout/rect_bgl_ -- VerticesUniforms occupies the same
+    //     16-byte viewport prefix RectUniforms does. ---
+    if (vertices_vs && vertices_ps)
+    {
+        GPU::ColorState colorState{};
+        colorState.format    = pixel_format_;
+        colorState.writeMask = GPU::ColorWrite::all;
+        colorState.blend     = premultipliedAlphaBlend();
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = vertices_vs;
+        desc.vertex.entryPoint = "VerticesVS";
+
+        GPU::VertexAttribute posAttr{};
+        posAttr.componentType  = GPU::ComponentType::ctFloat;
+        posAttr.accessorType   = GPU::AccessorType::acVec3;
+        posAttr.offset         = 0;
+        posAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute colorAttr{};
+        colorAttr.componentType  = GPU::ComponentType::ctFloat;
+        colorAttr.accessorType   = GPU::AccessorType::acVec4;
+        colorAttr.offset         = 3 * sizeof(float);
+        colorAttr.shaderLocation = 1;
+
+        GPU::VertexLayout layout{};
+        layout.arrayStride = sizeof(VerticesVertex);
+        layout.attributes  = { posAttr, colorAttr };
+        layout.stepMode    = GPU::StepMode::vertex;
+        desc.vertex.buffers = { layout };
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = vertices_ps;
+        frag.entryPoint = "VerticesPS";
+        frag.targets.push_back(colorState);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+        desc.layout    = rect_layout;
+
+        vertices_pipeline_ = device_->createRenderPipeline(desc);
     }
 
     // --- Quad (textured) pipeline ---
@@ -1006,6 +1076,45 @@ void D3DDrawBackend::drawFillAA(
     encoder.setBindGroup(0, slot.bind_group);
     encoder.setVertexBuffer(0, vbuf);
     encoder.draw(static_cast<uint32_t>(verts.size()));
+}
+
+void D3DDrawBackend::drawVertices(
+    const DrawVerticesCmd&  cmd,
+    const Matrix4&          transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!vertices_pipeline_ || !rect_bgl_ || cmd.vertices.empty() || cmd.indices.empty()) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    std::vector<VerticesVertex> verts;
+    verts.reserve(cmd.vertices.size());
+    for (const auto& v : cmd.vertices)
+    {
+        auto p = transform * vm::Vector4<float>(v.pos.x, v.pos.y, 0.0f, 1.0f);
+        verts.push_back({p.x(), p.y(), p.w(), v.color.r, v.color.g, v.color.b, v.color.a});
+    }
+
+    auto vbuf = vertices_vertex_pool_.acquire(*device_, verts.size() * sizeof(VerticesVertex), verts.data());
+    if (!vbuf) return;
+
+    auto ibuf = vertices_index_pool_.acquire(*device_, cmd.indices.size() * sizeof(uint32_t), cmd.indices.data());
+    if (!ibuf) return;
+
+    // RectUniforms layout (color, viewport) is shared with rect_pipeline_ --
+    // see vertices.hlsl's doc comment. `color` is unused by this pipeline.
+    RectUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    auto slot = rect_uniform_pool_.acquire(*device_, rect_bgl_, sizeof(RectUniforms), &u);
+    if (!slot.bind_group) return;
+
+    encoder.setPipeline(vertices_pipeline_);
+    encoder.setBindGroup(0, slot.bind_group);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setIndexBuffer(ibuf, GPU::IndexFormat::uint32);
+    encoder.drawIndexed(static_cast<uint32_t>(cmd.indices.size()));
 }
 
 void D3DDrawBackend::drawRect(

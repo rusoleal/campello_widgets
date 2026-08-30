@@ -11,6 +11,8 @@
 #include <campello_widgets/ui/rrect.hpp>
 #include <campello_widgets/ui/image_filter.hpp>
 #include <campello_widgets/ui/shader.hpp>
+#include <campello_widgets/ui/vertices.hpp>
+#include <campello_widgets/ui/rs_transform.hpp>
 
 namespace systems::leal::campello_gpu { class Texture; }
 
@@ -78,6 +80,32 @@ namespace systems::leal::campello_widgets
 
         /** @brief Draws points according to the given mode. */
         void drawPoints(PointMode mode, const std::vector<Offset>& points, const Paint& paint);
+
+        /**
+         * @brief Draws an arbitrary triangle mesh -- matches Flutter's
+         * `Canvas.drawVertices(vertices, blendMode, paint)`.
+         *
+         * `blend_mode` combines `paint.color` (as Porter-Duff "src") with
+         * each vertex's own color (as "dst"), the same formula
+         * `Paint.colorFilter` uses -- computed once per input vertex on the
+         * CPU, then linearly interpolated across each triangle by the GPU.
+         * This is mathematically exact whenever a triangle's vertex alphas
+         * are equal (the common case -- most meshes use fully-opaque
+         * per-vertex colors), and for `srcIn`/`srcOut`/`src`/`dst`/`clear`/
+         * `srcOver`/`modulate` regardless of alpha variation; for other
+         * modes combined with varying per-vertex alpha within one triangle,
+         * it's a smooth-interpolation approximation of the true per-pixel
+         * blend rather than an exact match.
+         *
+         * `paint.shader`, if set, paints the whole mesh with the shader
+         * (via the same shader-mask mechanism every other `drawXxx()` uses)
+         * instead of a flat/vertex-blended color -- e.g. a gradient-shaded
+         * mesh. Out of scope: `vertices`' own texture coordinates (a
+         * shader sampled *per vertex UV*, for texture-mapped mesh warping)
+         * and mesh-edge antialiasing (triangles are flat/interpolated-color
+         * with no AA skirt).
+         */
+        void drawVertices(const Vertices& vertices, BlendMode blend_mode, const Paint& paint);
 
         /**
          * @brief Draws a shadow for a path.
@@ -151,6 +179,34 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<campello_gpu::Texture> texture,
             const Rect& center,
             const Rect& dst_rect,
+            FilterQuality filter_quality = FilterQuality::high);
+
+        /**
+         * @brief Draws many sub-regions of one atlas texture, each
+         * independently rotated/scaled/translated -- matches Flutter's
+         * `Canvas.drawAtlas()`, scoped to its `atlas`/`transforms`/`rects`
+         * parameters only.
+         *
+         * `transforms[i]` positions `rects[i]` (an atlas-pixel-space
+         * sub-rect, *not* normalised — unlike `drawImage()`'s `src_rect`)
+         * so that sprite's own local `[0,rects[i].width] x
+         * [0,rects[i].height]` box lands wherever the `RSTransform` maps
+         * it. Implemented as one `save()`/`transform()`/`drawImage()`/
+         * `restore()` sequence per sprite — pure CPU geometry reusing
+         * existing Canvas primitives, no new GPU work.
+         *
+         * Out of scope (see `RSTransform`'s doc comment / this method's
+         * implementation notes for why): per-sprite `colors`/`blendMode`
+         * tinting (would need real per-fragment blending against the
+         * sampled atlas content — a new instanced GPU pipeline, not
+         * attempted here) and `cullRect` (a pure performance hint with no
+         * effect without batching, so dropped rather than kept as a
+         * no-op). `transforms.size()` must equal `rects.size()`.
+         */
+        void drawAtlas(
+            std::shared_ptr<campello_gpu::Texture> atlas,
+            const std::vector<RSTransform>& transforms,
+            const std::vector<Rect>& rects,
             FilterQuality filter_quality = FilterQuality::high);
 
         /**

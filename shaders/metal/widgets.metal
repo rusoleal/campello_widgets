@@ -122,6 +122,51 @@ fragment float4 rectAAFragment(RectAAVertOut in [[stage_in]])
 }
 
 // ---------------------------------------------------------------------------
+// Vertices pipeline (verticesVertex / verticesFragment)
+//
+// Canvas.drawVertices() -- an arbitrary triangle mesh where each vertex
+// carries its own full RGBA color (already paint-blended on the CPU, see
+// Canvas::drawVertices()'s doc comment), linearly interpolated by the
+// rasterizer across each triangle. Structurally identical to the rect-AA
+// pipeline above minus its single-shared-uniform-color specialization: no
+// RectUniforms.color here at all, since color is entirely a per-vertex
+// attribute.
+// ---------------------------------------------------------------------------
+
+struct VerticesUniforms {
+    float2 viewport;  // width, height (pixels)
+};
+
+struct VerticesVertexIn {
+    float3 posw  [[attribute(0)]];  // (x, y, w) -- CPU-transformed clip-space position
+    float4 color [[attribute(1)]];  // (r, g, b, a) -- straight alpha
+};
+
+struct VerticesVertOut {
+    float4 pos   [[position]];
+    float4 color;
+};
+
+vertex VerticesVertOut verticesVertex(
+    VerticesVertexIn           in [[stage_in]],
+    constant VerticesUniforms &u  [[buffer(1)]])
+{
+    float clip_x =  2.0 * in.posw.x / u.viewport.x - in.posw.z;
+    float clip_y = -(2.0 * in.posw.y / u.viewport.y - in.posw.z);
+
+    VerticesVertOut out;
+    out.pos   = float4(clip_x, clip_y, 0.0, in.posw.z);
+    out.color = in.color;
+    return out;
+}
+
+fragment float4 verticesFragment(VerticesVertOut in [[stage_in]])
+{
+    float4 c = in.color;
+    return float4(c.rgb * c.a, c.a);
+}
+
+// ---------------------------------------------------------------------------
 // Quad (textured) pipeline
 // ---------------------------------------------------------------------------
 

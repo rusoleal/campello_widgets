@@ -95,6 +95,14 @@ struct alignas(16) RectUniforms {
     float _pad[2];
 };
 
+// drawVertices()'s pipeline — no shared color (each vertex carries its own),
+// so this is just the viewport NDC-conversion constant RectUniforms also
+// carries.
+struct alignas(16) VerticesUniforms {
+    float viewport[2];  // width, height
+    float _pad[2];
+};
+
 struct alignas(16) QuadUniforms {
     float viewport[2];  // width, height (pixels)
     float opacity;      // [0, 1] — scales all pixel channels
@@ -244,6 +252,167 @@ MetalDrawBackend::MetalDrawBackend(
         desc.frontFace = GPU::FrontFace::ccw;
 
         rect_aa_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Vertices pipeline (drawVertices()) — premultiplied-alpha blend,
+    //     per-vertex color instead of rect_aa's shared-uniform color +
+    //     per-vertex alpha. See VerticesVertex's doc comment. ---
+    {
+        GPU::ColorState verticesCs{};
+        verticesCs.format    = pixel_format;
+        verticesCs.writeMask = GPU::ColorWrite::all;
+        verticesCs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = shader;
+        desc.vertex.entryPoint = "verticesVertex";
+
+        GPU::VertexAttribute posAttr{};
+        posAttr.componentType  = GPU::ComponentType::ctFloat;
+        posAttr.accessorType   = GPU::AccessorType::acVec3;
+        posAttr.offset         = offsetof(VerticesVertex, x);
+        posAttr.shaderLocation = 0;
+
+        GPU::VertexAttribute colorAttr{};
+        colorAttr.componentType  = GPU::ComponentType::ctFloat;
+        colorAttr.accessorType   = GPU::AccessorType::acVec4;
+        colorAttr.offset         = offsetof(VerticesVertex, r);
+        colorAttr.shaderLocation = 1;
+
+        GPU::VertexLayout verticesLayout{};
+        verticesLayout.arrayStride = sizeof(VerticesVertex);
+        verticesLayout.attributes  = {posAttr, colorAttr};
+        verticesLayout.stepMode    = GPU::StepMode::vertex;
+
+        desc.vertex.buffers = {verticesLayout};
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = shader;
+        frag.entryPoint = "verticesFragment";
+        frag.targets.push_back(verticesCs);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+
+        vertices_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Path::fillType() stencil-then-cover pipelines -- see
+    //     path_fill_stencil_write_winding_pipeline_'s doc comment in
+    //     metal_draw_backend.hpp. All three reuse rectVertex/rectFragment
+    //     and RectVertex/RectUniforms verbatim -- only ColorState/
+    //     depthStencil differ from rect_pipeline_ above. ---
+    {
+        GPU::VertexAttribute rectPosAttr{};
+        rectPosAttr.componentType  = GPU::ComponentType::ctFloat;
+        rectPosAttr.accessorType   = GPU::AccessorType::acVec3;
+        rectPosAttr.offset         = 0;
+        rectPosAttr.shaderLocation = 0;
+
+        GPU::VertexLayout rectLayout{};
+        rectLayout.arrayStride = sizeof(RectVertex);
+        rectLayout.attributes  = {rectPosAttr};
+        rectLayout.stepMode    = GPU::StepMode::vertex;
+
+        // Stencil-write pipelines: color writes disabled entirely (this
+        // pass only accumulates winding/parity into the stencil buffer),
+        // stencil test always passes (every fragment inside a triangle
+        // contributes), depth disabled.
+        GPU::ColorState writeCs{};
+        writeCs.format    = pixel_format;
+        writeCs.writeMask = static_cast<GPU::ColorWrite>(0); // none
+        writeCs.blend     = GPU::BlendState{};
+
+        auto buildWritePipeline = [&](GPU::StencilOp front_pass, GPU::StencilOp back_pass)
+            -> std::shared_ptr<GPU::RenderPipeline>
+        {
+            GPU::RenderPipelineDescriptor desc{};
+            desc.vertex.module     = shader;
+            desc.vertex.entryPoint = "rectVertex";
+            desc.vertex.buffers    = {rectLayout};
+
+            GPU::FragmentDescriptor frag{};
+            frag.module     = shader;
+            frag.entryPoint = "rectFragment";
+            frag.targets.push_back(writeCs);
+            desc.fragment = frag;
+
+            desc.topology  = GPU::PrimitiveTopology::triangleList;
+            desc.cullMode  = GPU::CullMode::none;
+            desc.frontFace = GPU::FrontFace::ccw;
+
+            GPU::DepthStencilDescriptor ds{};
+            ds.format            = GPU::PixelFormat::depth24plus_stencil8;
+            ds.depthCompare      = GPU::CompareOp::always;
+            ds.depthWriteEnabled = false;
+            ds.stencilReadMask   = 0xFFFFFFFF;
+            ds.stencilWriteMask  = 0xFFFFFFFF;
+            ds.stencilFront = GPU::StencilDescriptor{
+                GPU::CompareOp::always, GPU::StencilOp::keep, GPU::StencilOp::keep, front_pass};
+            ds.stencilBack = GPU::StencilDescriptor{
+                GPU::CompareOp::always, GPU::StencilOp::keep, GPU::StencilOp::keep, back_pass};
+            desc.depthStencil = ds;
+
+            return device_->createRenderPipeline(desc);
+        };
+
+        // nonZero winding: front faces (CCW, as ear-clipping produces for a
+        // contour authored in its "natural" direction) increment, back
+        // faces (a contour wound the opposite way) decrement -- the
+        // classic stencil winding-count technique.
+        path_fill_stencil_write_winding_pipeline_ =
+            buildWritePipeline(GPU::StencilOp::incrementWrap, GPU::StencilOp::decrementWrap);
+        // evenOdd: every crossing flips parity regardless of face.
+        path_fill_stencil_write_evenodd_pipeline_ =
+            buildWritePipeline(GPU::StencilOp::invert, GPU::StencilOp::invert);
+
+        // Cover pipeline: normal premultiplied-alpha color output, gated by
+        // "stencil != reference(0)" -- true for both a nonzero winding
+        // count *and* evenOdd's toggled-to-nonzero-byte state (invert
+        // starts at 0x00, flips to 0xFF on the first crossing) -- so one
+        // pipeline serves both fill types (see renderPathFillWinding()'s
+        // doc comment). passOp=zero resets the stencil back to 0 in the
+        // same draw that reads it, so no separate clear pass is needed.
+        GPU::ColorState coverCs{};
+        coverCs.format    = pixel_format;
+        coverCs.writeMask = GPU::ColorWrite::all;
+        coverCs.blend = GPU::BlendState{
+            .color = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+            .alpha = { GPU::BlendFactor::one, GPU::BlendFactor::oneMinusSrcAlpha, GPU::BlendOperation::add },
+        };
+
+        GPU::RenderPipelineDescriptor coverDesc{};
+        coverDesc.vertex.module     = shader;
+        coverDesc.vertex.entryPoint = "rectVertex";
+        coverDesc.vertex.buffers    = {rectLayout};
+
+        GPU::FragmentDescriptor coverFrag{};
+        coverFrag.module     = shader;
+        coverFrag.entryPoint = "rectFragment";
+        coverFrag.targets.push_back(coverCs);
+        coverDesc.fragment = coverFrag;
+
+        coverDesc.topology  = GPU::PrimitiveTopology::triangleList;
+        coverDesc.cullMode  = GPU::CullMode::none;
+        coverDesc.frontFace = GPU::FrontFace::ccw;
+
+        GPU::DepthStencilDescriptor coverDs{};
+        coverDs.format            = GPU::PixelFormat::depth24plus_stencil8;
+        coverDs.depthCompare      = GPU::CompareOp::always;
+        coverDs.depthWriteEnabled = false;
+        coverDs.stencilReadMask   = 0xFFFFFFFF;
+        coverDs.stencilWriteMask  = 0xFFFFFFFF;
+        coverDs.stencilFront = GPU::StencilDescriptor{
+            GPU::CompareOp::notEqual, GPU::StencilOp::zero, GPU::StencilOp::zero, GPU::StencilOp::zero};
+        coverDs.stencilBack = coverDs.stencilFront;
+        coverDesc.depthStencil = coverDs;
+
+        path_fill_stencil_cover_pipeline_ = device_->createRenderPipeline(coverDesc);
     }
 
     // --- Quad (textured) pipeline — premultiplied-alpha blend ---
@@ -823,6 +992,163 @@ void MetalDrawBackend::drawFillAA(
     encoder.setVertexBuffer(0, vbuf);
     encoder.setVertexBuffer(1, ubuf);
     encoder.draw(static_cast<uint32_t>(verts.size()));
+}
+
+void MetalDrawBackend::drawVertices(
+    const DrawVerticesCmd&  cmd,
+    const Matrix4&          transform,
+    const Rect&              clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!vertices_pipeline_ || cmd.vertices.empty() || cmd.indices.empty()) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    std::vector<VerticesVertex> verts;
+    verts.reserve(cmd.vertices.size());
+    for (const auto& v : cmd.vertices)
+    {
+        auto p = transform * vm::Vector4<float>(v.pos.x, v.pos.y, 0.0f, 1.0f);
+        verts.push_back({p.x(), p.y(), p.w(), v.color.r, v.color.g, v.color.b, v.color.a});
+    }
+
+    auto vbuf = vertices_vertex_pool_.acquire(*device_, verts.size() * sizeof(VerticesVertex), verts.data());
+    if (!vbuf) return;
+
+    auto ibuf = vertices_index_pool_.acquire(*device_, cmd.indices.size() * sizeof(uint32_t), cmd.indices.data());
+    if (!ibuf) return;
+
+    VerticesUniforms u{};
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+
+    auto ubuf = vertices_uniform_pool_.acquire(*device_, sizeof(VerticesUniforms), &u);
+    if (!ubuf) return;
+
+    encoder.setPipeline(vertices_pipeline_);
+    encoder.setVertexBuffer(0, vbuf);
+    encoder.setVertexBuffer(1, ubuf);
+    encoder.setIndexBuffer(ibuf, GPU::IndexFormat::uint32);
+    encoder.drawIndexed(static_cast<uint32_t>(cmd.indices.size()));
+}
+
+std::shared_ptr<GPU::Texture> MetalDrawBackend::renderPathFillWinding(
+    const std::vector<Offset>& triangles,
+    Path::FillType              fill_type,
+    const Color&                color,
+    uint32_t                    width,
+    uint32_t                    height,
+    GPU::CommandEncoder&        encoder)
+{
+    if (!path_fill_stencil_cover_pipeline_ || triangles.empty() || width == 0 || height == 0)
+        return nullptr;
+    auto write_pipeline = (fill_type == Path::FillType::evenOdd)
+        ? path_fill_stencil_write_evenodd_pipeline_
+        : path_fill_stencil_write_winding_pipeline_;
+    if (!write_pipeline) return nullptr;
+
+    // Dedicated textures, not pooled -- see IDrawBackend::renderPathFillWinding()'s
+    // doc comment: these aren't reused/replayed across frames like
+    // shadow/blur/clip results, so the shared size-keyed pool (which exists
+    // to amortize repeated same-size allocation across frames) isn't the
+    // right fit here yet.
+    auto color_tex = device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, 1,
+        static_cast<GPU::TextureUsage>(
+            static_cast<int>(GPU::TextureUsage::renderTarget) |
+            static_cast<int>(GPU::TextureUsage::textureBinding) |
+            static_cast<int>(GPU::TextureUsage::copySrc)));
+    if (!color_tex) return nullptr;
+
+    auto stencil_tex = device_->createTexture(
+        GPU::TextureType::tt2d, GPU::PixelFormat::depth24plus_stencil8, width, height, 1, 1, 1,
+        GPU::TextureUsage::renderTarget);
+    if (!stencil_tex) return nullptr;
+
+    auto color_view   = color_tex->createView(pixel_format_, 1);
+    auto stencil_view = stencil_tex->createView(GPU::PixelFormat::depth24plus_stencil8, 1);
+    if (!color_view || !stencil_view) return nullptr;
+
+    GPU::ColorAttachment ca{};
+    ca.view          = color_view;
+    ca.loadOp        = GPU::LoadOp::clear;
+    ca.storeOp       = GPU::StoreOp::store;
+    ca.clearValue[0] = ca.clearValue[1] = ca.clearValue[2] = ca.clearValue[3] = 0.0f;
+
+    GPU::DepthStencilAttachment dsa{};
+    dsa.view              = stencil_view;
+    dsa.stencilLoadOp     = GPU::LoadOp::clear;
+    dsa.stencilClearValue = 0;
+    dsa.stencilStoreOp    = GPU::StoreOp::discard;
+    dsa.stencilReadOnly   = false;
+    // depth24plus_stencil8, not a pure stencil8 format -- Metal's pipeline
+    // validation rejects stencil8 as a depthAttachmentPixelFormat even when
+    // depth is otherwise unused (campello_gpu's DepthStencilDescriptor.format
+    // covers both aspects on Metal). The depth channel itself goes
+    // unused -- these fields are
+    // unused by the pipelines above (depthWriteEnabled=false, compare=
+    // always) but still need a well-formed value.
+    dsa.depthLoadOp  = GPU::LoadOp::load;
+    dsa.depthStoreOp = GPU::StoreOp::discard;
+    dsa.depthReadOnly = true;
+
+    GPU::BeginRenderPassDescriptor desc{};
+    desc.colorAttachments      = {ca};
+    desc.depthStencilAttachment = dsa;
+
+    auto rpe = encoder.beginRenderPass(desc);
+    if (!rpe) return nullptr;
+
+    // Pass 1: stencil-write -- every contour's ear-clipped triangles,
+    // color writes disabled. `triangles` already carries physical-pixel
+    // positions local to this texture (see Renderer::applyPathFillWinding()'s
+    // doc comment) -- reused as-is via RectUniforms.viewport = (width,height).
+    std::vector<RectVertex> write_verts;
+    write_verts.reserve(triangles.size());
+    for (const auto& p : triangles) write_verts.push_back({p.x, p.y, 1.0f});
+
+    auto write_vbuf = rect_vertex_pool_.acquire(*device_, write_verts.size() * sizeof(RectVertex), write_verts.data());
+    if (write_vbuf)
+    {
+        RectUniforms wu{};
+        wu.viewport[0] = static_cast<float>(width);
+        wu.viewport[1] = static_cast<float>(height);
+        auto write_ubuf = rect_uniform_pool_.acquire(*device_, sizeof(RectUniforms), &wu);
+        if (write_ubuf)
+        {
+            rpe->setPipeline(write_pipeline);
+            rpe->setVertexBuffer(0, write_vbuf);
+            rpe->setVertexBuffer(1, write_ubuf);
+            rpe->draw(static_cast<uint32_t>(write_verts.size()));
+        }
+    }
+
+    // Pass 2: cover -- one quad spanning the whole texture, painted with
+    // the real fill color, gated + reset by the stencil test (see
+    // path_fill_stencil_cover_pipeline_'s doc comment).
+    const float w = static_cast<float>(width), h = static_cast<float>(height);
+    const RectVertex cover_verts[6] = {
+        {0.0f, 0.0f, 1.0f}, {w, 0.0f, 1.0f}, {0.0f, h, 1.0f},
+        {0.0f, h, 1.0f}, {w, 0.0f, 1.0f}, {w, h, 1.0f},
+    };
+    auto cover_vbuf = rect_vertex_pool_.acquire(*device_, sizeof(cover_verts), cover_verts);
+    if (cover_vbuf)
+    {
+        RectUniforms cu{};
+        cu.color[0] = color.r; cu.color[1] = color.g; cu.color[2] = color.b; cu.color[3] = color.a;
+        cu.viewport[0] = w; cu.viewport[1] = h;
+        auto cover_ubuf = rect_uniform_pool_.acquire(*device_, sizeof(RectUniforms), &cu);
+        if (cover_ubuf)
+        {
+            rpe->setPipeline(path_fill_stencil_cover_pipeline_);
+            rpe->setVertexBuffer(0, cover_vbuf);
+            rpe->setVertexBuffer(1, cover_ubuf);
+            rpe->setStencilReference(0);
+            rpe->draw(6);
+        }
+    }
+
+    rpe->end();
+    return color_tex;
 }
 
 void MetalDrawBackend::drawRect(
