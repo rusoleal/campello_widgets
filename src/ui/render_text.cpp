@@ -148,12 +148,20 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    std::optional<float> RenderText::computeDistanceToActualBaseline(TextBaseline) const
+    {
+        if (lines_.empty()) return std::nullopt;
+        // Approximate alphabetic/ideographic baseline: roughly 75% down from
+        // the top of the font's em-box -- same approximation debugPaint()
+        // already used for its debug baseline lines, now promoted to a real
+        // measurement other render objects (e.g. RenderBaseline) can use.
+        return span_.style.font_size * 0.75f;
+    }
+
     void RenderText::debugPaint(PaintContext& context, const Offset& offset) const
     {
         if (!DebugFlags::paintBaselinesEnabled) return;
 
-        // Approximate alphabetic baseline: roughly 75% down from the top of
-        // the font's em-box. This is close enough for visual debugging.
         const float baseline_offset = span_.style.font_size * 0.75f;
 
         for (std::size_t i = 0; i < lines_.size(); ++i) {

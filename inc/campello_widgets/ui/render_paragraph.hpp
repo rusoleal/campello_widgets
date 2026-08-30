@@ -30,6 +30,7 @@ namespace systems::leal::campello_widgets
 
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
+        std::optional<float> computeDistanceToActualBaseline(TextBaseline baseline) const override;
 
     private:
         /** @brief Information about a line of text for layout and painting. */

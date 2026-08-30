@@ -1,8 +1,10 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
+#include <campello_widgets/ui/text_baseline.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -123,6 +125,23 @@ namespace systems::leal::campello_widgets
         // ------------------------------------------------------------------
         // Diagnostics
         // ------------------------------------------------------------------
+
+        // ------------------------------------------------------------------
+        // Baseline
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief Distance from this box's top edge down to its baseline, if
+         * it has one.
+         *
+         * Default: delegates to `child_` at `child_offset_` if present
+         * (adding the child's own offset), else returns `std::nullopt` --
+         * mirroring Flutter's `RenderBox.computeDistanceToActualBaseline()`
+         * default. Text render objects (`RenderText`, `RenderParagraph`)
+         * override this with a real measurement; `RenderBaseline` is the
+         * only other caller.
+         */
+        virtual std::optional<float> computeDistanceToActualBaseline(TextBaseline baseline) const;
 
         std::vector<std::shared_ptr<DiagnosticsNode>> debugDescribeChildren() const override;
 

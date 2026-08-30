@@ -266,6 +266,14 @@ namespace systems::leal::campello_widgets
         size_ = constraints_.constrain(Size{max_line_width_, total_height});
     }
 
+    std::optional<float> RenderParagraph::computeDistanceToActualBaseline(TextBaseline) const
+    {
+        if (lines_.empty() || lines_[0].spans.empty()) return std::nullopt;
+        // Same 75%-of-font-size approximation as RenderText -- see its
+        // identical override's doc comment.
+        return lines_[0].spans[0].style.font_size * 0.75f;
+    }
+
     void RenderParagraph::performPaint(PaintContext& context, const Offset& offset)
     {
         // Scale font size by DPR for physical pixel rasterization.

@@ -29,6 +29,7 @@ namespace systems::leal::campello_widgets
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         void debugPaint(PaintContext& context, const Offset& offset) const override;
+        std::optional<float> computeDistanceToActualBaseline(TextBaseline baseline) const override;
 
     private:
         /** @brief Estimates the bounding size of a single-line span. */

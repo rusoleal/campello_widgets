@@ -3,6 +3,14 @@
 namespace systems::leal::campello_widgets
 {
 
+    std::optional<float> RenderBox::computeDistanceToActualBaseline(TextBaseline baseline) const
+    {
+        if (!child_) return std::nullopt;
+        const auto child_baseline = child_->computeDistanceToActualBaseline(baseline);
+        if (!child_baseline) return std::nullopt;
+        return *child_baseline + child_offset_.y;
+    }
+
     void RenderBox::setChild(std::shared_ptr<RenderBox> child) noexcept
     {
         if (child_ == child) return;

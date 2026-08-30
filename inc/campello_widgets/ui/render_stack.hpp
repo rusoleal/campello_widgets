@@ -66,7 +66,23 @@ namespace systems::leal::campello_widgets
         bool hitTestChildren(HitTestResult& result, const Offset& position) override;
         void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const override;
 
-    private:
+        // ------------------------------------------------------------------
+        // Per-child accessors -- let a subclass (RenderIndexedStack) paint/
+        // hit-test only a single selected child without duplicating this
+        // class's own layout logic.
+        // ------------------------------------------------------------------
+
+        size_t     childCount() const noexcept { return stack_children_.size(); }
+        RenderBox* boxAt(size_t index) const noexcept
+        {
+            return index < stack_children_.size() ? stack_children_[index].box.get() : nullptr;
+        }
+        Offset offsetAt(size_t index) const noexcept
+        {
+            return index < stack_children_.size() ? stack_children_[index].offset : Offset{};
+        }
+
+    protected:
         struct StackChild
         {
             std::shared_ptr<RenderBox> box;
