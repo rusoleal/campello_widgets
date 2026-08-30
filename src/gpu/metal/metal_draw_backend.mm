@@ -43,6 +43,12 @@ namespace vm  = systems::leal::vector_math;
 
 using namespace systems::leal::campello_widgets;
 
+// MSAA sample count for Path::fillType()'s stencil-then-cover fill (see
+// renderPathFillWinding()) -- 4 is WebGPU's other allowed value besides 1
+// (RenderPipelineDescriptor::sampleCount's doc comment), used here for both
+// the pipelines and the color+stencil textures/resolve target.
+static constexpr uint32_t kPathFillMsaaSamples = 4;
+
 // ---------------------------------------------------------------------------
 // Font resolution
 // ---------------------------------------------------------------------------
@@ -357,6 +363,7 @@ MetalDrawBackend::MetalDrawBackend(
             ds.stencilBack = GPU::StencilDescriptor{
                 GPU::CompareOp::always, GPU::StencilOp::keep, GPU::StencilOp::keep, back_pass};
             desc.depthStencil = ds;
+            desc.sampleCount  = kPathFillMsaaSamples;
 
             return device_->createRenderPipeline(desc);
         };
@@ -411,6 +418,7 @@ MetalDrawBackend::MetalDrawBackend(
             GPU::CompareOp::notEqual, GPU::StencilOp::zero, GPU::StencilOp::zero, GPU::StencilOp::zero};
         coverDs.stencilBack = coverDs.stencilFront;
         coverDesc.depthStencil = coverDs;
+        coverDesc.sampleCount  = kPathFillMsaaSamples;
 
         path_fill_stencil_cover_pipeline_ = device_->createRenderPipeline(coverDesc);
     }
@@ -1051,27 +1059,41 @@ std::shared_ptr<GPU::Texture> MetalDrawBackend::renderPathFillWinding(
     // shadow/blur/clip results, so the shared size-keyed pool (which exists
     // to amortize repeated same-size allocation across frames) isn't the
     // right fit here yet.
+    //
+    // color_tex/stencil_tex are multisampled (kPathFillMsaaSamples) and
+    // purely transient -- MSAA requires every attachment in the pass to
+    // share one sample count, but neither is ever read back directly.
+    // resolve_tex is the real single-sample output: the render pass resolves
+    // color_tex into it (ColorAttachment::resolveTarget below), and that's
+    // what gets returned/composited.
     auto color_tex = device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, kPathFillMsaaSamples,
+        GPU::TextureUsage::renderTarget);
+    if (!color_tex) return nullptr;
+
+    auto stencil_tex = device_->createTexture(
+        GPU::TextureType::tt2d, GPU::PixelFormat::depth24plus_stencil8, width, height, 1, 1, kPathFillMsaaSamples,
+        GPU::TextureUsage::renderTarget);
+    if (!stencil_tex) return nullptr;
+
+    auto resolve_tex = device_->createTexture(
         GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, 1,
         static_cast<GPU::TextureUsage>(
             static_cast<int>(GPU::TextureUsage::renderTarget) |
             static_cast<int>(GPU::TextureUsage::textureBinding) |
             static_cast<int>(GPU::TextureUsage::copySrc)));
-    if (!color_tex) return nullptr;
-
-    auto stencil_tex = device_->createTexture(
-        GPU::TextureType::tt2d, GPU::PixelFormat::depth24plus_stencil8, width, height, 1, 1, 1,
-        GPU::TextureUsage::renderTarget);
-    if (!stencil_tex) return nullptr;
+    if (!resolve_tex) return nullptr;
 
     auto color_view   = color_tex->createView(pixel_format_, 1);
     auto stencil_view = stencil_tex->createView(GPU::PixelFormat::depth24plus_stencil8, 1);
-    if (!color_view || !stencil_view) return nullptr;
+    auto resolve_view = resolve_tex->createView(pixel_format_, 1);
+    if (!color_view || !stencil_view || !resolve_view) return nullptr;
 
     GPU::ColorAttachment ca{};
     ca.view          = color_view;
+    ca.resolveTarget = resolve_view;
     ca.loadOp        = GPU::LoadOp::clear;
-    ca.storeOp       = GPU::StoreOp::store;
+    ca.storeOp       = GPU::StoreOp::discard; // multisampled content itself is never read back, only the resolve
     ca.clearValue[0] = ca.clearValue[1] = ca.clearValue[2] = ca.clearValue[3] = 0.0f;
 
     GPU::DepthStencilAttachment dsa{};
@@ -1148,7 +1170,7 @@ std::shared_ptr<GPU::Texture> MetalDrawBackend::renderPathFillWinding(
     }
 
     rpe->end();
-    return color_tex;
+    return resolve_tex;
 }
 
 void MetalDrawBackend::drawRect(

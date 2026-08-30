@@ -39,6 +39,10 @@ namespace systems::leal::campello_widgets
 
 namespace GPU = ::systems::leal::campello_gpu;
 
+// MSAA sample count for the Path.fillType() stencil-then-cover fill --
+// mirrors MetalDrawBackend's kPathFillMsaaSamples.
+static constexpr uint32_t kPathFillMsaaSamples = 4;
+
 // ---------------------------------------------------------------------------
 // Uniform structs (must match std140 layout in GLSL)
 // ---------------------------------------------------------------------------
@@ -686,6 +690,7 @@ VulkanDrawBackend::VulkanDrawBackend(
             desc.topology    = GPU::PrimitiveTopology::triangleList;
             desc.cullMode    = GPU::CullMode::none;
             desc.frontFace   = GPU::FrontFace::ccw;
+            desc.sampleCount = kPathFillMsaaSamples;
 
             desc.vertex.module     = colored_quad_vert;
             desc.vertex.entryPoint = "main";
@@ -732,6 +737,7 @@ VulkanDrawBackend::VulkanDrawBackend(
         coverDesc.topology    = GPU::PrimitiveTopology::triangleList;
         coverDesc.cullMode    = GPU::CullMode::none;
         coverDesc.frontFace   = GPU::FrontFace::ccw;
+        coverDesc.sampleCount = kPathFillMsaaSamples;
 
         coverDesc.vertex.module     = colored_quad_vert;
         coverDesc.vertex.entryPoint = "main";
@@ -1934,35 +1940,47 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::renderPathFillWinding(
 
     // Dedicated textures, not pooled -- see this method's declaration
     // (IDrawBackend) doc comment.
+    // color_tex/stencil_tex are multisampled (kPathFillMsaaSamples) and
+    // purely transient GPU-side computation aids; resolve_tex is the
+    // single-sample result actually returned and later sampled/composited.
     auto color_tex = device_->createTexture(
+        GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, kPathFillMsaaSamples,
+        GPU::TextureUsage::renderTarget);
+    if (!color_tex) return nullptr;
+
+    auto stencil_tex = device_->createTexture(
+        GPU::TextureType::tt2d, GPU::PixelFormat::depth24plus_stencil8, width, height, 1, 1, kPathFillMsaaSamples,
+        GPU::TextureUsage::renderTarget);
+    if (!stencil_tex) return nullptr;
+
+    auto resolve_tex = device_->createTexture(
         GPU::TextureType::tt2d, pixel_format_, width, height, 1, 1, 1,
         static_cast<GPU::TextureUsage>(
             static_cast<int>(GPU::TextureUsage::renderTarget) |
             static_cast<int>(GPU::TextureUsage::textureBinding) |
             static_cast<int>(GPU::TextureUsage::copySrc)));
-    if (!color_tex) return nullptr;
-
-    auto stencil_tex = device_->createTexture(
-        GPU::TextureType::tt2d, GPU::PixelFormat::depth24plus_stencil8, width, height, 1, 1, 1,
-        GPU::TextureUsage::renderTarget);
-    if (!stencil_tex) return nullptr;
+    if (!resolve_tex) return nullptr;
 
     auto color_view   = color_tex->createView(pixel_format_, 1);
     auto stencil_view = stencil_tex->createView(GPU::PixelFormat::depth24plus_stencil8, 1);
-    if (!color_view || !stencil_view) return nullptr;
+    auto resolve_view = resolve_tex->createView(pixel_format_, 1);
+    if (!color_view || !stencil_view || !resolve_view) return nullptr;
 
     // Keep the textures/views alive until the frame's GPU work is actually
     // done -- see createOffscreenTexture()/beginOffscreenPass()'s identical
     // reasoning (frame_textures_/frame_views_' doc comments).
     frame_textures_.push_back(color_tex);
     frame_textures_.push_back(stencil_tex);
+    frame_textures_.push_back(resolve_tex);
     frame_views_.push_back(color_view);
     frame_views_.push_back(stencil_view);
+    frame_views_.push_back(resolve_view);
 
     GPU::ColorAttachment ca{};
     ca.view          = color_view;
+    ca.resolveTarget = resolve_view;
     ca.loadOp        = GPU::LoadOp::clear;
-    ca.storeOp       = GPU::StoreOp::store;
+    ca.storeOp       = GPU::StoreOp::discard;
     ca.clearValue[0] = ca.clearValue[1] = ca.clearValue[2] = ca.clearValue[3] = 0.0f;
 
     GPU::DepthStencilAttachment dsa{};
@@ -2034,7 +2052,7 @@ std::shared_ptr<GPU::Texture> VulkanDrawBackend::renderPathFillWinding(
     }
 
     rpe->end();
-    return color_tex;
+    return resolve_tex;
 }
 
 // ---------------------------------------------------------------------------
