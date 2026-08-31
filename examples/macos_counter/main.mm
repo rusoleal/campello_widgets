@@ -71,10 +71,10 @@ cw::WidgetRef ButtonState::build(cw::BuildContext&)
 
     // Track press state for visual feedback
     auto detector = std::make_shared<cw::GestureDetector>();
-    detector->on_pan_update = [this](cw::Offset) {
+    detector->on_pan_update = [this](cw::DragUpdateDetails) {
         setState([this] { pressed_ = true; });
     };
-    detector->on_pan_end = [this] {
+    detector->on_pan_end = [this](cw::DragEndDetails) {
         setState([this] { pressed_ = false; });
     };
     detector->on_tap = [this] {

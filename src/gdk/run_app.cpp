@@ -333,12 +333,16 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
                 float x = static_cast<float>(GET_X_LPARAM(lparam)) / dpr;
                 float y = static_cast<float>(GET_Y_LPARAM(lparam)) / dpr;
                 SetCapture(hwnd);
-                state->dispatcher->handlePointerEvent({
-                    Widgets::PointerEventKind::down,
-                    0,
-                    { x, y },
-                    1.0f
-                });
+
+                Widgets::PointerEvent e;
+                e.kind       = Widgets::PointerEventKind::down;
+                e.pointer_id = 0;
+                e.position   = { x, y };
+                e.pressure   = 1.0f;
+                e.button     = (msg == WM_RBUTTONDOWN) ? Widgets::PointerButton::secondary
+                             : (msg == WM_MBUTTONDOWN) ? Widgets::PointerButton::tertiary
+                                                        : Widgets::PointerButton::primary;
+                state->dispatcher->handlePointerEvent(e);
             }
             return 0;
         }
@@ -351,12 +355,16 @@ static LRESULT CALLBACK windowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
                 float x = static_cast<float>(GET_X_LPARAM(lparam)) / dpr;
                 float y = static_cast<float>(GET_Y_LPARAM(lparam)) / dpr;
                 ReleaseCapture();
-                state->dispatcher->handlePointerEvent({
-                    Widgets::PointerEventKind::up,
-                    0,
-                    { x, y },
-                    0.0f
-                });
+
+                Widgets::PointerEvent e;
+                e.kind       = Widgets::PointerEventKind::up;
+                e.pointer_id = 0;
+                e.position   = { x, y };
+                e.pressure   = 0.0f;
+                e.button     = (msg == WM_RBUTTONUP) ? Widgets::PointerButton::secondary
+                             : (msg == WM_MBUTTONUP) ? Widgets::PointerButton::tertiary
+                                                      : Widgets::PointerButton::primary;
+                state->dispatcher->handlePointerEvent(e);
             }
             return 0;
         }

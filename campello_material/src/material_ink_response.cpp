@@ -158,8 +158,8 @@ namespace systems::leal::campello_widgets
             gesture->focus_node   = w.focus_node;
             gesture->autofocus    = w.autofocus;
             gesture->focusable    = true;
-            gesture->on_pan_down  = [this](Offset local) {
-                ripple_origin_ = local;
+            gesture->on_pan_down  = [this](DragDownDetails details) {
+                ripple_origin_ = details.local_position;
                 ripple_active_ = true;
                 if (ripple_ctrl_) ripple_ctrl_->forward(0.0);
             };

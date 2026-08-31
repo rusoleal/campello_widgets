@@ -1,5 +1,7 @@
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <campello_widgets/ui/pointer_event.hpp>
 
 namespace systems::leal::campello_widgets
@@ -31,6 +33,14 @@ namespace systems::leal::campello_widgets
      * unreachable with a mouse.
      */
     inline constexpr float kStationaryTolerance = kTouchSlop;
+
+    /// Max gap (ms) between two qualifying taps for the second to count as
+    /// a double-tap rather than two independent single taps.
+    inline constexpr uint64_t kDoubleTapMs = 300;
+
+    /// How long (ms) a pointer must be held stationary before it resolves
+    /// as a long-press rather than a tap.
+    inline constexpr uint64_t kLongPressMs = 500;
 
     /**
      * @brief True for pointer kinds whose contact point is pixel-precise —
@@ -81,6 +91,21 @@ namespace systems::leal::campello_widgets
     constexpr float computePanSlop(PointerDeviceKind kind) noexcept
     {
         return isPrecisePointer(kind) ? kPrecisePointerPanSlop : kPanSlop;
+    }
+
+    /**
+     * @brief Milliseconds since std::chrono::steady_clock's epoch, right now.
+     *
+     * Shared by gesture recognizers that stamp a pointer-down time (tap/
+     * double-tap/long-press) — factored out so each recognizer doesn't
+     * repeat the same duration_cast boilerplate.
+     */
+    inline uint64_t currentMonotonicMs() noexcept
+    {
+        return static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count());
     }
 
 } // namespace systems::leal::campello_widgets

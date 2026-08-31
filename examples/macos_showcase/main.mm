@@ -640,7 +640,8 @@ public:
                 pushLog("long press");
             });
         };
-        detector->on_pan_update = [this](cw::Offset delta) {
+        detector->on_pan_update = [this](cw::DragUpdateDetails details) {
+            cw::Offset delta = details.delta;
             setState([this, delta] {
                 pan_acc_.x += delta.x; pan_acc_.y += delta.y;
                 last_gesture_ = "pan";
@@ -650,7 +651,7 @@ public:
                 pushLog("pan_update  " + fmtOffset("", delta));
             });
         };
-        detector->on_pan_end = [this] {
+        detector->on_pan_end = [this](cw::DragEndDetails) {
             setState([this] {
                 pan_acc_ = cw::Offset::zero();
                 last_gesture_ = "pan end"; detail_ = "";

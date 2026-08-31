@@ -399,6 +399,18 @@ static float tiltOrientationForMotionEvent(const AInputEvent* event, size_t poin
     return AMotionEvent_getAxisValue(event, AMOTION_EVENT_AXIS_ORIENTATION, pointer_index);
 }
 
+// AMotionEvent_getButtonState() is a per-event (not per-pointer) bitmask,
+// and only meaningful for a connected mouse/stylus with buttons -- plain
+// touch reports no bits set at all, which correctly falls through to
+// `primary` here (a finger tap is not "some other button").
+static Widgets::PointerButton buttonForMotionEvent(const AInputEvent* event)
+{
+    const int32_t buttons = AMotionEvent_getButtonState(event);
+    if (buttons & AMOTION_EVENT_BUTTON_SECONDARY) return Widgets::PointerButton::secondary;
+    if (buttons & AMOTION_EVENT_BUTTON_TERTIARY)  return Widgets::PointerButton::tertiary;
+    return Widgets::PointerButton::primary;
+}
+
 static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
 {
     auto* session_ptr = reinterpret_cast<std::unique_ptr<WidgetSession>*>(app->userData);
@@ -441,6 +453,7 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
                 .position    = { x, y },
                 .pressure    = AMotionEvent_getPressure(event, idx),
                 .device_kind = deviceKindForMotionEvent(event, idx),
+                .button      = buttonForMotionEvent(event),
                 .tilt        = tiltForMotionEvent(event, idx),
                 .tilt_orientation = tiltOrientationForMotionEvent(event, idx)});
             break;
@@ -526,7 +539,8 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
                 .pointer_id  = id,
                 .position    = { x, y },
                 .pressure    = 0.0f,
-                .device_kind = deviceKindForMotionEvent(event, idx)});
+                .device_kind = deviceKindForMotionEvent(event, idx),
+                .button      = buttonForMotionEvent(event)});
             break;
         }
 

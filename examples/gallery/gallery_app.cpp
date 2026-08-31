@@ -1016,6 +1016,8 @@ public:
         has_interacted_ = false;
         dropped_   = 0;
         modifier_click_label_ = "Click me (try holding Cmd/Ctrl/Shift/Alt)";
+        secondary_tap_label_  = "right-click me";
+        force_press_label_    = "press hard with a stylus (stylus only)";
     }
 
     cw::WidgetRef build(cw::BuildContext& ctx) override
@@ -1063,7 +1065,8 @@ public:
                 has_interacted_ = true;
             });
         };
-        detector->on_pan_update = [this](cw::Offset d) {
+        detector->on_pan_update = [this](cw::DragUpdateDetails details) {
+            cw::Offset d = details.delta;
             std::ostringstream o;
             o << std::fixed << std::setprecision(1) << "Δ " << d.x << ", " << d.y;
             setState([this, s = o.str()] {
@@ -1071,7 +1074,7 @@ public:
                 has_interacted_ = true;
             });
         };
-        detector->on_pan_end = [this] {
+        detector->on_pan_end = [this](cw::DragEndDetails) {
             setState([this] {
                 gesture_="pan end"; detail_=""; zone_color_=cw::Color::fromRGB(0.60f,0.40f,0.85f);
                 text_color_=cw::Color::white();
@@ -1169,6 +1172,112 @@ public:
             });
         };
 
+        // --- Scale / pinch — on_scale_start/update/end drives a live
+        // scale + rotation Transform. NOTE (wave-8 verification finding):
+        // macOS two-finger trackpad pinch/rotate route through AppKit's
+        // NSMagnificationGestureRecognizer / NSRotationGestureRecognizer,
+        // which run_app.mm does not forward into the PointerEvent pipeline
+        // as concurrent multi-pointer events -- so on a MacBook trackpad
+        // this demo is not reachable today. It IS reachable from a real
+        // multi-touch surface (e.g. a touchscreen) that delivers two
+        // independent pointer_id down/move events, which is what
+        // ScaleGestureRecognizer actually consumes. See PointerDispatcher.
+        auto pinch_box = std::make_shared<cw::Container>();
+        pinch_box->width  = 90.0f;
+        pinch_box->height = 90.0f;
+        pinch_box->color  = kBlue;
+        pinch_box->child  = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("pinch\nme", ts(12.0f, cw::Color::white())));
+
+        auto pinch_transform = std::make_shared<cw::Transform>();
+        pinch_transform->transform = cw::Transform::rotation(pinch_rotation_) * cw::Transform::scaling(pinch_scale_);
+        pinch_transform->child = pinch_box;
+
+        auto pinch_container = std::make_shared<cw::Container>();
+        pinch_container->height = 140.0f;
+        pinch_container->child  = cw::mw<cw::Center>(pinch_transform);
+
+        auto pinch_detector = std::make_shared<cw::GestureDetector>();
+        pinch_detector->child = pinch_container;
+        pinch_detector->on_scale_update = [this](cw::ScaleUpdateDetails d) {
+            setState([this, d] { pinch_scale_ = d.scale; pinch_rotation_ = d.rotation; });
+        };
+        pinch_detector->on_scale_end = [this](cw::ScaleEndDetails) {
+            setState([this] { pinch_scale_ = 1.0f; pinch_rotation_ = 0.0f; });
+        };
+
+        // --- Secondary tap (right-click) — reachable on macOS now that
+        // run_app.mm implements -rightMouseDown:/-rightMouseUp:.
+        auto secondary_box = std::make_shared<cw::Container>();
+        secondary_box->height = 60.0f;
+        secondary_box->color  = secondary_tap_hit_ ? kOrange : colors.surface_variant;
+        secondary_box->child  = cw::mw<cw::Center>(
+            cw::mw<cw::Text>(secondary_tap_label_,
+                ts(13.0f, secondary_tap_hit_ ? cw::Color::white() : colors.on_surface_variant)));
+        auto secondary_detector = std::make_shared<cw::GestureDetector>();
+        secondary_detector->child = secondary_box;
+        secondary_detector->on_secondary_tap = [this] {
+            setState([this] { secondary_tap_hit_ = true; secondary_tap_label_ = "right-click detected!"; });
+        };
+
+        // --- HitTestBehavior — two overlapping detectors in a Stack; the
+        // front one is translucent, so a tap reaches both instead of only
+        // the front (the default `opaque` behavior).
+        auto back_box = std::make_shared<cw::Container>();
+        back_box->height = 70.0f;
+        back_box->color  = kTeal;
+        back_box->child  = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("back taps: " + std::to_string(translucent_back_taps_),
+                ts(13.0f, cw::Color::white())));
+        auto back_detector = std::make_shared<cw::GestureDetector>();
+        back_detector->child = back_box;
+        back_detector->on_tap_down = [this](cw::TapDownDetails) {
+            setState([this] { translucent_back_taps_++; });
+        };
+
+        auto front_box = std::make_shared<cw::Container>();
+        front_box->height = 70.0f;
+        front_box->color  = cw::Color::fromRGBA(0.95f, 0.40f, 0.10f, 0.55f);
+        front_box->child  = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("front (translucent) taps: " + std::to_string(translucent_front_taps_),
+                ts(13.0f, cw::Color::white())));
+        auto front_detector = std::make_shared<cw::GestureDetector>();
+        front_detector->behavior    = cw::HitTestBehavior::translucent;
+        front_detector->child       = front_box;
+        front_detector->on_tap_down = [this](cw::TapDownDetails) {
+            setState([this] { translucent_front_taps_++; });
+        };
+
+        auto hit_test_stack_container = std::make_shared<cw::Container>();
+        hit_test_stack_container->height = 70.0f;
+        auto hit_test_stack = std::make_shared<cw::Stack>();
+        hit_test_stack->fit      = cw::StackFit::expand;
+        hit_test_stack->children = { back_detector, front_detector };
+        hit_test_stack_container->child = hit_test_stack;
+
+        // --- Force press — only PointerDeviceKind::stylus reports staged
+        // pressure in this codebase (see ForcePressGestureRecognizer's doc
+        // comment); a mouse/trackpad/touch tap will never fire this. Not
+        // interactively verifiable on this machine without real stylus
+        // hardware — included for API completeness and documentation.
+        auto force_box = std::make_shared<cw::Container>();
+        force_box->height = 60.0f;
+        force_box->color  = force_press_active_ ? kGreen : colors.surface_variant;
+        force_box->child  = cw::mw<cw::Center>(
+            cw::mw<cw::Text>(force_press_label_,
+                ts(13.0f, force_press_active_ ? cw::Color::white() : colors.on_surface_variant)));
+        auto force_detector = std::make_shared<cw::GestureDetector>();
+        force_detector->child = force_box;
+        force_detector->on_force_press_start = [this](cw::ForcePressDetails) {
+            setState([this] { force_press_active_ = true; force_press_label_ = "force press started"; });
+        };
+        force_detector->on_force_press_peak = [this](cw::ForcePressDetails) {
+            setState([this] { force_press_label_ = "force press PEAK"; });
+        };
+        force_detector->on_force_press_end = [this](cw::ForcePressDetails) {
+            setState([this] { force_press_active_ = false; force_press_label_ = "press hard with a stylus (stylus only)"; });
+        };
+
         auto content = cw::mw<cw::Padding>(cw::EdgeInsets::all(20.0f),
             cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
                 cw::WidgetList{
@@ -1180,6 +1289,18 @@ public:
                     vspace(20.0f),
                     subheading("HARDWARE KEYBOARD — HardwareKeyboard::current() checked at tap time", colors.on_surface_variant),
                     card(mod_click_detector, 0.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("SCALE / PINCH — on_scale_start/update/end (multi-touch; see note above)", colors.on_surface_variant),
+                    card(pinch_detector, 0.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("SECONDARY TAP — on_secondary_tap (right-click)", colors.on_surface_variant),
+                    card(secondary_detector, 0.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("HIT TEST BEHAVIOR — translucent front detector lets both receive the tap", colors.on_surface_variant),
+                    card(hit_test_stack_container, 0.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("FORCE PRESS — stylus only, on_force_press_start/peak/end", colors.on_surface_variant),
+                    card(force_detector, 0.0f, colors.surface),
                 }));
 
         auto bg = std::make_shared<cw::Container>();
@@ -1195,6 +1316,15 @@ private:
     int         dropped_ = 0;
     std::string modifier_click_label_;
     bool        modifier_click_had_modifier_ = false;
+
+    float       pinch_scale_    = 1.0f;
+    float       pinch_rotation_ = 0.0f;
+    std::string secondary_tap_label_;
+    bool        secondary_tap_hit_       = false;
+    int         translucent_back_taps_   = 0;
+    int         translucent_front_taps_  = 0;
+    std::string force_press_label_;
+    bool        force_press_active_      = false;
 };
 
 class GesturesSection : public cw::StatefulWidget {

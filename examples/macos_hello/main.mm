@@ -310,14 +310,15 @@ public:
             setState([this] { status_ = "Long press!"; });
         };
 
-        detector->on_pan_update = [this](cw::Offset delta) {
+        detector->on_pan_update = [this](cw::DragUpdateDetails details) {
+            cw::Offset delta = details.delta;
             setState([this, delta] {
                 status_ = "Pan  dx=" + fmtFloat(delta.x)
                         + "  dy=" + fmtFloat(delta.y);
             });
         };
 
-        detector->on_pan_end = [this] {
+        detector->on_pan_end = [this](cw::DragEndDetails) {
             setState([this] { status_ += "  (pan ended)"; });
         };
 

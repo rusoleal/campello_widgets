@@ -580,6 +580,16 @@ static void pointer_button(void* data, struct wl_pointer* pointer,
     e.pointer_id = 0;
     e.position   = { state->last_pointer_x, state->last_pointer_y };
 
+    // `button` is a Linux evdev code (from <linux/input-event-codes.h>,
+    // not included here to avoid a new header dependency for three known
+    // constants): BTN_LEFT=0x110, BTN_RIGHT=0x111, BTN_MIDDLE=0x112.
+    switch (button) {
+        case 0x110: e.button = Widgets::PointerButton::primary;   break;
+        case 0x111: e.button = Widgets::PointerButton::secondary; break;
+        case 0x112: e.button = Widgets::PointerButton::tertiary;  break;
+        default:    e.button = Widgets::PointerButton::unknown;   break;
+    }
+
     if (state_val == WL_POINTER_BUTTON_STATE_PRESSED) {
         e.kind = Widgets::PointerEventKind::down;
         e.pressure = 1.0f;

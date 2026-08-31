@@ -554,12 +554,30 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             int x = ev.xbutton.x;
             int y = ev.xbutton.y;
 
+            // X11 button numbering: Button1=left(primary), Button2=middle
+            // (tertiary), Button3=right(secondary) -- note 2 and 3 are NOT
+            // "2=secondary" as you might assume from the PointerButton enum
+            // order. Button4/Button5 are the scroll wheel reported as
+            // synthetic buttons under X11 -- this file has no separate
+            // scroll-wheel handling today (a pre-existing gap, not
+            // introduced here), so they still fall through this generic
+            // down/up path; map them to `unknown` rather than
+            // mis-attributing them to a real button.
+            Widgets::PointerButton button = Widgets::PointerButton::unknown;
+            switch (ev.xbutton.button) {
+                case Button1: button = Widgets::PointerButton::primary;   break;
+                case Button2: button = Widgets::PointerButton::tertiary;  break;
+                case Button3: button = Widgets::PointerButton::secondary; break;
+                default: break;
+            }
+
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::down;
             e.pointer_id = 0;
             e.position = { static_cast<float>(x) / state->display_scale,
                            static_cast<float>(y) / state->display_scale };
             e.pressure = 1.0f;
+            e.button = button;
             state->dispatcher->handlePointerEvent(e);
             state->mouse_pressed = true;
 
@@ -573,12 +591,22 @@ static void handleX11Event(WindowState* state, const XEvent& ev)
             int x = ev.xbutton.x;
             int y = ev.xbutton.y;
 
+            // See ButtonPress's comment for the X11 button-number mapping.
+            Widgets::PointerButton button = Widgets::PointerButton::unknown;
+            switch (ev.xbutton.button) {
+                case Button1: button = Widgets::PointerButton::primary;   break;
+                case Button2: button = Widgets::PointerButton::tertiary;  break;
+                case Button3: button = Widgets::PointerButton::secondary; break;
+                default: break;
+            }
+
             Widgets::PointerEvent e;
             e.kind = Widgets::PointerEventKind::up;
             e.pointer_id = 0;
             e.position = { static_cast<float>(x) / state->display_scale,
                            static_cast<float>(y) / state->display_scale };
             e.pressure = 0.0f;
+            e.button = button;
             state->dispatcher->handlePointerEvent(e);
             state->mouse_pressed = false;
             break;

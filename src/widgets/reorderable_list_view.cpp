@@ -32,7 +32,7 @@ namespace systems::leal::campello_widgets
 
                 auto gd = std::make_shared<GestureDetector>();
                 gd->child = item_widget;
-                gd->on_pan_down = [this, i](Offset)
+                gd->on_pan_down = [this, i](DragDownDetails)
                 {
                     setState([this, i]()
                     {
@@ -40,12 +40,12 @@ namespace systems::leal::campello_widgets
                         drag_delta_     = 0.0f;
                     });
                 };
-                gd->on_pan_update = [this](Offset delta)
+                gd->on_pan_update = [this](DragUpdateDetails details)
                 {
                     if (dragging_index_ < 0) return;
-                    setState([this, delta]() { drag_delta_ += delta.y; });
+                    setState([this, delta = details.delta]() { drag_delta_ += delta.y; });
                 };
-                gd->on_pan_end = [this]()
+                gd->on_pan_end = [this](DragEndDetails)
                 {
                     if (dragging_index_ < 0) return;
                     const auto& w2 = widget();

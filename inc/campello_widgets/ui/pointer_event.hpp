@@ -43,6 +43,22 @@ namespace systems::leal::campello_widgets
     };
 
     /**
+     * @brief Which mouse button produced a PointerEvent.
+     *
+     * Meaningless for touch/stylus contacts (always `primary`). Mirrors
+     * Flutter's kPrimaryButton/kSecondaryButton/kTertiaryButton, simplified
+     * to an enum since this codebase only ever needs to know "which one",
+     * not a bitmask of simultaneously-held buttons.
+     */
+    enum class PointerButton : uint8_t
+    {
+        primary,    ///< Left click / single-finger touch / stylus tip.
+        secondary,  ///< Right click.
+        tertiary,   ///< Middle click.
+        unknown,
+    };
+
+    /**
      * @brief A single platform-agnostic pointer contact or scroll event.
      *
      * Produced by platform adapters (macOS, iOS, Android, …) and fed into
@@ -61,6 +77,7 @@ namespace systems::leal::campello_widgets
         Offset            position;                ///< Logical pixels from surface origin
         float             pressure       = 1.0f;   ///< 0.0–1.0; 1.0 for mouse, 0.0 for hover
         PointerDeviceKind device_kind    = PointerDeviceKind::touch; ///< Selects gesture slop
+        PointerButton     button         = PointerButton::primary;  ///< Which mouse button (mouse events only)
         float             scroll_delta_x = 0.0f;   ///< Scroll amount, x axis (scroll events only)
         float             scroll_delta_y = 0.0f;   ///< Scroll amount, y axis (scroll events only)
 

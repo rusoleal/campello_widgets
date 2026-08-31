@@ -166,6 +166,71 @@ namespace {
         pos, 1.0f, Widgets::PointerDeviceKind::mouse});
 }
 
+// AppKit only calls -mouseDown:/-mouseDragged:/-mouseUp: for the primary
+// (left) button; right/middle clicks arrive on these separate selectors,
+// which previously weren't implemented at all -- so right/middle clicks
+// produced zero PointerEvents. NSEvent.buttonNumber: 0=left, 1=right,
+// 2=middle, 3+=further side buttons (mapped to secondary/tertiary too,
+// since PointerButton has no "further" slot -- see PointerButton's doc
+// comment).
+- (void)rightMouseDown:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    auto pos = [self pointerOffsetForEvent:event];
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::down, 0,
+        pos, 1.0f, Widgets::PointerDeviceKind::mouse, Widgets::PointerButton::secondary});
+}
+
+- (void)rightMouseDragged:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::move, 0,
+        [self pointerOffsetForEvent:event], 1.0f, Widgets::PointerDeviceKind::mouse, Widgets::PointerButton::secondary});
+}
+
+- (void)rightMouseUp:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    auto pos = [self pointerOffsetForEvent:event];
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::up, 0,
+        pos, 1.0f, Widgets::PointerDeviceKind::mouse, Widgets::PointerButton::secondary});
+}
+
+- (void)otherMouseDown:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    auto pos = [self pointerOffsetForEvent:event];
+    const auto button = event.buttonNumber == 2 ? Widgets::PointerButton::tertiary
+                                                 : Widgets::PointerButton::unknown;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::down, 0,
+        pos, 1.0f, Widgets::PointerDeviceKind::mouse, button});
+}
+
+- (void)otherMouseDragged:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    const auto button = event.buttonNumber == 2 ? Widgets::PointerButton::tertiary
+                                                 : Widgets::PointerButton::unknown;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::move, 0,
+        [self pointerOffsetForEvent:event], 1.0f, Widgets::PointerDeviceKind::mouse, button});
+}
+
+- (void)otherMouseUp:(NSEvent*)event
+{
+    if (!_dispatcher) return;
+    auto pos = [self pointerOffsetForEvent:event];
+    const auto button = event.buttonNumber == 2 ? Widgets::PointerButton::tertiary
+                                                 : Widgets::PointerButton::unknown;
+    _dispatcher->handlePointerEvent({
+        Widgets::PointerEventKind::up, 0,
+        pos, 1.0f, Widgets::PointerDeviceKind::mouse, button});
+}
+
 static Widgets::KeyCode macosKeyCodeToKeyCode(unsigned short kc)
 {
     switch (kc) {

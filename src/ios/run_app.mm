@@ -585,6 +585,10 @@ namespace {
 {
     (void)event;
     if (!_dispatcher) return;
+    // `button` intentionally stays at its default (primary) here -- touch
+    // has no button concept, and a Bluetooth mouse/trackpad on iPadOS
+    // surfaces as UITouchTypeIndirectPointer / UIPointerInteraction, a
+    // separate API this codebase doesn't handle yet.
     for (UITouch* touch in touches)
     {
         _dispatcher->handlePointerEvent({

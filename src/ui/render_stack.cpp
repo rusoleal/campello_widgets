@@ -182,13 +182,26 @@ namespace systems::leal::campello_widgets
     bool RenderStack::hitTestChildren(HitTestResult& result, const Offset& position)
     {
         // Walk back-to-front: last child is painted on top and gets first hit.
+        bool hit_any = false;
         for (auto it = stack_children_.rbegin(); it != stack_children_.rend(); ++it)
         {
             if (!it->box) continue;
             if (it->box->hitTest(result, position - it->offset))
-                return true;
+            {
+                hit_any = true;
+                // A non-opaque claim (HitTestBehavior::translucent, see
+                // hit_test.hpp) doesn't block further, lower-painted
+                // siblings from also being hit-tested at this point --
+                // only an opaque hit stops the walk. The entry this child
+                // just appended is always the last one in the path (its
+                // own hitTest() adds it after recursing into its own
+                // descendants).
+                if (result.path().back().opaque)
+                    return true;
+                continue;
+            }
         }
-        return false;
+        return hit_any;
     }
 
     void RenderStack::visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const

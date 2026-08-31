@@ -19,6 +19,40 @@ namespace systems::leal::campello_widgets
     {
         RenderBox* target         = nullptr;
         Offset     local_position;
+
+        /// False only for a HitTestBehavior::translucent claim -- tells an
+        /// ancestor multi-child hit-test loop (e.g. RenderStack) that this
+        /// entry doesn't block further, lower-painted siblings from also
+        /// being hit-tested at the same point.
+        bool       opaque         = true;
+    };
+
+    /**
+     * @brief Controls how a RenderBox that claims pointer hits on its own
+     * account (RenderGestureDetector today) interacts with its children's
+     * own hit results and with lower-painted siblings in the same parent.
+     *
+     * Mirrors Flutter's HitTestBehavior.
+     */
+    enum class HitTestBehavior
+    {
+        /// Always claims the hit within its own bounds, regardless of
+        /// whether a descendant also claimed it, and blocks further,
+        /// lower-painted siblings (e.g. in a Stack) from being hit-tested.
+        /// The default -- matches this codebase's behavior before
+        /// HitTestBehavior existed.
+        opaque,
+
+        /// Always claims the hit like `opaque`, but does not block
+        /// lower-painted siblings from also being hit-tested -- so e.g. a
+        /// translucent overlay and the tappable content beneath it in a
+        /// Stack can both receive the same tap.
+        translucent,
+
+        /// Only claims the hit when no descendant already did -- e.g. a
+        /// row that should only react to taps landing outside its
+        /// interactive children.
+        deferToChild,
     };
 
     /**

@@ -78,9 +78,10 @@ namespace systems::leal::campello_widgets
 
                 auto gd = std::make_shared<GestureDetector>();
                 gd->child = sized;
-                gd->on_pan_update = [controller_ptr, track_room, content_range, is_vertical](Offset delta)
+                gd->on_pan_update = [controller_ptr, track_room, content_range, is_vertical](DragUpdateDetails details)
                 {
                     if (track_room <= 0.0f || content_range <= 0.0f) return;
+                    const Offset delta       = details.delta;
                     const float delta_main   = is_vertical ? delta.y : delta.x;
                     const float scroll_delta = delta_main / track_room * content_range;
                     controller_ptr->jumpTo(controller_ptr->offset() + scroll_delta);

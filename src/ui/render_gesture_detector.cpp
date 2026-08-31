@@ -1,23 +1,51 @@
-#include <cmath>
-#include <chrono>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
-#include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/dirty_region.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
+
+#include <cassert>
 
 namespace systems::leal::campello_widgets
 {
 
     RenderGestureDetector::RenderGestureDetector()
+        : tap_recognizer_(std::make_unique<TapGestureRecognizer>(
+              *this, PointerButton::primary,
+              &RenderGestureDetector::on_tap, &RenderGestureDetector::on_tap_down,
+              &RenderGestureDetector::on_tap_up, &RenderGestureDetector::on_tap_cancel,
+              &RenderGestureDetector::on_double_tap))
+        , secondary_tap_recognizer_(std::make_unique<TapGestureRecognizer>(
+              *this, PointerButton::secondary,
+              &RenderGestureDetector::on_secondary_tap, &RenderGestureDetector::on_secondary_tap_down,
+              &RenderGestureDetector::on_secondary_tap_up, &RenderGestureDetector::on_secondary_tap_cancel,
+              nullptr))
+        , tertiary_tap_recognizer_(std::make_unique<TapGestureRecognizer>(
+              *this, PointerButton::tertiary,
+              nullptr, &RenderGestureDetector::on_tertiary_tap_down,
+              &RenderGestureDetector::on_tertiary_tap_up, &RenderGestureDetector::on_tertiary_tap_cancel,
+              nullptr))
+        , long_press_recognizer_(std::make_unique<LongPressGestureRecognizer>(*this))
+        , pan_recognizer_(std::make_unique<PanGestureRecognizer>(*this))
+        , horizontal_drag_recognizer_(std::make_unique<HorizontalDragGestureRecognizer>(*this))
+        , vertical_drag_recognizer_(std::make_unique<VerticalDragGestureRecognizer>(*this))
+        , scale_recognizer_(std::make_unique<ScaleGestureRecognizer>(*this))
+        , force_press_recognizer_(std::make_unique<ForcePressGestureRecognizer>(*this))
     {
     }
 
     RenderGestureDetector::~RenderGestureDetector()
     {
+        tap_recognizer_->dispose();
+        secondary_tap_recognizer_->dispose();
+        tertiary_tap_recognizer_->dispose();
+        long_press_recognizer_->dispose();
+        pan_recognizer_->dispose();
+        horizontal_drag_recognizer_->dispose();
+        vertical_drag_recognizer_->dispose();
+        scale_recognizer_->dispose();
+        force_press_recognizer_->dispose();
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
-            d->arena().removeMember(this);
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
@@ -54,9 +82,17 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::detach()
     {
+        tap_recognizer_->dispose();
+        secondary_tap_recognizer_->dispose();
+        tertiary_tap_recognizer_->dispose();
+        long_press_recognizer_->dispose();
+        pan_recognizer_->dispose();
+        horizontal_drag_recognizer_->dispose();
+        vertical_drag_recognizer_->dispose();
+        scale_recognizer_->dispose();
+        force_press_recognizer_->dispose();
         if (auto* d = PointerDispatcher::activeDispatcher())
         {
-            d->arena().removeMember(this);
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
@@ -148,34 +184,8 @@ namespace systems::leal::campello_widgets
     }
 
     // -------------------------------------------------------------------------
-    // GestureArenaMember
+    // Shared owner-level state, driven by this detector's own recognizers.
     // -------------------------------------------------------------------------
-
-    void RenderGestureDetector::acceptGesture(int32_t /*pointer_id*/)
-    {
-        won_arena_ = true;
-        if (has_down_ && !panning_ && exceedsSlop())
-        {
-            panning_ = true;
-            setPressed(false); // reclassified as a pan -- see the identical move-case comment
-        }
-        if (pending_tap_)
-        {
-            pending_tap_ = false;
-            resolveTapOutcome();
-        }
-    }
-
-    void RenderGestureDetector::rejectGesture(int32_t /*pointer_id*/)
-    {
-        lost_arena_  = true;
-        pending_tap_ = false;
-        // Lost the gesture arena to a competing recognizer (e.g. an
-        // ancestor ScrollView) while still held down -- the press visual
-        // must end now, not linger until a pointer-up that may never
-        // resolve as our tap at all.
-        setPressed(false);
-    }
 
     void RenderGestureDetector::setPressed(bool pressed)
     {
@@ -184,71 +194,18 @@ namespace systems::leal::campello_widgets
         if (on_press_change) on_press_change(pressed_);
     }
 
-    bool RenderGestureDetector::exceedsSlop() const noexcept
+    void RenderGestureDetector::requestFocusOnTap()
     {
-        // Mirrors Flutter's GestureDetector picking a PanGestureRecognizer
-        // (device-aware pan slop, for a responsive drag-start) when pan
-        // callbacks are set, vs judging "is the pointer still basically
-        // stationary" for a pure tap/long-press detector — which always uses
-        // a fixed, generous tolerance regardless of device precision (see
-        // kStationaryTolerance's doc comment for why).
-        const float slop = (on_pan_update || on_pan_end)
-            ? computePanSlop(device_kind_)
-            : kStationaryTolerance;
-        const float dx = last_pos_.x - down_pos_.x;
-        const float dy = last_pos_.y - down_pos_.y;
-        return std::sqrt(dx * dx + dy * dy) > slop;
-    }
-
-    bool RenderGestureDetector::exceedsStationaryTolerance() const noexcept
-    {
-        const float dx = last_pos_.x - down_pos_.x;
-        const float dy = last_pos_.y - down_pos_.y;
-        return std::sqrt(dx * dx + dy * dy) > kStationaryTolerance;
-    }
-
-    void RenderGestureDetector::resolveTapOutcome()
-    {
-        // A completed tap (single or double) grabs keyboard focus for this
-        // control, mirroring clicking a Flutter button focusing it -- but
-        // marked as pointer-driven so a theme's focus-ring painter doesn't
-        // draw a ring just because a click happened to also focus this
-        // control (see FocusHighlightMode's doc comment).
+        // A completed tap grabs keyboard focus for this control, mirroring
+        // clicking a Flutter button focusing it -- but marked as
+        // pointer-driven so a theme's focus-ring painter doesn't draw a
+        // ring just because a click happened to also focus this control
+        // (see FocusHighlightMode's doc comment).
         if (registered_node_)
         {
             FocusManager::notePointerInteraction();
             registered_node_->requestFocus();
         }
-
-        // Check for double-tap — only when something is actually listening.
-        // Mirrors Flutter's GestureDetector: with no onDoubleTap callback, no
-        // DoubleTapGestureRecognizer is ever armed, so every tap resolves
-        // immediately as a single tap. Without this guard, a second tap
-        // landing within the double-tap window at roughly the same spot hit
-        // the early `return` below regardless of on_double_tap being set,
-        // silently swallowing that tap — on_tap() never fired for it. That's
-        // exactly what made rapid tapping on a plain (single-tap-only)
-        // button feel like it dropped taps.
-        if (on_double_tap && last_tap_valid_ && down_time_ms_ != 0 &&
-            (down_time_ms_ - last_tap_time_ms_) <= kDoubleTapMs)
-        {
-            const float dtx   = down_pos_.x - last_tap_pos_.x;
-            const float dty   = down_pos_.y - last_tap_pos_.y;
-            const float ddist = std::sqrt(dtx * dtx + dty * dty);
-            if (ddist < kStationaryTolerance)
-            {
-                on_double_tap();
-                last_tap_valid_ = false;
-                return;
-            }
-        }
-
-        if (on_tap) on_tap();
-
-        // Record this tap for double-tap detection.
-        last_tap_valid_   = true;
-        last_tap_time_ms_ = down_time_ms_;
-        last_tap_pos_     = down_pos_;
     }
 
     // -------------------------------------------------------------------------
@@ -258,110 +215,74 @@ namespace systems::leal::campello_widgets
         switch (event.kind)
         {
         case PointerEventKind::down:
-            has_down_         = true;
-            panning_          = false;
-            long_press_fired_ = false;
-            won_arena_        = false;
-            lost_arena_       = false;
-            pending_tap_      = false;
-            down_pos_         = event.position;
-            last_pos_         = event.position;
-            device_kind_      = event.device_kind;
-            {
-                auto now = std::chrono::steady_clock::now();
-                down_time_ms_ = static_cast<uint64_t>(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(
-                        now.time_since_epoch()).count());
-            }
-            arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
-                arena_entry_.emplace(d->arena().add(event.pointer_id, this));
-            if (on_pan_down) on_pan_down(event.local_position);
-            setPressed(true);
+        {
+            // Pan, horizontal-drag, vertical-drag, and scale are mutually
+            // exclusive families -- mirrors Flutter's own GestureDetector
+            // assertion (onScale* cannot coexist with onPan*/
+            // onHorizontalDrag*/onVerticalDrag*).
+            const bool has_pan =
+                static_cast<bool>(on_pan_update) || static_cast<bool>(on_pan_end) || static_cast<bool>(on_pan_start);
+            const bool has_horizontal = static_cast<bool>(on_horizontal_drag_update) ||
+                                         static_cast<bool>(on_horizontal_drag_end) ||
+                                         static_cast<bool>(on_horizontal_drag_start);
+            const bool has_vertical = static_cast<bool>(on_vertical_drag_update) ||
+                                       static_cast<bool>(on_vertical_drag_end) ||
+                                       static_cast<bool>(on_vertical_drag_start);
+            const bool has_scale = static_cast<bool>(on_scale_update) || static_cast<bool>(on_scale_end) ||
+                                    static_cast<bool>(on_scale_start);
+            assert((static_cast<int>(has_pan) + static_cast<int>(has_horizontal) + static_cast<int>(has_vertical) +
+                    static_cast<int>(has_scale)) <= 1 &&
+                   "GestureDetector: on_pan_*, on_horizontal_drag_*, on_vertical_drag_*, and on_scale_* are "
+                   "mutually exclusive gesture families -- set at most one of the four on a single detector.");
 
-            // Frames are only produced on demand (see FrameScheduler) — a
-            // stationary press doesn't itself invalidate anything, so
-            // nothing would otherwise ask for another frame until the
-            // pointer moves or lifts. Without this, onTick() (which the
-            // long-press deadline check below depends on) would never run
-            // again after this one, and long-press could never fire.
-            if (on_long_press) FrameScheduler::scheduleFrame();
+            tap_recognizer_->addPointer(event);
+            secondary_tap_recognizer_->addPointer(event);
+            tertiary_tap_recognizer_->addPointer(event);
+            long_press_recognizer_->addPointer(event);
+            pan_recognizer_->addPointer(event);
+            horizontal_drag_recognizer_->addPointer(event);
+            vertical_drag_recognizer_->addPointer(event);
+            scale_recognizer_->addPointer(event);
+            force_press_recognizer_->addPointer(event);
+            setPressed(true);
             break;
+        }
 
         case PointerEventKind::move:
-            if (has_down_ && !lost_arena_)
-            {
-                const Offset delta = event.position - last_pos_;
-                last_pos_ = event.position;
-
-                if (!panning_ && exceedsSlop())
-                {
-                    if (won_arena_)
-                    {
-                        // Already ours (uncontested, or claimed via long
-                        // press) — exceeding slop just reclassifies this as
-                        // "not a tap" and is unrelated to arena competition.
-                        panning_ = true;
-                        // No longer a tap-in-progress -- matches Flutter's
-                        // InkResponse un-highlighting once a TapGestureRecognizer
-                        // loses to a competing PanGestureRecognizer.
-                        setPressed(false);
-                    }
-                    else if (arena_entry_)
-                    {
-                        // Only fight for the gesture if we actually act on a
-                        // pan — a pure tap/long-press detector (the common
-                        // "button" case) has nothing to do with movement and
-                        // should give up its claim instead, mirroring
-                        // Flutter's TapGestureRecognizer self-rejecting once
-                        // the pointer travels past slop. Otherwise an
-                        // ancestor scrollable could never win past a button
-                        // it merely happens to be dragged across.
-                        arena_entry_->resolve(
-                            (on_pan_update || on_pan_end)
-                                ? GestureDisposition::accepted
-                                : GestureDisposition::rejected);
-                    }
-                }
-
-                if (panning_ && on_pan_update)
-                    on_pan_update(delta);
-            }
+            tap_recognizer_->handlePointerEvent(event);
+            secondary_tap_recognizer_->handlePointerEvent(event);
+            tertiary_tap_recognizer_->handlePointerEvent(event);
+            long_press_recognizer_->handlePointerEvent(event);
+            pan_recognizer_->handlePointerEvent(event);
+            horizontal_drag_recognizer_->handlePointerEvent(event);
+            vertical_drag_recognizer_->handlePointerEvent(event);
+            scale_recognizer_->handlePointerEvent(event);
+            force_press_recognizer_->handlePointerEvent(event);
             break;
 
         case PointerEventKind::up:
-            if (has_down_ && !lost_arena_)
-            {
-                if (panning_)
-                {
-                    if (on_pan_end) on_pan_end();
-                }
-                else if (!long_press_fired_)
-                {
-                    const float dx   = event.position.x - down_pos_.x;
-                    const float dy   = event.position.y - down_pos_.y;
-                    const float dist = std::sqrt(dx * dx + dy * dy);
-
-                    if (dist < kStationaryTolerance)
-                    {
-                        if (won_arena_)
-                            resolveTapOutcome();
-                        else
-                            pending_tap_ = true;
-                    }
-                }
-            }
-            has_down_ = false;
-            panning_  = false;
-            arena_entry_.reset();
+            tap_recognizer_->handlePointerEvent(event);
+            secondary_tap_recognizer_->handlePointerEvent(event);
+            tertiary_tap_recognizer_->handlePointerEvent(event);
+            long_press_recognizer_->handlePointerEvent(event);
+            pan_recognizer_->handlePointerEvent(event);
+            horizontal_drag_recognizer_->handlePointerEvent(event);
+            vertical_drag_recognizer_->handlePointerEvent(event);
+            scale_recognizer_->handlePointerEvent(event);
+            force_press_recognizer_->handlePointerEvent(event);
             setPressed(false);
             break;
 
         case PointerEventKind::cancel:
-            has_down_    = false;
-            panning_     = false;
-            pending_tap_ = false;
-            arena_entry_.reset();
+            tap_recognizer_->handlePointerEvent(event);
+            secondary_tap_recognizer_->handlePointerEvent(event);
+            tertiary_tap_recognizer_->handlePointerEvent(event);
+            long_press_recognizer_->handlePointerEvent(event);
+            pan_recognizer_->handlePointerEvent(event);
+            horizontal_drag_recognizer_->handlePointerEvent(event);
+            vertical_drag_recognizer_->handlePointerEvent(event);
+            scale_recognizer_->handlePointerEvent(event);
+            force_press_recognizer_->handlePointerEvent(event);
             setPressed(false);
             break;
 
@@ -370,6 +291,33 @@ namespace systems::leal::campello_widgets
                 on_scroll({event.scroll_delta_x, event.scroll_delta_y});
             break;
         }
+    }
+
+    bool RenderGestureDetector::hitTest(HitTestResult& result, const Offset& position)
+    {
+        if (position.x < 0.0f || position.x >= size_.width ||
+            position.y < 0.0f || position.y >= size_.height)
+            return false;
+
+        const bool child_hit = hitTestChildren(result, position);
+
+        if (behavior == HitTestBehavior::deferToChild)
+        {
+            // A child already claimed this point -- stay out of the hit
+            // path (and therefore out of the pointer dispatch / gesture
+            // arena for this event) entirely, rather than merely refusing
+            // to add our own entry while still having been "consulted".
+            if (child_hit) return true;
+            result.add({this, position, /*opaque=*/true});
+            return true;
+        }
+
+        // opaque and translucent both always claim the point regardless of
+        // whether a child also did; they differ only in whether the entry
+        // they add blocks an ancestor multi-child hit-test loop (e.g.
+        // RenderStack) from continuing to lower-painted siblings.
+        result.add({this, position, /*opaque=*/behavior != HitTestBehavior::translucent});
+        return true;
     }
 
     void RenderGestureDetector::performLayout()
@@ -419,35 +367,7 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::onTick(uint64_t now_ms)
     {
-        if (!has_down_ || lost_arena_) return;
-
-        // Long press: fire once after kLongPressMs without moving past the
-        // stationary tolerance. Deliberately independent of `panning_` — a
-        // widget with pan handlers (e.g. a "press and drag" zone) can flip
-        // panning_ almost immediately for a mouse (see computePanSlop), but
-        // that must not defeat a co-located long-press the way an
-        // independent Flutter LongPressGestureRecognizer wouldn't be.
-        if (!long_press_fired_ && !exceedsStationaryTolerance() &&
-            (now_ms - down_time_ms_) >= kLongPressMs)
-        {
-            // Claim explicitly — mirrors Flutter's LongPressGestureRecognizer
-            // accepting as soon as its timer fires, so a competing ancestor
-            // pan/scroll can no longer steal the gesture after this point.
-            if (!won_arena_ && arena_entry_)
-                arena_entry_->resolve(GestureDisposition::accepted);
-
-            long_press_fired_ = true;
-            if (on_long_press) on_long_press();
-        }
-        else if (on_long_press && !long_press_fired_ && !exceedsStationaryTolerance())
-        {
-            // Deadline not reached yet and still a live candidate — request
-            // another frame so this tick keeps running, mirroring Ticker's
-            // self-rescheduling (see ticker.cpp). Frames are otherwise only
-            // produced on demand, and a stationary hold doesn't invalidate
-            // anything on its own.
-            FrameScheduler::scheduleFrame();
-        }
+        long_press_recognizer_->handleTick(now_ms);
     }
 
 } // namespace systems::leal::campello_widgets
