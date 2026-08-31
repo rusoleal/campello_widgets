@@ -19,7 +19,7 @@ namespace cw = systems::leal::campello_widgets;
 
 namespace
 {
-    struct StubBuildContext : cw::BuildContext
+    struct Wave3StubBuildContext : cw::BuildContext
     {
         const cw::Widget& widget() const override { std::abort(); }
     protected:
@@ -185,7 +185,7 @@ TEST(Shortcuts, MatchingComboInvokesCallbackAndConsumes)
     w.bindings = {
         {cw::KeyCombo{cw::KeyCode::s, cw::KeyModifiers::ctrl}, [&]() { fired = true; }},
     };
-    StubBuildContext ctx;
+    Wave3StubBuildContext ctx;
     w.build(ctx); // wires focus_node->on_key
 
     cw::KeyEvent e;
@@ -207,7 +207,7 @@ TEST(Shortcuts, NonMatchingComboFallsThrough)
     w.bindings = {
         {cw::KeyCombo{cw::KeyCode::s, cw::KeyModifiers::ctrl}, [&]() { fired = true; }},
     };
-    StubBuildContext ctx;
+    Wave3StubBuildContext ctx;
     w.build(ctx);
 
     cw::KeyEvent e;
@@ -228,7 +228,7 @@ TEST(Shortcuts, KeyUpNeverTriggers)
     w.bindings = {
         {cw::KeyCombo{cw::KeyCode::escape, cw::KeyModifiers::none}, [&]() { fired = true; }},
     };
-    StubBuildContext ctx;
+    Wave3StubBuildContext ctx;
     w.build(ctx);
 
     cw::KeyEvent e;

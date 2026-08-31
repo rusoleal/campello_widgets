@@ -587,6 +587,14 @@ namespace systems::leal::campello_widgets
             ++save_stack_.back().pushed_clips;
     }
 
+    Rect Canvas::getLocalClipBounds() const noexcept
+    {
+        // current_clip_ is tracked in absolute/destination space (see the
+        // comment on transformRectAABB above), so mapping it back to the
+        // caller's local space is the inverse of the same operation.
+        return transformRectAABB(current_clip_, current_transform_.inverted());
+    }
+
     // ------------------------------------------------------------------
     // BackdropFilter scope
     // ------------------------------------------------------------------

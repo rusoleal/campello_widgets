@@ -25,7 +25,7 @@ namespace
     // Container::build()-style stub -- see test_container.cpp's identical
     // helper. No ancestor InheritedWidgets; only used for build() calls that
     // don't (or shouldn't) find one.
-    struct StubBuildContext : cw::BuildContext
+    struct Wave1StubBuildContext : cw::BuildContext
     {
         const cw::Widget& widget() const override { std::abort(); }
 
@@ -76,7 +76,7 @@ TEST(Visibility, VisibleReturnsChildDirectly)
 {
     auto leaf = std::make_shared<cw::SizedBox>(10.0f, 10.0f);
     cw::Visibility v(true, leaf);
-    StubBuildContext ctx;
+    Wave1StubBuildContext ctx;
     EXPECT_EQ(v.build(ctx), leaf);
 }
 
@@ -85,7 +85,7 @@ TEST(Visibility, InvisibleMaintainStateWrapsInOffstage)
     auto leaf = std::make_shared<cw::SizedBox>(10.0f, 10.0f);
     cw::Visibility v(false, leaf);
     v.maintain_state = true;
-    StubBuildContext ctx;
+    Wave1StubBuildContext ctx;
 
     auto off = std::dynamic_pointer_cast<const cw::Offstage>(v.build(ctx));
     ASSERT_NE(off, nullptr);
@@ -98,7 +98,7 @@ TEST(Visibility, InvisibleWithoutMaintainStateDropsChild)
     auto leaf = std::make_shared<cw::SizedBox>(10.0f, 10.0f);
     cw::Visibility v(false, leaf);
     v.maintain_state = false;
-    StubBuildContext ctx;
+    Wave1StubBuildContext ctx;
 
     auto built = v.build(ctx);
     // Default replacement: a shrink SizedBox, not the original child.
@@ -114,7 +114,7 @@ TEST(Visibility, InvisibleUsesCustomReplacement)
     cw::Visibility v(false, leaf);
     v.maintain_state = false;
     v.replacement    = replacement;
-    StubBuildContext ctx;
+    Wave1StubBuildContext ctx;
 
     EXPECT_EQ(v.build(ctx), replacement);
 }
@@ -240,7 +240,7 @@ TEST(Listener, UpdateRenderObjectReplacesCallbacks)
 
 TEST(DefaultTextStyle, OfReturnsDefaultConstructedStyleWithNoAncestor)
 {
-    StubBuildContext ctx;
+    Wave1StubBuildContext ctx;
     cw::TextStyle style = cw::DefaultTextStyle::of(ctx);
     EXPECT_EQ(style, cw::TextStyle{});
 }

@@ -389,9 +389,31 @@ namespace systems::leal::campello_widgets
         /**
          * @brief The current effective clip (intersection of all live clips).
          *
-         * Returns a full-viewport rect when no clip is active.
+         * Returns a full-viewport rect when no clip is active. Tracked in
+         * absolute/destination space (see `getDestinationClipBounds()`).
          */
         const Rect& currentClip() const noexcept { return current_clip_; }
+
+        /**
+         * @brief The current effective clip in destination (device/root)
+         * space, i.e. after `currentTransform()` has been applied.
+         *
+         * This is simply `currentClip()` under another name — clip bounds
+         * are tracked in absolute space internally — kept as a distinct
+         * accessor for parity with Flutter's `Canvas.getDestinationClipBounds()`.
+         */
+        const Rect& getDestinationClipBounds() const noexcept { return current_clip_; }
+
+        /**
+         * @brief The current effective clip, mapped back into the caller's
+         * local (pre-transform) coordinate space.
+         *
+         * Inverts `currentTransform()` against `currentClip()`'s four
+         * corners and re-bounds them into an axis-aligned rect, so a
+         * rotated/skewed ambient transform still yields a conservative
+         * (possibly larger) local-space bound rather than an incorrect one.
+         */
+        Rect getLocalClipBounds() const noexcept;
 
         /** @brief The current effective opacity (product of all nested setOpacity calls). */
         float currentOpacity() const noexcept { return current_opacity_; }
