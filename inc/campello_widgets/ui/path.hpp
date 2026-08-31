@@ -36,6 +36,17 @@ namespace systems::leal::campello_widgets
             evenOdd,    // Even-odd rule
         };
 
+        /** Mirrors Flutter's dart:ui PathOperation. 'union'/'xor' are reserved words in C++
+         *  (the latter as an alternative operator token), hence unionOp/xorOp. */
+        enum class PathOperation
+        {
+            difference,          // path1 - path2
+            intersect,
+            unionOp,
+            xorOp,
+            reverseDifference,   // path2 - path1
+        };
+
         enum class PathCommandType
         {
             moveTo,
@@ -135,6 +146,23 @@ namespace systems::leal::campello_widgets
 
         /** @brief Returns a copy of this path. */
         Path copy() const;
+
+        /**
+         * @brief Computes a boolean combination of two paths (Flutter's Path.combine parity).
+         *
+         * Both inputs are flattened via the existing GPU tessellator's buildPathContours()
+         * before the boolean op runs (backed by vendored Clipper2), so — consistent with this
+         * codebase's existing Path fidelity level (getBounds()/contains() are already
+         * curve-approximate) — the result is built from polygon approximations of any curves,
+         * not exact analytic curve intersection.
+         *
+         * The combined fillType is always FillType::winding: Clipper2's output rings encode
+         * holes via opposite winding direction from their containing outer ring, which the
+         * existing GPU fill-winding pipeline (renderer.cpp) already interprets correctly under
+         * the nonzero rule. If path1 and path2 have different FillTypes, path1's is used to
+         * interpret both inputs' self-intersections during the op itself.
+         */
+        static Path combine(PathOperation op, const Path& path1, const Path& path2);
 
         // ------------------------------------------------------------------
         // Accessors

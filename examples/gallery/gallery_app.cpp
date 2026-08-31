@@ -1667,6 +1667,70 @@ static void pathFillTypeOverlapWindingDemo(cw::Canvas& canvas, cw::Size size)
     pathFillTypeOverlapDemo(canvas, size, cw::Path::FillType::winding);
 }
 
+// Path::combine() -- boolean union/intersect/difference/xor/reverseDifference
+// between two paths (Flutter's Path.combine parity), backed by vendored
+// Clipper2. Reuses pathFillTypeOverlapDemo's exact two-circle geometry so the
+// results sit directly beside that section's fill-rule demos for comparison.
+static void pathCombineDemo(cw::Canvas& canvas, cw::Size size, cw::Path::PathOperation op, cw::Color color)
+{
+    const float r = std::min(size.width, size.height) * 0.32f;
+    const cw::Offset c1{size.width * 0.42f, size.height * 0.5f};
+    const cw::Offset c2{size.width * 0.58f, size.height * 0.5f};
+
+    cw::Path a; a.addOval(cw::Rect::fromLTWH(c1.x - r, c1.y - r, r * 2.0f, r * 2.0f));
+    cw::Path b; b.addOval(cw::Rect::fromLTWH(c2.x - r, c2.y - r, r * 2.0f, r * 2.0f));
+
+    const cw::Path result = cw::Path::combine(op, a, b);
+    canvas.drawPath(result, cw::Paint::filled(color));
+}
+
+static void pathCombineUnionDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathCombineDemo(canvas, size, cw::Path::PathOperation::unionOp, kTeal);
+}
+
+static void pathCombineIntersectDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathCombineDemo(canvas, size, cw::Path::PathOperation::intersect, kTeal);
+}
+
+static void pathCombineDifferenceDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathCombineDemo(canvas, size, cw::Path::PathOperation::difference, kTeal);
+}
+
+static void pathCombineReverseDifferenceDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathCombineDemo(canvas, size, cw::Path::PathOperation::reverseDifference, kTeal);
+}
+
+static void pathCombineXorDemo(cw::Canvas& canvas, cw::Size size)
+{
+    pathCombineDemo(canvas, size, cw::Path::PathOperation::xorOp, kTeal);
+}
+
+// The critical empirical check for combine(): a difference between fully
+// nested (concentric) circles must render as a true hole/donut -- the
+// background showing through the middle -- not a solid disc. This depends
+// on Clipper2's output rings encoding the hole via opposite winding
+// direction from the outer ring, and the existing GPU fill-winding pipeline
+// (renderer.cpp) correctly interpreting that under FillType::winding, which
+// is what combine() always sets on its result.
+static void pathCombineNestedHoleDemo(cw::Canvas& canvas, cw::Size size)
+{
+    const cw::Offset center{size.width * 0.5f, size.height * 0.5f};
+    const float outer_r = std::min(size.width, size.height) * 0.42f;
+    const float inner_r = outer_r * 0.5f;
+
+    cw::Path outer;
+    outer.addOval(cw::Rect::fromLTWH(center.x - outer_r, center.y - outer_r, outer_r * 2.0f, outer_r * 2.0f));
+    cw::Path inner;
+    inner.addOval(cw::Rect::fromLTWH(center.x - inner_r, center.y - inner_r, inner_r * 2.0f, inner_r * 2.0f));
+
+    const cw::Path result = cw::Path::combine(cw::Path::PathOperation::difference, outer, inner);
+    canvas.drawPath(result, cw::Paint::filled(kOrange));
+}
+
 // ---------------------------------------------------------------------------
 // 7. CLIPPING & FX — ClipRRect, ClipOval, DecoratedBox, Opacity, BackdropFilter
 // ---------------------------------------------------------------------------
@@ -1894,6 +1958,26 @@ public:
                 strokeSample("Overlap, evenOdd (lens hole)", 150.0f, 130.0f, pathFillTypeOverlapEvenOddDemo, colors.on_surface_variant),
             });
 
+        // Path::combine() -- boolean ops between two paths, backed by
+        // vendored Clipper2. Same overlapping-circles geometry as the
+        // fillType row above, for direct visual comparison.
+        auto path_combine_row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("union", 150.0f, 130.0f, pathCombineUnionDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("intersect", 150.0f, 130.0f, pathCombineIntersectDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("difference", 150.0f, 130.0f, pathCombineDifferenceDemo, colors.on_surface_variant),
+            });
+        auto path_combine_row2 = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::start,
+            cw::WidgetList{
+                strokeSample("reverseDifference", 150.0f, 130.0f, pathCombineReverseDifferenceDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("xorOp", 150.0f, 130.0f, pathCombineXorDemo, colors.on_surface_variant),
+                hspace(16.0f),
+                strokeSample("difference, nested\n(true hole/donut)", 150.0f, 130.0f, pathCombineNestedHoleDemo, colors.on_surface_variant),
+            });
+
         // Opacity row — 5 levels
         std::vector<cw::WidgetRef> opacity_boxes;
         for (int i = 1; i <= 5; ++i) {
@@ -2017,6 +2101,11 @@ public:
                     vspace(20.0f),
                     subheading("PATH.FILLTYPE — winding vs evenOdd, GPU stencil-then-cover", colors.on_surface_variant),
                     card(fill_type_row, 16.0f, colors.surface),
+                    vspace(20.0f),
+                    subheading("PATH.COMBINE — union / intersect / difference / reverseDifference / xor / nested hole (vendored Clipper2)", colors.on_surface_variant),
+                    card(path_combine_row, 16.0f, colors.surface),
+                    vspace(12.0f),
+                    card(path_combine_row2, 16.0f, colors.surface),
                     vspace(20.0f),
                     subheading("OPACITY — five levels 0.2 → 1.0", colors.on_surface_variant),
                     card(opacity_row, 16.0f, colors.surface),

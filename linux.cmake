@@ -52,6 +52,7 @@ target_link_libraries(campello_widgets
         campello_input
         vector_math
         campello_image
+        Clipper2
     PRIVATE
         curl
         ${LINUX_DEPS_LIBRARIES}

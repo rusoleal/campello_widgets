@@ -59,6 +59,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/campello_gpu.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/campello_input.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/vector_math.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/campello_image.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/dependencies/clipper2.cmake)
 
 # ---------------------------------------------------------------------------
 # Platform-specific build
