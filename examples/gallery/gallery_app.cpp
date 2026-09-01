@@ -926,6 +926,66 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// 4c. SLIVERS — CustomScrollView: a pinned/collapsing SliverPersistentHeader
+// above a SliverFixedExtentList, the widget-layer bridge for the
+// sliver-scrolling protocol.
+// ---------------------------------------------------------------------------
+class SliversSection : public cw::StatelessWidget
+{
+public:
+    cw::WidgetRef build(cw::BuildContext& ctx) const override
+    {
+        const auto& colors = cw::Theme::of(ctx)->tokens().colors;
+
+        auto header_content = std::make_shared<cw::Container>();
+        header_content->color = colors.primary;
+        header_content->child = cw::mw<cw::Center>(
+            cw::mw<cw::Text>("Sliver Header (pinned, 60-160px)",
+                ts(16.0f, colors.on_primary)));
+
+        auto header = std::make_shared<cw::SliverPersistentHeader>();
+        header->min_extent = 60.0f;
+        header->max_extent = 160.0f;
+        header->child      = header_content;
+
+        const int kCount = 60;
+        auto list = std::make_shared<cw::SliverFixedExtentList>();
+        list->item_count  = kCount;
+        list->item_extent = 52.0f;
+        list->builder = [colors](cw::BuildContext&, int i) -> cw::WidgetRef {
+            const cw::Color avatar_palette[] = { kBlue, kGreen, kOrange, kPurple, kTeal };
+            cw::Color av_color = avatar_palette[i % 5];
+
+            auto avatar = std::make_shared<cw::Container>();
+            avatar->width = 32.0f; avatar->height = 32.0f; avatar->color = av_color;
+            auto av_clip = std::make_shared<cw::ClipOval>(avatar);
+
+            auto row = cw::mw<cw::Row>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+                cw::WidgetList{
+                    av_clip, hspace(12.0f),
+                    cw::mw<cw::Text>("Item " + std::to_string(i + 1),
+                        ts(14.0f, colors.on_surface)),
+                });
+
+            auto cell = std::make_shared<cw::Container>();
+            cell->padding = cw::EdgeInsets::symmetric(16.0f, 0.0f);
+            cell->color   = i % 2 ? colors.surface_variant : colors.surface;
+            cell->child   = row;
+            return cell;
+        };
+
+        auto csv = std::make_shared<cw::CustomScrollView>();
+        csv->slivers = { header, list };
+        csv->physics = std::make_shared<cw::BouncingScrollPhysics>();
+
+        auto bg = std::make_shared<cw::Container>();
+        bg->color = colors.surface_variant;
+        bg->child = csv;
+        return bg;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // 5. ANIMATIONS — AnimatedSwitcher, AnimatedAlign, explicit transitions
 // ---------------------------------------------------------------------------
 class AnimationsSection;
@@ -3052,7 +3112,7 @@ public:
 static const std::vector<std::string> kSectionNames = {
     "Layout", "Controls", "Text & Input", "Lists",
     "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images", "Draw",
-    "Video", "Refresh",
+    "Video", "Refresh", "Slivers",
 };
 
 // One glyph per section, shown alone when the sidebar collapses to
@@ -3061,7 +3121,7 @@ static const std::vector<std::string> kSectionNames = {
 static const std::vector<std::string> kSectionIcons = {
     "▦", "⚙", "Aa", "☰",
     "▶", "✋", "✂", "⌨", "\U0001F5BC", "✏",
-    "\U0001F3AC", "↻",
+    "\U0001F3AC", "↻", "▤",
 };
 
 // Below this total window width the sidebar collapses to icon-only.
@@ -3084,6 +3144,7 @@ static cw::WidgetRef buildSection(int idx)
         case 9: return std::make_shared<DrawSection>();
         case 10: return std::make_shared<VideoSection>();
         case 11: return std::make_shared<RefreshSection>();
+        case 12: return std::make_shared<SliversSection>();
         default: return std::make_shared<LayoutSection>();
     }
 }
