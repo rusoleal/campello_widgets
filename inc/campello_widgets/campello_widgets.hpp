@@ -33,6 +33,11 @@
 #include <campello_widgets/ui/box_constraints.hpp>
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/render_box.hpp>
+#include <campello_widgets/ui/sliver_constraints.hpp>
+#include <campello_widgets/ui/sliver_geometry.hpp>
+#include <campello_widgets/ui/render_sliver.hpp>
+#include <campello_widgets/ui/render_sliver_to_box_adapter.hpp>
+#include <campello_widgets/ui/render_viewport.hpp>
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
 
