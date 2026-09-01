@@ -545,6 +545,42 @@ namespace systems::leal::campello_widgets
     }
 
     // -----------------------------------------------------------------------
+    // RefreshIndicator — real M3 RefreshIndicator sits in a small elevated
+    // circular surface (a 40dp circle, resting elevation level 1), unlike
+    // the bare buildProgressIndicator() spinner above. Reuses buildCard()'s
+    // elevated-variant shadow treatment rather than inventing a new one.
+    // -----------------------------------------------------------------------
+
+    WidgetRef MaterialDesignSystem::buildRefreshIndicator(const RefreshIndicatorConfig& cfg) const
+    {
+        const auto& c = tokens_.colors;
+        auto pi = std::make_shared<CircularProgressIndicator>();
+        pi->value = cfg.refreshing
+            ? std::nullopt
+            : std::optional<float>(std::clamp(cfg.pull_progress, 0.0f, 1.0f));
+        pi->value_color      = c.primary;
+        pi->background_color = c.surface_variant;
+        pi->stroke_width     = 3.0f;
+        pi->size             = 24.0f;
+
+        BoxDecoration deco;
+        deco.color         = c.surface;
+        deco.border_radius = 20.0f; // half of the 40dp square below -> circle
+        deco.box_shadow = {
+            BoxShadow{
+                Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.12f),
+                Offset{0.0f, tokens_.elevation.level1 * 0.5f},
+                tokens_.elevation.level1 * 2.0f
+            }
+        };
+
+        auto card = std::make_shared<DecoratedBox>();
+        card->decoration = deco;
+        card->child       = Center::create(pi);
+        return SizedBox::square(40.0f, card);
+    }
+
+    // -----------------------------------------------------------------------
     // Tooltip — MD3 shape token: Extra Small (4dp)
     // -----------------------------------------------------------------------
 

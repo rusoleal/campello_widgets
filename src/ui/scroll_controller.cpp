@@ -59,6 +59,27 @@ namespace systems::leal::campello_widgets
             listeners_.erase(it);
     }
 
+    uint64_t ScrollController::addOverscrollListener(std::function<void(float)> fn)
+    {
+        const uint64_t id = next_overscroll_listener_id_++;
+        overscroll_listeners_.emplace_back(id, std::move(fn));
+        return id;
+    }
+
+    void ScrollController::removeOverscrollListener(uint64_t id)
+    {
+        auto it = std::find_if(overscroll_listeners_.begin(), overscroll_listeners_.end(),
+            [id](const auto& p) { return p.first == id; });
+        if (it != overscroll_listeners_.end())
+            overscroll_listeners_.erase(it);
+    }
+
+    void ScrollController::notifyOverscroll(float raw_overscroll)
+    {
+        for (auto& [id, fn] : overscroll_listeners_)
+            fn(raw_overscroll);
+    }
+
     void ScrollController::setOffset(float offset)
     {
         const float clamped = std::clamp(offset, min_extent_, max_extent_);

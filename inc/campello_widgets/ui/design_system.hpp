@@ -110,6 +110,14 @@ namespace systems::leal::campello_widgets
         std::optional<float> value; ///< null = indeterminate
     };
 
+    struct RefreshIndicatorConfig
+    {
+        // 0..1 while dragging (pre-trigger reveal, arc grows with pull distance);
+        // may exceed 1 while over-pulling before release. Ignored once `refreshing`.
+        float pull_progress = 0.0f;
+        bool  refreshing    = false;  ///< true once triggered -- spinner goes indeterminate/continuous
+    };
+
     struct TooltipConfig
     {
         std::string message;
@@ -513,6 +521,7 @@ namespace systems::leal::campello_widgets
         virtual WidgetRef buildTextField(const TextFieldConfig&) const = 0;
         virtual WidgetRef buildCard(const CardConfig&) const = 0;
         virtual WidgetRef buildProgressIndicator(const ProgressConfig&) const = 0;
+        virtual WidgetRef buildRefreshIndicator(const RefreshIndicatorConfig&) const = 0;
         virtual WidgetRef buildTooltip(const TooltipConfig&) const = 0;
         virtual WidgetRef buildListTile(const ListTileConfig&) const = 0;
         virtual WidgetRef buildDivider(const DividerConfig&) const = 0;

@@ -149,6 +149,7 @@
 #include <campello_widgets/widgets/single_child_scroll_view.hpp>
 #include <campello_widgets/widgets/list_view.hpp>
 #include <campello_widgets/widgets/grid_view.hpp>
+#include <campello_widgets/widgets/refresh_indicator.hpp>
 
 // Two-dimensional scrollables (TableView, TreeView)
 #include <campello_widgets/ui/span.hpp>

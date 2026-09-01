@@ -203,6 +203,28 @@ TEST(CampelloDesignSystem, BuildProgressIndicatorLinearReturnsWidget)
     EXPECT_NE(w, nullptr);
 }
 
+TEST(CampelloDesignSystem, BuildRefreshIndicatorReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    RefreshIndicatorConfig cfg;
+    cfg.pull_progress = 0.5f;
+
+    auto w = ds.buildRefreshIndicator(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
+TEST(CampelloDesignSystem, BuildRefreshIndicatorRefreshingReturnsWidget)
+{
+    auto ds = CampelloDesignSystem::light();
+
+    RefreshIndicatorConfig cfg;
+    cfg.refreshing = true;
+
+    auto w = ds.buildRefreshIndicator(cfg);
+    EXPECT_NE(w, nullptr);
+}
+
 TEST(CampelloDesignSystem, BuildTooltipReturnsWidget)
 {
     auto ds = CampelloDesignSystem::light();

@@ -35,6 +35,7 @@ namespace systems::leal::campello_widgets
         WidgetRef buildTextField(const TextFieldConfig&) const override;
         WidgetRef buildCard(const CardConfig&) const override;
         WidgetRef buildProgressIndicator(const ProgressConfig&) const override;
+        WidgetRef buildRefreshIndicator(const RefreshIndicatorConfig&) const override;
         WidgetRef buildTooltip(const TooltipConfig&) const override;
         WidgetRef buildListTile(const ListTileConfig&) const override;
         WidgetRef buildDivider(const DividerConfig&) const override;

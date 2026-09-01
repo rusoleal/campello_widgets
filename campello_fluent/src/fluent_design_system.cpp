@@ -523,6 +523,19 @@ WidgetRef FluentDesignSystem::buildProgressIndicator(const ProgressConfig& cfg) 
     return ind;
 }
 
+// Bare spinner, accent-colored, no background ring -- matches this design
+// system's own buildProgressIndicator() above, which likewise sets no
+// background_color.
+WidgetRef FluentDesignSystem::buildRefreshIndicator(const RefreshIndicatorConfig& cfg) const
+{
+    auto pi = std::make_shared<CircularProgressIndicator>();
+    pi->value = cfg.refreshing
+        ? std::nullopt
+        : std::optional<float>(std::clamp(cfg.pull_progress, 0.0f, 1.0f));
+    pi->value_color = accent_;
+    return pi;
+}
+
 WidgetRef FluentDesignSystem::buildTooltip(const TooltipConfig& cfg) const
 {
     const auto& c = tokens_.colors;

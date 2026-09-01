@@ -73,6 +73,7 @@ TEST_P(DesignSystemContractTest, AllBuildersReturnNonNullForDefaultConfig)
     EXPECT_NE(ds->buildTextField(TextFieldConfig{}), nullptr);
     EXPECT_NE(ds->buildCard(CardConfig{}), nullptr);
     EXPECT_NE(ds->buildProgressIndicator(ProgressConfig{}), nullptr);
+    EXPECT_NE(ds->buildRefreshIndicator(RefreshIndicatorConfig{}), nullptr);
     EXPECT_NE(ds->buildTooltip(TooltipConfig{}), nullptr);
     EXPECT_NE(ds->buildListTile(ListTileConfig{}), nullptr);
     EXPECT_NE(ds->buildDivider(DividerConfig{}), nullptr);

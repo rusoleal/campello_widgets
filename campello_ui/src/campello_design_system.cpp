@@ -525,6 +525,20 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    WidgetRef CampelloDesignSystem::buildRefreshIndicator(const RefreshIndicatorConfig& cfg) const
+    {
+        const auto& c = tokens_.colors;
+        auto pi = std::make_shared<CircularProgressIndicator>();
+        pi->value = cfg.refreshing
+            ? std::nullopt
+            : std::optional<float>(std::clamp(cfg.pull_progress, 0.0f, 1.0f));
+        pi->value_color      = c.primary;
+        pi->background_color = withOpacity(c.primary, 0.15f);
+        pi->stroke_width     = 3.0f;
+        pi->size             = 32.0f;
+        return pi;
+    }
+
     // -----------------------------------------------------------------------
     // Tooltip
     // -----------------------------------------------------------------------

@@ -83,6 +83,29 @@ namespace systems::leal::campello_widgets
         /** @brief Removes the listener with the given ID. */
         void removeListener(uint64_t id);
 
+        /**
+         * @brief Registers a callback that fires with the raw (unresisted)
+         * top-edge overscroll distance, in logical pixels.
+         *
+         * Positive = pulled past the top boundary by that many px, before
+         * any boundary-resistance damping (ClampingScrollPhysics clamps the
+         * *displayed* offset() at the boundary while this keeps advancing;
+         * BouncingScrollPhysics rubber-bands the displayed offset by less
+         * than this). Zero = not overscrolled at the top, whether in-bounds
+         * or overscrolled at the *bottom* — this channel only ever reports
+         * the top edge, matching RefreshIndicator's one use for it.
+         *
+         * Separate from addListener() because that one only ever carries
+         * the boundary-resisted offset() — this is the only way to observe
+         * how far past the edge a drag actually went.
+         *
+         * @return A listener ID for use with removeOverscrollListener().
+         */
+        uint64_t addOverscrollListener(std::function<void(float)> fn);
+
+        /** @brief Removes the overscroll listener with the given ID. */
+        void removeOverscrollListener(uint64_t id);
+
         // ------------------------------------------------------------------
         // Called by the render object
         // ------------------------------------------------------------------
@@ -100,6 +123,9 @@ namespace systems::leal::campello_widgets
         /** @brief Called when the scrollable render object unmounts. */
         void detach() noexcept { attached_ = false; }
 
+        /** @brief Called by the render object on every scroll-delta application. */
+        void notifyOverscroll(float raw_overscroll);
+
     private:
         void setOffset(float offset);
         void notifyListeners();
@@ -114,6 +140,9 @@ namespace systems::leal::campello_widgets
 
         uint64_t next_listener_id_ = 1;
         std::vector<std::pair<uint64_t, std::function<void()>>> listeners_;
+
+        uint64_t next_overscroll_listener_id_ = 1;
+        std::vector<std::pair<uint64_t, std::function<void(float)>>> overscroll_listeners_;
     };
 
 } // namespace systems::leal::campello_widgets

@@ -279,7 +279,22 @@ namespace systems::leal::campello_widgets
 
         if (controller_)
         {
+            // controller_->offset() only updates when the clamped value
+            // actually changes (ScrollController::setOffset()'s own
+            // dedup) -- read it BEFORE jumpTo() so this comparison sees
+            // the prior value, not the one we're about to set. Unlike the
+            // no-controller branch below, nothing here previously
+            // requested a repaint at all: it relied entirely on some
+            // listener happening to setState/rebuild as a side effect of
+            // controller_->notifyListeners() (e.g. Scrollbar's own
+            // subscription) -- fragile, and produces exactly the
+            // steps-of-several-pixels symptom this fixes when nothing
+            // else happens to be listening on every tick.
+            const bool offset_changed = (clamped != controller_->offset());
             controller_->jumpTo(clamped);
+            controller_->notifyOverscroll(std::max(0.0f, min_extent_ - raw_offset_));
+            if (offset_changed)
+                markNeedsPaint();
         }
         else
         {
@@ -414,12 +429,26 @@ namespace systems::leal::campello_widgets
                 velocity_px_s_ = -velocity_tracker_.getVelocity();
             panning_ = false;
             arena_entry_.reset();
+            // Releasing while overscrolled (spring-back) or with residual
+            // velocity (momentum) needs onTick() to keep running, but
+            // nothing else requests that first follow-up frame on release
+            // -- onTick() only fires once a frame is actually scheduled,
+            // so without this, a release that leaves the view overscrolled
+            // (e.g. a partial pull-to-refresh, cancelled before the
+            // trigger threshold) freezes at the last dragged frame forever.
+            if (raw_offset_ < min_extent_ || raw_offset_ > max_extent_ ||
+                std::abs(velocity_px_s_) >= kMinVelocity)
+                FrameScheduler::scheduleFrame();
             break;
 
         case PointerEventKind::cancel:
             pointer_down_ = false;
             panning_ = false;
             arena_entry_.reset();
+            // See the `up` case's doc above -- same gap, same fix.
+            if (raw_offset_ < min_extent_ || raw_offset_ > max_extent_ ||
+                std::abs(velocity_px_s_) >= kMinVelocity)
+                FrameScheduler::scheduleFrame();
             break;
 
         case PointerEventKind::scroll:

@@ -583,6 +583,27 @@ namespace systems::leal::campello_widgets
     }
 
     // -----------------------------------------------------------------------
+    // RefreshIndicator — bare spinner, no elevated card: matches this
+    // design system's own buildProgressIndicator() above (no card wrapper
+    // there either), and real Cupertino pull-to-refresh is a plain
+    // UIActivityIndicatorView with no surrounding surface.
+    // -----------------------------------------------------------------------
+
+    WidgetRef CupertinoDesignSystem::buildRefreshIndicator(const RefreshIndicatorConfig& cfg) const
+    {
+        const auto& c = tokens_.colors;
+        auto pi = std::make_shared<CircularProgressIndicator>();
+        pi->value = cfg.refreshing
+            ? std::nullopt
+            : std::optional<float>(std::clamp(cfg.pull_progress, 0.0f, 1.0f));
+        pi->value_color      = c.primary;
+        pi->background_color = c.outline_variant;
+        pi->stroke_width     = 3.0f;
+        pi->size             = 28.0f;
+        return pi;
+    }
+
+    // -----------------------------------------------------------------------
     // Tooltip
     // -----------------------------------------------------------------------
 

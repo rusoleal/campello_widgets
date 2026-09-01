@@ -307,6 +307,18 @@ namespace systems::leal::campello_widgets
         return pi;
     }
 
+    WidgetRef NullDesignSystem::buildRefreshIndicator(const RefreshIndicatorConfig& cfg) const
+    {
+        const auto& c = tokens_.colors;
+        auto pi = std::make_shared<CircularProgressIndicator>();
+        pi->value = cfg.refreshing
+            ? std::nullopt
+            : std::optional<float>(std::clamp(cfg.pull_progress, 0.0f, 1.0f));
+        pi->value_color      = c.primary;
+        pi->background_color = c.surface_variant;
+        return pi;
+    }
+
     WidgetRef NullDesignSystem::buildTooltip(const TooltipConfig& cfg) const
     {
         const auto& c = tokens_.colors;

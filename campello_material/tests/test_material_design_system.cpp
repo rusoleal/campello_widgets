@@ -123,6 +123,7 @@ TEST(MaterialDesignSystem, BuildsAllWidgets)
     EXPECT_NE(ds.buildTextField(TextFieldConfig{}), nullptr);
     EXPECT_NE(ds.buildCard(CardConfig{}), nullptr);
     EXPECT_NE(ds.buildProgressIndicator(ProgressConfig{}), nullptr);
+    EXPECT_NE(ds.buildRefreshIndicator(RefreshIndicatorConfig{}), nullptr);
     EXPECT_NE(ds.buildTooltip(TooltipConfig{}), nullptr);
     EXPECT_NE(ds.buildListTile(ListTileConfig{}), nullptr);
     EXPECT_NE(ds.buildDivider(DividerConfig{}), nullptr);
@@ -145,6 +146,18 @@ TEST(MaterialDesignSystem, BuildsAllWidgets)
     EXPECT_NE(ds.buildSearchField(SearchFieldConfig{}), nullptr);
     EXPECT_NE(ds.buildDatePicker(DatePickerConfig{}), nullptr);
     EXPECT_NE(ds.buildTimePicker(TimePickerConfig{}), nullptr);
+}
+
+TEST(MaterialDesignSystem, BuildRefreshIndicatorReflectsPullProgress)
+{
+    auto ds = MaterialDesignSystem::light();
+
+    RefreshIndicatorConfig cfg;
+    cfg.pull_progress = 0.4f;
+    EXPECT_NE(ds.buildRefreshIndicator(cfg), nullptr);
+
+    cfg.refreshing = true;
+    EXPECT_NE(ds.buildRefreshIndicator(cfg), nullptr);
 }
 
 TEST(MaterialDesignSystem, SearchFieldIsFullyRoundedPill)

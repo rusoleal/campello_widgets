@@ -5,6 +5,7 @@
 #include <campello_ui/campello_design_system.hpp>
 #include <campello_material/material_design_system.hpp>
 #include <campello_cupertino/cupertino_design_system.hpp>
+#include <campello_fluent/fluent_design_system.hpp>
 
 #include <cmath>
 #include <functional>
@@ -55,6 +56,7 @@ enum class GalleryDesignSystemKind
     material,
     cupertino,
     cupertino_glass,
+    fluent,
 };
 
 static std::shared_ptr<const cw::DesignSystem> makeGalleryDesignSystem(GalleryDesignSystemKind kind, bool dark)
@@ -69,6 +71,9 @@ static std::shared_ptr<const cw::DesignSystem> makeGalleryDesignSystem(GalleryDe
         case GalleryDesignSystemKind::cupertino_glass:
             return std::make_shared<cw::CupertinoDesignSystem>(
                 cw::CupertinoDesignSystem::liquidGlass(dark));
+        case GalleryDesignSystemKind::fluent:
+            return std::make_shared<cw::FluentDesignSystem>(
+                dark ? cw::FluentDesignSystem::dark() : cw::FluentDesignSystem::light());
         case GalleryDesignSystemKind::campello_ui:
         default:
             return std::make_shared<cw::CampelloDesignSystem>(
@@ -836,6 +841,88 @@ class ListsSection : public cw::StatefulWidget {
 public:
     std::unique_ptr<cw::StateBase> createState() const override
     { return std::make_unique<ListsSectionState>(); }
+};
+
+// ---------------------------------------------------------------------------
+// 4b. REFRESH — RefreshIndicator (pull-to-refresh), themed per DesignSystem
+// ---------------------------------------------------------------------------
+class RefreshSection;
+
+class RefreshSectionState : public cw::State<RefreshSection>
+{
+public:
+    void initState() override
+    {
+        controller_ = std::make_shared<cw::ScrollController>();
+    }
+
+    void dispose() override
+    {
+        // Drop the in-flight fake-refresh timer (if any) so its listener
+        // never fires back into a destroyed State.
+        refresh_timer_.reset();
+    }
+
+    cw::WidgetRef build(cw::BuildContext& ctx) override
+    {
+        const auto& colors = cw::Theme::of(ctx)->tokens().colors;
+
+        const int kCount = 40;
+        auto lv = std::make_shared<cw::ListView>();
+        lv->controller  = controller_;
+        lv->item_count  = kCount;
+        lv->item_extent = 52.0f;
+        lv->physics     = std::make_shared<cw::BouncingScrollPhysics>();
+        lv->builder = [colors](cw::BuildContext&, int i) -> cw::WidgetRef {
+            auto cell = std::make_shared<cw::Container>();
+            cell->padding = cw::EdgeInsets::symmetric(16.0f, 0.0f);
+            cell->color   = i % 2 ? colors.surface_variant : colors.surface;
+            cell->child   = cw::mw<cw::Align>(cw::Alignment::centerLeft(),
+                cw::mw<cw::Text>("Item " + std::to_string(i + 1), ts(14.0f, colors.on_surface)));
+            return cell;
+        };
+
+        auto ri = std::make_shared<cw::RefreshIndicator>(controller_, lv);
+        ri->on_refresh = [this](std::function<void()> done) {
+            // Simulate ~1.5s of async work via an AnimationController (main-
+            // thread, ticker-driven — no raw OS thread) so the spinner's
+            // indeterminate spin phase is actually visible, not an instant
+            // flash. Owned by this State so dispose() above can drop it if
+            // the user navigates away mid-refresh.
+            refresh_timer_ = std::make_unique<cw::AnimationController>(1500.0);
+            refresh_timer_->addListener([this, done] {
+                if (refresh_timer_ && refresh_timer_->normalizedValue() >= 1.0) {
+                    refresh_timer_.reset();
+                    done();
+                }
+            });
+            refresh_timer_->forward();
+        };
+
+        auto header = cw::mw<cw::Padding>(cw::EdgeInsets::all(16.0f),
+            cw::mw<cw::Text>(
+                "Pull down past the top to reveal the spinner, then release to trigger a "
+                "fake 1.5s refresh. Try it across all 4 themes via the sidebar switcher.",
+                ts(13.0f, colors.on_surface_variant)));
+
+        auto root = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+            cw::WidgetList{ header, cw::mw<cw::Expanded>(ri) });
+
+        auto bg = std::make_shared<cw::Container>();
+        bg->color = colors.surface_variant;
+        bg->child = root;
+        return bg;
+    }
+
+private:
+    std::shared_ptr<cw::ScrollController>    controller_;
+    std::unique_ptr<cw::AnimationController> refresh_timer_;
+};
+
+class RefreshSection : public cw::StatefulWidget {
+public:
+    std::unique_ptr<cw::StateBase> createState() const override
+    { return std::make_unique<RefreshSectionState>(); }
 };
 
 // ---------------------------------------------------------------------------
@@ -2965,7 +3052,7 @@ public:
 static const std::vector<std::string> kSectionNames = {
     "Layout", "Controls", "Text & Input", "Lists",
     "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images", "Draw",
-    "Video",
+    "Video", "Refresh",
 };
 
 // One glyph per section, shown alone when the sidebar collapses to
@@ -2974,7 +3061,7 @@ static const std::vector<std::string> kSectionNames = {
 static const std::vector<std::string> kSectionIcons = {
     "▦", "⚙", "Aa", "☰",
     "▶", "✋", "✂", "⌨", "\U0001F5BC", "✏",
-    "\U0001F3AC",
+    "\U0001F3AC", "↻",
 };
 
 // Below this total window width the sidebar collapses to icon-only.
@@ -2996,6 +3083,7 @@ static cw::WidgetRef buildSection(int idx)
         case 8: return std::make_shared<ImagesSection>();
         case 9: return std::make_shared<DrawSection>();
         case 10: return std::make_shared<VideoSection>();
+        case 11: return std::make_shared<RefreshSection>();
         default: return std::make_shared<LayoutSection>();
     }
 }
@@ -3151,6 +3239,14 @@ private:
                     selected_fg   = colors.on_surface;
                     unselected_fg = colors.on_surface_variant;
                     break;
+                case GalleryDesignSystemKind::fluent:
+                    // Fluent's buildSegmentedButton() re-tints the label
+                    // itself (accent vs. on_surface) regardless of what
+                    // color it's handed here, so this choice is inert —
+                    // present for clarity, not correctness.
+                    selected_fg   = colors.on_surface;
+                    unselected_fg = colors.on_surface_variant;
+                    break;
                 case GalleryDesignSystemKind::campello_ui:
                 default:
                     selected_fg   = colors.on_primary;
@@ -3168,6 +3264,7 @@ private:
                 {segLabel("MD3", 1),   nullptr},
                 {segLabel("iOS", 2),   nullptr},
                 {segLabel("Glass", 3), nullptr},
+                {segLabel("Flu", 4),   nullptr},
             };
             seg_cfg.selected_index = static_cast<int>(kind_);
             seg_cfg.on_changed     = [this](int i) { setDesignSystemKind(i); };

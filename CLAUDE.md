@@ -42,9 +42,12 @@ campello_material/      # DesignSystem impl: Material Design 3 (see TODO.md Phas
 campello_cupertino/     # DesignSystem impl: Apple HIG / Cupertino (see TODO.md Phase 16)
   inc/campello_cupertino/
   src/
+campello_fluent/        # DesignSystem impl: Microsoft Fluent Design
+  inc/campello_fluent/
+  src/
 ```
 
-New files must follow this layout exactly. Public API goes in `inc/campello_widgets/`, implementation in `src/`. `campello_widgets` core has no concrete visual style of its own — `campello_ui`/`campello_material`/`campello_cupertino` are sibling libraries that implement `DesignSystem` (`inc/campello_widgets/ui/design_system.hpp`) and link against core, never the other way around.
+New files must follow this layout exactly. Public API goes in `inc/campello_widgets/`, implementation in `src/`. `campello_widgets` core has no concrete visual style of its own — `campello_ui`/`campello_material`/`campello_cupertino`/`campello_fluent` are sibling libraries that implement `DesignSystem` (`inc/campello_widgets/ui/design_system.hpp`) and link against core, never the other way around.
 
 ## Build
 
