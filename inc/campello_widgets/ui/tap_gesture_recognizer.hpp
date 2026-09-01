@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <optional>
 #include <campello_widgets/ui/gesture_recognizer.hpp>
 #include <campello_widgets/ui/gesture_details.hpp>

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <thread>
 #include <campello_widgets/ui/render_viewport.hpp>
+#include <campello_widgets/ui/render_sliver_persistent_header.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
 #include <campello_widgets/ui/scroll_controller.hpp>
 #include <campello_widgets/ui/animation_controller.hpp>
@@ -451,4 +452,161 @@ TEST(RenderViewport, MomentumContinuesAfterRelease)
 
     vp.detach();
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Pinning (Stage 5) — RenderSliverPersistentHeader integration. New
+// territory with no prior precedent; every expected number below was worked
+// through by hand against RenderViewport::performLayout()'s actual formulas
+// before being asserted (see the Stage 5 plan's own worked example, which
+// this test's first case reproduces with header height 80).
+// ---------------------------------------------------------------------------
+
+TEST(RenderViewport, SinglePinnedHeaderStaysAtTopWhileBodyScrollsAndClipsUnderIt)
+{
+    cw::RenderViewport vp;
+    auto header = std::make_shared<cw::RenderSliverPersistentHeader>();
+    header->min_extent = 80.0f;
+    header->max_extent = 80.0f; // fixed, non-collapsing
+    auto body = std::make_shared<ViewportTestSliver>(300.0f);
+    vp.insertChild(header, 0);
+    vp.insertChild(body, 1);
+
+    auto controller = std::make_shared<cw::ScrollController>();
+    vp.setController(controller);
+
+    doLayout(vp, 400.0f, 150.0f); // total content 380, viewport 150 -> max scroll 230
+
+    EXPECT_FLOAT_EQ(controller->maxScrollExtent(), 230.0f);
+
+    // At scroll 0: header sits at the top, body is flush against its bottom
+    // edge (80px), matching the plan's worked example exactly.
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f);
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), 80.0f);
+    EXPECT_TRUE(vp.isPinnedObstructionAt(0));
+    EXPECT_FALSE(vp.isPinnedObstructionAt(1));
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(1), 80.0f); // == header's height, even though not yet "needed"
+
+    // Scroll deep (200 of the available 230) -- header stays pinned at 0
+    // (never scrolls away), body's own natural, unclamped position keeps
+    // advancing upward past the header's floor, which is exactly why
+    // clipFloorAt(1) exists: without a clip, body would paint straight
+    // through the header's reserved 80px region.
+    controller->jumpTo(200.0f);
+    vp.markNeedsLayout();
+    doLayout(vp, 400.0f, 150.0f);
+
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f); // still pinned
+    EXPECT_FLOAT_EQ(header->geometry().paint_extent, 80.0f); // never shrinks (min == max)
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), -120.0f); // 80 - 200, unclamped
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(1), 80.0f);
+    EXPECT_TRUE(vp.isPinnedObstructionAt(0));
+    EXPECT_FALSE(vp.isPinnedObstructionAt(1));
+}
+
+TEST(RenderViewport, TwoStackedPinnedHeadersClampToEachOtherAndSumIntoBodyClipFloor)
+{
+    cw::RenderViewport vp;
+    auto header1 = std::make_shared<cw::RenderSliverPersistentHeader>();
+    header1->min_extent = 60.0f;
+    header1->max_extent = 60.0f;
+    auto header2 = std::make_shared<cw::RenderSliverPersistentHeader>();
+    header2->min_extent = 50.0f;
+    header2->max_extent = 50.0f;
+    auto body = std::make_shared<ViewportTestSliver>(300.0f);
+    vp.insertChild(header1, 0);
+    vp.insertChild(header2, 1);
+    vp.insertChild(body, 2);
+
+    auto controller = std::make_shared<cw::ScrollController>();
+    vp.setController(controller);
+
+    doLayout(vp, 400.0f, 150.0f); // total content 410, viewport 150 -> max scroll 260
+
+    // At scroll 0: headers stack directly on top of each other, body flush
+    // against the second header's bottom edge.
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f);
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), 60.0f);
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(2), 110.0f);
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(2), 110.0f); // 60 + 50
+
+    // Scroll deep (200 of 260) -- both headers pin, second stacks below the
+    // first (clamped to header1's height, NOT its own unclamped natural
+    // position), body's clip floor reflects the sum of both.
+    controller->jumpTo(200.0f);
+    vp.markNeedsLayout();
+    doLayout(vp, 400.0f, 150.0f);
+
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f);   // header1 pinned at top
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), 60.0f);  // header2 stacks right below header1
+    EXPECT_TRUE(vp.isPinnedObstructionAt(0));
+    EXPECT_TRUE(vp.isPinnedObstructionAt(1));
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(2), -90.0f); // body's unclamped natural position
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(2), 110.0f);    // 60 + 50, unchanged
+}
+
+TEST(RenderViewport, CollapsingHeaderTracksBodyDuringCollapseThenClipsOncePinned)
+{
+    cw::RenderViewport vp;
+    auto header = std::make_shared<cw::RenderSliverPersistentHeader>();
+    header->min_extent = 30.0f;
+    header->max_extent = 100.0f; // 70px collapse range
+    auto body = std::make_shared<ViewportTestSliver>(300.0f);
+    vp.insertChild(header, 0);
+    vp.insertChild(body, 1);
+
+    auto controller = std::make_shared<cw::ScrollController>();
+    vp.setController(controller);
+
+    doLayout(vp, 400.0f, 150.0f); // total content 400, viewport 150 -> max scroll 250
+
+    // Mid-collapse (scroll 40 of the 70px collapse range): header stays
+    // pinned at position 0 (only its SIZE shrinks, not its position), body
+    // stays exactly flush against the header's current (shrunk) bottom edge
+    // -- no gap, no overlap, confirmed algebraically in the plan.
+    controller->jumpTo(40.0f);
+    vp.markNeedsLayout();
+    doLayout(vp, 400.0f, 150.0f);
+
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f);
+    EXPECT_FLOAT_EQ(header->geometry().paint_extent, 60.0f); // 100 - 40
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), 60.0f); // flush against header's current bottom edge
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(1), 30.0f); // == min_extent, harmless-but-inert during collapse
+
+    // Fully collapsed and pinned (scroll 150, well past the 70px collapse
+    // range): header holds at min_extent, body's unclamped position has now
+    // moved past the header's resting floor -- this is exactly the case the
+    // clip exists for.
+    controller->jumpTo(150.0f);
+    vp.markNeedsLayout();
+    doLayout(vp, 400.0f, 150.0f);
+
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f); // still pinned
+    EXPECT_FLOAT_EQ(header->geometry().paint_extent, 30.0f); // holds at min_extent, doesn't keep shrinking
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), -50.0f); // 100 - 150, unclamped -- now past the header's floor (30)
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(1), 30.0f);
+}
+
+TEST(RenderViewport, NoPinnedHeadersLeavesClipFloorAndObstructionFlagsAtDefault)
+{
+    // Regression guard for the gated-no-op claim: with only ordinary
+    // (non-obstructing) slivers, every new Stage 5 field must sit at its
+    // inert default and every layout_offset must match the pre-Stage-5
+    // formula exactly -- re-derives the same numbers
+    // LayoutOffsetsReflectScrollPosition already asserts, through the new
+    // accessors this time.
+    cw::RenderViewport vp;
+    auto a = std::make_shared<ViewportTestSliver>(100.0f);
+    auto b = std::make_shared<ViewportTestSliver>(100.0f);
+    vp.insertChild(a, 0);
+    vp.insertChild(b, 1);
+
+    doLayout(vp, 400.0f, 150.0f);
+
+    EXPECT_FALSE(vp.isPinnedObstructionAt(0));
+    EXPECT_FALSE(vp.isPinnedObstructionAt(1));
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(0), 0.0f);
+    EXPECT_FLOAT_EQ(vp.clipFloorAt(1), 0.0f);
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f);
+    EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), 100.0f);
 }

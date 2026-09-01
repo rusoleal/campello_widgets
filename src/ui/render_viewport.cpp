@@ -121,6 +121,11 @@ namespace systems::leal::campello_widgets
         {
             float preceding        = 0.0f;
             float max_paint_offset = 0.0f;
+            // Running total of every earlier pinned obstruction's
+            // max_scroll_obstruction_extent (Stage 5) -- 0 unless a pinned
+            // persistent header precedes the current child. See
+            // ViewportChild's own doc and RenderSliverPersistentHeader.
+            float pin_floor = 0.0f;
             std::optional<float> pending_correction;
 
             for (auto& c : children_)
@@ -132,7 +137,7 @@ namespace systems::leal::campello_widgets
                 sc.growth_direction          = GrowthDirection::forward;
                 sc.scroll_offset             = std::max(0.0f, scroll + correction_total - preceding);
                 sc.preceding_scroll_extent   = preceding;
-                sc.overlap                   = 0.0f;
+                sc.overlap                   = pin_floor;
                 sc.remaining_paint_extent    = std::max(0.0f, viewport_extent_ - max_paint_offset);
                 sc.remaining_cache_extent    = sc.remaining_paint_extent;
                 sc.viewport_main_axis_extent = viewport_extent_;
@@ -147,9 +152,24 @@ namespace systems::leal::campello_widgets
                     break; // re-run the WHOLE pass with the adjusted offset
                 }
 
-                c.layout_offset = preceding - (scroll + correction_total);
+                // A sliver that reports itself as a pinned obstruction (a
+                // persistent header) has its natural, scroll-delta-based
+                // offset clamped so it never scrolls above the floor
+                // reserved by any earlier pinned obstruction -- this is the
+                // entire pinning mechanism; see the Stage 5 plan's worked
+                // example. Ordinary content (max_scroll_obstruction_extent
+                // == 0, true for every pre-Stage-5 sliver) is completely
+                // untouched -- natural_offset is used as-is.
+                const float natural_offset = preceding - (scroll + correction_total);
+                const bool  is_obstruction = g.max_scroll_obstruction_extent > 0.0f;
+                c.layout_offset         = is_obstruction ? std::max(natural_offset, pin_floor) : natural_offset;
+                c.is_pinned_obstruction = is_obstruction;
+                c.clip_floor            = pin_floor;
+
                 preceding       += g.scroll_extent;
                 max_paint_offset = std::max(max_paint_offset, c.layout_offset + g.paint_extent);
+                if (is_obstruction)
+                    pin_floor = std::max(pin_floor, c.layout_offset + g.max_scroll_obstruction_extent);
             }
 
             if (pending_correction.has_value() && cycle < kMaxLayoutCycles)
@@ -178,6 +198,16 @@ namespace systems::leal::campello_widgets
     // Paint -- no ambient translate: SliverConstraints/SliverGeometry are
     // already viewport-relative by design, so c.layout_offset is already
     // resolved to visible-space (see the class doc / plan's paint section).
+    //
+    // Two passes (Stage 5): non-obstructing children first, each clipped to
+    // its own clip_floor when a pinned header precedes it (see
+    // performLayout()'s pin_floor bookkeeping and the Stage 5 plan's worked
+    // example for why this clip is necessary once a header is fully
+    // collapsed/pinned); pinned obstructions paint last, unclipped, so they
+    // always render on top of whatever scrolled underneath them regardless
+    // of insertion order. For a viewport with no pinned headers, every
+    // clip_floor is 0 and the second pass is empty -- byte-identical to the
+    // single-pass behavior before Stage 5.
     // -------------------------------------------------------------------------
 
     void RenderViewport::performPaint(PaintContext& context, const Offset& offset)
@@ -192,7 +222,32 @@ namespace systems::leal::campello_widgets
 
         for (const auto& c : children_)
         {
-            if (!c.sliver || !c.sliver->geometry().visible) continue;
+            if (!c.sliver || !c.sliver->geometry().visible || c.is_pinned_obstruction) continue;
+
+            const Offset child_offset = is_v
+                ? Offset{0.0f, c.layout_offset}
+                : Offset{c.layout_offset, 0.0f};
+
+            if (c.clip_floor > 0.0f)
+            {
+                canvas.save();
+                canvas.clipRect(is_v
+                    ? Rect::fromLTWH(offset.x, offset.y + c.clip_floor,
+                                      size_.width, std::max(0.0f, size_.height - c.clip_floor))
+                    : Rect::fromLTWH(offset.x + c.clip_floor, offset.y,
+                                      std::max(0.0f, size_.width - c.clip_floor), size_.height));
+                c.sliver->paint(context, offset + child_offset);
+                canvas.restore();
+            }
+            else
+            {
+                c.sliver->paint(context, offset + child_offset);
+            }
+        }
+
+        for (const auto& c : children_)
+        {
+            if (!c.sliver || !c.sliver->geometry().visible || !c.is_pinned_obstruction) continue;
 
             const Offset child_offset = is_v
                 ? Offset{0.0f, c.layout_offset}

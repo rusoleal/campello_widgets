@@ -76,6 +76,28 @@ namespace systems::leal::campello_widgets
             return index < children_.size() ? children_[index].layout_offset : 0.0f;
         }
 
+        /**
+         * @brief The accumulated pinned-obstruction floor (see performLayout())
+         * in effect *before* this child was laid out — 0 unless an earlier
+         * sibling is a pinned persistent header. Non-obstructing children are
+         * clipped to this floor during paint; test/introspection accessor for
+         * that mechanism, mirroring layoutOffsetAt().
+         */
+        float clipFloorAt(size_t index) const noexcept
+        {
+            return index < children_.size() ? children_[index].clip_floor : 0.0f;
+        }
+
+        /**
+         * @brief Whether this child reported itself as a pinned obstruction
+         * (SliverGeometry::max_scroll_obstruction_extent > 0) on its most
+         * recent layout — test/introspection accessor mirroring layoutOffsetAt().
+         */
+        bool isPinnedObstructionAt(size_t index) const noexcept
+        {
+            return index < children_.size() ? children_[index].is_pinned_obstruction : false;
+        }
+
         // ------------------------------------------------------------------
         // RenderBox overrides
         // ------------------------------------------------------------------
@@ -122,6 +144,13 @@ namespace systems::leal::campello_widgets
             // Viewport-relative layout offset along the scroll axis, set
             // fresh every performLayout() pass — see that method's doc.
             float layout_offset = 0.0f;
+            // Pinning support (Stage 5) — both set fresh every
+            // performLayout() pass, both default-inert (false/0) so every
+            // pre-Stage-5 sliver is completely unaffected. See
+            // performLayout()'s pin_floor bookkeeping and performPaint()'s
+            // two-pass clip.
+            bool  is_pinned_obstruction = false;
+            float clip_floor            = 0.0f;
         };
         std::vector<ViewportChild> children_;
 
