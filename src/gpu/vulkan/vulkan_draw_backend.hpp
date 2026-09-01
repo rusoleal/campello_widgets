@@ -452,6 +452,9 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_write_evenodd_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_cover_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  rrect_pipeline_;
+    // Dedicated arc/pie SDF pipeline — see arc.vert/arc.frag's doc comment
+    // for why this isn't just rrect_pipeline_.
+    std::shared_ptr<campello_gpu::RenderPipeline>  arc_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
 
     // Blend-mode variants of the solid-color pipelines. Only a subset of
@@ -462,6 +465,7 @@ private:
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rect_aa_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> vertices_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> rrect_blend_pipelines_;
+    std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> arc_blend_pipelines_;
     std::map<BlendMode, std::shared_ptr<campello_gpu::RenderPipeline>> line_blend_pipelines_;
 
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
@@ -485,6 +489,7 @@ private:
     std::shared_ptr<campello_gpu::BindGroupLayout> shader_mask_bgl_;
     std::shared_ptr<campello_gpu::PipelineLayout>  rect_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  rrect_layout_;
+    std::shared_ptr<campello_gpu::PipelineLayout>  arc_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  line_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  quad_layout_;
     std::shared_ptr<campello_gpu::PipelineLayout>  shader_mask_layout_;

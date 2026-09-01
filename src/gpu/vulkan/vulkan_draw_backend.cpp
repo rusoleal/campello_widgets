@@ -63,6 +63,18 @@ struct alignas(16) RRectUniforms
     float stroke_w;     // 0 = fill, >0 = stroke width in pixels
 };
 
+// Mirrors arc.vert/arc.frag's ArcUniforms field-for-field.
+struct alignas(16) ArcUniforms
+{
+    float rect[4];       // x, y, w, h (bounding box, pixels)
+    float color[4];      // r, g, b, a
+    float viewport[2];   // w, h
+    float stroke_w;      // 0 = solid wedge fill to center; >0 = arc-band stroke width
+    float start_angle;   // radians
+    float sweep_angle;   // radians
+    float _pad[3];
+};
+
 struct alignas(16) LineUniforms
 {
     float p1[4];        // xy: start (pixels), zw: unused
@@ -279,6 +291,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     auto vertices_frag     = loadSpv(device_, shaders::kvertices_frag_spv,     shaders::kvertices_frag_spvSize);
     auto rrect_vert        = loadSpv(device_, shaders::krrect_vert_spv,        shaders::krrect_vert_spvSize);
     auto rrect_frag        = loadSpv(device_, shaders::krrect_frag_spv,        shaders::krrect_frag_spvSize);
+    auto arc_vert          = loadSpv(device_, shaders::karc_vert_spv,          shaders::karc_vert_spvSize);
+    auto arc_frag          = loadSpv(device_, shaders::karc_frag_spv,          shaders::karc_frag_spvSize);
     auto line_vert         = loadSpv(device_, shaders::kline_vert_spv,         shaders::kline_vert_spvSize);
     auto line_frag         = loadSpv(device_, shaders::kline_frag_spv,         shaders::kline_frag_spvSize);
     auto quad_vert         = loadSpv(device_, shaders::kquad_vert_spv,         shaders::kquad_vert_spvSize);
@@ -449,6 +463,19 @@ VulkanDrawBackend::VulkanDrawBackend(
                 static_cast<int>(GPU::ShaderStage::fragment)),
             0, sizeof(RRectUniforms) } };
         rrect_layout_ = device_->createPipelineLayout(desc);
+    }
+
+    // Pipeline layout: no bind groups — ArcUniforms rides a push constant
+    // instead (arc pipeline). See arc.vert/arc.frag's doc comment for why
+    // this is a separate pipeline+layout from rrect_layout_/rrect_pipeline_.
+    {
+        GPU::PipelineLayoutDescriptor desc{};
+        desc.pushConstantRanges = { {
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(ArcUniforms) } };
+        arc_layout_ = device_->createPipelineLayout(desc);
     }
 
     // Pipeline layout: no bind groups — LineUniforms (80 bytes) rides a
@@ -785,6 +812,28 @@ VulkanDrawBackend::VulkanDrawBackend(
         rrect_pipeline_ = device_->createRenderPipeline(desc);
         if (!rrect_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] rrect_pipeline_ creation FAILED\n");
         buildBlendVariants(desc, rrect_blend_pipelines_, rrect_pipeline_);
+    }
+
+    // Arc pipeline (SDF arc/pie) — see arc.vert/arc.frag's doc comment.
+    {
+        GPU::RenderPipelineDescriptor desc{};
+        desc.layout      = arc_layout_;
+        desc.topology    = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode    = GPU::CullMode::none;
+        desc.frontFace   = GPU::FrontFace::ccw;
+
+        desc.vertex.module     = arc_vert;
+        desc.vertex.entryPoint = "main";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = arc_frag;
+        frag.entryPoint = "main";
+        frag.targets    = { GPU::ColorState{ pixel_format_, GPU::ColorWrite::all, blend } };
+        desc.fragment   = frag;
+
+        arc_pipeline_ = device_->createRenderPipeline(desc);
+        if (!arc_pipeline_) std::fprintf(stderr, "[VulkanDrawBackend] arc_pipeline_ creation FAILED\n");
+        buildBlendVariants(desc, arc_blend_pipelines_, arc_pipeline_);
     }
 
     // Line pipeline — arbitrary-angle line segment rendered as a rotated quad.
@@ -1641,7 +1690,8 @@ void VulkanDrawBackend::drawPoints(
 }
 
 // ---------------------------------------------------------------------------
-// drawArc — tessellate to triangles and draw via colored_quad_pipeline_
+// drawArc — antialiased SDF arc/pie via the dedicated arc_pipeline_. See
+// arc.vert/arc.frag's doc comment for the technique.
 // ---------------------------------------------------------------------------
 
 void VulkanDrawBackend::drawArc(
@@ -1650,108 +1700,66 @@ void VulkanDrawBackend::drawArc(
     const Rect&                      clip,
     GPU::RenderPassEncoder&          encoder)
 {
-    if (!colored_quad_pipeline_) return;
+    if (!arc_pipeline_) return;
 
     namespace vm = systems::leal::vector_math;
 
-    const float cx = cmd.rect.x + cmd.rect.width * 0.5f;
-    const float cy = cmd.rect.y + cmd.rect.height * 0.5f;
-    const float rx = cmd.rect.width * 0.5f;
-    const float ry = cmd.rect.height * 0.5f;
-    if (rx <= 0.0f || ry <= 0.0f) return;
-
-    // Choose segment count based on the larger radius and sweep magnitude.
-    const float abs_sweep = std::abs(cmd.sweep_angle);
-    const int   segments  = std::max(3, static_cast<int>(abs_sweep * 20.0f));
-
-    std::vector<ColoredQuadVertex> verts;
-    verts.reserve(static_cast<size_t>(segments) * 6);
+    // Transform the bounding rect's corners to screen space — same approach
+    // drawCircle()/drawRRect() already use. Like those, this assumes the
+    // ambient transform is translate+uniform-scale (no rotation), a
+    // pre-existing limitation of the whole shape/SDF family in this
+    // backend, not something newly introduced here.
+    const auto tl = transform * vm::Vector4<float>(cmd.rect.x, cmd.rect.y, 0.0f, 1.0f);
+    const auto br = transform * vm::Vector4<float>(cmd.rect.x + cmd.rect.width,
+                                                     cmd.rect.y + cmd.rect.height, 0.0f, 1.0f);
+    const float x = tl.x();
+    const float y = tl.y();
+    const float w = br.x() - tl.x();
+    const float h = br.y() - tl.y();
+    if (w <= 0.0f || h <= 0.0f) return;
 
     const bool is_stroke = (cmd.paint.style == PaintStyle::stroke);
-    const float stroke_w = std::max(1.0f, cmd.paint.stroke_width);
 
-    // Scale factor for stroke width (magnitude of x-axis under transform).
     auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
     const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
-    const float pixel_stroke = stroke_w * scale;
+    const float pixel_stroke = std::max(1.0f, cmd.paint.stroke_width) * scale;
 
-    for (int i = 0; i < segments; ++i)
-    {
-        const float t0 = cmd.start_angle + cmd.sweep_angle * (float(i) / float(segments));
-        const float t1 = cmd.start_angle + cmd.sweep_angle * (float(i + 1) / float(segments));
+    // Preserves the exact pre-existing behavior: use_center always fills a
+    // solid wedge to center regardless of paint style; a plain fill
+    // (use_center=false, style != stroke) also fills to center. Only
+    // (!use_center && is_stroke) is a true arc-band stroke. See arc.vert/
+    // arc.frag's doc comment for the full rationale — fixing that
+    // fill-to-center quirk to match Flutter's real chord-closed shape is a
+    // separate, unrelated correctness question, deliberately out of scope
+    // here (zero production consumers use it today).
+    const bool  solid_wedge      = cmd.use_center || !is_stroke;
+    const float uniform_stroke_w = solid_wedge ? 0.0f : pixel_stroke;
 
-        const float c0 = std::cos(t0), s0 = std::sin(t0);
-        const float c1 = std::cos(t1), s1 = std::sin(t1);
-
-        if (cmd.use_center)
-        {
-            // Pie wedge: triangles fan from center.
-            const vm::Vector4<float> p_center = transform * vm::Vector4<float>(cx, cy, 0.0f, 1.0f);
-            const vm::Vector4<float> p0 = transform * vm::Vector4<float>(cx + rx * c0, cy + ry * s0, 0.0f, 1.0f);
-            const vm::Vector4<float> p1 = transform * vm::Vector4<float>(cx + rx * c1, cy + ry * s1, 0.0f, 1.0f);
-
-            verts.push_back({p_center.x(), p_center.y(), p_center.w()});
-            verts.push_back({p0.x(), p0.y(), p0.w()});
-            verts.push_back({p1.x(), p1.y(), p1.w()});
-        }
-        else
-        {
-            // Open arc segment: quad strip with inner/outer radius.
-            const auto eval = [&](float t, float r) -> vm::Vector4<float> {
-                // Point on the outer oval at angle t.
-                const float ox = cx + rx * std::cos(t);
-                const float oy = cy + ry * std::sin(t);
-                // Normalized outward normal for an oval at angle t.
-                float nx = std::cos(t) / rx;
-                float ny = std::sin(t) / ry;
-                float nlen = std::sqrt(nx * nx + ny * ny);
-                if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; }
-                // r is the inward offset (0 = outer edge, stroke_w = inner edge).
-                return transform * vm::Vector4<float>(ox - r * nx, oy - r * ny, 0.0f, 1.0f);
-            };
-
-            // For fill, draw the full sector (inner radius = 0).
-            // For stroke, draw a band inside the outer edge.
-            const float inner_r = is_stroke ? pixel_stroke : 0.0f;
-
-            const auto p00 = eval(t0, 0.0f);
-            const auto p01 = eval(t0, inner_r);
-            const auto p10 = eval(t1, 0.0f);
-            const auto p11 = eval(t1, inner_r);
-
-            verts.push_back({p01.x(), p01.y(), p01.w()});
-            verts.push_back({p00.x(), p00.y(), p00.w()});
-            verts.push_back({p11.x(), p11.y(), p11.w()});
-            verts.push_back({p11.x(), p11.y(), p11.w()});
-            verts.push_back({p00.x(), p00.y(), p00.w()});
-            verts.push_back({p10.x(), p10.y(), p10.w()});
-        }
-    }
-
-    if (verts.empty()) return;
     applyScissor(clip, encoder);
 
-    auto vbuf = colored_quad_vertex_pool_.acquire(*device_, verts.size() * sizeof(ColoredQuadVertex), verts.data());
-    if (!vbuf) return;
-
-    // ColoredQuadUniforms rect field is unused, but the layout requires it.
-    RectUniforms u{};
+    ArcUniforms u{};
+    u.rect[0]     = x;
+    u.rect[1]     = y;
+    u.rect[2]     = w;
+    u.rect[3]     = h;
     u.color[0]    = cmd.paint.color.r;
     u.color[1]    = cmd.paint.color.g;
     u.color[2]    = cmd.paint.color.b;
     u.color[3]    = cmd.paint.color.a;
     u.viewport[0] = vp_w_;
     u.viewport[1] = vp_h_;
+    u.stroke_w    = uniform_stroke_w;
+    u.start_angle = cmd.start_angle;
+    u.sweep_angle = cmd.sweep_angle;
 
     encoder.setPipeline(pipelineForBlendMode(
-        cmd.paint.blend_mode, colored_quad_pipeline_, colored_quad_blend_pipelines_));
+        cmd.paint.blend_mode, arc_pipeline_, arc_blend_pipelines_));
     encoder.setPushConstants(
         static_cast<GPU::ShaderStage>(
             static_cast<int>(GPU::ShaderStage::vertex) |
             static_cast<int>(GPU::ShaderStage::fragment)),
-        0, sizeof(RectUniforms), &u);
-    encoder.setVertexBuffer(0, vbuf);
-    encoder.draw(static_cast<uint32_t>(verts.size()));
+        0, sizeof(ArcUniforms), &u);
+    encoder.draw(6);
 }
 
 // ---------------------------------------------------------------------------

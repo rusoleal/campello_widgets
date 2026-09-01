@@ -97,6 +97,18 @@ struct alignas(16) ShapeUniforms
     float _pad[3];
 };
 
+// Mirrors arc.hlsl's ArcUniforms field-for-field.
+struct alignas(16) ArcUniforms
+{
+    float rect[4];       // x, y, w, h (bounding box, pixels)
+    float color[4];      // r, g, b, a
+    float viewport[2];   // w, h
+    float stroke_w;      // 0 = solid wedge fill to center; >0 = arc-band stroke width
+    float start_angle;   // radians
+    float sweep_angle;   // radians
+    float _pad[3];
+};
+
 struct alignas(16) LineUniforms
 {
     float p1[4];
@@ -366,6 +378,8 @@ D3DDrawBackend::D3DDrawBackend(
     auto quad_ps  = loadShader(device_, kquad_ps_cso,  kquad_ps_csoSize);
     auto shape_vs = loadShader(device_, kshape_vs_cso, kshape_vs_csoSize);
     auto shape_ps = loadShader(device_, kshape_ps_cso, kshape_ps_csoSize);
+    auto arc_vs   = loadShader(device_, karc_vs_cso,   karc_vs_csoSize);
+    auto arc_ps   = loadShader(device_, karc_ps_cso,   karc_ps_csoSize);
     auto line_vs  = loadShader(device_, kline_vs_cso,  kline_vs_csoSize);
     auto line_ps  = loadShader(device_, kline_ps_cso,  kline_ps_csoSize);
     auto blur_vs  = loadShader(device_, kblur_vs_cso,  kblur_vs_csoSize);
@@ -397,6 +411,7 @@ D3DDrawBackend::D3DDrawBackend(
         desc.entries = { cs(GPU::ShaderStage::vertex) };
         rect_bgl_  = device_->createBindGroupLayout(desc);
         shape_bgl_ = device_->createBindGroupLayout(desc);
+        arc_bgl_   = device_->createBindGroupLayout(desc);
         line_bgl_  = device_->createBindGroupLayout(desc);
         blur_uniform_bgl_ = device_->createBindGroupLayout(desc);
     }
@@ -498,6 +513,7 @@ D3DDrawBackend::D3DDrawBackend(
     };
     auto rect_layout  = makeLayout({ rect_bgl_ });
     auto shape_layout = makeLayout({ shape_bgl_ });
+    auto arc_layout   = makeLayout({ arc_bgl_ });
     auto line_layout  = makeLayout({ line_bgl_ });
     // Order matters: index 0 = quad_uniform_bgl_ (setBindGroup(0, ...)),
     // index 1 = quad_tex_bgl_ (setBindGroup(1, ...)) — see drawTexturedQuad().
@@ -765,6 +781,33 @@ D3DDrawBackend::D3DDrawBackend(
         desc.layout    = shape_layout;
 
         shape_pipeline_ = device_->createRenderPipeline(desc);
+    }
+
+    // --- Arc pipeline (SDF arc/pie) — no vertex buffers. See arc.hlsl's
+    //     doc comment for why this isn't just shape_pipeline_. ---
+    {
+        GPU::ColorState colorState{};
+        colorState.format    = pixel_format_;
+        colorState.writeMask = GPU::ColorWrite::all;
+        colorState.blend     = premultipliedAlphaBlend();
+
+        GPU::RenderPipelineDescriptor desc{};
+        desc.vertex.module     = arc_vs;
+        desc.vertex.entryPoint = "ArcVS";
+
+        GPU::FragmentDescriptor frag{};
+        frag.module     = arc_ps;
+        frag.entryPoint = "ArcPS";
+        frag.targets.push_back(colorState);
+        desc.fragment = frag;
+
+        desc.topology  = GPU::PrimitiveTopology::triangleList;
+        desc.cullMode  = GPU::CullMode::none;
+        desc.frontFace = GPU::FrontFace::ccw;
+        desc.layout    = arc_layout;
+
+        arc_pipeline_ = device_->createRenderPipeline(desc);
+        if (!arc_pipeline_) std::fprintf(stderr, "[D3DDrawBackend] arc_pipeline_ creation FAILED\n");
     }
 
     // --- Line pipeline — no vertex buffers ---
@@ -1418,7 +1461,8 @@ void D3DDrawBackend::drawLine(
 }
 
 // ---------------------------------------------------------------------------
-// drawArc — tessellate to triangles and draw via rect_pipeline_
+// drawArc — antialiased SDF arc/pie via the dedicated arc_pipeline_. See
+// arc.hlsl's doc comment for the technique.
 // ---------------------------------------------------------------------------
 
 void D3DDrawBackend::drawArc(
@@ -1427,73 +1471,61 @@ void D3DDrawBackend::drawArc(
     const Rect&             clip,
     GPU::RenderPassEncoder& encoder)
 {
-    if (!rect_pipeline_) return;
+    if (!arc_pipeline_ || !arc_bgl_) return;
     if (!applyScissor(clip, encoder)) return;
 
-    const float cx = cmd.rect.x + cmd.rect.width * 0.5f;
-    const float cy = cmd.rect.y + cmd.rect.height * 0.5f;
-    const float rx = cmd.rect.width * 0.5f;
-    const float ry = cmd.rect.height * 0.5f;
-    if (rx <= 0.0f || ry <= 0.0f) return;
-
-    const float abs_sweep = std::abs(cmd.sweep_angle);
-    const int   segments  = std::max(3, static_cast<int>(abs_sweep * 20.0f));
-
-    std::vector<RectVertex> verts;
-    verts.reserve(static_cast<size_t>(segments) * 6);
+    // Transform the bounding rect's corners to screen space — same approach
+    // drawCircle()/drawOval() already use ahead of drawShape(). Like those,
+    // this assumes the ambient transform is translate+uniform-scale (no
+    // rotation), a pre-existing limitation of the whole shape/SDF family in
+    // this backend, not something newly introduced here.
+    const auto tl = transform * vm::Vector4<float>(cmd.rect.x, cmd.rect.y, 0.0f, 1.0f);
+    const auto br = transform * vm::Vector4<float>(cmd.rect.x + cmd.rect.width,
+                                                     cmd.rect.y + cmd.rect.height, 0.0f, 1.0f);
+    const float x = tl.x();
+    const float y = tl.y();
+    const float w = br.x() - tl.x();
+    const float h = br.y() - tl.y();
+    if (w <= 0.0f || h <= 0.0f) return;
 
     const bool is_stroke = (cmd.paint.style == PaintStyle::stroke);
-    const float stroke_w = std::max(1.0f, cmd.paint.stroke_width);
 
     auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
     const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
-    const float pixel_stroke = stroke_w * scale;
+    const float pixel_stroke = std::max(1.0f, cmd.paint.stroke_width) * scale;
 
-    for (int i = 0; i < segments; ++i)
-    {
-        const float t0 = cmd.start_angle + cmd.sweep_angle * (float(i) / float(segments));
-        const float t1 = cmd.start_angle + cmd.sweep_angle * (float(i + 1) / float(segments));
+    // Preserves the exact pre-existing behavior: use_center always fills a
+    // solid wedge to center regardless of paint style; a plain fill
+    // (use_center=false, style != stroke) also fills to center. Only
+    // (!use_center && is_stroke) is a true arc-band stroke. See arc.hlsl's
+    // doc comment for the full rationale — fixing that fill-to-center
+    // quirk to match Flutter's real chord-closed shape is a separate,
+    // unrelated correctness question, deliberately out of scope here (zero
+    // production consumers use it today).
+    const bool  solid_wedge      = cmd.use_center || !is_stroke;
+    const float uniform_stroke_w = solid_wedge ? 0.0f : pixel_stroke;
 
-        if (cmd.use_center)
-        {
-            const vm::Vector4<float> p_center = transform * vm::Vector4<float>(cx, cy, 0.0f, 1.0f);
-            const vm::Vector4<float> p0 = transform * vm::Vector4<float>(cx + rx * std::cos(t0), cy + ry * std::sin(t0), 0.0f, 1.0f);
-            const vm::Vector4<float> p1 = transform * vm::Vector4<float>(cx + rx * std::cos(t1), cy + ry * std::sin(t1), 0.0f, 1.0f);
+    ArcUniforms u{};
+    u.rect[0]     = x;
+    u.rect[1]     = y;
+    u.rect[2]     = w;
+    u.rect[3]     = h;
+    u.color[0]    = cmd.paint.color.r;
+    u.color[1]    = cmd.paint.color.g;
+    u.color[2]    = cmd.paint.color.b;
+    u.color[3]    = cmd.paint.color.a;
+    u.viewport[0] = vp_w_;
+    u.viewport[1] = vp_h_;
+    u.stroke_w    = uniform_stroke_w;
+    u.start_angle = cmd.start_angle;
+    u.sweep_angle = cmd.sweep_angle;
 
-            verts.push_back({p_center.x(), p_center.y(), p_center.w()});
-            verts.push_back({p0.x(), p0.y(), p0.w()});
-            verts.push_back({p1.x(), p1.y(), p1.w()});
-        }
-        else
-        {
-            const auto eval = [&](float t, float r) -> vm::Vector4<float> {
-                const float ox = cx + rx * std::cos(t);
-                const float oy = cy + ry * std::sin(t);
-                float nx = std::cos(t) / rx;
-                float ny = std::sin(t) / ry;
-                float nlen = std::sqrt(nx * nx + ny * ny);
-                if (nlen > 0.0001f) { nx /= nlen; ny /= nlen; }
-                return transform * vm::Vector4<float>(ox - r * nx, oy - r * ny, 0.0f, 1.0f);
-            };
+    auto slot = arc_uniform_pool_.acquire(*device_, arc_bgl_, sizeof(ArcUniforms), &u);
+    if (!slot.bind_group) return;
 
-            const float inner_r = is_stroke ? pixel_stroke : 0.0f;
-
-            const auto p00 = eval(t0, 0.0f);
-            const auto p01 = eval(t0, inner_r);
-            const auto p10 = eval(t1, 0.0f);
-            const auto p11 = eval(t1, inner_r);
-
-            verts.push_back({p01.x(), p01.y(), p01.w()});
-            verts.push_back({p00.x(), p00.y(), p00.w()});
-            verts.push_back({p11.x(), p11.y(), p11.w()});
-            verts.push_back({p11.x(), p11.y(), p11.w()});
-            verts.push_back({p00.x(), p00.y(), p00.w()});
-            verts.push_back({p10.x(), p10.y(), p10.w()});
-        }
-    }
-
-    if (!verts.empty())
-        drawFilledVertices(verts, cmd.paint.color, encoder);
+    encoder.setPipeline(arc_pipeline_);
+    encoder.setBindGroup(0, slot.bind_group);
+    encoder.draw(6);
 }
 
 // ---------------------------------------------------------------------------

@@ -208,6 +208,7 @@ public:
         ++frame_counter_;
         rect_uniform_pool_.beginFrame();
         shape_uniform_pool_.beginFrame();
+        arc_uniform_pool_.beginFrame();
         line_uniform_pool_.beginFrame();
         quad_uniform_pool_.beginFrame();
         rect_vertex_pool_.beginFrame();
@@ -603,6 +604,9 @@ private:
 
     UniformBindGroupPool rect_uniform_pool_;
     UniformBindGroupPool shape_uniform_pool_;
+    // ArcUniforms pool -- drawArc()'s dedicated pipeline, see arc.hlsl's
+    // doc comment for why this isn't just shape_uniform_pool_.
+    UniformBindGroupPool arc_uniform_pool_;
     UniformBindGroupPool line_uniform_pool_;
     UniformBindGroupPool quad_uniform_pool_;
     // Icon pipeline's uniforms (viewport/opacity/tint — larger than
@@ -635,6 +639,7 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>   rect_aa_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   vertices_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   shape_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>   arc_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>   quad_pipeline_;
     // Icon pipeline (tinted template images — see icon.hlsl).
@@ -645,6 +650,7 @@ private:
 
     std::shared_ptr<campello_gpu::BindGroupLayout>  rect_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  shape_bgl_;
+    std::shared_ptr<campello_gpu::BindGroupLayout>  arc_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  line_bgl_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_uniform_bgl_;  // uniform@0 (bind group 0)
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_tex_bgl_;      // texture@0, sampler@1 (bind group 1)

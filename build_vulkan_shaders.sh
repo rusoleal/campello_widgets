@@ -10,7 +10,7 @@ mkdir -p "$SCRIPT_DIR/src/shaders"
 # ---------------------------------------------------------------------------
 # Compile GLSL → SPIR-V
 # ---------------------------------------------------------------------------
-SHADERS=(rect.vert rect.frag rrect.vert rrect.frag quad.vert quad.frag quad_aa.vert clip_shape.vert clip_shape.frag blur.vert blur.frag colored_quad.vert rect_aa.vert rect_aa.frag line.vert line.frag shader_mask.vert shader_mask.frag icon.vert icon.frag vertices.vert vertices.frag)
+SHADERS=(rect.vert rect.frag rrect.vert rrect.frag arc.vert arc.frag quad.vert quad.frag quad_aa.vert clip_shape.vert clip_shape.frag blur.vert blur.frag colored_quad.vert rect_aa.vert rect_aa.frag line.vert line.frag shader_mask.vert shader_mask.frag icon.vert icon.frag vertices.vert vertices.frag)
 SPV_FILES=()
 
 for s in "${SHADERS[@]}"; do

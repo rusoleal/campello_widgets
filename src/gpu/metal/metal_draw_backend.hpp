@@ -241,6 +241,7 @@ public:
         ++frame_counter_;
         rect_uniform_pool_.beginFrame();
         shape_uniform_pool_.beginFrame();
+        arc_uniform_pool_.beginFrame();
         line_uniform_pool_.beginFrame();
         quad_uniform_pool_.beginFrame();
         quad_vertex_pool_.beginFrame();
@@ -529,6 +530,9 @@ private:
 
     UniformBufferPool rect_uniform_pool_;
     UniformBufferPool shape_uniform_pool_;
+    // ArcUniforms pool -- drawArc()'s dedicated pipeline, see its shader
+    // doc comment (widgets.metal) for why this isn't just shape_uniform_pool_.
+    UniformBufferPool arc_uniform_pool_;
     UniformBufferPool line_uniform_pool_;
     UniformBufferPool quad_uniform_pool_;
 
@@ -603,6 +607,7 @@ private:
     std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_write_evenodd_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  path_fill_stencil_cover_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  shape_pipeline_;
+    std::shared_ptr<campello_gpu::RenderPipeline>  arc_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  line_pipeline_;
     std::shared_ptr<campello_gpu::RenderPipeline>  quad_pipeline_;
     std::shared_ptr<campello_gpu::BindGroupLayout>  quad_bgl_;

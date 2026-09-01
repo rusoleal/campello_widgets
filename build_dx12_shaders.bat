@@ -37,6 +37,8 @@ call :compile quad.hlsl  QuadVS  vs_5_0 quad_vs.cso
 call :compile quad.hlsl  QuadPS  ps_5_0 quad_ps.cso
 call :compile shape.hlsl ShapeVS vs_5_0 shape_vs.cso
 call :compile shape.hlsl ShapePS ps_5_0 shape_ps.cso
+call :compile arc.hlsl   ArcVS   vs_5_0 arc_vs.cso
+call :compile arc.hlsl   ArcPS   ps_5_0 arc_ps.cso
 call :compile line.hlsl  LineVS  vs_5_0 line_vs.cso
 call :compile line.hlsl  LinePS  ps_5_0 line_ps.cso
 call :compile blur.hlsl  BlurVS  vs_5_0 blur_vs.cso

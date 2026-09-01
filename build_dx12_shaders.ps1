@@ -12,6 +12,7 @@ $csoFiles = @(
     "vertices_vs.cso", "vertices_ps.cso",
     "quad_vs.cso", "quad_ps.cso",
     "shape_vs.cso", "shape_ps.cso",
+    "arc_vs.cso", "arc_ps.cso",
     "line_vs.cso", "line_ps.cso",
     "blur_vs.cso", "blur_ps.cso",
     "clip_shape_vs.cso", "clip_shape_ps.cso",

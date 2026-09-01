@@ -393,6 +393,158 @@ fragment float4 shapeFragment(ShapeVertOut in [[stage_in]])
 }
 
 // ---------------------------------------------------------------------------
+// Arc pipeline — antialiased circular/elliptical arc via SDF, matching
+// Skia's own GPU arc renderer (GrOvalOpFactory.cpp's CircleOp): the radial
+// edge reuses shapeFragment()'s ellipse SDF verbatim, combined (via max,
+// i.e. SDF intersection) with an angular-wedge SDF built from two half-plane
+// tests -- one per cut edge at start_angle and start_angle+sweep_angle --
+// instead of an atan2-based angle-range compare. A separate, dedicated
+// pipeline rather than an addition to the shared shape_pipeline_ above: that
+// pipeline is used by every drawCircle/drawOval/drawRRect call in the whole
+// app, so giving it an optional angular cut would mean every one of those
+// call sites needs a new "no clip" sentinel to avoid ever accidentally
+// clipping a shape that was never meant to have one. Isolating the new,
+// less-proven arc math to its own pipeline means zero risk to that existing,
+// working, well-tested path.
+//
+// Angular-cut derivation (half-plane distance to the two boundary rays
+// through the ellipse's own center, each treated as an infinite line):
+//   mid        = start_angle + sweep_angle/2      (bisector, sign-independent)
+//   half_angle = |sweep_angle|/2
+// For half_angle <= PI/2 the wedge is exactly the intersection (max) of two
+// half-plane SDFs, each the signed perpendicular distance to the boundary
+// line at theta1=mid-half_angle / theta2=mid+half_angle, oriented so the
+// wedge interior is negative. For half_angle > PI/2 (e.g. the spinner's 270
+// degree sweep) that same two-half-plane formula isn't valid on its own --
+// a wedge wider than a straight line can't be the AND of two half-planes --
+// so instead compute the SDF of the smaller COMPLEMENTARY wedge (width =
+// 2*PI - 2*half_angle < PI,
+// always in the valid domain) using the identical formula, then negate:
+// the complement's boundary is the exact same two rays, so its signed
+// distance is exactly the negation of the wedge's own, not an
+// approximation. This keeps every case, including full sweeps, going
+// through one small, always-valid formula rather than a wide-angle special
+// case whose exact valid domain would otherwise have to be trusted from
+// memory instead of derived.
+//
+// Uniforms at [[buffer(0)]]: ArcUniforms (vertex stage only, forwarded to
+// the fragment stage via flat varyings, same convention as shapeFragment).
+// ---------------------------------------------------------------------------
+
+struct ArcUniforms {
+    float4 rect;        // x, y, w, h  — bounding box (pixels)
+    float4 color;       // r, g, b, a  — straight alpha
+    float2 viewport;    // framebuffer w, h (pixels)
+    float  stroke_w;    // 0 = solid wedge fill to center; >0 = arc-band stroke width
+    float  start_angle; // radians, 0 = 3 o'clock, screen space (y-down)
+    float  sweep_angle; // radians, positive = clockwise on screen
+    float  _pad0;
+    float  _pad1;
+    float  _pad2;
+};
+
+struct ArcVertOut {
+    float4 pos         [[position]];
+    float4 color       [[flat]];
+    float4 rect_data   [[flat]];
+    float  stroke_w    [[flat]];
+    float  start_angle [[flat]];
+    float  sweep_angle [[flat]];
+};
+
+vertex ArcVertOut arcVertex(
+    uint                vid [[vertex_id]],
+    constant ArcUniforms &u  [[buffer(0)]])
+{
+    // Identical inflation rule to shapeVertex() above (see its doc comment) —
+    // matched exactly rather than independently re-derived, since this is
+    // the codebase's existing, proven convention for this shape family.
+    const float aa = 0.5;
+    float inflate = (u.stroke_w > 0.0) ? (u.stroke_w * 0.5 + aa) : 0.0;
+
+    float2 t      = kQuadCorners[vid];
+    float2 origin = u.rect.xy - inflate;
+    float2 size   = u.rect.zw + inflate * 2.0;
+    float2 px     = origin + t * size;
+
+    float2 ndc = (px / u.viewport) * 2.0 - 1.0;
+    ndc.y = -ndc.y;
+
+    ArcVertOut out;
+    out.pos         = float4(ndc, 0.0, 1.0);
+    out.color       = u.color;
+    out.rect_data   = u.rect;
+    out.stroke_w    = u.stroke_w;
+    out.start_angle = u.start_angle;
+    out.sweep_angle = u.sweep_angle;
+    return out;
+}
+
+// Signed distance to a wedge (bisector `mid`, half-angle `half_angle`, both
+// radians) via the intersection of two half-plane tests — only valid for
+// half_angle <= PI/2 on its own; see arcFragment() for how wider wedges use
+// this. (Named half_angle, not half — `half` is a reserved MSL scalar type.)
+inline float sdWedgeHalfPlanes(float2 p, float mid, float half_angle)
+{
+    float theta1 = mid - half_angle;
+    float theta2 = mid + half_angle;
+    float2 n1 = float2(-sin(theta1),  cos(theta1)); // points into the wedge from theta1
+    float2 n2 = float2( sin(theta2), -cos(theta2)); // points into the wedge from theta2
+    float d1 = -dot(p, n1);
+    float d2 = -dot(p, n2);
+    return max(d1, d2);
+}
+
+fragment float4 arcFragment(ArcVertOut in [[stage_in]])
+{
+    float2 center = float2(in.rect_data.x + in.rect_data.z * 0.5,
+                           in.rect_data.y + in.rect_data.w * 0.5);
+    float2 p  = in.pos.xy - center;
+    float2 hs = float2(in.rect_data.z, in.rect_data.w) * 0.5;
+
+    // Radial SDF — identical to shapeFragment()'s ellipse branch.
+    float2 s = p / hs;
+    float d_radial_fill = (length(s) - 1.0) * min(hs.x, hs.y);
+
+    const float aa = 0.5;
+    // NOTE: an INSET ring (band from the outer boundary inward by stroke_w),
+    // not shapeFragment()'s CENTERED stroke (which straddles the boundary,
+    // extending stroke_w/2 both in and out) -- deliberately different from
+    // that pipeline's own convention, because it must match the arc's
+    // actual pre-existing geometry: the original CPU tessellation always
+    // built the stroke band as [outer boundary, outer boundary - stroke_w],
+    // fully inset, and this pass is scoped to adding antialiasing only, not
+    // moving the stroke. (Also matches Vulkan's rrect.frag stroke
+    // convention, confirmed by reading it before porting this pipeline
+    // there — the two backends already agreed on inset before this change.)
+    float d_radial = (in.stroke_w <= 0.0)
+        ? d_radial_fill
+        : max(d_radial_fill, -(d_radial_fill + in.stroke_w));
+
+    // Angular SDF — see the pipeline's doc comment above for the
+    // complement-for-wide-wedges derivation.
+    const float kPi = 3.14159265358979323846;
+    float mid        = in.start_angle + in.sweep_angle * 0.5;
+    float half_angle = abs(in.sweep_angle) * 0.5;
+
+    float d_angle;
+    if (half_angle <= kPi * 0.5) {
+        d_angle = sdWedgeHalfPlanes(p, mid, half_angle);
+    } else {
+        float comp_half = kPi - half_angle;
+        float comp_mid  = mid + kPi;
+        d_angle = -sdWedgeHalfPlanes(p, comp_mid, comp_half);
+    }
+
+    float d = max(d_radial, d_angle);
+    float alpha = 1.0 - smoothstep(-aa, aa, d);
+
+    float4 col = in.color;
+    col.a *= alpha;
+    return float4(col.rgb * col.a, col.a);   // premultiplied output
+}
+
+// ---------------------------------------------------------------------------
 // Line pipeline — arbitrary-angle line segment rendered as a rotated quad
 //
 // Uniforms at [[buffer(0)]]: LineUniforms
