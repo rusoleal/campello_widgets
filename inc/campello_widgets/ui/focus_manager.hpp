@@ -238,6 +238,20 @@ namespace systems::leal::campello_widgets
         // alike so none of them can cross a scope boundary.
         std::vector<FocusNode*> traversalCandidates() const;
 
+        // Sorts `candidates` (already scope-filtered leaves from
+        // traversalCandidates()) respecting FocusTraversalGroup boundaries:
+        // buckets every candidate by its nearest enclosing group between it
+        // and `scope`, sorts each bucket with that group's own
+        // traversal_policy (falling back to `fallback` when unset), then
+        // flattens depth-first so each group's members stay contiguous.
+        // Collapses to plain `fallback->order(candidates)` whenever no
+        // candidate has a FocusTraversalGroup ancestor -- see FocusNode::
+        // isTraversalGroup()'s doc and this method's own .cpp comment.
+        std::vector<FocusNode*> sortWithGroups(
+            const std::vector<FocusNode*>& candidates,
+            FocusNode* scope,
+            FocusTraversalPolicy* fallback) const;
+
         FocusNode*              current_focus_ = nullptr;
         std::vector<FocusNode*> focus_order_;
 

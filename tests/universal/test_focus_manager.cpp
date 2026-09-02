@@ -8,6 +8,7 @@
 #include <campello_widgets/ui/key_event.hpp>
 #include <campello_widgets/widgets/focus.hpp>
 #include <campello_widgets/widgets/focus_scope.hpp>
+#include <campello_widgets/widgets/focus_traversal_group.hpp>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -532,4 +533,286 @@ TEST(FocusScope, AutoCreatesItsOwnScopedFocusNode)
     ASSERT_NE(scope.focus_node, nullptr);
     EXPECT_TRUE(scope.focus_node->isScope());
     EXPECT_TRUE(scope.scope);
+}
+
+// -----------------------------------------------------------------------
+// FocusTraversalGroup -- orthogonal to FocusScope: groups Tab *order*
+// without gating escape or restoring focus. See FocusManager::
+// sortWithGroups()'s own doc comment for the algorithm these exercise.
+// -----------------------------------------------------------------------
+
+TEST(FocusTraversalGroup, AutoCreatesItsOwnGroupFlaggedFocusNode)
+{
+    cw::FocusTraversalGroup group;
+    ASSERT_NE(group.focus_node, nullptr);
+    EXPECT_TRUE(group.focus_node->isTraversalGroup());
+    // Never itself a Tab stop -- see FocusTraversalGroup's own class doc.
+    EXPECT_FALSE(group.focus_node->canRequestFocus());
+    EXPECT_TRUE(group.focus_node->skipTraversal());
+}
+
+TEST(FocusManager, TraversalGroupNodeIsNeverATabStop)
+{
+    cw::FocusManager mgr;
+    ScopedActiveManager active(mgr);
+
+    auto groupNode = std::make_shared<cw::FocusNode>();
+    groupNode->setTraversalGroup(true);
+    groupNode->setCanRequestFocus(false);
+    groupNode->setSkipTraversal(true);
+    cw::RenderFocus groupBox;
+    groupBox.focus_node = groupNode;
+
+    auto g1Node = std::make_shared<cw::FocusNode>();
+    auto g2Node = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus g1Box, g2Box;
+    g1Box.focus_node = g1Node;
+    g2Box.focus_node = g2Node;
+    g1Box.setParent(&groupBox);
+    g2Box.setParent(&groupBox);
+
+    mgr.registerNode(groupNode.get());
+    mgr.registerNode(g1Node.get());
+    mgr.registerNode(g2Node.get());
+
+    mgr.requestFocus(g1Node.get());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(g2Node->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(g1Node->hasFocus()); // wraps back to g1 -- never lands on groupNode itself
+
+    g1Box.setParent(nullptr);
+    g2Box.setParent(nullptr);
+}
+
+TEST(FocusManager, TraversalGroupKeepsMembersContiguous)
+{
+    cw::FocusManager mgr;
+    ScopedActiveManager active(mgr);
+
+    cw::FocusNode a, b; // outside the group entirely
+
+    auto groupNode = std::make_shared<cw::FocusNode>();
+    groupNode->setTraversalGroup(true);
+    groupNode->setCanRequestFocus(false);
+    groupNode->setSkipTraversal(true);
+    cw::RenderFocus groupBox;
+    groupBox.focus_node = groupNode;
+
+    auto g1Node = std::make_shared<cw::FocusNode>();
+    auto g2Node = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus g1Box, g2Box;
+    g1Box.focus_node = g1Node;
+    g2Box.focus_node = g2Node;
+    g1Box.setParent(&groupBox);
+    g2Box.setParent(&groupBox);
+
+    mgr.registerNode(&a);
+    mgr.registerNode(groupNode.get());
+    mgr.registerNode(g1Node.get());
+    mgr.registerNode(g2Node.get());
+    mgr.registerNode(&b);
+
+    mgr.requestFocus(&a);
+    mgr.moveFocusForward();
+    EXPECT_TRUE(g1Node->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(g2Node->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(b.hasFocus()); // a, g1, g2, b -- the group's members stay contiguous
+
+    g1Box.setParent(nullptr);
+    g2Box.setParent(nullptr);
+}
+
+TEST(FocusManager, TraversalGroupDoesNotGateEscape)
+{
+    cw::FocusManager mgr;
+    ScopedActiveManager active(mgr);
+
+    cw::FocusNode a, b;
+
+    auto groupNode = std::make_shared<cw::FocusNode>();
+    groupNode->setTraversalGroup(true);
+    groupNode->setCanRequestFocus(false);
+    groupNode->setSkipTraversal(true);
+    cw::RenderFocus groupBox;
+    groupBox.focus_node = groupNode;
+
+    auto g1Node = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus g1Box;
+    g1Box.focus_node = g1Node;
+    g1Box.setParent(&groupBox);
+
+    mgr.registerNode(&a);
+    mgr.registerNode(groupNode.get());
+    mgr.registerNode(g1Node.get());
+    mgr.registerNode(&b);
+
+    mgr.requestFocus(g1Node.get());
+    mgr.moveFocusForward();
+    // Leaves the group freely, unlike a FocusScope boundary -- contrast
+    // TraversalStaysWithinScope above, which refuses exactly this move.
+    EXPECT_TRUE(b.hasFocus());
+
+    g1Box.setParent(nullptr);
+}
+
+TEST(FocusManager, TraversalGroupOwnPolicyAppliesOnlyWithinIt)
+{
+    cw::FocusManager mgr;
+    ScopedActiveManager active(mgr);
+
+    cw::FocusNode a, b; // outside the group, plain registration order
+
+    auto groupNode = std::make_shared<cw::FocusNode>();
+    groupNode->setTraversalGroup(true);
+    groupNode->setCanRequestFocus(false);
+    groupNode->setSkipTraversal(true);
+    groupNode->traversal_policy = std::make_shared<cw::ReadingOrderTraversalPolicy>();
+    cw::RenderFocus groupBox;
+    groupBox.focus_node = groupNode;
+
+    cw::RenderFocus bottomBox, topBox;
+    auto bottomNode = std::make_shared<cw::FocusNode>();
+    auto topNode    = std::make_shared<cw::FocusNode>();
+    bottomBox.focus_node = bottomNode;
+    topBox.focus_node    = topNode;
+    bottomBox.setParent(&groupBox);
+    topBox.setParent(&groupBox);
+
+    paintAt(bottomBox, 0.0f, 100.0f);
+    paintAt(topBox,    0.0f, 0.0f);
+
+    mgr.registerNode(&a);
+    mgr.registerNode(groupNode.get());
+    // Registered bottom-then-top -- the group's own ReadingOrder should
+    // still visit top first, without affecting `a`/`b` outside it.
+    mgr.registerNode(bottomNode.get());
+    mgr.registerNode(topNode.get());
+    mgr.registerNode(&b);
+
+    mgr.requestFocus(&a);
+    mgr.moveFocusForward();
+    EXPECT_TRUE(topNode->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(bottomNode->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(b.hasFocus()); // outside the group, plain registration order continues
+
+    bottomBox.setParent(nullptr);
+    topBox.setParent(nullptr);
+}
+
+TEST(FocusManager, NestedTraversalGroupsStayContiguous)
+{
+    cw::FocusManager mgr;
+    ScopedActiveManager active(mgr);
+
+    auto outerNode = std::make_shared<cw::FocusNode>();
+    outerNode->setTraversalGroup(true);
+    outerNode->setCanRequestFocus(false);
+    outerNode->setSkipTraversal(true);
+    cw::RenderFocus outerBox;
+    outerBox.focus_node = outerNode;
+
+    auto xNode = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus xBox;
+    xBox.focus_node = xNode;
+    xBox.setParent(&outerBox);
+
+    auto innerNode = std::make_shared<cw::FocusNode>();
+    innerNode->setTraversalGroup(true);
+    innerNode->setCanRequestFocus(false);
+    innerNode->setSkipTraversal(true);
+    innerNode->traversal_policy = std::make_shared<cw::ReadingOrderTraversalPolicy>();
+    cw::RenderFocus innerBox;
+    innerBox.focus_node = innerNode;
+    innerBox.setParent(&outerBox);
+
+    cw::RenderFocus yBox, zBox; // y painted bottom, z painted top
+    auto yNode = std::make_shared<cw::FocusNode>();
+    auto zNode = std::make_shared<cw::FocusNode>();
+    yBox.focus_node = yNode;
+    zBox.focus_node = zNode;
+    yBox.setParent(&innerBox);
+    zBox.setParent(&innerBox);
+    paintAt(yBox, 0.0f, 100.0f);
+    paintAt(zBox, 0.0f, 0.0f);
+
+    auto wNode = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus wBox;
+    wBox.focus_node = wNode;
+    wBox.setParent(&outerBox);
+
+    mgr.registerNode(outerNode.get());
+    mgr.registerNode(xNode.get());
+    mgr.registerNode(innerNode.get());
+    // Registered bottom-then-top -- the inner group's own ReadingOrder
+    // should still visit top (z) first, nested inside the outer group's
+    // own (default, registration-order) contiguous block.
+    mgr.registerNode(yNode.get());
+    mgr.registerNode(zNode.get());
+    mgr.registerNode(wNode.get());
+
+    mgr.requestFocus(xNode.get());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(zNode->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(yNode->hasFocus());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(wNode->hasFocus()); // back out to the outer group's own next member
+
+    yBox.setParent(nullptr);
+    zBox.setParent(nullptr);
+    xBox.setParent(nullptr);
+    wBox.setParent(nullptr);
+}
+
+TEST(FocusManager, TraversalGroupInsideScopeRespectsScopeButNotGroupBoundary)
+{
+    cw::FocusManager mgr;
+    ScopedActiveManager active(mgr);
+
+    cw::FocusNode a; // outside the scope entirely
+
+    auto scopeNode = std::make_shared<cw::FocusNode>();
+    scopeNode->setScope(true);
+    cw::RenderFocus scopeBox;
+    scopeBox.focus_node = scopeNode;
+
+    auto groupNode = std::make_shared<cw::FocusNode>();
+    groupNode->setTraversalGroup(true);
+    groupNode->setCanRequestFocus(false);
+    groupNode->setSkipTraversal(true);
+    cw::RenderFocus groupBox;
+    groupBox.focus_node = groupNode;
+    groupBox.setParent(&scopeBox);
+
+    auto g1Node = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus g1Box;
+    g1Box.focus_node = g1Node;
+    g1Box.setParent(&groupBox);
+
+    auto bNode = std::make_shared<cw::FocusNode>();
+    cw::RenderFocus bBox;
+    bBox.focus_node = bNode;
+    bBox.setParent(&scopeBox); // sibling of groupBox, still inside the scope
+
+    mgr.registerNode(&a);
+    mgr.registerNode(scopeNode.get());
+    mgr.registerNode(groupNode.get());
+    mgr.registerNode(g1Node.get());
+    mgr.registerNode(bNode.get());
+
+    mgr.requestFocus(g1Node.get());
+    mgr.moveFocusForward();
+    EXPECT_TRUE(bNode->hasFocus()); // freely crosses the GROUP boundary
+
+    mgr.moveFocusForward();
+    EXPECT_TRUE(g1Node->hasFocus()); // wraps within the SCOPE, never reaches `a`
+
+    g1Box.setParent(nullptr);
+    bBox.setParent(nullptr);
+    groupBox.setParent(nullptr);
 }

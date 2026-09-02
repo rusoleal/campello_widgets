@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <unordered_map>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/focus_traversal_policy.hpp>
@@ -22,6 +23,19 @@ namespace systems::leal::campello_widgets
                 default: return false;
             }
         }
+
+        // Implementation detail of FocusManager::sortWithGroups() -- see
+        // that method's own doc comment (focus_manager.hpp) for what this
+        // represents. `group` is nullptr for the scope's own top-level
+        // bucket; `items` holds leaves and/or child-group marker
+        // FocusNode*s in first-occurrence order, with `children` mapping
+        // each such marker to its own nested bucket.
+        struct GroupBucket
+        {
+            FocusNode* group = nullptr;
+            std::vector<FocusNode*> items;
+            std::unordered_map<FocusNode*, GroupBucket> children;
+        };
     }
 
     std::atomic<FocusManager*> FocusManager::s_active_manager_{nullptr};
@@ -262,6 +276,75 @@ namespace systems::leal::campello_widgets
         return result;
     }
 
+    // Buckets `candidates` (already scope-filtered leaves) by their nearest
+    // enclosing FocusTraversalGroup ancestor between them and `scope`, sorts
+    // each bucket with that group's own traversal_policy (or `fallback` when
+    // the group has none), then flattens depth-first so each group's members
+    // stay contiguous -- ports Flutter's real _findGroups/_sortAllDescendants
+    // shape (focus_traversal.dart), simplified to operate on the already-
+    // filtered leaf list this codebase's traversalCandidates() produces
+    // rather than a raw, unfiltered descendant walk. Group marker nodes
+    // themselves never appear in `candidates` (traversalCandidates() already
+    // excludes them via the existing canRequestFocus()/skipTraversal()
+    // filters, since FocusTraversalGroup sets both false/true on its own
+    // node -- see focus_traversal_group.hpp), so every bucket's `items` is
+    // built purely from the walk below, never a special-cased self-entry.
+    //
+    // Collapses to exactly `fallback->order(candidates)` whenever no
+    // candidate has a FocusTraversalGroup ancestor: every candidate's chain
+    // is empty, so all of them land in the single root bucket, sorted once
+    // with `fallback` -- byte-identical to this method's pre-existing
+    // behavior for every Tab flow that predates FocusTraversalGroup.
+    std::vector<FocusNode*> FocusManager::sortWithGroups(
+        const std::vector<FocusNode*>& candidates, FocusNode* scope, FocusTraversalPolicy* fallback) const
+    {
+        GroupBucket root;
+        for (FocusNode* c : candidates)
+        {
+            std::vector<FocusNode*> chain;
+            for (FocusNode* p = c->parent(); p && p != scope; p = p->parent())
+                if (p->isTraversalGroup()) chain.push_back(p);
+            std::reverse(chain.begin(), chain.end());
+
+            GroupBucket* cur = &root;
+            for (FocusNode* g : chain)
+            {
+                auto it = cur->children.find(g);
+                if (it == cur->children.end())
+                {
+                    cur->items.push_back(g);
+                    it = cur->children.emplace(g, GroupBucket{g, {}, {}}).first;
+                }
+                cur = &it->second;
+            }
+            cur->items.push_back(c);
+        }
+
+        std::function<std::vector<FocusNode*>(GroupBucket&, FocusTraversalPolicy*)> flatten =
+            [&](GroupBucket& bucket, FocusTraversalPolicy* inherited) -> std::vector<FocusNode*>
+        {
+            FocusTraversalPolicy* policy = (bucket.group && bucket.group->traversal_policy)
+                ? bucket.group->traversal_policy.get()
+                : inherited;
+            std::vector<FocusNode*> result;
+            for (FocusNode* item : policy->order(bucket.items))
+            {
+                auto it = bucket.children.find(item);
+                if (it != bucket.children.end())
+                {
+                    std::vector<FocusNode*> sub = flatten(it->second, policy);
+                    result.insert(result.end(), sub.begin(), sub.end());
+                }
+                else
+                {
+                    result.push_back(item);
+                }
+            }
+            return result;
+        };
+        return flatten(root, fallback);
+    }
+
     void FocusManager::moveFocusForward()
     {
         std::vector<FocusNode*> candidates = traversalCandidates();
@@ -277,7 +360,7 @@ namespace systems::leal::campello_widgets
                 default_traversal_policy_ = std::make_shared<OrderedTraversalPolicy>();
             policy = default_traversal_policy_.get();
         }
-        std::vector<FocusNode*> ordered = policy->order(candidates);
+        std::vector<FocusNode*> ordered = sortWithGroups(candidates, scope, policy);
 
         if (!current_focus_)
         {
@@ -314,7 +397,7 @@ namespace systems::leal::campello_widgets
                 default_traversal_policy_ = std::make_shared<OrderedTraversalPolicy>();
             policy = default_traversal_policy_.get();
         }
-        std::vector<FocusNode*> ordered = policy->order(candidates);
+        std::vector<FocusNode*> ordered = sortWithGroups(candidates, scope, policy);
 
         if (!current_focus_)
         {

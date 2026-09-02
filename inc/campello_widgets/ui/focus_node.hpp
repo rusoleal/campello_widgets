@@ -127,6 +127,16 @@ namespace systems::leal::campello_widgets
         bool isScope() const noexcept { return is_scope_; }
         void setScope(bool value) noexcept { is_scope_ = value; }
 
+        /**
+         * @brief True if this node groups its descendants' Tab order without
+         * gating Tab-escape or restoring focus on unmount — orthogonal to
+         * isScope() (see FocusManager's own traversal-sort doc). Set via the
+         * FocusTraversalGroup widget, which also sets skipTraversal(true) and
+         * canRequestFocus(false) on the same node so it's never itself a Tab stop.
+         */
+        bool isTraversalGroup() const noexcept { return is_traversal_group_; }
+        void setTraversalGroup(bool value) noexcept { is_traversal_group_ = value; }
+
         /** @brief Excludes this node from Tab/Shift+Tab and directional
          *  traversal candidate lists (it can still be focused
          *  programmatically via requestFocus()). Mirrors Flutter's
@@ -170,6 +180,7 @@ namespace systems::leal::campello_widgets
         Rect bounds_;
         RenderObject* owner_ = nullptr;
         bool is_scope_ = false;
+        bool is_traversal_group_ = false;
         bool skip_traversal_ = false;
         bool can_request_focus_ = true;
         FocusNode* previously_focused_outside_ = nullptr;
