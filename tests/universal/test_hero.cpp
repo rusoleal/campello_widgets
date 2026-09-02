@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <campello_widgets/widgets/hero.hpp>
+#include <campello_widgets/widgets/navigator.hpp>
 #include <campello_widgets/widgets/center.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/row.hpp>
@@ -8,6 +9,7 @@
 #include <campello_widgets/widgets/container.hpp>
 #include <campello_widgets/widgets/text.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
+#include <campello_widgets/widgets/stateless_widget.hpp>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -199,4 +201,206 @@ TEST(Hero, BuildIsAPurePassthroughToChild)
 
     cw::WidgetRef built = hero.build(ctx);
     EXPECT_EQ(built.get(), child.get());
+}
+
+// ---------------------------------------------------------------------------
+// 7-10. HeroController -- Stage 4: tag-matched manifest across a route
+// transition, isolated per route (no rect capture yet -- see Stage 5).
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Captures the live NavigatorState* the first time this widget builds --
+    // mirrors test_navigator.cpp's own CaptureNavigatorState idiom, but
+    // distinctly named (different translation unit, but Unity Build can
+    // still merge same-named file-scope symbols into one TU) and also wraps
+    // a `child` so the captured route's own content can include a Hero.
+    class HeroFlightCaptureState : public cw::StatelessWidget
+    {
+    public:
+        cw::NavigatorState** out = nullptr;
+        cw::WidgetRef         child;
+
+        cw::WidgetRef build(cw::BuildContext& ctx) const override
+        {
+            if (out) *out = cw::Navigator::of(ctx);
+            return child;
+        }
+    };
+
+    // A non-opaque test route -- lets two routes be built simultaneously, so
+    // elementForRoute() can return distinct, live elements for both at once.
+    // (An opaque top route hides the route beneath it entirely -- see the
+    // "opaque push" test below, which exercises that case deliberately.)
+    class HeroTransparentTestRoute : public cw::Route
+    {
+    public:
+        explicit HeroTransparentTestRoute(std::function<cw::WidgetRef(cw::BuildContext&)> builder)
+            : builder_(std::move(builder)) {}
+
+        cw::WidgetRef build(cw::BuildContext& ctx) override { return builder_(ctx); }
+        bool opaque() const override { return false; }
+
+    private:
+        std::function<cw::WidgetRef(cw::BuildContext&)> builder_;
+    };
+
+    cw::WidgetRef makeTaggedHero(const std::string& tag, float size)
+    {
+        auto hero   = std::make_shared<cw::Hero>();
+        hero->tag   = tag;
+        hero->child = std::make_shared<cw::SizedBox>(size, size);
+        return hero;
+    }
+} // namespace
+
+TEST(HeroController, DidChangeTopBuildsIsolatedMatchedPairManifestOnPush)
+{
+    auto controller = std::make_shared<cw::HeroController>();
+    cw::NavigatorState* state = nullptr;
+
+    auto route_a = std::make_shared<cw::PageRoute>([&](cw::BuildContext&) -> cw::WidgetRef {
+        auto capture  = std::make_shared<HeroFlightCaptureState>();
+        capture->out   = &state;
+        capture->child = makeTaggedHero("shared", 10.0f);
+        return capture;
+    });
+
+    auto nav = std::make_shared<cw::Navigator>();
+    nav->initial_route = route_a;
+    // Must be set before mount: NavigatorState::initState() wires
+    // NavigatorObserver::navigator() only for observers present at that
+    // moment (see navigator.cpp), unlike push()/pop()'s direct
+    // widget().observers loops, which read the live list on every call.
+    nav->observers = {controller};
+
+    auto root = mountHeroTestTree(nav);
+    ASSERT_NE(state, nullptr);
+    ASSERT_NE(controller->navigator(), nullptr);
+    EXPECT_TRUE(controller->manifests().empty()); // no transition has happened yet
+
+    auto route_b = std::make_shared<HeroTransparentTestRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return makeTaggedHero("shared", 30.0f);
+    });
+    state->push(route_b);
+
+    const auto& manifests = controller->manifests();
+    ASSERT_EQ(manifests.size(), 1u);
+    EXPECT_EQ(manifests[0].tag, "shared");
+    ASSERT_NE(manifests[0].from_element, nullptr);
+    ASSERT_NE(manifests[0].to_element, nullptr);
+
+    // The critical correctness check: two same-tag Heroes on different
+    // routes must produce two DISTINCT Element*s, not a collided single
+    // entry from a non-isolated combined walk across both routes at once.
+    EXPECT_NE(manifests[0].from_element, manifests[0].to_element);
+    EXPECT_EQ(static_cast<const cw::Hero&>(manifests[0].from_element->widget()).tag, "shared");
+    EXPECT_EQ(static_cast<const cw::Hero&>(manifests[0].to_element->widget()).tag, "shared");
+
+    root->unmount();
+}
+
+TEST(HeroController, DidChangeTopProducesEmptyManifestWhenNoTagsOverlap)
+{
+    auto controller = std::make_shared<cw::HeroController>();
+    cw::NavigatorState* state = nullptr;
+
+    auto route_a = std::make_shared<cw::PageRoute>([&](cw::BuildContext&) -> cw::WidgetRef {
+        auto capture  = std::make_shared<HeroFlightCaptureState>();
+        capture->out   = &state;
+        capture->child = makeTaggedHero("a", 10.0f);
+        return capture;
+    });
+
+    auto nav = std::make_shared<cw::Navigator>();
+    nav->initial_route = route_a;
+    nav->observers      = {controller};
+
+    auto root = mountHeroTestTree(nav);
+    ASSERT_NE(state, nullptr);
+
+    auto route_b = std::make_shared<HeroTransparentTestRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return makeTaggedHero("b", 30.0f);
+    });
+    state->push(route_b);
+
+    EXPECT_TRUE(controller->manifests().empty());
+
+    root->unmount();
+}
+
+TEST(HeroController, DidChangeTopBuildsFreshReversedManifestOnPop)
+{
+    auto controller = std::make_shared<cw::HeroController>();
+    cw::NavigatorState* state = nullptr;
+
+    auto route_a = std::make_shared<cw::PageRoute>([&](cw::BuildContext&) -> cw::WidgetRef {
+        auto capture  = std::make_shared<HeroFlightCaptureState>();
+        capture->out   = &state;
+        capture->child = makeTaggedHero("shared", 10.0f);
+        return capture;
+    });
+
+    auto nav = std::make_shared<cw::Navigator>();
+    nav->initial_route = route_a;
+    nav->observers      = {controller};
+
+    auto root = mountHeroTestTree(nav);
+    ASSERT_NE(state, nullptr);
+
+    auto route_b = std::make_shared<HeroTransparentTestRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return makeTaggedHero("shared", 30.0f);
+    });
+    state->push(route_b);
+
+    ASSERT_EQ(controller->manifests().size(), 1u);
+    cw::Element* push_from = controller->manifests()[0].from_element;
+    cw::Element* push_to   = controller->manifests()[0].to_element;
+
+    state->pop();
+
+    const auto& pop_manifests = controller->manifests();
+    ASSERT_EQ(pop_manifests.size(), 1u);
+    EXPECT_EQ(pop_manifests[0].tag, "shared");
+    // A fresh manifest, reversed relative to the push: didChangeTop()'s
+    // (top_route, previous_top_route) args swap direction on pop(), so
+    // from/to must swap too, not just repeat the push's own manifest.
+    EXPECT_EQ(pop_manifests[0].from_element, push_to);
+    EXPECT_EQ(pop_manifests[0].to_element, push_from);
+
+    root->unmount();
+}
+
+TEST(HeroController, DidChangeTopStaysEmptyWhenPreviousRouteElementIsGone)
+{
+    // An opaque push (the default) covers the previous route entirely --
+    // NavigatorState::build() doesn't build routes below an opaque top at
+    // all, so the previous route's element is gone from the tree by the
+    // time didChangeTop() fires. HeroController must guard against this
+    // (elementForRoute() returning nullptr) rather than crash or misreport.
+    auto controller = std::make_shared<cw::HeroController>();
+    cw::NavigatorState* state = nullptr;
+
+    auto route_a = std::make_shared<cw::PageRoute>([&](cw::BuildContext&) -> cw::WidgetRef {
+        auto capture  = std::make_shared<HeroFlightCaptureState>();
+        capture->out   = &state;
+        capture->child = makeTaggedHero("shared", 10.0f);
+        return capture;
+    });
+
+    auto nav = std::make_shared<cw::Navigator>();
+    nav->initial_route = route_a;
+    nav->observers      = {controller};
+
+    auto root = mountHeroTestTree(nav);
+    ASSERT_NE(state, nullptr);
+
+    auto route_b = std::make_shared<cw::PageRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return makeTaggedHero("shared", 30.0f);
+    });
+    EXPECT_NO_THROW(state->push(route_b));
+
+    EXPECT_TRUE(controller->manifests().empty());
+
+    root->unmount();
 }

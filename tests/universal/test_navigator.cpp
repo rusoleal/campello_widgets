@@ -279,3 +279,75 @@ TEST(NavigatorObserver, MultipleObserversAllNotifiedForTheSameEvent)
     EXPECT_EQ(observer2->calls.size(), 2u);
     EXPECT_EQ(observer1->calls[0].route, observer2->calls[0].route);
 }
+
+// ---------------------------------------------------------------------------
+// 6. NavigatorObserver::navigator() -- set on mount, cleared on dispose.
+// (Hero widget, Stage 4.)
+// ---------------------------------------------------------------------------
+
+TEST(NavigatorObserver, NavigatorAccessorSetOnMountAndClearedOnDispose)
+{
+    auto observer = std::make_shared<RecordingObserver>();
+    EXPECT_EQ(observer->navigator(), nullptr);
+
+    auto route_a = std::make_shared<cw::PageRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return std::make_shared<cw::SizedBox>(10.0f, 10.0f);
+    });
+    auto nav = std::make_shared<cw::Navigator>();
+    nav->initial_route = route_a;
+    nav->observers     = {observer};
+
+    auto root = mountNavigatorTestTree(nav);
+    ASSERT_NE(observer->navigator(), nullptr);
+
+    root->unmount();
+    EXPECT_EQ(observer->navigator(), nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// 7. NavigatorState::elementForRoute() (Hero widget, Stage 4.)
+//
+// Uses a non-opaque route (mirrors a dialog/bottom-sheet) so two routes are
+// built simultaneously -- an opaque top route would cover the bottom route
+// entirely and NavigatorState::build() wouldn't build it at all, which would
+// make it impossible to observe two *distinct* live elements at once.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    class TransparentTestRoute : public cw::Route
+    {
+    public:
+        explicit TransparentTestRoute(std::function<cw::WidgetRef(cw::BuildContext&)> builder)
+            : builder_(std::move(builder)) {}
+
+        cw::WidgetRef build(cw::BuildContext& ctx) override { return builder_(ctx); }
+        bool opaque() const override { return false; }
+
+    private:
+        std::function<cw::WidgetRef(cw::BuildContext&)> builder_;
+    };
+} // namespace
+
+TEST(NavigatorState, ElementForRouteReturnsDistinctElementsPerRouteAndNullForUnregistered)
+{
+    NavigatorFixture f;
+    ASSERT_NE(f.state, nullptr);
+
+    auto route_b = std::make_shared<TransparentTestRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return std::make_shared<cw::SizedBox>(20.0f, 20.0f);
+    });
+    f.state->push(route_b);
+
+    cw::Element* elem_a = f.state->elementForRoute(f.route_a.get());
+    cw::Element* elem_b = f.state->elementForRoute(route_b.get());
+    ASSERT_NE(elem_a, nullptr);
+    ASSERT_NE(elem_b, nullptr);
+    EXPECT_NE(elem_a, elem_b);
+
+    auto route_unregistered = std::make_shared<cw::PageRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+        return std::make_shared<cw::SizedBox>(5.0f, 5.0f);
+    });
+    EXPECT_EQ(f.state->elementForRoute(route_unregistered.get()), nullptr);
+    EXPECT_EQ(f.state->elementForRoute(nullptr), nullptr);
+}

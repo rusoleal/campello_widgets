@@ -1,6 +1,8 @@
 #include <campello_widgets/widgets/navigator.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/slide_transition.hpp>
+#include <campello_widgets/widgets/stateful_element.hpp>
+#include <campello_widgets/widgets/inherited_element.hpp>
 #include <campello_widgets/ui/stack_fit.hpp>
 #include <campello_widgets/ui/key.hpp>
 #include <campello_widgets/ui/curves.hpp>
@@ -54,10 +56,20 @@ void NavigatorState::initState()
 {
     if (auto r = widget().initial_route)
         stack_.push_back(makeEntry(std::move(r), /*snap_to_end=*/true));
+
+    for (auto& obs : widget().observers)
+    {
+        if (obs) obs->navigator_ = this;
+    }
 }
 
 void NavigatorState::dispose()
 {
+    for (auto& obs : widget().observers)
+    {
+        if (obs) obs->navigator_ = nullptr;
+    }
+
     // Remove all animation listeners to avoid dangling callbacks.
     for (auto& entry : stack_)
     {
@@ -141,6 +153,28 @@ void NavigatorState::pushReplacement(std::shared_ptr<Route> route)
         obs->didReplace(new_top, anim, old_top);
         obs->didChangeTop(new_top, anim, old_top);
     }
+}
+
+// --------------------------------------------------------------------------
+// NavigatorState — element lookup
+// --------------------------------------------------------------------------
+
+Element* NavigatorState::elementForRoute(Route* route) const
+{
+    if (!route) return nullptr;
+    Element* scope_elem = element() ? element()->firstChildElement() : nullptr; // NavigatorScope
+    Element* stack_elem = scope_elem ? scope_elem->firstChildElement() : nullptr; // the Stack
+    if (!stack_elem) return nullptr;
+
+    ObjectKey target(route);
+    Element* found = nullptr;
+    stack_elem->visitChildren([&](Element* layer)
+    {
+        if (found) return;
+        const auto& w = layer->widget();
+        if (w.key && target.equals(*w.key)) found = layer;
+    });
+    return found;
 }
 
 // --------------------------------------------------------------------------

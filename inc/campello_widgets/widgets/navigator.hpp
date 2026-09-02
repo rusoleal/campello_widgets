@@ -117,6 +117,13 @@ public:
      * pushed route's, on push; the popped route's, on pop).
      */
     virtual void didChangeTop(Route* top_route, std::shared_ptr<AnimationController> animation, Route* previous_top_route) {}
+
+    /** @brief The NavigatorState this observer is currently registered with, or nullptr. */
+    NavigatorState* navigator() const noexcept { return navigator_; }
+
+private:
+    friend class NavigatorState;
+    NavigatorState* navigator_ = nullptr;
 };
 
 // ==========================================================================
@@ -224,6 +231,15 @@ public:
 
     /** @brief True if more than one route is in the stack. */
     bool canPop() const { return stack_.size() > 1; }
+
+    /**
+     * @brief Returns the top-level built Element for `route`, or nullptr if
+     * `route` is not currently built (not on the stack, or below an opaque
+     * route). Walks from this state's own StatefulElement through
+     * NavigatorScope down to the Stack, then matches build()'s per-layer
+     * ObjectKey(route) against each direct child.
+     */
+    Element* elementForRoute(Route* route) const;
 
     WidgetRef build(BuildContext& ctx) override;
 
