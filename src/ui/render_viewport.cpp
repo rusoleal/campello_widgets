@@ -362,7 +362,8 @@ namespace systems::leal::campello_widgets
             if (panning_)
             {
                 const float delta = is_v ? dy : dx;
-                applyScrollDelta(-delta);
+                if (external_delta_redirect) external_delta_redirect(-delta);
+                else                          applyScrollDelta(-delta);
                 velocity_tracker_.addPosition(
                     std::chrono::steady_clock::now(),
                     is_v ? event.position.y : event.position.x);
@@ -408,7 +409,10 @@ namespace systems::leal::campello_widgets
                     last_scroll_event_ms_ = currentMonotonicMs();
                     wheel_momentum_pending_ = true;
                 }
-                d->signalResolver().registerHandler([this, delta] { applyScrollDelta(delta, "wheel"); }, dominant);
+                d->signalResolver().registerHandler([this, delta] {
+                    if (external_delta_redirect) external_delta_redirect(delta);
+                    else                          applyScrollDelta(delta, "wheel");
+                }, dominant);
             }
             break;
         }

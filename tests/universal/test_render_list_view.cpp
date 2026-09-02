@@ -7,6 +7,7 @@
 #include <campello_widgets/ui/scroll_controller.hpp>
 #include <chrono>
 #include <thread>
+#include <vector>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -513,4 +514,195 @@ TEST(RenderListView, ApplyExternalScrollDeltaUpdatesAttachedController)
     const float applied = lv.applyExternalScrollDelta(150.0f);
     EXPECT_FLOAT_EQ(applied, 150.0f);
     EXPECT_FLOAT_EQ(controller->offset(), 150.0f);
+}
+
+// ---------------------------------------------------------------------------
+// external_delta_redirect -- the NestedScrollView coordinator hook. Unset
+// (default) must reproduce PanGestureScrolls's own exact numbers byte-for-
+// byte -- the sharpest possible regression check, since the modified
+// move/scroll call sites are `if (external_delta_redirect) ... else
+// <original call>`, so with the hook unset the else branch is verbatim what
+// used to run unconditionally.
+// ---------------------------------------------------------------------------
+
+TEST(RenderListView, PanGestureScrollsWithRedirectHookUnsetMatchesOriginalBehavior)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+    // lv.external_delta_redirect left unset (nullptr) deliberately.
+
+    lv.attach();
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 150.0f};
+    dispatcher.handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {0.0f, 100.0f};
+    dispatcher.handlePointerEvent(move);
+
+    move.position = {0.0f, 50.0f};
+    dispatcher.handlePointerEvent(move);
+
+    EXPECT_EQ(lv.firstVisibleIndex(), 2); // identical to PanGestureScrolls's own assertion
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+TEST(RenderListView, PanGestureRoutesThroughRedirectHookWhenSet)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    std::vector<float> redirected_deltas;
+    lv.external_delta_redirect = [&](float d) { redirected_deltas.push_back(d); };
+
+    lv.attach();
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 150.0f};
+    dispatcher.handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {0.0f, 100.0f}; // dy=-50, crosses slop, delta redirected = 50
+    dispatcher.handlePointerEvent(move);
+
+    ASSERT_EQ(redirected_deltas.size(), 1u);
+    EXPECT_FLOAT_EQ(redirected_deltas[0], 50.0f);
+    // The redirect callback only captured the delta, never applied it --
+    // lv's own scroll position must be untouched.
+    EXPECT_EQ(lv.firstVisibleIndex(), 0);
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+TEST(RenderListView, WheelEventRoutesThroughRedirectHookWhenSet)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    std::vector<float> redirected_deltas;
+    lv.external_delta_redirect = [&](float d) { redirected_deltas.push_back(d); };
+
+    lv.attach();
+
+    cw::PointerEvent scroll;
+    scroll.kind           = cw::PointerEventKind::scroll;
+    scroll.position       = {0.0f, 0.0f};
+    scroll.scroll_delta_y = 75.0f;
+    dispatcher.handlePointerEvent(scroll);
+
+    ASSERT_EQ(redirected_deltas.size(), 1u);
+    EXPECT_FLOAT_EQ(redirected_deltas[0], 75.0f);
+    EXPECT_EQ(lv.firstVisibleIndex(), 0); // not applied directly
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+// onTick()'s own spring-back/momentum must NOT be redirected -- confirmed by
+// letting real momentum run (via dispatcher.tick(), same as
+// MomentumContinuesAfterRelease above) with the hook set: the redirect must
+// fire during the drag phase but NOT during the tick-driven momentum phase,
+// even though momentum still visibly moves the list (proving onTick() calls
+// applyScrollDelta() directly on lv itself, never through the hook).
+TEST(RenderListView, MomentumIsNotRedirectedEvenWithHookSet)
+{
+    cw::RenderListView lv;
+    auto root = std::shared_ptr<cw::RenderBox>(&lv, [](cw::RenderBox*){});
+    cw::PointerDispatcher dispatcher(root);
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    lv.item_count  = 100;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f);
+
+    int redirect_call_count = 0;
+    // The redirect callback intentionally does NOT apply the delta anywhere
+    // (no real coordinator here) -- lv's own scroll position stays at 0
+    // through the whole drag, so any *momentum* that later appears can only
+    // have come from onTick() calling applyScrollDelta() directly, not from
+    // residual state the redirected drag itself left behind.
+    lv.external_delta_redirect = [&](float) { ++redirect_call_count; };
+
+    lv.attach();
+
+    auto nowMs = [] {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    };
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 190.0f};
+    dispatcher.handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind = cw::PointerEventKind::move;
+    float y = 190.0f;
+    for (int i = 1; i <= 5; i++)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        y -= 40.0f;
+        move.position = {0.0f, y};
+        dispatcher.handlePointerEvent(move);
+    }
+
+    const int calls_during_drag = redirect_call_count;
+    EXPECT_GT(calls_during_drag, 0); // drag itself was redirected
+    EXPECT_EQ(lv.firstVisibleIndex(), 0); // redirect never applied anything to lv itself
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher.handlePointerEvent(up);
+
+    // velocity_px_s_ was seeded from the drag above; drive real ticks the
+    // same way MomentumContinuesAfterRelease does.
+    dispatcher.tick(nowMs());
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    dispatcher.tick(nowMs());
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    dispatcher.tick(nowMs());
+
+    EXPECT_GT(lv.firstVisibleIndex(), 0)
+        << "momentum should still move the list via onTick()'s own direct applyScrollDelta()";
+    EXPECT_EQ(redirect_call_count, calls_during_drag)
+        << "onTick()'s spring/momentum calls must not go through external_delta_redirect";
+
+    lv.detach();
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
 }

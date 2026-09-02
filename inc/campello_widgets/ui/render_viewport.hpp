@@ -68,6 +68,17 @@ namespace systems::leal::campello_widgets
          */
         float applyExternalScrollDelta(float delta);
 
+        /**
+         * @brief When set, a genuinely user-driven scroll delta (drag or
+         * wheel -- never onTick()'s own spring-back/momentum, which stays
+         * local to this view even when coordinated) is handed to this
+         * callback instead of being applied directly via this view's own
+         * applyScrollDelta(). Set by a NestedScrollCoordinator on both the
+         * outer and inner participants it coordinates; unset (nullptr)
+         * preserves this view's exact standalone behavior.
+         */
+        std::function<void(float)> external_delta_redirect;
+
         // ------------------------------------------------------------------
         // Child management — mirrors RenderStack::insertChild/clearChildren/
         // truncateChildren field-for-field, over RenderSliver instead of

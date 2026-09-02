@@ -44,6 +44,7 @@
 #include <campello_widgets/ui/render_sliver_overlap_absorber.hpp>
 #include <campello_widgets/ui/render_sliver_overlap_injector.hpp>
 #include <campello_widgets/ui/render_viewport.hpp>
+#include <campello_widgets/ui/nested_scroll_coordinator.hpp>
 #include <campello_widgets/widgets/render_object_widget.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
 #include <campello_widgets/widgets/sliver_to_box_adapter.hpp>

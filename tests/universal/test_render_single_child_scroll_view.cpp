@@ -1,4 +1,7 @@
 #include <gtest/gtest.h>
+#include <chrono>
+#include <thread>
+#include <vector>
 #include <campello_widgets/ui/render_single_child_scroll_view.hpp>
 #include <campello_widgets/ui/render_sized_box.hpp>
 #include <campello_widgets/ui/scroll_controller.hpp>
@@ -141,4 +144,119 @@ TEST(RenderSingleChildScrollView, ApplyExternalScrollDeltaRubberBandsUnderBounci
     // from the ClampingScrollPhysics case above, nor the full, undamped 2000.
     EXPECT_GT(applied, 1800.0f);
     EXPECT_LT(applied, 2000.0f);
+}
+
+// ---------------------------------------------------------------------------
+// external_delta_redirect -- the NestedScrollView coordinator hook.
+// ---------------------------------------------------------------------------
+
+TEST_F(ScrollViewFixture, PanGestureWithRedirectHookUnsetMatchesOriginalBehavior)
+{
+    // sv.external_delta_redirect left unset (nullptr) deliberately.
+    EXPECT_FLOAT_EQ(controller->offset(), 0.0f);
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 150.0f};
+    dispatcher->handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {0.0f, 50.0f}; // dy=-100, exceeds 36px touch slop, applies immediately
+    dispatcher->handlePointerEvent(move);
+
+    EXPECT_FLOAT_EQ(controller->offset(), 100.0f);
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher->handlePointerEvent(up);
+}
+
+TEST_F(ScrollViewFixture, PanGestureRoutesThroughRedirectHookWhenSet)
+{
+    std::vector<float> redirected_deltas;
+    sv.external_delta_redirect = [&](float d) { redirected_deltas.push_back(d); };
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 150.0f};
+    dispatcher->handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind     = cw::PointerEventKind::move;
+    move.position = {0.0f, 50.0f}; // dy=-100
+    dispatcher->handlePointerEvent(move);
+
+    ASSERT_EQ(redirected_deltas.size(), 1u);
+    EXPECT_FLOAT_EQ(redirected_deltas[0], 100.0f);
+    EXPECT_FLOAT_EQ(controller->offset(), 0.0f); // redirect never applied anything itself
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher->handlePointerEvent(up);
+}
+
+TEST_F(ScrollViewFixture, WheelEventRoutesThroughRedirectHookWhenSet)
+{
+    std::vector<float> redirected_deltas;
+    sv.external_delta_redirect = [&](float d) { redirected_deltas.push_back(d); };
+
+    cw::PointerEvent scroll;
+    scroll.kind           = cw::PointerEventKind::scroll;
+    scroll.position       = {0.0f, 0.0f};
+    scroll.scroll_delta_y = 75.0f;
+    dispatcher->handlePointerEvent(scroll);
+
+    ASSERT_EQ(redirected_deltas.size(), 1u);
+    EXPECT_FLOAT_EQ(redirected_deltas[0], 75.0f);
+    EXPECT_FLOAT_EQ(controller->offset(), 0.0f);
+}
+
+// onTick()'s own spring-back/momentum must NOT be redirected -- see
+// RenderListView's own MomentumIsNotRedirectedEvenWithHookSet for the same
+// reasoning, adapted to this class's dispatcher.tick()-driven momentum path.
+TEST_F(ScrollViewFixture, MomentumIsNotRedirectedEvenWithHookSet)
+{
+    int redirect_call_count = 0;
+    sv.external_delta_redirect = [&](float) { ++redirect_call_count; };
+
+    auto nowMs = [] {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    };
+
+    cw::PointerEvent down;
+    down.kind     = cw::PointerEventKind::down;
+    down.position = {0.0f, 190.0f};
+    dispatcher->handlePointerEvent(down);
+
+    cw::PointerEvent move;
+    move.kind = cw::PointerEventKind::move;
+    float y = 190.0f;
+    for (int i = 1; i <= 5; i++)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        y -= 40.0f;
+        move.position = {0.0f, y};
+        dispatcher->handlePointerEvent(move);
+    }
+
+    const int calls_during_drag = redirect_call_count;
+    EXPECT_GT(calls_during_drag, 0);
+    EXPECT_FLOAT_EQ(controller->offset(), 0.0f); // redirect never applied anything to sv itself
+
+    cw::PointerEvent up;
+    up.kind = cw::PointerEventKind::up;
+    dispatcher->handlePointerEvent(up);
+
+    dispatcher->tick(nowMs());
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    dispatcher->tick(nowMs());
+    std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    dispatcher->tick(nowMs());
+
+    EXPECT_GT(controller->offset(), 0.0f)
+        << "momentum should still move the view via onTick()'s own direct applyScrollDelta()";
+    EXPECT_EQ(redirect_call_count, calls_during_drag)
+        << "onTick()'s spring/momentum calls must not go through external_delta_redirect";
 }
