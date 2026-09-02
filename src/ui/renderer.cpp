@@ -1,5 +1,6 @@
 #include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
+#include <campello_widgets/ui/post_frame_callbacks.hpp>
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
 #include <campello_widgets/ui/box_constraints.hpp>
@@ -206,6 +207,7 @@ namespace systems::leal::campello_widgets
         if (!root_ || !std::exchange(paint_requested_, false)) {
             if (print_sub_phases)
                 std::fprintf(stderr, "[buildFrame] skip: paint_not_requested\n");
+            PostFrameCallbacks::runPending();
             return std::nullopt;
         }
 
@@ -230,6 +232,7 @@ namespace systems::leal::campello_widgets
         if (draw_list.empty()) {
             if (print_sub_phases)
                 std::fprintf(stderr, "[buildFrame] skip: draw_list empty\n");
+            PostFrameCallbacks::runPending();
             return std::nullopt;
         }
         if (print_sub_phases)
@@ -290,6 +293,7 @@ namespace systems::leal::campello_widgets
             pending_drawable_ = nullptr;
         }
 
+        PostFrameCallbacks::runPending();
         return package;
     }
 

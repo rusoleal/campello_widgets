@@ -3,32 +3,41 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-#include <campello_widgets/widgets/stateless_widget.hpp>
+#include <campello_widgets/widgets/single_child_render_object_widget.hpp>
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/widgets/navigator.hpp>
+#include <campello_widgets/widgets/overlay.hpp>
+#include <campello_widgets/ui/animation_controller.hpp>
+#include <campello_widgets/ui/value_notifier.hpp>
+#include <campello_widgets/ui/rect.hpp>
 
 namespace systems::leal::campello_widgets
 {
 
     /**
      * @brief Marks a widget as a shared-element transition endpoint, matched
-     * by `tag` between two routes -- Stage 2 of the Hero widget initiative
-     * (see the Hero Widget Scoping artifact). Inert at this stage: a pure
-     * passthrough, no transition logic, no RenderObject of its own.
+     * by `tag` between two routes.
      *
      * `tag` is a plain `std::string` for this stage -- Flutter's real
      * `Hero.tag` is a fully generic `Object`; this codebase already has a
      * `Key`/`ValueKey` hierarchy that could back a more general tag later.
      * Starting with `std::string` is a deliberate simplification (the
      * overwhelmingly common real usage anyway), not an accidental limit.
+     *
+     * A `SingleChildRenderObjectWidget` (not `StatelessWidget`) wrapping a
+     * `RenderHero` -- Stage 5 of the Hero widget initiative. This gives
+     * Hero's own Element direct RenderObject ownership
+     * (`nearestRenderObjectElement()` returns itself), which
+     * `HeroController` needs to reach the captured on-screen rect
+     * (`RenderHero::globalRect()`) and to hide/reveal the endpoint
+     * (`RenderHero::setHidden()`) during a flight.
      */
-    class Hero : public StatelessWidget
+    class Hero : public SingleChildRenderObjectWidget
     {
     public:
-        std::string tag;
-        WidgetRef   child;
+        std::string tag; // `child` is inherited from SingleChildRenderObjectWidget
 
-        WidgetRef build(BuildContext&) const override { return child; }
+        std::shared_ptr<RenderObject> createRenderObject() const override;
 
         /**
          * @brief Collects every descendant Hero under `root` into a
@@ -44,12 +53,13 @@ namespace systems::leal::campello_widgets
 
     /**
      * @brief Builds a tag-matched manifest of Hero pairs across a route
-     * transition -- Stage 4 of the Hero widget initiative. Register on
-     * Navigator::observers.
+     * transition, then runs the flight -- Stage 5 (final) of the Hero widget
+     * initiative. Register on Navigator::observers.
      *
-     * Rect capture is deferred to Stage 5 (needs a post-frame-callback
-     * mechanism this codebase doesn't have yet): this stage only identifies
-     * which Hero Elements match up, not where they are on screen.
+     * Rect capture and the flight itself are deferred to a post-frame
+     * callback (`PostFrameCallbacks::schedule()`), since
+     * `RenderHero::globalRect()` is only valid once the destination route
+     * has actually painted -- see `runFlights()`.
      */
     class HeroController : public NavigatorObserver
     {
@@ -61,14 +71,39 @@ namespace systems::leal::campello_widgets
             Element*    to_element   = nullptr;
         };
 
+        /**
+         * @brief One in-flight shared-element transition, tracked purely for
+         * introspection (e.g. tests) -- HeroController doesn't consult this
+         * list itself, cleanup is entirely driven by `animation`'s own
+         * listener (see runFlights()).
+         */
+        struct ActiveFlight
+        {
+            std::string                          tag;
+            std::shared_ptr<AnimationController> controller; // shared with the route transition
+            std::shared_ptr<OverlayEntry>        entry;
+            std::shared_ptr<ValueNotifier<Rect>> notifier;
+        };
+
         void didChangeTop(Route* top_route, std::shared_ptr<AnimationController> animation,
                            Route* previous_top_route) override;
 
-        /** @brief Manifests captured by the most recent didChangeTop() call -- no rects yet, see Stage 5. */
+        /** @brief Manifests captured by the most recent didChangeTop() call. */
         const std::vector<FlightManifest>& manifests() const noexcept { return manifests_; }
 
+        /** @brief Flights currently in progress (for introspection/tests). */
+        const std::vector<ActiveFlight>& activeFlights() const noexcept { return active_flights_; }
+
     private:
+        /**
+         * @brief Captures both endpoints' rects and starts a flight for each
+         * manifest entry -- called via a post-frame callback scheduled from
+         * didChangeTop(), once the destination route has actually painted.
+         */
+        void runFlights(std::shared_ptr<AnimationController> animation);
+
         std::vector<FlightManifest> manifests_;
+        std::vector<ActiveFlight>   active_flights_;
     };
 
 } // namespace systems::leal::campello_widgets
