@@ -73,6 +73,53 @@ private:
 };
 
 // ==========================================================================
+// NavigatorObserver  — notified of push/pop/replace events
+// ==========================================================================
+
+/**
+ * @brief Listener interface for Navigator push/pop/replace events.
+ *
+ * Every method is a no-op default (mirrors Flutter's own NavigatorObserver
+ * shape) -- register on Navigator::observers to be notified. With zero
+ * observers registered, NavigatorState's notification loops are no-ops by
+ * construction; every currently-working Navigator is unaffected.
+ *
+ * Unlike Flutter's real Route/ModalRoute, this codebase's Route does not
+ * own its own transition AnimationController -- that lives on
+ * NavigatorState's private RouteEntry instead. So, where Flutter's
+ * NavigatorObserver callbacks reach a route's animation through the route
+ * object itself, these pass the relevant AnimationController explicitly
+ * alongside the route pointer(s).
+ */
+class NavigatorObserver
+{
+public:
+    virtual ~NavigatorObserver() = default;
+
+    /** @brief Fires after `route` has been pushed onto the stack. */
+    virtual void didPush(Route* route, std::shared_ptr<AnimationController> animation, Route* previous_route) {}
+
+    /**
+     * @brief Fires immediately when a pop is requested -- before the exit
+     * animation completes, matching Flutter's real timing (a Hero flight
+     * needs to start in parallel with the exit transition, not after it).
+     */
+    virtual void didPop(Route* route, Route* previous_route) {}
+
+    /** @brief Fires after `old_route` has been replaced by `new_route`. */
+    virtual void didReplace(Route* new_route, std::shared_ptr<AnimationController> new_animation, Route* old_route) {}
+
+    /**
+     * @brief Fires whenever the top route changes -- the one hook a future
+     * HeroController actually needs (matches Flutter's real
+     * NavigatorObserver.didChangeTop()). `animation` is whichever route's
+     * own AnimationController is actively driving this transition (the
+     * pushed route's, on push; the popped route's, on pop).
+     */
+    virtual void didChangeTop(Route* top_route, std::shared_ptr<AnimationController> animation, Route* previous_top_route) {}
+};
+
+// ==========================================================================
 // NavigatorScope  — InheritedWidget that exposes NavigatorState*
 // ==========================================================================
 
@@ -116,6 +163,9 @@ class Navigator : public StatefulWidget
 public:
     /** @brief The first route shown when the Navigator is inserted into the tree. */
     std::shared_ptr<Route> initial_route;
+
+    /** @brief Notified of push/pop/replace events -- see NavigatorObserver. */
+    std::vector<std::shared_ptr<NavigatorObserver>> observers;
 
     std::unique_ptr<StateBase> createState() const override;
 

@@ -73,23 +73,52 @@ void NavigatorState::dispose()
 
 void NavigatorState::push(std::shared_ptr<Route> route)
 {
+    Route* previous_top = stack_.empty() ? nullptr : stack_.back().route.get();
+
     auto entry = makeEntry(std::move(route));
     entry.animation->forward(0.0); // animate from off-screen right to visible
+    Route* new_top = entry.route.get();
+    auto   anim    = entry.animation;
     stack_.push_back(std::move(entry));
     setState([]{});
+
+    for (auto& obs : widget().observers)
+    {
+        if (!obs) continue;
+        obs->didPush(new_top, anim, previous_top);
+        obs->didChangeTop(new_top, anim, previous_top);
+    }
 }
 
 void NavigatorState::pop()
 {
     if (stack_.size() <= 1) return;
 
-    auto& top   = stack_.back();
-    top.popping = true;
+    auto&  top    = stack_.back();
+    top.popping   = true;
+    Route* popped = top.route.get();
+    auto   anim   = top.animation;
     top.animation->reverse(); // slide back to the right
+
+    // Fire immediately, before the exit animation completes -- see
+    // NavigatorObserver::didPop()'s doc for why. The popped entry is still
+    // in stack_ (removed only once its animation finishes, in build()'s
+    // prune step), so the entry right below it is the route that will
+    // become visible once the pop completes.
+    Route* new_top = stack_[stack_.size() - 2].route.get();
+
+    for (auto& obs : widget().observers)
+    {
+        if (!obs) continue;
+        obs->didPop(popped, new_top);
+        obs->didChangeTop(new_top, anim, popped);
+    }
 }
 
 void NavigatorState::pushReplacement(std::shared_ptr<Route> route)
 {
+    Route* old_top = stack_.empty() ? nullptr : stack_.back().route.get();
+
     // Remove the current top immediately (no exit animation).
     if (!stack_.empty())
     {
@@ -101,8 +130,17 @@ void NavigatorState::pushReplacement(std::shared_ptr<Route> route)
 
     auto entry = makeEntry(std::move(route));
     entry.animation->forward(0.0);
+    Route* new_top = entry.route.get();
+    auto   anim    = entry.animation;
     stack_.push_back(std::move(entry));
     setState([]{});
+
+    for (auto& obs : widget().observers)
+    {
+        if (!obs) continue;
+        obs->didReplace(new_top, anim, old_top);
+        obs->didChangeTop(new_top, anim, old_top);
+    }
 }
 
 // --------------------------------------------------------------------------
