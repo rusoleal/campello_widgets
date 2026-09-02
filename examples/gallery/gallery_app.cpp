@@ -3532,8 +3532,17 @@ private:
         // Nav items wrapped in Expanded so the theme footer below them
         // (added via buildThemeFooter()) gets pushed to the bottom of the
         // sidebar rather than sitting right after the last nav item.
-        nav_col_children.push_back(cw::mw<cw::Expanded>(cw::mw<cw::Column>(
-            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch, nav_items)));
+        // Scrollable: on a short window (or once enough sections accumulate
+        // that the list no longer fits), a plain Column here just clips
+        // silently -- there's no way to reach whichever tabs land past the
+        // visible height. SingleChildScrollView measures the Column's real
+        // (unbounded) height and only engages scrolling once it actually
+        // overflows, so this is a no-op change whenever everything already
+        // fits.
+        auto nav_scroll = std::make_shared<cw::SingleChildScrollView>();
+        nav_scroll->child = cw::mw<cw::Column>(
+            cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch, nav_items);
+        nav_col_children.push_back(cw::mw<cw::Expanded>(nav_scroll));
         nav_col_children.push_back(buildThemeFooter(collapsed));
 
         auto nav_col = cw::mw<cw::Column>(
