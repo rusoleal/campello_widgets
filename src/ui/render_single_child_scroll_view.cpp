@@ -224,6 +224,13 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    float RenderSingleChildScrollView::applyExternalScrollDelta(float delta)
+    {
+        const float before = scrollOffset();
+        applyScrollDelta(delta, "external");
+        return scrollOffset() - before;
+    }
+
     // -------------------------------------------------------------------------
     // Input handling
     // -------------------------------------------------------------------------

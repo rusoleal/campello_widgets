@@ -87,3 +87,58 @@ TEST_F(ScrollViewFixture, SubSlopJitterDoesNotScrollEvenWhenUncontested)
     up.kind = cw::PointerEventKind::up;
     dispatcher->handlePointerEvent(up);
 }
+
+// ---------------------------------------------------------------------------
+// applyExternalScrollDelta() — the NestedScrollView Stage 3 primitive. A
+// thin wrapper around the same private applyScrollDelta() the pointer path
+// already uses, so these confirm the return value is genuinely
+// physics-derived (not an echo of the input) and that both the
+// controller-attached and internal_offset_ paths are reachable through it.
+// ---------------------------------------------------------------------------
+
+TEST_F(ScrollViewFixture, ApplyExternalScrollDeltaUpdatesAttachedController)
+{
+    // Fixture: 2000px child, 200px viewport -> max_extent_ 1800.
+    const float applied = sv.applyExternalScrollDelta(150.0f);
+    EXPECT_FLOAT_EQ(applied, 150.0f);
+    EXPECT_FLOAT_EQ(controller->offset(), 150.0f);
+}
+
+TEST_F(ScrollViewFixture, ApplyExternalScrollDeltaClampsAtBoundaryUnderClampingPhysics)
+{
+    const float applied = sv.applyExternalScrollDelta(5000.0f); // well past the 1800 boundary
+    EXPECT_FLOAT_EQ(applied, 1800.0f); // only the portion up to the boundary
+    EXPECT_FLOAT_EQ(controller->offset(), 1800.0f);
+}
+
+TEST(RenderSingleChildScrollView, ApplyExternalScrollDeltaInBoundsNoController)
+{
+    cw::RenderSingleChildScrollView sv;
+    sv.scroll_axis = cw::Axis::vertical;
+    auto child = std::make_shared<cw::RenderSizedBox>();
+    child->width  = 400.0f;
+    child->height = 2000.0f;
+    sv.setChild(child);
+    sv.layout(cw::BoxConstraints::tight(400.0f, 200.0f)); // max_extent_ 1800
+
+    const float applied = sv.applyExternalScrollDelta(100.0f);
+    EXPECT_FLOAT_EQ(applied, 100.0f);
+}
+
+TEST(RenderSingleChildScrollView, ApplyExternalScrollDeltaRubberBandsUnderBouncingPhysics)
+{
+    cw::RenderSingleChildScrollView sv;
+    sv.scroll_axis = cw::Axis::vertical;
+    sv.setPhysics(std::make_shared<cw::BouncingScrollPhysics>());
+    auto child = std::make_shared<cw::RenderSizedBox>();
+    child->width  = 400.0f;
+    child->height = 2000.0f;
+    sv.setChild(child);
+    sv.layout(cw::BoxConstraints::tight(400.0f, 200.0f)); // max_extent_ 1800
+
+    const float applied = sv.applyExternalScrollDelta(2000.0f); // 200px past the boundary
+    // Resistance-damped past the boundary -- neither the hard 1800 clamp
+    // from the ClampingScrollPhysics case above, nor the full, undamped 2000.
+    EXPECT_GT(applied, 1800.0f);
+    EXPECT_LT(applied, 2000.0f);
+}

@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/box_constraints.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
+#include <campello_widgets/ui/scroll_controller.hpp>
 #include <chrono>
 #include <thread>
 
@@ -452,4 +453,64 @@ TEST(RenderListView, NestedPerpendicularListViewInnerWinsArenaTie)
     outer.detach();
     inner.detach();
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// applyExternalScrollDelta() — the NestedScrollView Stage 3 primitive. A
+// thin wrapper around the same private applyScrollDelta() the pointer path
+// already uses, so these confirm the return value is genuinely
+// physics-derived (not an echo of the input) and that both the
+// controller-attached and internal_offset_ paths are reachable through it.
+// ---------------------------------------------------------------------------
+
+TEST(RenderListView, ApplyExternalScrollDeltaInBoundsNoController)
+{
+    cw::RenderListView lv;
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f); // content 1000, viewport 200 -> max_extent_ 800
+
+    const float applied = lv.applyExternalScrollDelta(100.0f);
+    EXPECT_FLOAT_EQ(applied, 100.0f);
+    EXPECT_EQ(lv.firstVisibleIndex(), 2); // 100 / 50
+}
+
+TEST(RenderListView, ApplyExternalScrollDeltaClampsAtBoundaryUnderClampingPhysics)
+{
+    cw::RenderListView lv;
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    doLayout(lv, 400.0f, 200.0f); // max_extent_ 800
+
+    const float applied = lv.applyExternalScrollDelta(1000.0f); // well past the 800 boundary
+    EXPECT_FLOAT_EQ(applied, 800.0f); // only the portion up to the boundary, not the full 1000
+}
+
+TEST(RenderListView, ApplyExternalScrollDeltaRubberBandsUnderBouncingPhysics)
+{
+    cw::RenderListView lv;
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    lv.setPhysics(std::make_shared<cw::BouncingScrollPhysics>());
+    doLayout(lv, 400.0f, 200.0f); // max_extent_ 800
+
+    const float applied = lv.applyExternalScrollDelta(1000.0f); // 200px past the boundary
+    // Resistance-damped past the boundary -- neither the hard 800 clamp from
+    // the ClampingScrollPhysics case above, nor the full, undamped 1000.
+    EXPECT_GT(applied, 800.0f);
+    EXPECT_LT(applied, 1000.0f);
+}
+
+TEST(RenderListView, ApplyExternalScrollDeltaUpdatesAttachedController)
+{
+    cw::RenderListView lv;
+    lv.item_count  = 20;
+    lv.item_extent = 50.0f;
+    auto controller = std::make_shared<cw::ScrollController>();
+    lv.setController(controller);
+    doLayout(lv, 400.0f, 200.0f);
+
+    const float applied = lv.applyExternalScrollDelta(150.0f);
+    EXPECT_FLOAT_EQ(applied, 150.0f);
+    EXPECT_FLOAT_EQ(controller->offset(), 150.0f);
 }

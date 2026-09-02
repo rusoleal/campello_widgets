@@ -301,6 +301,13 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    float RenderViewport::applyExternalScrollDelta(float delta)
+    {
+        const float before = scrollOffset();
+        applyScrollDelta(delta, "external");
+        return scrollOffset() - before;
+    }
+
     // -------------------------------------------------------------------------
     // Input handling -- field-for-field mirrors RenderListView::onPointerEvent()
     // -------------------------------------------------------------------------

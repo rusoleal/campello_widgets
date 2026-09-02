@@ -610,3 +610,77 @@ TEST(RenderViewport, NoPinnedHeadersLeavesClipFloorAndObstructionFlagsAtDefault)
     EXPECT_FLOAT_EQ(vp.layoutOffsetAt(0), 0.0f);
     EXPECT_FLOAT_EQ(vp.layoutOffsetAt(1), 100.0f);
 }
+
+// ---------------------------------------------------------------------------
+// 7. applyExternalScrollDelta() — the NestedScrollView Stage 3 primitive. A
+// thin wrapper around the same private applyScrollDelta() the pointer path
+// already uses (RenderViewport's own calls markNeedsLayout(), not
+// markNeedsPaint(), unlike RenderListView/RenderSingleChildScrollView --
+// deliberate and unchanged by this wrapper), so these confirm the return
+// value is genuinely physics-derived and that both the controller-attached
+// and internal_offset_ paths are reachable through it.
+// ---------------------------------------------------------------------------
+
+TEST(RenderViewport, ApplyExternalScrollDeltaInBoundsWithController)
+{
+    cw::RenderViewport vp;
+    vp.insertChild(std::make_shared<ViewportTestSliver>(1000.0f), 0);
+
+    auto controller = std::make_shared<cw::ScrollController>();
+    vp.setController(controller);
+
+    doLayout(vp, 400.0f, 200.0f); // content 1000, viewport 200 -> max_extent_ 800
+
+    const float applied = vp.applyExternalScrollDelta(150.0f);
+    EXPECT_FLOAT_EQ(applied, 150.0f);
+    EXPECT_FLOAT_EQ(controller->offset(), 150.0f);
+}
+
+TEST(RenderViewport, ApplyExternalScrollDeltaClampsAtBoundaryUnderClampingPhysics)
+{
+    cw::RenderViewport vp;
+    vp.insertChild(std::make_shared<ViewportTestSliver>(1000.0f), 0);
+
+    auto controller = std::make_shared<cw::ScrollController>();
+    vp.setController(controller);
+
+    doLayout(vp, 400.0f, 200.0f); // max_extent_ 800
+
+    const float applied = vp.applyExternalScrollDelta(2000.0f); // well past the 800 boundary
+    EXPECT_FLOAT_EQ(applied, 800.0f); // only the portion up to the boundary
+    EXPECT_FLOAT_EQ(controller->offset(), 800.0f);
+}
+
+TEST(RenderViewport, ApplyExternalScrollDeltaRubberBandsUnderBouncingPhysics)
+{
+    // Deliberately no ScrollController here (unlike the two cases above) --
+    // ScrollController::setOffset() (scroll_controller.cpp) hard-clamps to
+    // [min,max] on every jumpTo(), independent of physics, so a
+    // controller-attached scrollOffset() can never surface rubber-banded
+    // overscroll (that's what the separate raw-offset/notifyOverscroll()
+    // channel is for). The internal_offset_ path below stores whatever
+    // physics computes directly, with no further clamping, so it's the one
+    // that actually demonstrates this method delegating to physics.
+    cw::RenderViewport vp;
+    vp.physics = std::make_shared<cw::BouncingScrollPhysics>();
+    vp.insertChild(std::make_shared<ViewportTestSliver>(1000.0f), 0);
+
+    doLayout(vp, 400.0f, 200.0f); // max_extent_ 800
+
+    const float applied = vp.applyExternalScrollDelta(1000.0f); // 200px past the boundary
+    // Resistance-damped past the boundary -- neither the hard 800 clamp
+    // from the ClampingScrollPhysics case above, nor the full, undamped 1000.
+    EXPECT_GT(applied, 800.0f);
+    EXPECT_LT(applied, 1000.0f);
+}
+
+TEST(RenderViewport, ApplyExternalScrollDeltaWorksWithoutController)
+{
+    cw::RenderViewport vp;
+    vp.insertChild(std::make_shared<ViewportTestSliver>(1000.0f), 0);
+
+    doLayout(vp, 400.0f, 200.0f); // no controller -> internal_offset_ path
+
+    const float applied = vp.applyExternalScrollDelta(100.0f);
+    EXPECT_FLOAT_EQ(applied, 100.0f);
+}

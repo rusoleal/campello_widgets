@@ -57,6 +57,21 @@ namespace systems::leal::campello_widgets
         /** @brief Replaces the active scroll physics (defaults to ClampingScrollPhysics). */
         void setPhysics(std::shared_ptr<ScrollPhysics> physics);
 
+        /**
+         * @brief Applies a scroll delta from an external coordinator (a future
+         * NestedScrollView), through this view's own physics, exactly as if it
+         * came from this view's own pointer/wheel input -- but without touching
+         * this view's own gesture/velocity state, since the delta already came
+         * from somewhere else's gesture.
+         *
+         * @return The amount actually absorbed (post-physics) -- may be less than
+         * `delta` at a hard clamping boundary, or the delta minus rubber-band
+         * resistance under bouncing physics. Never assume it equals `delta`; a
+         * coordinator uses the difference to redistribute the remainder to
+         * another position.
+         */
+        float applyExternalScrollDelta(float delta);
+
         void performLayout() override;
         void performPaint(PaintContext& context, const Offset& offset) override;
         void paint(PaintContext& context, const Offset& offset) override;

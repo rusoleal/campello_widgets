@@ -306,6 +306,13 @@ namespace systems::leal::campello_widgets
         checkVisibleRangeChanged();
     }
 
+    float RenderListView::applyExternalScrollDelta(float delta)
+    {
+        const float before = scrollOffset();
+        applyScrollDelta(delta, "external");
+        return scrollOffset() - before;
+    }
+
     void RenderListView::checkVisibleRangeChanged()
     {
         const int first = firstVisibleIndex();
