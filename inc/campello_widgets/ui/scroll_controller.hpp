@@ -5,11 +5,10 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <campello_widgets/ui/animation_controller.hpp>
 
 namespace systems::leal::campello_widgets
 {
-
-    class AnimationController;
 
     /**
      * @brief Controls the scroll offset of a scrollable widget.

@@ -170,6 +170,21 @@ namespace systems::leal::campello_widgets
         RenderObjectElement* findDescendantRenderObjectElement() noexcept;
 
         /**
+         * @brief Visits every descendant of `root` (not `root` itself),
+         * recursively, via `visitChildren()` -- correctly walks across
+         * multi-child boundaries since it's built entirely on that existing,
+         * already-overridden-per-type virtual (MultiChildRenderObjectElement,
+         * CustomScrollViewElement, NestedScrollViewElement, StackElement, ...
+         * each already override it correctly; every single-child element
+         * gets the base class's own default via firstChildElement()).
+         *
+         * Mirrors Flutter's real `context.visitChildElements()` walk (used
+         * by e.g. Hero's own tag-matching mechanism) in excluding `root`
+         * itself -- only descendants are visited.
+         */
+        static void visitAllDescendants(Element* root, const std::function<void(Element*)>& visitor);
+
+        /**
          * @brief Called when a descendant element has replaced its child with a
          *        different widget type, potentially producing a new RenderObject.
          *

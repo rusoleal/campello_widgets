@@ -155,6 +155,7 @@
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/render_focus.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
+#include <campello_widgets/widgets/hero.hpp>
 #include <campello_widgets/widgets/focus.hpp>
 #include <campello_widgets/widgets/focus_traversal_group.hpp>
 #include <campello_widgets/widgets/keyboard_listener.hpp>

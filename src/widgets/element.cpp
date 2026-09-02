@@ -173,6 +173,16 @@ namespace systems::leal::campello_widgets
         return child ? child->findDescendantRenderObjectElement() : nullptr;
     }
 
+    void Element::visitAllDescendants(Element* root, const std::function<void(Element*)>& visitor)
+    {
+        if (!root) return;
+        root->visitChildren([&](Element* child)
+        {
+            visitor(child);
+            visitAllDescendants(child, visitor);
+        });
+    }
+
     std::shared_ptr<Element> Element::updateChild(
         std::shared_ptr<Element> child,
         WidgetRef                new_widget,
