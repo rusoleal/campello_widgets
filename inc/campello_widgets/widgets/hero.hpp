@@ -56,10 +56,17 @@ namespace systems::leal::campello_widgets
      * transition, then runs the flight -- Stage 5 (final) of the Hero widget
      * initiative. Register on Navigator::observers.
      *
-     * Rect capture and the flight itself are deferred to a post-frame
-     * callback (`PostFrameCallbacks::schedule()`), since
-     * `RenderHero::globalRect()` is only valid once the destination route
-     * has actually painted -- see `runFlights()`.
+     * Manifest-building itself, not just rect capture, is deferred to a
+     * post-frame callback (`PostFrameCallbacks::schedule()`): `push()`/
+     * `pop()` only *schedule* a rebuild (`setState()` ->
+     * `Element::markNeedsBuild()`, which just marks the Navigator's element
+     * dirty in real apps -- only test environments rebuild synchronously,
+     * see `markNeedsBuild()`'s own doc comment). So at the moment
+     * `didChangeTop()` fires, the destination route's Elements genuinely
+     * don't exist in the tree yet; `elementForRoute()` would return nullptr
+     * if called synchronously here, silently producing an empty manifest
+     * and no flight, ever -- mirrors why Flutter's own real HeroController
+     * defers its Hero discovery the same way.
      */
     class HeroController : public NavigatorObserver
     {
@@ -96,10 +103,15 @@ namespace systems::leal::campello_widgets
 
     private:
         /**
-         * @brief Captures both endpoints' rects and starts a flight for each
-         * manifest entry -- called via a post-frame callback scheduled from
-         * didChangeTop(), once the destination route has actually painted.
+         * @brief Builds the matched-pair manifest for one transition, then
+         * runs a flight for each entry -- the post-frame callback body
+         * scheduled from didChangeTop(), once the destination route has
+         * actually been built, laid out, and painted.
          */
+        void buildManifestsAndFly(Route* top_route, Route* previous_top_route,
+                                   std::shared_ptr<AnimationController> animation);
+
+        /** @brief Captures both endpoints' rects and starts a flight for each manifest entry. */
         void runFlights(std::shared_ptr<AnimationController> animation);
 
         std::vector<FlightManifest> manifests_;

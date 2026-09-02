@@ -28,8 +28,18 @@ namespace systems::leal::campello_widgets
     void HeroController::didChangeTop(
         Route* top_route, std::shared_ptr<AnimationController> animation, Route* previous_top_route)
     {
+        if (!navigator() || !top_route || !previous_top_route || !animation) return;
+
+        PostFrameCallbacks::schedule([this, top_route, previous_top_route, animation]() {
+            buildManifestsAndFly(top_route, previous_top_route, animation);
+        });
+    }
+
+    void HeroController::buildManifestsAndFly(
+        Route* top_route, Route* previous_top_route, std::shared_ptr<AnimationController> animation)
+    {
         manifests_.clear();
-        if (!navigator() || !top_route || !previous_top_route) return;
+        if (!navigator()) return;
 
         Element* to_layer   = navigator()->elementForRoute(top_route);
         Element* from_layer = navigator()->elementForRoute(previous_top_route);
@@ -45,8 +55,8 @@ namespace systems::leal::campello_widgets
             manifests_.push_back(FlightManifest{tag, from_element, it->second});
         }
 
-        if (!manifests_.empty() && animation)
-            PostFrameCallbacks::schedule([this, animation]() { runFlights(animation); });
+        if (!manifests_.empty())
+            runFlights(animation);
     }
 
     void HeroController::runFlights(std::shared_ptr<AnimationController> animation)
@@ -71,15 +81,29 @@ namespace systems::leal::campello_widgets
             auto* to_hero   = dynamic_cast<RenderHero*>(to_re->renderObject());
             if (!from_hero || !to_hero) continue;
 
-            const Rect from_rect = from_hero->globalRect();
-            const Rect to_rect   = to_hero->globalRect();
             from_hero->setHidden(true);
             to_hero->setHidden(true);
 
-            const Tween<Rect> tween = reversed ? Tween<Rect>{to_rect, from_rect}
-                                                : Tween<Rect>{from_rect, to_rect};
+            // Re-read both endpoints' rects on every tick rather than
+            // freezing them once at flight start. globalRect() is a plain
+            // field read (RenderHero::performPaint() keeps it current every
+            // frame regardless of hidden_, since only the child's own paint
+            // is skipped) -- essentially free. This matters because the
+            // pushed/popped route's own SlideTransition keeps moving its
+            // content throughout the whole transition: capturing its Hero's
+            // rect once, at the very start, would target wherever it
+            // happened to be at that instant (e.g. still fully off-screen
+            // for a push, t=0) instead of where it's actually heading.
+            // Re-measuring lets the tween's moving endpoint track the
+            // route's own transition and converge on the real resting rect.
+            auto evaluateShuttleRect = [reversed](RenderHero& f, RenderHero& t, AnimationController& anim) {
+                const Tween<Rect> tween = reversed ? Tween<Rect>{t.globalRect(), f.globalRect()}
+                                                    : Tween<Rect>{f.globalRect(), t.globalRect()};
+                return tween.evaluate(anim);
+            };
 
-            auto notifier = std::make_shared<ValueNotifier<Rect>>(tween.evaluate(*animation));
+            auto notifier = std::make_shared<ValueNotifier<Rect>>(
+                evaluateShuttleRect(*from_hero, *to_hero, *animation));
             auto vlb = std::make_shared<ValueListenableBuilder<Rect>>();
             vlb->valueListenable = notifier;
 
@@ -99,8 +123,8 @@ namespace systems::leal::campello_widgets
 
             auto listener_id = std::make_shared<uint64_t>(0);
             *listener_id = animation->addListener(
-                [animation, tween, notifier, entry, to_hero, listener_id]() {
-                    notifier->setValue(tween.evaluate(*animation));
+                [animation, evaluateShuttleRect, notifier, entry, from_hero, to_hero, listener_id]() {
+                    notifier->setValue(evaluateShuttleRect(*from_hero, *to_hero, *animation));
                     if (animation->status() == AnimationStatus::completed ||
                         animation->status() == AnimationStatus::dismissed)
                     {

@@ -363,6 +363,13 @@ TEST(HeroController, DidChangeTopBuildsIsolatedMatchedPairManifestOnPush)
     });
     state->push(route_b);
 
+    // Manifest-building itself is deferred to the post-frame callback now
+    // (didChangeTop() can't resolve elementForRoute() synchronously in real
+    // apps -- see HeroController::didChangeTop()'s doc comment).
+    EXPECT_TRUE(controller->manifests().empty());
+
+    cw::PostFrameCallbacks::runPending();
+
     const auto& manifests = controller->manifests();
     ASSERT_EQ(manifests.size(), 1u);
     EXPECT_EQ(manifests[0].tag, "shared");
@@ -375,14 +382,6 @@ TEST(HeroController, DidChangeTopBuildsIsolatedMatchedPairManifestOnPush)
     EXPECT_NE(manifests[0].from_element, manifests[0].to_element);
     EXPECT_EQ(static_cast<const cw::Hero&>(manifests[0].from_element->widget()).tag, "shared");
     EXPECT_EQ(static_cast<const cw::Hero&>(manifests[0].to_element->widget()).tag, "shared");
-
-    // Stage 5: didChangeTop() with a non-empty manifest schedules a
-    // PostFrameCallbacks::schedule() call capturing `controller` (a raw
-    // `this`). Drain it here, while `controller` is still alive, so it
-    // doesn't sit pending in the global queue past this test's own scope --
-    // otherwise a *later* test's runPending() call would fire it against a
-    // dangling HeroController*.
-    cw::PostFrameCallbacks::runPending();
 
     root->unmount();
 }
@@ -410,6 +409,7 @@ TEST(HeroController, DidChangeTopProducesEmptyManifestWhenNoTagsOverlap)
         return makeTaggedHero("b", 30.0f);
     });
     state->push(route_b);
+    cw::PostFrameCallbacks::runPending();
 
     EXPECT_TRUE(controller->manifests().empty());
 
@@ -439,12 +439,17 @@ TEST(HeroController, DidChangeTopBuildsFreshReversedManifestOnPop)
         return makeTaggedHero("shared", 30.0f);
     });
     state->push(route_b);
+    cw::PostFrameCallbacks::runPending(); // builds the push's manifest and starts its flight
 
     ASSERT_EQ(controller->manifests().size(), 1u);
     cw::Element* push_from = controller->manifests()[0].from_element;
     cw::Element* push_to   = controller->manifests()[0].to_element;
 
     state->pop();
+
+    // Deferred here too -- didChangeTop() always schedules, never builds
+    // synchronously (see its doc comment).
+    cw::PostFrameCallbacks::runPending();
 
     const auto& pop_manifests = controller->manifests();
     ASSERT_EQ(pop_manifests.size(), 1u);
@@ -454,11 +459,6 @@ TEST(HeroController, DidChangeTopBuildsFreshReversedManifestOnPop)
     // from/to must swap too, not just repeat the push's own manifest.
     EXPECT_EQ(pop_manifests[0].from_element, push_to);
     EXPECT_EQ(pop_manifests[0].to_element, push_from);
-
-    // Drain both the push's and the pop's scheduled post-frame callbacks
-    // (Stage 5) while `controller` is still alive -- see the matching
-    // comment in DidChangeTopBuildsIsolatedMatchedPairManifestOnPush above.
-    cw::PostFrameCallbacks::runPending();
 
     root->unmount();
 }
@@ -491,6 +491,7 @@ TEST(HeroController, DidChangeTopStaysEmptyWhenPreviousRouteElementIsGone)
         return makeTaggedHero("shared", 30.0f);
     });
     EXPECT_NO_THROW(state->push(route_b));
+    EXPECT_NO_THROW(cw::PostFrameCallbacks::runPending());
 
     EXPECT_TRUE(controller->manifests().empty());
 
@@ -586,6 +587,22 @@ TEST_F(HeroFlightFixture, PushStartsAFlightThatEndsHidingSourceAndRevealingDesti
     });
     state->push(route_b); // synchronous rebuild in test environments -- see Element::markNeedsBuild()
 
+    // Re-layout/paint so BOTH routes' Heroes (now simultaneously built --
+    // route_b is non-opaque) get real global rects captured this "frame",
+    // mirroring what Renderer::buildFrame()'s layoutPass()/generateDrawList()
+    // does before its own PostFrameCallbacks::runPending() call.
+    root_box->layout(cw::BoxConstraints::tight(400.0f, 400.0f));
+    cw::PaintContext ctx2(400.0f, 400.0f);
+    root_box->paint(ctx2, cw::Offset::zero());
+
+    // Nothing has run yet -- manifest-building itself, not just the flight,
+    // is deferred to the post-frame callback (didChangeTop() can't resolve
+    // elementForRoute() synchronously in real apps -- see its doc comment).
+    EXPECT_TRUE(controller->manifests().empty());
+    EXPECT_TRUE(controller->activeFlights().empty());
+
+    cw::PostFrameCallbacks::runPending();
+
     ASSERT_EQ(controller->manifests().size(), 1u);
     cw::Element* push_from = controller->manifests()[0].from_element;
     cw::Element* push_to   = controller->manifests()[0].to_element;
@@ -593,23 +610,10 @@ TEST_F(HeroFlightFixture, PushStartsAFlightThatEndsHidingSourceAndRevealingDesti
     auto* to_hero   = dynamic_cast<cw::RenderHero*>(push_to->nearestRenderObjectElement()->renderObject());
     ASSERT_NE(from_hero, nullptr);
     ASSERT_NE(to_hero, nullptr);
-
-    // Re-layout/paint so BOTH routes' Heroes (now simultaneously built --
-    // route_b is non-opaque) get real global rects captured this "frame",
-    // mirroring what Renderer::buildFrame()'s layoutPass()/generateDrawList()
-    // would do before its own PostFrameCallbacks::runPending() call.
-    root_box->layout(cw::BoxConstraints::tight(400.0f, 400.0f));
-    cw::PaintContext ctx2(400.0f, 400.0f);
-    root_box->paint(ctx2, cw::Offset::zero());
+    // global_rect_ was captured during the paint pass above, before this
+    // runPending() call ran runFlights() -- reading it now (after) still
+    // reflects that same captured value, since nothing has repainted since.
     const cw::Rect expected_from_rect = from_hero->globalRect();
-
-    // Flight hasn't started yet -- runFlights() only runs via the deferred
-    // post-frame callback, not synchronously from didChangeTop()/push().
-    EXPECT_TRUE(controller->activeFlights().empty());
-    EXPECT_FALSE(from_hero->hidden());
-    EXPECT_FALSE(to_hero->hidden());
-
-    cw::PostFrameCallbacks::runPending();
 
     ASSERT_EQ(controller->activeFlights().size(), 1u);
     const auto& flight = controller->activeFlights()[0];
@@ -667,11 +671,21 @@ TEST_F(HeroFlightFixture, PopStartsAReversedFlight)
     root_box->layout(cw::BoxConstraints::tight(400.0f, 400.0f));
     cw::PaintContext setup_ctx2(400.0f, 400.0f);
     root_box->paint(setup_ctx2, cw::Offset::zero());
-    // Drain the push's own post-frame flight so pop() below starts cleanly.
+    // Build the push's manifest and drain its post-frame flight so pop()
+    // below starts cleanly.
     cw::PostFrameCallbacks::runPending();
     pumpAnimation(300.0);
 
     state->pop();
+    root_box->layout(cw::BoxConstraints::tight(400.0f, 400.0f));
+    cw::PaintContext pop_ctx(400.0f, 400.0f);
+    root_box->paint(pop_ctx, cw::Offset::zero());
+
+    // manifests_ still holds the push's manifest here (clear() itself is
+    // now also deferred, inside buildManifestsAndFly()) -- only after this
+    // runPending() call does it get cleared and rebuilt for the pop.
+    cw::PostFrameCallbacks::runPending();
+
     ASSERT_EQ(controller->manifests().size(), 1u);
     cw::Element* pop_from = controller->manifests()[0].from_element; // route_b's hero
     cw::Element* pop_to   = controller->manifests()[0].to_element;   // route_a's hero
@@ -679,13 +693,9 @@ TEST_F(HeroFlightFixture, PopStartsAReversedFlight)
     auto* to_hero   = dynamic_cast<cw::RenderHero*>(pop_to->nearestRenderObjectElement()->renderObject());
     ASSERT_NE(from_hero, nullptr);
     ASSERT_NE(to_hero, nullptr);
-
-    root_box->layout(cw::BoxConstraints::tight(400.0f, 400.0f));
-    cw::PaintContext pop_ctx(400.0f, 400.0f);
-    root_box->paint(pop_ctx, cw::Offset::zero());
+    // global_rect_ reflects the paint pass above (before this runPending()
+    // call ran runFlights()) -- unchanged by runFlights() itself.
     const cw::Rect expected_from_rect = from_hero->globalRect();
-
-    cw::PostFrameCallbacks::runPending();
 
     // active_flights_ also still holds the (already-completed) push flight
     // from earlier in this test -- HeroController never prunes it (see its
