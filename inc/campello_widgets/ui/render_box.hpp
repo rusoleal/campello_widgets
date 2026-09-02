@@ -5,6 +5,8 @@
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/hit_test.hpp>
 #include <campello_widgets/ui/text_baseline.hpp>
+#include <campello_widgets/ui/rect.hpp>
+#include <campello_widgets/ui/dirty_region.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -154,6 +156,30 @@ namespace systems::leal::campello_widgets
         virtual void visitRenderChildren(const std::function<void(RenderBox*)>& visitor) const;
 
     protected:
+
+        /**
+         * @brief Computes this box's true on-screen rect as of the current paint
+         * pass -- accounting for the safe-area paint-origin inset
+         * (RenderObject::activePaintOriginOffset()) and any ambient canvas
+         * transform (e.g. a scrolled ancestor's canvas.translate(), independent
+         * of `offset` and only applied at paint time). Call from performPaint()
+         * with the same context/offset it received, and store the result into
+         * your own field if needed outside the paint pass -- this is not cached.
+         *
+         * The shared recipe RenderFocus/RenderGestureDetector each independently
+         * implemented before this existed. Note RenderDraggable's own
+         * global-offset tracking deliberately does NOT use this -- it only
+         * subtracts the paint-origin inset, skipping the ambient-transform
+         * projection below, a real pre-existing divergence left as-is here.
+         */
+        Rect computeGlobalRect(PaintContext& context, const Offset& offset) const noexcept
+        {
+            const Offset paint_origin = RenderObject::activePaintOriginOffset();
+            const Rect   local_bounds = Rect::fromLTWH(
+                offset.x - paint_origin.x, offset.y - paint_origin.y,
+                size_.width, size_.height);
+            return projectedBounds(context.canvas().currentTransform(), local_bounds);
+        }
 
     protected:
         std::shared_ptr<RenderBox> child_;

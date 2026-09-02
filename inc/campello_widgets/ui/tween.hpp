@@ -5,6 +5,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/size.hpp>
+#include <campello_widgets/ui/rect.hpp>
 
 namespace systems::leal::campello_widgets
 {
@@ -61,6 +62,16 @@ namespace systems::leal::campello_widgets
                 a.height + static_cast<float>((b.height - a.height) * t)};
     }
 
+    template<>
+    inline Rect lerp(const Rect& a, const Rect& b, double t)
+    {
+        return Rect::fromLTWH(
+            a.x      + static_cast<float>((b.x      - a.x)      * t),
+            a.y      + static_cast<float>((b.y      - a.y)      * t),
+            a.width  + static_cast<float>((b.width  - a.width)  * t),
+            a.height + static_cast<float>((b.height - a.height) * t));
+    }
+
     // ------------------------------------------------------------------
     // Tween<T>
     // ------------------------------------------------------------------
@@ -69,7 +80,7 @@ namespace systems::leal::campello_widgets
      * @brief Interpolates between two values of type T.
      *
      * Uses `lerp<T>` under the hood. Specializations exist for float, double,
-     * Color, Offset, and Size.
+     * Color, Offset, Alignment, Size, and Rect.
      *
      * @code
      * Tween<Color> t{Color::blue(), Color::red()};

@@ -1,6 +1,5 @@
 #include <campello_widgets/ui/render_gesture_detector.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
-#include <campello_widgets/ui/dirty_region.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 
 #include <cassert>
@@ -339,25 +338,16 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::performPaint(PaintContext& ctx, const Offset& offset)
     {
-        // Convert to tree-local space (subtract the safe-area inset baked
-        // into `offset` — see RenderObject::setActivePaintOriginOffset's doc
-        // comment). globalOffset() feeds anchor positioning for overlays
-        // (e.g. DropdownButton's/PopupMenuButton's menu, via Positioned)
-        // that live in the Overlay's own top-level coordinate space, not
-        // this node's tree-local one — leaving this un-projected would
-        // offset anchored overlays by the safe-area inset whenever it's
-        // non-zero (any iPhone), AND — see projectedBounds()'s doc — by
-        // any ambient Canvas transform currently active (critically, a
-        // scrolled ancestor's `canvas.translate()`, which is independent of
-        // `offset` and only applied at paint time): an anchor button inside
-        // a SingleChildScrollView reports its pre-scroll logical position
-        // without this, so its menu opens shifted by however far the list
-        // has scrolled.
-        const Offset paint_origin = RenderObject::activePaintOriginOffset();
-        const Rect   local_bounds = Rect::fromLTWH(
-            offset.x - paint_origin.x, offset.y - paint_origin.y,
-            size_.width, size_.height);
-        const Rect projected = projectedBounds(ctx.canvas().currentTransform(), local_bounds);
+        // globalOffset() feeds anchor positioning for overlays (e.g.
+        // DropdownButton's/PopupMenuButton's menu, via Positioned) that live
+        // in the Overlay's own top-level coordinate space, not this node's
+        // tree-local one — see RenderBox::computeGlobalRect()'s doc comment
+        // for why both the safe-area inset and any ambient canvas transform
+        // (critically, a scrolled ancestor's `canvas.translate()`) must be
+        // accounted for: an anchor button inside a SingleChildScrollView
+        // would otherwise report its pre-scroll logical position, opening
+        // its menu shifted by however far the list has scrolled.
+        const Rect projected = computeGlobalRect(ctx, offset);
         global_offset_ = { projected.x, projected.y };
         // Feeds FocusManager::moveFocusDirectional()'s D-pad/TV navigation
         // — see FocusNode::bounds()'s doc comment.

@@ -306,3 +306,31 @@ TEST(TweenAnimationBuilder, FloatTweenEvaluatesLinearly)
     EXPECT_FLOAT_EQ(t.evaluate(0.5), 50.0f);
     EXPECT_FLOAT_EQ(t.evaluate(1.0), 100.0f);
 }
+
+// Hero widget, Stage 1: Tween<Rect>/lerp<Rect> -- interpolates all four
+// fields independently, same shape as Tween<Size>'s own width/height lerp.
+TEST(Tween, RectTweenEvaluatesEachFieldLinearly)
+{
+    cw::Tween<cw::Rect> t{
+        cw::Rect::fromLTWH(0.0f, 0.0f, 20.0f, 20.0f),
+        cw::Rect::fromLTWH(100.0f, 50.0f, 60.0f, 40.0f),
+    };
+
+    const cw::Rect at0 = t.evaluate(0.0);
+    EXPECT_FLOAT_EQ(at0.x, 0.0f);
+    EXPECT_FLOAT_EQ(at0.y, 0.0f);
+    EXPECT_FLOAT_EQ(at0.width, 20.0f);
+    EXPECT_FLOAT_EQ(at0.height, 20.0f);
+
+    const cw::Rect at1 = t.evaluate(1.0);
+    EXPECT_FLOAT_EQ(at1.x, 100.0f);
+    EXPECT_FLOAT_EQ(at1.y, 50.0f);
+    EXPECT_FLOAT_EQ(at1.width, 60.0f);
+    EXPECT_FLOAT_EQ(at1.height, 40.0f);
+
+    const cw::Rect mid = t.evaluate(0.5);
+    EXPECT_FLOAT_EQ(mid.x, 50.0f);
+    EXPECT_FLOAT_EQ(mid.y, 25.0f);
+    EXPECT_FLOAT_EQ(mid.width, 40.0f);
+    EXPECT_FLOAT_EQ(mid.height, 30.0f);
+}

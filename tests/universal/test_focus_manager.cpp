@@ -433,6 +433,52 @@ TEST(FocusManager, NestedScopeRestoresToOuterScopeNotRoot)
 }
 
 // -----------------------------------------------------------------------
+// RenderBox::computeGlobalRect() -- exercised here via RenderFocus's own
+// performPaint(), the only production call site test_focus_manager.cpp
+// already has a real RenderBox for. Regression coverage for the Hero
+// Stage 1 consolidation: RenderFocus/RenderGestureDetector both migrated
+// to share this helper instead of duplicating the math -- this test
+// proves the *shared* helper correctly accounts for BOTH the safe-area
+// paint-origin inset AND a real ambient canvas transform together, a
+// combination `paintAt()`'s own simple no-transform/no-inset usage above
+// never exercises.
+// -----------------------------------------------------------------------
+
+TEST(RenderBox, ComputeGlobalRectAccountsForPaintOriginAndAmbientTransform)
+{
+    cw::RenderFocus box;
+    box.focus_node = std::make_shared<cw::FocusNode>();
+    box.layout(cw::BoxConstraints::tight(10.0f, 10.0f));
+
+    cw::PaintContext ctx(800.0f, 800.0f);
+
+    // Simulate a device with a safe-area inset (e.g. an iPhone's status
+    // bar/Dynamic Island) plus a scrolled ancestor's own ambient canvas
+    // transform -- both independent, additive mechanisms per
+    // RenderObject::setActivePaintOriginOffset()'s and projectedBounds()'s
+    // own doc comments. Restored to zero/identity afterward so this test
+    // can't leak state into any other test via the shared static.
+    cw::RenderObject::setActivePaintOriginOffset({20.0f, 5.0f});
+    ctx.canvas().save();
+    ctx.canvas().translate(0.0f, -700.0f);
+
+    // offset is the box's logical (pre-scroll) position, safe-area inset
+    // already baked in by whatever ancestor positioned it.
+    box.paint(ctx, cw::Offset{50.0f, 1200.0f});
+
+    ctx.canvas().restore();
+    cw::RenderObject::setActivePaintOriginOffset({0.0f, 0.0f});
+
+    const cw::Rect bounds = box.focus_node->bounds();
+    // local_bounds = offset - paint_origin = (50-20, 1200-5) = (30, 1195), 10x10.
+    // Projected through translate(0, -700): x unchanged, y = 1195 - 700 = 495.
+    EXPECT_FLOAT_EQ(bounds.x, 30.0f);
+    EXPECT_FLOAT_EQ(bounds.y, 495.0f);
+    EXPECT_FLOAT_EQ(bounds.width, 10.0f);
+    EXPECT_FLOAT_EQ(bounds.height, 10.0f);
+}
+
+// -----------------------------------------------------------------------
 // Traversal policies
 // -----------------------------------------------------------------------
 

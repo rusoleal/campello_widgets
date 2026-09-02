@@ -1,6 +1,5 @@
 #include <campello_widgets/ui/render_focus.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
-#include <campello_widgets/ui/dirty_region.hpp>
 #include <cstdio>
 
 namespace systems::leal::campello_widgets
@@ -35,20 +34,14 @@ namespace systems::leal::campello_widgets
 
     void RenderFocus::performPaint(PaintContext& context, const Offset& offset)
     {
+        // Same projection RenderGestureDetector::performPaint() uses for its
+        // globalOffset() (see RenderBox::computeGlobalRect()'s doc comment) —
+        // accounts for the safe-area inset and any ambient canvas transform
+        // (e.g. a scrolled ancestor), so directional focus navigation
+        // compares nodes in one consistent coordinate space regardless of
+        // where in the tree they live.
         if (focus_node)
-        {
-            // Same projection RenderGestureDetector::performPaint() uses for
-            // its globalOffset() (see that doc comment) — accounts for the
-            // safe-area inset baked into `offset` and any ambient canvas
-            // transform (e.g. a scrolled ancestor), so directional focus
-            // navigation compares nodes in one consistent coordinate space
-            // regardless of where in the tree they live.
-            const Offset paint_origin = RenderObject::activePaintOriginOffset();
-            const Rect   local_bounds = Rect::fromLTWH(
-                offset.x - paint_origin.x, offset.y - paint_origin.y,
-                size_.width, size_.height);
-            focus_node->bounds_ = projectedBounds(context.canvas().currentTransform(), local_bounds);
-        }
+            focus_node->bounds_ = computeGlobalRect(context, offset);
 
         if (child_) paintChild(context, offset);
     }
