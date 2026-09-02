@@ -1047,6 +1047,185 @@ public:
 };
 
 // ---------------------------------------------------------------------------
+// 4e. HERO — Navigator + Hero/HeroController: tap a color tile to fly it
+// into a detail route via a shared Hero tag (Hero widget initiative,
+// Stages 1-5).
+// ---------------------------------------------------------------------------
+struct HeroDemoItem { std::string tag; std::string title; cw::Color color; };
+
+static const std::vector<HeroDemoItem>& heroDemoItems()
+{
+    static const std::vector<HeroDemoItem> items = {
+        {"hero-0", "Azure",  kBlue},
+        {"hero-1", "Meadow", kGreen},
+        {"hero-2", "Amber",  kOrange},
+        {"hero-3", "Orchid", kPurple},
+        {"hero-4", "Lagoon", kTeal},
+        {"hero-5", "Ember",  kRed},
+    };
+    return items;
+}
+
+// PageRoute::build(ctx) runs with the Navigator's own context, BEFORE the
+// returned content is wrapped in NavigatorScope and mounted as a true
+// descendant -- so Navigator::of(ctx) called directly inside a route
+// builder always returns nullptr. Route content must instead be a widget
+// whose OWN build() (run once mounted under NavigatorScope) resolves it.
+class HeroRouteContent : public cw::StatelessWidget
+{
+public:
+    std::function<cw::WidgetRef(cw::BuildContext&, cw::NavigatorState*)> content_builder;
+
+    cw::WidgetRef build(cw::BuildContext& ctx) const override
+    {
+        return content_builder(ctx, cw::Navigator::of(ctx));
+    }
+};
+
+static cw::WidgetRef wrapHeroRoute(
+    std::function<cw::WidgetRef(cw::BuildContext&, cw::NavigatorState*)> content_builder)
+{
+    auto w = std::make_shared<HeroRouteContent>();
+    w->content_builder = std::move(content_builder);
+    return w;
+}
+
+// NavigatorState::build() only builds routes below the topmost *opaque*
+// entry (see its own "Find the bottom-most visible route" step) -- a plain
+// (opaque-by-default) PageRoute would mean the grid route's Hero never
+// stays built once the detail route is on top, so HeroController could
+// never find a from_element and no flight would ever run. Both routes must
+// stay built simultaneously for the duration of the transition -- mirrors
+// test_hero.cpp's own HeroTransparentTestRoute.
+class HeroPageRoute : public cw::Route
+{
+public:
+    explicit HeroPageRoute(std::function<cw::WidgetRef(cw::BuildContext&)> builder)
+        : builder_(std::move(builder)) {}
+
+    cw::WidgetRef build(cw::BuildContext& ctx) override { return builder_(ctx); }
+    bool opaque() const override { return false; }
+
+private:
+    std::function<cw::WidgetRef(cw::BuildContext&)> builder_;
+};
+
+static cw::WidgetRef buildHeroDetailRoute(cw::BuildContext& ctx, cw::NavigatorState* nav, const HeroDemoItem& item)
+{
+    const auto& colors = cw::Theme::of(ctx)->tokens().colors;
+
+    auto box = std::make_shared<cw::Container>();
+    box->color = item.color;
+
+    auto hero = std::make_shared<cw::Hero>();
+    hero->tag   = item.tag;
+    hero->child = box;
+
+    auto hero_area   = std::make_shared<cw::SizedBox>();
+    hero_area->height = 260.0f;
+    hero_area->child  = hero;
+
+    auto back = tapBtn("< Back", colors.primary, [nav] { if (nav) nav->pop(); });
+
+    auto content = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+        cw::WidgetList{
+            hero_area,
+            vspace(20.0f),
+            cw::mw<cw::Padding>(cw::EdgeInsets::symmetric(20.0f, 0.0f),
+                cw::mw<cw::Text>(item.title, ts(24.0f, colors.on_surface))),
+            vspace(8.0f),
+            cw::mw<cw::Padding>(cw::EdgeInsets::symmetric(20.0f, 0.0f),
+                cw::mw<cw::Text>(
+                    "Tap Back to fly this tile back into the grid -- the "
+                    "matching Hero tag on both routes drives the shared-"
+                    "element flight.",
+                    ts(13.0f, colors.on_surface_variant))),
+            vspace(20.0f),
+            cw::mw<cw::Padding>(cw::EdgeInsets::symmetric(20.0f, 0.0f), back),
+        });
+
+    auto page = std::make_shared<cw::Container>();
+    page->color = colors.surface;
+    page->child = content;
+    return page;
+}
+
+static cw::WidgetRef buildHeroGridRoute(cw::BuildContext& ctx, cw::NavigatorState* nav)
+{
+    const auto& colors = cw::Theme::of(ctx)->tokens().colors;
+
+    std::vector<cw::WidgetRef> tiles;
+    for (const auto& item : heroDemoItems()) {
+        auto box = std::make_shared<cw::Container>();
+        box->width = 96.0f; box->height = 96.0f; box->color = item.color;
+
+        auto hero = std::make_shared<cw::Hero>();
+        hero->tag   = item.tag;
+        hero->child = box;
+
+        auto label = cw::mw<cw::Text>(item.title, ts(12.0f, colors.on_surface));
+        auto tile = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::center,
+            cw::WidgetList{ hero, vspace(6.0f), label });
+
+        auto g = std::make_shared<cw::GestureDetector>();
+        g->on_tap = [nav, item] {
+            if (!nav) return;
+            nav->push(std::make_shared<HeroPageRoute>([item](cw::BuildContext&) -> cw::WidgetRef {
+                return wrapHeroRoute([item](cw::BuildContext& ctx2, cw::NavigatorState* nav2) {
+                    return buildHeroDetailRoute(ctx2, nav2, item);
+                });
+            }));
+        };
+        g->child = tile;
+        tiles.push_back(ptr(g));
+    }
+
+    auto wrap = std::make_shared<cw::Wrap>(tiles);
+    wrap->spacing     = 20.0f;
+    wrap->run_spacing = 20.0f;
+
+    auto intro = cw::mw<cw::Text>(
+        "Tap a tile to fly it into a detail view via a shared Hero tag.",
+        ts(13.0f, colors.on_surface_variant));
+
+    auto content = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+        cw::WidgetList{ intro, vspace(20.0f), wrap });
+
+    auto page = std::make_shared<cw::Container>();
+    page->color   = colors.surface;
+    page->padding = cw::EdgeInsets::all(20.0f);
+    page->child   = content;
+    return page;
+}
+
+class HeroSection : public cw::StatelessWidget
+{
+public:
+    cw::WidgetRef build(cw::BuildContext&) const override
+    {
+        // A stable, built-once Navigator instance: NavigatorState::initState()
+        // wires NavigatorObserver::navigator() only for the observers present
+        // at its own (one-time) mount -- a fresh Navigator/HeroController
+        // built on every HeroSection::build() call (this StatelessWidget
+        // rebuilds whenever its ancestors do, e.g. sidebar press feedback,
+        // unrelated to the Hero tab itself) would leave the *live*
+        // HeroController's navigator() permanently null, since only the very
+        // first instance ever got wired.
+        static std::shared_ptr<cw::Navigator> nav = [] {
+            auto n = std::make_shared<cw::Navigator>();
+            n->initial_route = std::make_shared<cw::PageRoute>([](cw::BuildContext&) -> cw::WidgetRef {
+                return wrapHeroRoute([](cw::BuildContext& ctx, cw::NavigatorState* navState) {
+                    return buildHeroGridRoute(ctx, navState);
+                });
+            });
+            n->observers = { std::make_shared<cw::HeroController>() };
+            return n;
+        }();
+        return nav;
+    }
+};
+
+// ---------------------------------------------------------------------------
 // 5. ANIMATIONS — AnimatedSwitcher, AnimatedAlign, explicit transitions
 // ---------------------------------------------------------------------------
 class AnimationsSection;
@@ -3173,7 +3352,7 @@ public:
 static const std::vector<std::string> kSectionNames = {
     "Layout", "Controls", "Text & Input", "Lists",
     "Animations", "Gestures", "Clipping & FX", "Keyboard", "Images", "Draw",
-    "Video", "Refresh", "Slivers", "Nested",
+    "Video", "Refresh", "Slivers", "Nested", "Hero",
 };
 
 // One glyph per section, shown alone when the sidebar collapses to
@@ -3182,7 +3361,7 @@ static const std::vector<std::string> kSectionNames = {
 static const std::vector<std::string> kSectionIcons = {
     "▦", "⚙", "Aa", "☰",
     "▶", "✋", "✂", "⌨", "\U0001F5BC", "✏",
-    "\U0001F3AC", "↻", "▤", "⇕",
+    "\U0001F3AC", "↻", "▤", "⇕", "♥",
 };
 
 // Below this total window width the sidebar collapses to icon-only.
@@ -3207,6 +3386,7 @@ static cw::WidgetRef buildSection(int idx)
         case 11: return std::make_shared<RefreshSection>();
         case 12: return std::make_shared<SliversSection>();
         case 13: return std::make_shared<NestedSection>();
+        case 14: return std::make_shared<HeroSection>();
         default: return std::make_shared<LayoutSection>();
     }
 }
