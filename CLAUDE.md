@@ -139,7 +139,7 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 - Headers use `#pragma once`.
 - Implementations `#include` their own header first, then dependencies.
 
-## Phase Status (as of 2026-08-14)
+## Phase Status (as of 2026-09-03)
 
 | Phase | Status |
 |---|---|
@@ -149,10 +149,10 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 | 4 — Rendering Pipeline | Complete |
 | 5 — Basic Render Widgets | Complete |
 | 6 — Composited Widgets | Complete |
-| 7 — Input Handling | Complete |
+| 7 — Input Handling | Complete (`FocusScope`, `FocusTraversalGroup`/`FocusTraversalPolicy`, D-pad/TV spatial focus navigation, `HardwareKeyboard` all since landed) |
 | 8 — Animation System | Complete |
-| 9 — Scrolling | Complete |
-| 10 — Platform Integration | Partial (macOS, iOS, Android, Windows, Linux all done; platform channel/FFI abstraction pending) |
-| 11 — Developer Experience | Complete (headless GPU visual tests via `GpuVisualRenderer` now landed) |
+| 9 — Scrolling | Complete (sliver scrolling protocol, `CustomScrollView`, `NestedScrollView` all since landed) |
+| 10 — Platform Integration | Partial (macOS, iOS, Android, Windows, Linux all done, including video playback on macOS/iOS/Android/Windows; platform channel/FFI abstraction and Windows/GDK GameInput still pending) |
+| 11 — Developer Experience | Complete (`GpuVisualRenderer` replaced by a leaner offscreen-draw-backend capture path shared with a new cross-platform visual fidelity testing framework — real-device references on iOS/Android/Windows) |
 | 15 — Design System | Complete (`DesignSystem` abstract interface + `Theme` propagation; see `TODO.md`) |
-| 16 — Design System Decoupling | In Progress (M0–M8 done: `campello_ui`/`campello_material`/`campello_cupertino` split out as sibling libraries with 35 builders each, MD3 container color roles, wave-3 components wired into `examples/gallery`; see `TODO.md`) |
+| 16 — Design System Decoupling | In Progress (M0–M9 done: `campello_ui`/`campello_material`/`campello_cupertino` split out as sibling libraries with 35 builders each, MD3 container color roles, wave-3 components wired into `examples/gallery`; `campello_fluent` added as a 4th sibling `DesignSystem`, all 30 builders implemented and validated against real WinUI 3 captures; see `TODO.md`) |

@@ -112,6 +112,8 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 - [x] Keyboard focus system
   - [x] `FocusNode` / `Focus` widget
   - [x] Focus traversal (tab order, Tab/Shift+Tab intercept in FocusManager)
+  - [x] `FocusScope` (containment/restoration) + `FocusTraversalGroup` (Tab-order grouping) +
+        `FocusTraversalPolicy` (pluggable ordering) + D-pad/TV spatial (directional) traversal
 - [x] Touch support (multitouch, for iOS / Android)
 
 ---
@@ -135,6 +137,10 @@ Requires Phase 2 (widget tree) and `campello_input` integration.
 - [x] `ListView` (virtualised, lazy-building children)
 - [x] `GridView`
 - [x] Scroll physics (momentum, bounce, clamped)
+- [x] Sliver scrolling protocol (`RenderSliver`/`RenderViewport`/`RenderSliverToBoxAdapter`/
+      `RenderSliverFixedExtentList`/`RenderSliverPersistentHeader`) + `CustomScrollView` widget bridge
+- [x] `NestedScrollView` (`RenderSliverFillRemaining`, `SliverOverlapAbsorber`/`Injector`,
+      `NestedScrollCoordinator`, widget bridge)
 
 ---
 
@@ -356,6 +362,8 @@ Widgets identified as missing after comparing against Flutter's widget catalog.
 ### Navigation / Routing
 - [x] `Navigator` — stack-based screen/route manager
 - [x] `Route` / `PageRoute` — represents a single screen/dialog route
+- [x] `Hero` — shared-element transitions between routes (`NavigatorObserver`, `HeroController`,
+      `PostFrameCallbacks`, `RenderHero`)
 
 ### Decoration / Painting
 - [x] `DecoratedBox` + `BoxDecoration` — borders, shadows, border-radius (`BoxShadow`, `BoxBorder`, `DecorationPosition`)
