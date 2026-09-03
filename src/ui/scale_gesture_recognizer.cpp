@@ -54,6 +54,7 @@ namespace
     void ScaleGestureRecognizer::addPointer(const PointerEvent& down)
     {
         device_kind_ = down.device_kind;
+        last_timestamp_ms_ = down.timestamp_ms;
         pointers_[down.pointer_id] = {down.position, down.local_position};
 
         if (auto* d = PointerDispatcher::activeDispatcher())
@@ -128,9 +129,8 @@ namespace
 
         vx_.reset();
         vy_.reset();
-        const auto now = std::chrono::steady_clock::now();
-        vx_.addPosition(now, focal.x);
-        vy_.addPosition(now, focal.y);
+        vx_.addPosition(last_timestamp_ms_, focal.x);
+        vy_.addPosition(last_timestamp_ms_, focal.y);
 
         if (owner_.on_scale_start)
             owner_.on_scale_start(ScaleStartDetails{focal, local_focal, static_cast<int>(pointers_.size())});
@@ -205,9 +205,8 @@ namespace
             prev_span_ = cur_span; prev_h_span_ = cur_h; prev_v_span_ = cur_v; prev_angle_ = cur_angle;
         }
 
-        const auto now = std::chrono::steady_clock::now();
-        vx_.addPosition(now, c.x);
-        vy_.addPosition(now, c.y);
+        vx_.addPosition(last_timestamp_ms_, c.x);
+        vy_.addPosition(last_timestamp_ms_, c.y);
 
         if (owner_.on_scale_update)
             owner_.on_scale_update(
@@ -224,6 +223,7 @@ namespace
             if (it == pointers_.end()) return;
             it->second.position       = event.position;
             it->second.local_position = event.local_position;
+            last_timestamp_ms_        = event.timestamp_ms;
 
             if (!started_)
             {

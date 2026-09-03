@@ -225,9 +225,18 @@ TEST_F(ScrollViewFixture, MomentumIsNotRedirectedEvenWithHookSet)
             std::chrono::steady_clock::now().time_since_epoch()).count());
     };
 
+    // Synthetic timestamp_ms values, +10ms per event, instead of real
+    // std::this_thread::sleep_for() between dispatches -- VelocityTracker
+    // computes elapsed time from PointerEvent::timestamp_ms, not real
+    // wall-clock time, so this makes the drag's resulting release velocity
+    // deterministic regardless of how long this process actually takes to
+    // execute each line (see VelocityTracker's own doc comment).
+    uint64_t t = 1'000;
+
     cw::PointerEvent down;
-    down.kind     = cw::PointerEventKind::down;
-    down.position = {0.0f, 190.0f};
+    down.kind         = cw::PointerEventKind::down;
+    down.position     = {0.0f, 190.0f};
+    down.timestamp_ms = t;
     dispatcher->handlePointerEvent(down);
 
     cw::PointerEvent move;
@@ -235,9 +244,10 @@ TEST_F(ScrollViewFixture, MomentumIsNotRedirectedEvenWithHookSet)
     float y = 190.0f;
     for (int i = 1; i <= 5; i++)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        t += 10;
         y -= 40.0f;
-        move.position = {0.0f, y};
+        move.position     = {0.0f, y};
+        move.timestamp_ms = t;
         dispatcher->handlePointerEvent(move);
     }
 

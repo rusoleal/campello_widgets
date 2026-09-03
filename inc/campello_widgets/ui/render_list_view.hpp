@@ -188,6 +188,14 @@ namespace systems::leal::campello_widgets
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
 
+        // Timestamp of whichever PointerEvent most recently reached
+        // onPointerEvent() -- feeds velocity_tracker_/wheel_velocity_tracker_
+        // via applyScrollDelta(), which doesn't itself take a PointerEvent
+        // (it's also called from applyExternalScrollDelta(), with no event
+        // at all). See VelocityTracker's own doc comment for why this
+        // replaced calling steady_clock::now() directly at each feed site.
+        uint64_t last_pointer_timestamp_ms_ = 0;
+
         // Trackpad/wheel scrolling never goes through onPointerEvent's
         // down/move/up drag path above, so velocity_tracker_ never sees it.
         // This tracks the wheel's own recent delivered velocity instead, so

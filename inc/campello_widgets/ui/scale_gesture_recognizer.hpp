@@ -99,6 +99,13 @@ namespace systems::leal::campello_widgets
         Offset   down_pos_single_;   ///< Down position of the first pointer, for its solo slop gate.
         PointerDeviceKind device_kind_ = PointerDeviceKind::touch;
 
+        /// Timestamp of whichever PointerEvent most recently reached
+        /// addPointer()/handlePointerEvent() -- maybeStart()/updateScale()
+        /// read this to seed/feed vx_/vy_ instead of calling
+        /// steady_clock::now() themselves (see VelocityTracker's doc
+        /// comment for why), since neither is itself a PointerEvent handler.
+        uint64_t last_timestamp_ms_ = 0;
+
         // Cumulative gesture output, carried across pointer-count changes.
         float scale_    = 1.0f;
         float h_scale_  = 1.0f;

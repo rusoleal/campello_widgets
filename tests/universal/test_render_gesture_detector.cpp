@@ -588,20 +588,27 @@ TEST_F(VerticalDragFixture, FiresOnVerticalMovement)
     EXPECT_GE(vertical_update_count, 1);
 }
 
-// Real-time-driven, mirrors RenderListView's MomentumContinuesAfterRelease
-// test's rationale: a naive last-two-samples delta/dt estimate would report
-// ~0 velocity from the final, near-stationary sample right before release,
-// even though the drag was fast throughout -- VelocityTracker's trailing-
-// window least-squares fit should still report real, non-trivial velocity.
+// Mirrors RenderListView's MomentumContinuesAfterRelease test's rationale: a
+// naive last-two-samples delta/dt estimate would report ~0 velocity from the
+// final, near-stationary sample right before release, even though the drag
+// was fast throughout -- VelocityTracker's trailing-window least-squares fit
+// should still report real, non-trivial velocity. Uses synthetic
+// timestamp_ms values instead of real std::this_thread::sleep_for() between
+// dispatches, so the intended ~4000 px/s drag is deterministic regardless of
+// how long this process actually takes to execute each line (see
+// VelocityTracker's own doc comment).
 TEST_F(GestureDetectorFixture, PanEndCarriesReleaseVelocity)
 {
+    uint64_t t = 1'000;
+
     // Down must land inside the fixture's 200x100 box for the initial
     // hit-test to capture the pointer -- subsequent moves then route via
     // the captured path regardless of position (see PointerDispatcher's
     // move-handling comment), so they're free to drift outside it.
     cw::PointerEvent down;
-    down.kind     = cw::PointerEventKind::down;
-    down.position = {50.0f, 90.0f};
+    down.kind         = cw::PointerEventKind::down;
+    down.position     = {50.0f, 90.0f};
+    down.timestamp_ms = t;
     dispatcher->handlePointerEvent(down);
 
     cw::PointerEvent move;
@@ -609,20 +616,23 @@ TEST_F(GestureDetectorFixture, PanEndCarriesReleaseVelocity)
     float y = 90.0f;
     for (int i = 1; i <= 5; i++)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        t += 10;
         y -= 40.0f; // fast, steady drag upward: ~4000 px/s
-        move.position = {50.0f, y};
+        move.position     = {50.0f, y};
+        move.timestamp_ms = t;
         dispatcher->handlePointerEvent(move);
     }
     // Near-zero final delta right before release.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    t += 10;
     y -= 0.2f;
-    move.position = {50.0f, y};
+    move.position     = {50.0f, y};
+    move.timestamp_ms = t;
     dispatcher->handlePointerEvent(move);
 
     cw::PointerEvent up;
-    up.kind     = cw::PointerEventKind::up;
-    up.position = {50.0f, y};
+    up.kind         = cw::PointerEventKind::up;
+    up.position     = {50.0f, y};
+    up.timestamp_ms = t;
     dispatcher->handlePointerEvent(up);
 
     EXPECT_EQ(pan_end_count, 1);

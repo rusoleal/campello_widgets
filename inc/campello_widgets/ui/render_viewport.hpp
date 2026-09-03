@@ -207,6 +207,9 @@ namespace systems::leal::campello_widgets
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
 
+        // See RenderListView::last_pointer_timestamp_ms_'s doc.
+        uint64_t last_pointer_timestamp_ms_ = 0;
+
         VelocityTracker wheel_velocity_tracker_;
         bool wheel_momentum_pending_ = false;
         uint64_t last_scroll_event_ms_ = 0;

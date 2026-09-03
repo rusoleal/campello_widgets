@@ -53,9 +53,8 @@ namespace systems::leal::campello_widgets
             {
                 // Already started -- a long press, once recognised, isn't
                 // undone by subsequent movement; just report it.
-                const auto now = std::chrono::steady_clock::now();
-                vx_.addPosition(now, event.position.x);
-                vy_.addPosition(now, event.position.y);
+                vx_.addPosition(event.timestamp_ms, event.position.x);
+                vy_.addPosition(event.timestamp_ms, event.position.y);
                 if (owner_.on_long_press_move_update)
                     owner_.on_long_press_move_update(LongPressMoveUpdateDetails{
                         event.position, event.local_position, event.position - down_pos_});
@@ -111,9 +110,8 @@ namespace systems::leal::campello_widgets
             // wouldn't contribute meaningful velocity anyway.
             vx_.reset();
             vy_.reset();
-            const auto now = std::chrono::steady_clock::now();
-            vx_.addPosition(now, last_pos_.x);
-            vy_.addPosition(now, last_pos_.y);
+            vx_.addPosition(now_ms, last_pos_.x);
+            vy_.addPosition(now_ms, last_pos_.y);
 
             if (owner_.on_long_press) owner_.on_long_press();
             if (owner_.on_long_press_start)

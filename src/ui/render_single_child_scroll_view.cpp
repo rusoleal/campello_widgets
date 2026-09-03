@@ -185,7 +185,7 @@ namespace systems::leal::campello_widgets
         raw_offset_ += delta;
         // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
         if (std::strcmp(source, "wheel") == 0)
-            wheel_velocity_tracker_.addPosition(std::chrono::steady_clock::now(), raw_offset_);
+            wheel_velocity_tracker_.addPosition(last_pointer_timestamp_ms_, raw_offset_);
         const float clamped = physics_->applyBoundaryConditions(raw_offset_, min_extent_, max_extent_);
 
         if (DebugFlags::printScrollTrace)
@@ -262,9 +262,10 @@ namespace systems::leal::campello_widgets
             pan_last_pos_  = event.position;
             pan_down_pos_  = event.position;
             velocity_px_s_ = 0.0f;
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             velocity_tracker_.reset();
             velocity_tracker_.addPosition(
-                std::chrono::steady_clock::now(),
+                event.timestamp_ms,
                 scroll_axis == Axis::vertical ? event.position.y : event.position.x);
             device_kind_   = event.device_kind;
             arena_entry_.reset();
@@ -311,13 +312,14 @@ namespace systems::leal::campello_widgets
                 }
             }
 
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             if (panning_)
             {
                 const float delta = is_v ? dy : dx;
                 if (external_delta_redirect) external_delta_redirect(-delta);
                 else                          applyScrollDelta(-delta); // drag up → scroll down
                 velocity_tracker_.addPosition(
-                    std::chrono::steady_clock::now(),
+                    event.timestamp_ms,
                     is_v ? event.position.y : event.position.x);
             }
 
@@ -368,6 +370,7 @@ namespace systems::leal::campello_widgets
             const float delta       = is_v ? event.scroll_delta_y : event.scroll_delta_x;
             const float cross_delta = is_v ? event.scroll_delta_x : event.scroll_delta_y;
             const bool  dominant    = std::abs(delta) >= std::abs(cross_delta);
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             // See RenderListView::onPointerEvent()'s scroll case doc —
             // while overscrolled, drop trailing sub-threshold deltas
             // (macOS's own momentum-tail trickle) entirely rather than

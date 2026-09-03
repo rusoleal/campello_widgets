@@ -107,6 +107,18 @@ namespace systems::leal::campello_widgets
         /// PointerDispatcher::dispatch() from the hit-test path, mirroring
         /// Flutter's `localPosition` on PointerEvent/DragDetails.
         Offset            local_position;
+
+        /// Milliseconds since std::chrono::steady_clock's epoch, when this
+        /// event occurred. 0 (the default) means "unset" --
+        /// PointerDispatcher::handlePointerEvent() stamps it with the
+        /// current time if still 0 by the time it reaches there, so real
+        /// platform events (which don't currently set this) keep working
+        /// unchanged. Tests wanting deterministic gesture timing (velocity,
+        /// momentum) set this explicitly instead of relying on real elapsed
+        /// wall-clock time between synthetic events. Appended last, not
+        /// inserted, since some platform adapters (e.g. macOS's run_app.mm)
+        /// construct PointerEvents via positional aggregate init.
+        uint64_t          timestamp_ms   = 0;
     };
 
 } // namespace systems::leal::campello_widgets

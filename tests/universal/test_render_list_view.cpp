@@ -273,24 +273,37 @@ TEST(RenderListView, MomentumContinuesAfterRelease)
             std::chrono::steady_clock::now().time_since_epoch()).count());
     };
 
+    // Synthetic timestamps, +10ms per event, instead of real
+    // std::this_thread::sleep_for() between dispatches: VelocityTracker
+    // computes elapsed time from PointerEvent::timestamp_ms, not real
+    // wall-clock time, so this makes the intended ~4000 px/s drag
+    // deterministic regardless of how long this process actually takes to
+    // execute each line (an unoptimized Debug build under a loaded CI
+    // runner previously let real per-call overhead eat into the tracker's
+    // 100ms trailing window before release, diluting the computed velocity
+    // toward zero — see VelocityTracker's own doc comment).
+    uint64_t t = 1'000;
+
     cw::PointerEvent down;
-    down.kind     = cw::PointerEventKind::down;
-    down.position = {0.0f, 190.0f};
+    down.kind         = cw::PointerEventKind::down;
+    down.position     = {0.0f, 190.0f};
+    down.timestamp_ms = t;
     dispatcher.handlePointerEvent(down);
 
-    // Fast, steady drag upward (reveals later items) — 40px every 10ms real
-    // elapsed time (~4000 px/s), well above the momentum threshold. Once
-    // the pointer is captured on down, subsequent moves route via the
-    // cached hit path regardless of position, so drifting past the
-    // viewport's own bounds here is fine.
+    // Fast, steady drag upward (reveals later items) — 40px every 10ms
+    // (~4000 px/s), well above the momentum threshold. Once the pointer is
+    // captured on down, subsequent moves route via the cached hit path
+    // regardless of position, so drifting past the viewport's own bounds
+    // here is fine.
     cw::PointerEvent move;
     move.kind = cw::PointerEventKind::move;
     float y = 190.0f;
     for (int i = 1; i <= 5; i++)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        t += 10;
         y -= 40.0f;
-        move.position = {0.0f, y};
+        move.position     = {0.0f, y};
+        move.timestamp_ms = t;
         dispatcher.handlePointerEvent(move);
     }
     // Final sample right before release: a near-zero delta, matching either
@@ -298,9 +311,10 @@ TEST(RenderListView, MomentumContinuesAfterRelease)
     // several move callbacks together with negligible time between them —
     // both leave the *previous* implementation's single-sample delta/dt
     // estimate reporting ~0 velocity despite the real, fast drag above.
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    t += 10;
     y -= 0.2f;
-    move.position = {0.0f, y};
+    move.position     = {0.0f, y};
+    move.timestamp_ms = t;
     dispatcher.handlePointerEvent(move);
 
     cw::PointerEvent up;

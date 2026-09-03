@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/gesture_constants.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/render_object.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
@@ -87,38 +88,51 @@ namespace systems::leal::campello_widgets
     void PointerDispatcher::handlePointerEvent(const PointerEvent& event)
     {
         ThreadChecker::instance().assertOnBoundThread("PointerDispatcher::handlePointerEvent");
+
+        // Stamp a real dispatch-time timestamp onto every event that didn't
+        // already arrive with one -- the single choke point every real and
+        // synthetic PointerEvent passes through, so every gesture
+        // recognizer/scrollable downstream can read event.timestamp_ms
+        // instead of independently calling steady_clock::now() itself (see
+        // VelocityTracker's own doc comment for why that mattered). Tests
+        // that want deterministic timing set timestamp_ms explicitly before
+        // calling this, and that value is respected as-is.
+        PointerEvent stamped = event;
+        if (stamped.timestamp_ms == 0)
+            stamped.timestamp_ms = currentMonotonicMs();
+
         // Record position for debug visualization
-        if (event.kind == PointerEventKind::down ||
-            event.kind == PointerEventKind::move ||
-            event.kind == PointerEventKind::up)
+        if (stamped.kind == PointerEventKind::down ||
+            stamped.kind == PointerEventKind::move ||
+            stamped.kind == PointerEventKind::up)
         {
-            recent_positions_.push_back({event.position.x, event.position.y, 0});
+            recent_positions_.push_back({stamped.position.x, stamped.position.y, 0});
             if (recent_positions_.size() > 16)
                 recent_positions_.erase(recent_positions_.begin());
         }
 
-        switch (event.kind)
+        switch (stamped.kind)
         {
         case PointerEventKind::down:
         {
             // Hit-test and capture the path for this pointer. Each entry's
             // local_position is exact at this instant (fresh hit test).
             HitTestResult result;
-            if (root_) root_->hitTest(result, event.position);
+            if (root_) root_->hitTest(result, stamped.position);
 
-            dispatch(result.path(), event);
-            active_pointers_[event.pointer_id] = {result.path(), event.position};
+            dispatch(result.path(), stamped);
+            active_pointers_[stamped.pointer_id] = {result.path(), stamped.position};
 
             // All recognizers in the hit path have had a chance to add()
             // themselves to the arena by now — close it so it can start
             // resolving as soon as one of them claims a win.
-            arena_.close(event.pointer_id);
+            arena_.close(stamped.pointer_id);
             break;
         }
 
         case PointerEventKind::move:
         {
-            auto it = active_pointers_.find(event.pointer_id);
+            auto it = active_pointers_.find(stamped.pointer_id);
             if (it != active_pointers_.end())
             {
                 // Captured move — dispatch to the same path as the down event.
@@ -136,20 +150,20 @@ namespace systems::leal::campello_widgets
                     // The path's local_position was captured at down time; the
                     // box hasn't moved since (only translations occur between
                     // ancestor and descendant), so local delta == global delta.
-                    const Offset delta_since_down = event.position - it->second.down_position;
+                    const Offset delta_since_down = stamped.position - it->second.down_position;
                     std::vector<HitTestEntry> adjusted;
                     adjusted.reserve(path.size());
                     for (const auto& entry : path)
                         adjusted.push_back({entry.target, entry.local_position + delta_since_down});
 
-                    dispatch(adjusted, event);
+                    dispatch(adjusted, stamped);
                 }
             }
             else
             {
                 // Hover move — re-hit-test each call.
                 HitTestResult result;
-                if (root_) root_->hitTest(result, event.position);
+                if (root_) root_->hitTest(result, stamped.position);
 
                 std::vector<RenderBox*> new_targets;
                 new_targets.reserve(result.path().size());
@@ -158,7 +172,7 @@ namespace systems::leal::campello_widgets
 
                 // Send cancel to boxes that were hovered last time but are no longer.
                 std::unordered_set<RenderBox*> new_set(new_targets.begin(), new_targets.end());
-                PointerEvent cancel_event = event;
+                PointerEvent cancel_event = stamped;
                 cancel_event.kind = PointerEventKind::cancel;
                 auto old_hover = last_hover_path_; // snapshot in case setRoot() is triggered
                 for (RenderBox* box : old_hover)
@@ -173,7 +187,7 @@ namespace systems::leal::campello_widgets
                     }
                 }
 
-                dispatch(result.path(), event);
+                dispatch(result.path(), stamped);
                 last_hover_path_ = std::move(new_targets);
             }
             break;
@@ -182,7 +196,7 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::up:
         case PointerEventKind::cancel:
         {
-            auto it = active_pointers_.find(event.pointer_id);
+            auto it = active_pointers_.find(stamped.pointer_id);
             if (it != active_pointers_.end())
             {
                 // Copy the path and erase the entry BEFORE dispatching.
@@ -190,7 +204,7 @@ namespace systems::leal::campello_widgets
                 // releasePointer() which mutates active_pointers_, invalidating
                 // the iterator we are about to erase.
                 auto path = it->second.path;
-                const Offset delta_since_down = event.position - it->second.down_position;
+                const Offset delta_since_down = stamped.position - it->second.down_position;
                 active_pointers_.erase(it);
 
                 path.erase(
@@ -205,14 +219,14 @@ namespace systems::leal::campello_widgets
                     for (const auto& entry : path)
                         adjusted.push_back({entry.target, entry.local_position + delta_since_down});
 
-                    dispatch(adjusted, event);
+                    dispatch(adjusted, stamped);
                 }
             }
 
             // The pointer is no longer tracked (lifted/cancelled) — if
             // nobody explicitly resolved the arena, the first member added
             // wins by default.
-            arena_.sweep(event.pointer_id);
+            arena_.sweep(stamped.pointer_id);
             break;
         }
 
@@ -220,7 +234,7 @@ namespace systems::leal::campello_widgets
         {
             // Scroll events are not captured — re-hit-test each time.
             HitTestResult result;
-            if (root_) root_->hitTest(result, event.position);
+            if (root_) root_->hitTest(result, stamped.position);
 
             // dispatch() calls every handler in the path, but a scroll
             // signal should only be acted on once — see
@@ -229,7 +243,7 @@ namespace systems::leal::campello_widgets
             // event). Each scrollable's handler registers a candidate
             // instead of applying its delta directly; resolve() here runs
             // only the first (innermost) one.
-            dispatch(result.path(), event);
+            dispatch(result.path(), stamped);
             signal_resolver_.resolve();
             break;
         }

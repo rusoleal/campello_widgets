@@ -37,9 +37,8 @@ namespace systems::leal::campello_widgets
 
         vx_.reset();
         vy_.reset();
-        const auto now = std::chrono::steady_clock::now();
-        vx_.addPosition(now, down.position.x);
-        vy_.addPosition(now, down.position.y);
+        vx_.addPosition(down.timestamp_ms, down.position.x);
+        vy_.addPosition(down.timestamp_ms, down.position.y);
 
         arena_entry_.reset();
         if (auto* d = PointerDispatcher::activeDispatcher())
@@ -72,9 +71,8 @@ namespace systems::leal::campello_widgets
             last_pos_          = event.position;
             last_local_pos_    = event.local_position;
 
-            const auto now = std::chrono::steady_clock::now();
-            vx_.addPosition(now, event.position.x);
-            vy_.addPosition(now, event.position.y);
+            vx_.addPosition(event.timestamp_ms, event.position.x);
+            vy_.addPosition(event.timestamp_ms, event.position.y);
 
             if (!dragging_ && exceedsSlopThreshold())
             {

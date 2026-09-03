@@ -401,8 +401,8 @@ namespace systems::leal::campello_widgets
             velocity_y_ = 0.0f;
             velocity_tracker_x_.reset();
             velocity_tracker_y_.reset();
-            velocity_tracker_x_.addPosition(std::chrono::steady_clock::now(), event.position.x);
-            velocity_tracker_y_.addPosition(std::chrono::steady_clock::now(), event.position.y);
+            velocity_tracker_x_.addPosition(event.timestamp_ms, event.position.x);
+            velocity_tracker_y_.addPosition(event.timestamp_ms, event.position.y);
             arena_entry_.reset();
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
@@ -449,9 +449,8 @@ namespace systems::leal::campello_widgets
             {
                 applyScrollDelta(-dx, -dy);
 
-                const auto now = std::chrono::steady_clock::now();
-                velocity_tracker_x_.addPosition(now, event.position.x);
-                velocity_tracker_y_.addPosition(now, event.position.y);
+                velocity_tracker_x_.addPosition(event.timestamp_ms, event.position.x);
+                velocity_tracker_y_.addPosition(event.timestamp_ms, event.position.y);
             }
 
             pan_last_pos_ = event.position;
@@ -478,14 +477,17 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::scroll:
         {
             applyScrollDelta(event.scroll_delta_x, event.scroll_delta_y);
-            const auto now = std::chrono::steady_clock::now();
             // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
-            wheel_velocity_tracker_x_.addPosition(now, scrollX());
-            wheel_velocity_tracker_y_.addPosition(now, scrollY());
+            wheel_velocity_tracker_x_.addPosition(event.timestamp_ms, scrollX());
+            wheel_velocity_tracker_y_.addPosition(event.timestamp_ms, scrollY());
             wheel_momentum_pending_ = true;
+            // Out of scope for the VelocityTracker timestamp-injection fix
+            // (see gesture_constants.hpp's currentMonotonicMs() doc / the
+            // plan this change came from) -- kept on its own independent
+            // steady_clock::now() read, same as before.
             last_scroll_event_ms_ = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now.time_since_epoch()).count());
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             break;
         }
         }

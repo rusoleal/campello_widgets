@@ -257,7 +257,7 @@ namespace systems::leal::campello_widgets
         // enough. Position, not delta: the tracker fits a line through
         // samples, so it needs the cumulative value.
         if (std::strcmp(source, "wheel") == 0)
-            wheel_velocity_tracker_.addPosition(std::chrono::steady_clock::now(), raw_offset_);
+            wheel_velocity_tracker_.addPosition(last_pointer_timestamp_ms_, raw_offset_);
         const float clamped = physics_->applyBoundaryConditions(raw_offset_, min_extent_, max_extent_);
 
         if (DebugFlags::printScrollTrace)
@@ -362,9 +362,10 @@ namespace systems::leal::campello_widgets
             pan_down_pos_  = event.position;
             device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             velocity_tracker_.reset();
             velocity_tracker_.addPosition(
-                std::chrono::steady_clock::now(),
+                event.timestamp_ms,
                 scroll_axis == Axis::vertical ? event.position.y : event.position.x);
             arena_entry_.reset();
             if (auto* d = PointerDispatcher::activeDispatcher())
@@ -414,13 +415,14 @@ namespace systems::leal::campello_widgets
                 }
             }
 
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             if (panning_)
             {
                 const float delta = is_v ? dy : dx;
                 if (external_delta_redirect) external_delta_redirect(-delta);
                 else                          applyScrollDelta(-delta);
                 velocity_tracker_.addPosition(
-                    std::chrono::steady_clock::now(),
+                    event.timestamp_ms,
                     is_v ? event.position.y : event.position.x);
             }
 
@@ -474,6 +476,7 @@ namespace systems::leal::campello_widgets
             const float delta       = is_v ? event.scroll_delta_y : event.scroll_delta_x;
             const float cross_delta = is_v ? event.scroll_delta_x : event.scroll_delta_y;
             const bool  dominant    = std::abs(delta) >= std::abs(cross_delta);
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             // While overscrolled, a trailing sub-threshold delta (macOS's
             // own rapidly-decaying momentum tail, which keeps sending
             // events for well over a second after the fingers lift) is

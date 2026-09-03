@@ -1,9 +1,9 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 
 namespace systems::leal::campello_widgets
 {
@@ -25,6 +25,19 @@ namespace systems::leal::campello_widgets
      * This instead fits a line (least squares) through the samples still
      * within a short trailing time window of the newest one, which is far
      * more robust to both problems.
+     *
+     * Samples are timestamped in milliseconds (matching PointerEvent::
+     * timestamp_ms and this codebase's other time plumbing, e.g.
+     * PointerDispatcher::tick()/currentMonotonicMs()) rather than a
+     * std::chrono::steady_clock::time_point -- callers pass the triggering
+     * PointerEvent's own timestamp_ms directly, instead of each call site
+     * calling steady_clock::now() itself. Calling now() deep inside a
+     * recognizer's own event-handling code meant the "timestamp" reflected
+     * whatever unrelated processing overhead ran before that line executed,
+     * not when the input actually occurred -- harmless in an optimized
+     * build, but enough to dilute a fast flick's computed velocity toward
+     * zero in an unoptimized Debug build under a loaded CI runner (the
+     * horizon window below aging out the real samples before release).
      */
     class VelocityTracker
     {
@@ -35,9 +48,9 @@ namespace systems::leal::campello_widgets
             head_  = 0;
         }
 
-        void addPosition(std::chrono::steady_clock::time_point time, float position) noexcept
+        void addPosition(uint64_t timestamp_ms, float position) noexcept
         {
-            samples_[head_] = {time, position};
+            samples_[head_] = {timestamp_ms, position};
             head_ = (head_ + 1) % kMaxSamples;
             if (count_ < kMaxSamples) ++count_;
         }
@@ -51,7 +64,7 @@ namespace systems::leal::campello_widgets
             if (count_ < 2) return 0.0f;
 
             const std::size_t newest_index = (head_ + kMaxSamples - 1) % kMaxSamples;
-            const auto        newest_time  = samples_[newest_index].time;
+            const uint64_t     newest_ms    = samples_[newest_index].timestamp_ms;
 
             // Accumulate a linear regression of position against "seconds
             // before the newest sample" (so the newest sample sits at x=0),
@@ -65,7 +78,7 @@ namespace systems::leal::campello_widgets
             {
                 const std::size_t idx = (head_ + kMaxSamples - 1 - i) % kMaxSamples;
                 const Sample& s = samples_[idx];
-                const double t  = std::chrono::duration<double>(newest_time - s.time).count();
+                const double t  = static_cast<double>(newest_ms - s.timestamp_ms) / 1000.0;
                 if (t > kHorizonSeconds) break;
 
                 sum_t  += t;
@@ -90,8 +103,8 @@ namespace systems::leal::campello_widgets
     private:
         struct Sample
         {
-            std::chrono::steady_clock::time_point time;
-            float                                  position = 0.0f;
+            uint64_t timestamp_ms = 0;
+            float    position     = 0.0f;
         };
 
         static constexpr std::size_t kMaxSamples     = 20;

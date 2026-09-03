@@ -252,7 +252,7 @@ namespace systems::leal::campello_widgets
         raw_offset_ += delta;
         // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
         if (std::strcmp(source, "wheel") == 0)
-            wheel_velocity_tracker_.addPosition(std::chrono::steady_clock::now(), raw_offset_);
+            wheel_velocity_tracker_.addPosition(last_pointer_timestamp_ms_, raw_offset_);
         const float clamped = physics_->applyBoundaryConditions(raw_offset_, min_extent_, max_extent_);
 
         if (DebugFlags::printScrollTrace)
@@ -330,8 +330,9 @@ namespace systems::leal::campello_widgets
             pan_down_pos_  = event.position;
             device_kind_   = event.device_kind;
             velocity_px_s_ = 0.0f;
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             velocity_tracker_.reset();
-            velocity_tracker_.addPosition(std::chrono::steady_clock::now(), event.position.y);
+            velocity_tracker_.addPosition(event.timestamp_ms, event.position.y);
             arena_entry_.reset();
             if (auto* d = PointerDispatcher::activeDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
@@ -372,10 +373,11 @@ namespace systems::leal::campello_widgets
                 }
             }
 
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             if (panning_)
             {
                 applyScrollDelta(-dy);
-                velocity_tracker_.addPosition(std::chrono::steady_clock::now(), event.position.y);
+                velocity_tracker_.addPosition(event.timestamp_ms, event.position.y);
             }
 
             pan_last_pos_ = event.position;
@@ -410,6 +412,7 @@ namespace systems::leal::campello_widgets
             // silently drop some events, felt as jumpy scrolling.
             const float delta    = event.scroll_delta_y;
             const bool  dominant = std::abs(event.scroll_delta_y) >= std::abs(event.scroll_delta_x);
+            last_pointer_timestamp_ms_ = event.timestamp_ms;
             // See RenderListView::onPointerEvent()'s scroll case doc —
             // while overscrolled, drop trailing sub-threshold deltas
             // (macOS's own momentum-tail trickle) entirely rather than

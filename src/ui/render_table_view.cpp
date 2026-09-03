@@ -623,14 +623,16 @@ namespace systems::leal::campello_widgets
         {
             // Invert scroll direction for natural scrolling feel on macOS
             applyScrollDelta(-event.scroll_delta_x, -event.scroll_delta_y);
-            const auto now = std::chrono::steady_clock::now();
             // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
-            wheel_velocity_tracker_x_.addPosition(now, scrollX());
-            wheel_velocity_tracker_y_.addPosition(now, scrollY());
+            wheel_velocity_tracker_x_.addPosition(event.timestamp_ms, scrollX());
+            wheel_velocity_tracker_y_.addPosition(event.timestamp_ms, scrollY());
             wheel_momentum_pending_ = true;
+            // Out of scope for the VelocityTracker timestamp-injection fix --
+            // kept on its own independent steady_clock::now() read, same as
+            // before (see render_tree_view.cpp's identical split).
             last_scroll_event_ms_ = static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                    now.time_since_epoch()).count());
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             break;
         }
         }

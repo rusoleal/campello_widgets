@@ -137,6 +137,9 @@ namespace systems::leal::campello_widgets
         // recent samples instead of using only the last sample-to-sample delta.
         VelocityTracker velocity_tracker_;
 
+        // See RenderListView::last_pointer_timestamp_ms_'s doc.
+        uint64_t last_pointer_timestamp_ms_ = 0;
+
         // See RenderListView::wheel_velocity_tracker_'s doc — trackpad/
         // wheel scrolling never goes through the drag path above, so this
         // tracks its own recent velocity to hand off to onTick()'s momentum

@@ -149,6 +149,9 @@ namespace systems::leal::campello_widgets
         float  velocity_px_s_ = 0.0f;
         uint64_t last_tick_ms_= 0;
 
+        // See RenderListView::last_pointer_timestamp_ms_'s doc.
+        uint64_t last_pointer_timestamp_ms_ = 0;
+
         // See RenderListView::wheel_velocity_tracker_'s doc — trackpad/
         // wheel scrolling never goes through the drag path above, so this
         // tracks its own recent velocity to hand off to onTick()'s momentum
