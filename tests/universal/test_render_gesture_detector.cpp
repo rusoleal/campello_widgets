@@ -322,21 +322,34 @@ TEST_F(GestureDetectorFixture, LongPressMoveUpdateFiresAfterStartAndEndCarriesVe
     const auto now = std::chrono::steady_clock::now();
     const uint64_t now_ms = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count());
-    dispatcher->tick(now_ms + 600); // past kLongPressMs -- press has started
+    // down_time_ms_/the kLongPressMs deadline check are deliberately left on
+    // real time (a different, out-of-scope mechanism -- see
+    // gesture_constants.hpp's currentMonotonicMs() doc), so this tick still
+    // needs a real-time-based now_ms. handleTick()'s own velocity reseed
+    // (fired the instant the press starts) uses this same value, so the
+    // moves below continue their synthetic timestamps from it instead of an
+    // unrelated base -- keeps the whole sample sequence self-consistent.
+    uint64_t t = now_ms + 600;
+    dispatcher->tick(t); // past kLongPressMs -- press has started
 
     ASSERT_EQ(long_press_start_count, 1);
 
     // Movement after the press has started no longer threatens/cancels the
     // gesture (see LongPressGestureRecognizer's doc comment) -- it's
-    // tracked and reported instead.
+    // tracked and reported instead. Synthetic timestamp_ms values (+10ms
+    // per event) instead of real std::this_thread::sleep_for() between
+    // dispatches, so the resulting release velocity is deterministic
+    // regardless of real elapsed wall-clock time (see VelocityTracker's own
+    // doc comment).
     cw::PointerEvent move;
     move.kind = cw::PointerEventKind::move;
     float x = 50.0f;
     for (int i = 1; i <= 5; i++)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        t += 10;
         x += 40.0f;
-        move.position = {x, 50.0f};
+        move.position     = {x, 50.0f};
+        move.timestamp_ms = t;
         dispatcher->handlePointerEvent(move);
     }
 
