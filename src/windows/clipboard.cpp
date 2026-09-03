@@ -11,9 +11,17 @@ namespace systems::leal::campello_widgets
     {
         // Two-pass MultiByteToWideChar/WideCharToMultiByte + CP_UTF8, same
         // idiom as run_app.cpp's utf16ToUtf8() and d3d_draw_backend.cpp's
-        // utf8ToUtf16() -- neither is exposed outside its own TU, so this
-        // mirrors the pattern locally rather than reusing either.
-        std::wstring utf8ToUtf16(const std::string& s)
+        // utf8ToUtf16() -- deliberately NOT reused (mirrors the pattern
+        // locally instead), since the two implementations differ (this one
+        // takes an explicit length, d3d_draw_backend.cpp's relies on
+        // s.c_str()'s null terminator via a -1 length). Named distinctly
+        // (not just anonymous-namespace-local) because Unity Build merges
+        // every file's own `namespace { }` block in a translation unit into
+        // one shared anonymous namespace -- an identically-named function
+        // here and in d3d_draw_backend.cpp collided as a hard C2084
+        // redefinition once both landed in the same Unity batch, exactly
+        // the same class of bug as the g_java_vm collision on Android.
+        std::wstring clipboardUtf8ToUtf16(const std::string& s)
         {
             if (s.empty()) return {};
             int len = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
@@ -23,7 +31,12 @@ namespace systems::leal::campello_widgets
             return w;
         }
 
-        std::string utf16ToUtf8(const wchar_t* w, int wlen)
+        // Same Unity Build collision risk as clipboardUtf8ToUtf16() above --
+        // run_app.cpp has its own file-scope `static std::string
+        // utf16ToUtf8(const wchar_t*, int)` (internal linkage, same as this
+        // anonymous-namespace one); named distinctly to avoid a second,
+        // currently-latent C2084 once both land in the same Unity batch.
+        std::string clipboardUtf16ToUtf8(const wchar_t* w, int wlen)
         {
             if (!w || wlen <= 0) return {};
             int len = WideCharToMultiByte(CP_UTF8, 0, w, wlen, nullptr, 0, nullptr, nullptr);
@@ -49,7 +62,7 @@ namespace systems::leal::campello_widgets
             return;
         }
 
-        std::wstring wide = utf8ToUtf16(text);
+        std::wstring wide = clipboardUtf8ToUtf16(text);
         // Still need to allocate a valid (if empty) buffer for an empty
         // string, so the clipboard ends up genuinely cleared rather than
         // left holding whatever EmptyClipboard() didn't touch.
@@ -92,7 +105,7 @@ namespace systems::leal::campello_widgets
             const wchar_t* wide = static_cast<const wchar_t*>(GlobalLock(hData));
             if (wide)
             {
-                result = utf16ToUtf8(wide, static_cast<int>(wcslen(wide)));
+                result = clipboardUtf16ToUtf8(wide, static_cast<int>(wcslen(wide)));
                 GlobalUnlock(hData);
             }
         }
