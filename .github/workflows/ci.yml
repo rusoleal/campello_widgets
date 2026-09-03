@@ -48,13 +48,22 @@ jobs:
 
       # campello_gpu requires Vulkan headers; campello_widgets requires
       # X11, D-Bus (IBus), FreeType, HarfBuzz, fontconfig, and optionally
-      # Wayland + xkbcommon.
+      # Wayland + xkbcommon. mesa-vulkan-drivers provides lavapipe (software
+      # Vulkan) -- these GitHub-hosted runners have no real GPU, and unlike
+      # macOS (Metal, real hardware) / Windows (WARP, always available via
+      # D3D12), Linux has no headless-rendering fallback without it. Without
+      # this, any test that actually creates a campello_gpu::Device (e.g.
+      # tests/universal/test_visual_fidelity.cpp's VisualFidelity.* suite,
+      # via captureDrawListToPng()) fails outright rather than skipping --
+      # same package this project's own campello_gpu sibling repo installs
+      # for its own lavapipe-backed integration test job.
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libvulkan-dev \
+            mesa-vulkan-drivers \
             libx11-dev \
             libdbus-1-dev \
             libfreetype-dev \
@@ -96,6 +105,12 @@ jobs:
         if: matrix.test == true
         shell: bash
         run: |
+          if [[ "${{ matrix.platform }}" == "Linux" ]]; then
+            # Filename is architecture-specific (e.g. lvp_icd.x86_64.json vs
+            # lvp_icd.aarch64.json) -- discovered rather than hardcoded since
+            # this job runs both x86_64 and native arm64 Linux runners.
+            export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          fi
           ctest --test-dir "build/${{ matrix.platform }}_${{ matrix.arch }}_${{ matrix.build_type }}_test" \
             --output-on-failure \
             -C "${{ matrix.build_type }}" \
