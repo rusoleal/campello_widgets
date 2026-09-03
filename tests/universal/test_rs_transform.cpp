@@ -1,8 +1,14 @@
 #include <gtest/gtest.h>
 #include <campello_widgets/ui/rs_transform.hpp>
-#include <cmath>
 
 namespace cw = systems::leal::campello_widgets;
+
+// Avoids <cmath>'s M_PI -- not guaranteed available under strict standard
+// modes on every compiler this codebase targets (notably MSVC without
+// _USE_MATH_DEFINES, which gtest.h's own transitive <cmath> include would
+// beat this file to anyway) -- see scale_gesture_recognizer.cpp's identical
+// convention.
+constexpr float kPi = 3.14159265358979323846f;
 
 TEST(RSTransform, NoRotationNoScaleReducesToPlainTranslation)
 {
@@ -25,7 +31,7 @@ TEST(RSTransform, ScaleOnlyMultipliesScosScin)
 
 TEST(RSTransform, NinetyDegreeRotation)
 {
-    const float half_pi = static_cast<float>(M_PI) / 2.0f;
+    const float half_pi = kPi / 2.0f;
     auto t = cw::RSTransform::fromComponents(half_pi, 1.0f, 0.0f, 0.0f, 0.0f, 0.0f);
     EXPECT_NEAR(t.scos, 0.0f, 1e-5f);
     EXPECT_NEAR(t.ssin, 1.0f, 1e-5f);
