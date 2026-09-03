@@ -11,8 +11,9 @@
 // SDF below renders correctly regardless of rotation/perspective/mirroring).
 //
 // Bindings — two SEPARATE bind groups (same split as quad.hlsl/blur.hlsl):
-//   bind group 0: ClipShapeUniforms — register(b0), vertex stage
-//   bind group 1: Texture2D — register(t0), SamplerState — register(s1), pixel stage
+//   bind group 0: ClipShapeUniforms — register(b0, space0), vertex stage
+//   bind group 1: Texture2D — register(t0, space1), SamplerState — register(s1, space1), pixel stage
+// See quad.hlsl's doc comment for why the spaceN suffixes are required.
 // ===========================================================================
 
 cbuffer ClipShapeUniforms : register(b0)
@@ -26,8 +27,8 @@ cbuffer ClipShapeUniforms : register(b0)
     float2 _pad;
 };
 
-Texture2D    gTex : register(t0);
-SamplerState gSmp : register(s1);
+Texture2D    gTex : register(t0, space1);
+SamplerState gSmp : register(s1, space1);
 
 struct ClipShapeVertexIn
 {

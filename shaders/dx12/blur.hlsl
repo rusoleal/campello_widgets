@@ -7,8 +7,9 @@
 //
 // Bindings — two SEPARATE bind groups (same split as quad.hlsl, and for the
 // same reason: BlurUniforms is pooled/reused, the source texture is not):
-//   bind group 0: BlurUniforms — register(b0), vertex stage
-//   bind group 1: Texture2D — register(t0), SamplerState — register(s1), pixel stage
+//   bind group 0: BlurUniforms — register(b0, space0), vertex stage
+//   bind group 1: Texture2D — register(t0, space1), SamplerState — register(s1, space1), pixel stage
+// See quad.hlsl's doc comment for why the spaceN suffixes are required.
 // ===========================================================================
 
 cbuffer BlurUniforms : register(b0)
@@ -22,8 +23,8 @@ cbuffer BlurUniforms : register(b0)
     float2 _pad;
 };
 
-Texture2D    gTex : register(t0);
-SamplerState gSmp : register(s1);
+Texture2D    gTex : register(t0, space1);
+SamplerState gSmp : register(s1, space1);
 
 static const float2 kQuadCorners[6] = {
     float2(0.0, 0.0), float2(1.0, 0.0), float2(0.0, 1.0),

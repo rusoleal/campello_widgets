@@ -6,10 +6,11 @@
 // radial) sampled from a 256x1 LUT texture.
 //
 // Bindings:
-//   bind group 0: ShaderMaskUniforms — register(b0), vertex stage
-//   bind group 1: Texture2D child — register(t0)
-//                 Texture2D lut   — register(t1)
-//                 SamplerState    — register(s2), pixel stage
+//   bind group 0: ShaderMaskUniforms — register(b0, space0), vertex stage
+//   bind group 1: Texture2D child — register(t0, space1)
+//                 Texture2D lut   — register(t1, space1)
+//                 SamplerState    — register(s2, space1), pixel stage
+// See quad.hlsl's doc comment for why the spaceN suffixes are required.
 // ===========================================================================
 
 cbuffer ShaderMaskUniforms : register(b0)
@@ -23,9 +24,9 @@ cbuffer ShaderMaskUniforms : register(b0)
     float3 _pad1;
 };
 
-Texture2D    gChildTex : register(t0);
-Texture2D    gLutTex   : register(t1);
-SamplerState gSmp      : register(s2);
+Texture2D    gChildTex : register(t0, space1);
+Texture2D    gLutTex   : register(t1, space1);
+SamplerState gSmp      : register(s2, space1);
 
 struct ShaderMaskVertexIn
 {

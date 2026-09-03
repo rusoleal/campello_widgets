@@ -9,11 +9,22 @@
 //
 // Bindings — two SEPARATE BindGroupLayouts/root parameters (D3DDrawBackend
 // binds them via setBindGroup(0, ...) and setBindGroup(1, ...) respectively):
-//   bind group 0: QuadUniforms — register(b0), vertex stage
-//   bind group 1: Texture2D — register(t0), SamplerState — register(s1), pixel stage
+//   bind group 0: QuadUniforms — register(b0, space0), vertex stage
+//   bind group 1: Texture2D — register(t0, space1), SamplerState — register(s1, space1), pixel stage
 // The uniform buffer is split from the texture/sampler because the former is
 // small numeric data reused via a pooled ring buffer, while the latter
 // varies per draw (arbitrary images) — see D3DDrawBackend::drawTexturedQuad().
+//
+// The explicit spaceN suffixes matter: campello_gpu's DirectX backend
+// stamps each BindGroupLayout's descriptor ranges with RegisterSpace equal
+// to that layout's index within the pipeline layout (see
+// createUniversalRootSignature()'s doc comment in campello_gpu/src/directx/
+// device.cpp) — the D3D12 equivalent of Vulkan's per-`set` binding restart.
+// Leaving these implicit (defaulting to space0) makes the compiled shader's
+// resource bindings not match the root signature the moment a pipeline has
+// more than one bind group, which D3D12 rejects at PSO-creation time
+// ("Root Signature doesn't match Pixel Shader: ... descriptor range ... is
+// not fully bound in root signature").
 // ===========================================================================
 
 cbuffer QuadUniforms : register(b0)
@@ -23,8 +34,8 @@ cbuffer QuadUniforms : register(b0)
     float  _pad;
 };
 
-Texture2D    gTex : register(t0);
-SamplerState gSmp : register(s1);
+Texture2D    gTex : register(t0, space1);
+SamplerState gSmp : register(s1, space1);
 
 struct QuadVertexIn
 {

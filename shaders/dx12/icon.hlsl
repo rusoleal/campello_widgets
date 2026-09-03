@@ -13,8 +13,11 @@
 // simply larger (adds `tint`), and read from *both* the vertex and pixel
 // stages (unlike QuadUniforms, vertex-only), since IconPS itself reads
 // `tint`.
-//   bind group 0: IconUniforms — register(b0), vertex + pixel stage
-//   bind group 1: Texture2D — register(t0), SamplerState — register(s1), pixel stage
+//   bind group 0: IconUniforms — register(b0, space0), vertex + pixel stage
+//   bind group 1: Texture2D — register(t0, space1), SamplerState — register(s1, space1), pixel stage
+// See quad.hlsl's doc comment for why the spaceN suffixes are required —
+// campello_gpu's DirectX root signature builder stamps RegisterSpace from
+// each bind group's index in the pipeline layout.
 // ===========================================================================
 
 cbuffer IconUniforms : register(b0)
@@ -25,8 +28,8 @@ cbuffer IconUniforms : register(b0)
     float4 tint;      // straight-alpha RGBA recolor
 };
 
-Texture2D    gTex : register(t0);
-SamplerState gSmp : register(s1);
+Texture2D    gTex : register(t0, space1);
+SamplerState gSmp : register(s1, space1);
 
 struct IconVertexIn
 {
