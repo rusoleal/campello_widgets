@@ -24,6 +24,8 @@
 #include <android/log.h>
 #include <android/input.h>
 
+#include <dlfcn.h>
+
 #include "../gpu/vulkan/vulkan_draw_backend.hpp"
 #include "android_text_rasterizer.hpp"
 #include "android_clipboard.hpp"
@@ -844,6 +846,41 @@ static void onVsyncCallback(int64_t frameTimeNanos, void* data)
     }
 }
 
+// AChoreographer_postFrameCallback64() requires API 29+ (see onVsyncCallback's
+// own doc comment on why the 64-bit variant matters at all), but this
+// project's CI compiles against ANDROID_PLATFORM=android-28 -- a deliberate
+// floor (ci.yml: "API 28 is the minimum for Vulkan 1.1 ... which
+// campello_gpu requires"), not an oversight, so raising it isn't the fix.
+// The NDK headers mark the symbol __INTRODUCED_IN(29), which Clang enforces
+// as a hard compile error on a direct call regardless of what actually runs
+// on a real device. Resolved via dlsym instead: works regardless of the
+// compile-time platform level, and correctly returns null on a real
+// API < 29 device, which is exactly when the fallback below is needed.
+using AChoreographerFrameCallback64 = void (*)(int64_t, void*);
+using PostFrameCallback64Fn = void (*)(AChoreographer*, AChoreographerFrameCallback64, void*);
+
+static PostFrameCallback64Fn resolvePostFrameCallback64()
+{
+    static PostFrameCallback64Fn fn = reinterpret_cast<PostFrameCallback64Fn>(
+        dlsym(RTLD_DEFAULT, "AChoreographer_postFrameCallback64"));
+    return fn;
+}
+
+// Fallback for a real API < 29 device (AChoreographer_postFrameCallback()
+// itself has been available since API 24, so this is always safe to call).
+// AChoreographer_frameCallback's frameTimeNanos is `long`, 32 bits on a
+// 32-bit ABI -- see onVsyncCallback's own doc comment for the resulting
+// truncation/freeze bug. Nothing better is available below API 29; this
+// just restores the pre-fix behavior there instead of failing to build at
+// all for every ABI (the bug itself is specific to 32-bit ABIs on top of
+// that, per the same comment -- `long` is already 64-bit on arm64-v8a/
+// x86_64, so this fallback path is harmless there too, just unreachable in
+// practice since any real arm64-v8a/x86_64 device ships well above API 29).
+static void onVsyncCallbackLegacy(long frameTimeNanos, void* data)
+{
+    onVsyncCallback(static_cast<int64_t>(frameTimeNanos), data);
+}
+
 // ---------------------------------------------------------------------------
 // runApp
 // ---------------------------------------------------------------------------
@@ -900,28 +937,36 @@ void runApp(android_app* app, WidgetRef root_widget)
     FrameScheduler::setCallback([choreographer] {
         // Post at most one pending callback per vsync interval.
         const bool was_pending = gFramePending.exchange(true, std::memory_order_relaxed);
-        if (!was_pending)
-            // The 64 variant is required, not just preferred: the plain
-            // AChoreographer_postFrameCallback()'s callback type takes the
-            // vsync timestamp as `long`, which is 32 bits on this ABI
-            // (armeabi-v7a) — truncating the real 64-bit monotonic
-            // nanosecond timestamp to a *signed* 32-bit value overflows
-            // roughly every 2.1s of device uptime, making frameTimeNanos
-            // jump backward right when that happens. Every ticker/
-            // AnimationController computes elapsed/delta time from this
-            // value, sees non-advancing (or negative) time on that tick,
-            // and skips its update — no crash, no exception, just a
-            // widget tree that silently stops getting marked dirty:
-            // vsync keeps firing forever (confirmed: thousands of
-            // onVsyncCallback calls/sec) but buildFrame() returns nullopt
-            // forever after, so nothing is ever built or submitted again.
-            // Confirmed via logging on a real armeabi-v7a device
-            // (Chromecast with Google TV / Mali GPU) — looked exactly
-            // like a GPU driver hang (frozen frame, idle CPU, no crash)
-            // until the vsync counter gave it away. int64_t is unaffected
-            // on 64-bit ABIs (arm64-v8a, x86_64), which is why this never
-            // reproduced on a 64-bit device.
-            AChoreographer_postFrameCallback64(choreographer, onVsyncCallback, gActiveSession.load(std::memory_order_acquire));
+        if (was_pending) return;
+
+        // The 64 variant is preferred, not required on every ABI: the plain
+        // AChoreographer_postFrameCallback()'s callback type takes the
+        // vsync timestamp as `long`, which is 32 bits on a 32-bit ABI
+        // (armeabi-v7a) — truncating the real 64-bit monotonic
+        // nanosecond timestamp to a *signed* 32-bit value overflows
+        // roughly every 2.1s of device uptime, making frameTimeNanos
+        // jump backward right when that happens. Every ticker/
+        // AnimationController computes elapsed/delta time from this
+        // value, sees non-advancing (or negative) time on that tick,
+        // and skips its update — no crash, no exception, just a
+        // widget tree that silently stops getting marked dirty:
+        // vsync keeps firing forever (confirmed: thousands of
+        // onVsyncCallback calls/sec) but buildFrame() returns nullopt
+        // forever after, so nothing is ever built or submitted again.
+        // Confirmed via logging on a real armeabi-v7a device
+        // (Chromecast with Google TV / Mali GPU) — looked exactly
+        // like a GPU driver hang (frozen frame, idle CPU, no crash)
+        // until the vsync counter gave it away. int64_t is unaffected
+        // on 64-bit ABIs (arm64-v8a, x86_64), which is why this never
+        // reproduced on a 64-bit device. Only actually available on a
+        // real API 29+ device though (see resolvePostFrameCallback64's
+        // own doc comment) -- falls back to the plain, always-available
+        // callback (and the pre-fix truncation behavior) below API 29.
+        void* data = gActiveSession.load(std::memory_order_acquire);
+        if (auto* postFrameCallback64 = resolvePostFrameCallback64())
+            postFrameCallback64(choreographer, onVsyncCallback, data);
+        else
+            AChoreographer_postFrameCallback(choreographer, onVsyncCallbackLegacy, data);
     });
 
     std::unique_ptr<WidgetSession> session;
