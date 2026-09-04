@@ -172,10 +172,27 @@ namespace systems::leal::campello_widgets
     {
         if (notifying_) return;
         notifying_ = true;
-        // Snapshot so listeners can safely remove themselves during notification.
+        // Snapshot so listeners can safely remove themselves (or others)
+        // during notification without invalidating this loop's iteration.
+        // That alone isn't sufficient, though: StatefulElement::setState()
+        // rebuilds synchronously, so an EARLIER listener in this same batch
+        // (e.g. NavigatorState's own, which prunes a just-finished pop
+        // transition's route entry on every setState()) can synchronously
+        // unmount a widget whose State is a LATER, not-yet-invoked listener
+        // in this snapshot (e.g. that route's SlideTransitionState) — its
+        // dispose() correctly calls removeListener() before being destroyed,
+        // but the snapshot still holds a copy of its now-dangling captured
+        // `this`. Re-check membership in the *live* list right before
+        // invoking each snapshot entry, so a listener removed mid-batch by
+        // an earlier one's cascade is skipped instead of invoked through
+        // freed state.
         auto snapshot = listeners_;
         for (auto& [id, fn] : snapshot)
-            fn();
+        {
+            const bool still_registered = std::any_of(listeners_.begin(), listeners_.end(),
+                [id](const auto& p) { return p.first == id; });
+            if (still_registered) fn();
+        }
         notifying_ = false;
     }
 
