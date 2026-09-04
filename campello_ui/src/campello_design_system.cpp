@@ -256,10 +256,13 @@ namespace systems::leal::campello_widgets
                 break;
         }
 
-        if (!cfg.enabled) {
-            bg = withOpacity(bg, 0.4f);
-            fg = withOpacity(fg, 0.4f);
-        }
+        // Disabled dimming is applied once, below, via the outer Opacity
+        // wrap (0.4) around the whole button -- bg/fg stay fully saturated
+        // here. Pre-fading them here too used to compound with that wrap
+        // (0.4 * 0.4 = 0.16 effective opacity), making disabled buttons
+        // nearly illegible -- most visibly ButtonPriority::danger, where
+        // white-on-red faded to ~16% read as almost invisible white text on
+        // pale pink.
 
         // Compose label + optional icons
         WidgetRef content = cfg.label;

@@ -242,10 +242,12 @@ namespace systems::leal::campello_widgets
                 break;
         }
 
-        if (!cfg.enabled) {
-            bg = withOpacity(bg, 0.4f);
-            fg = withOpacity(fg, 0.4f);
-        }
+        // Disabled dimming is applied once, below, via the outer Opacity
+        // wrap (0.4) around the whole button -- bg/fg stay fully saturated
+        // here. Pre-fading them here too used to compound with that wrap
+        // (0.4 * 0.4 = 0.16 effective opacity), making disabled buttons
+        // nearly illegible. Same bug, same fix as CampelloDesignSystem's
+        // buildButton() (campello_ui/src/campello_design_system.cpp).
 
         // Apply the computed foreground color to plain Text labels; richer
         // labels (e.g. RichText/Row) are left to the caller.

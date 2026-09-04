@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-04
+
+### Fixed
+
+- **Disabled buttons rendered nearly illegible across `campello_ui`, `campello_material`, and
+  `campello_cupertino`** — each `DesignSystem`'s `buildButton()` faded a disabled button's
+  background/foreground colors to 40% opacity via `withOpacity(bg/fg, 0.4f)`, then separately
+  wrapped the *entire* button in an outer `Opacity{0.4f}` for the same disabled state — the two
+  compounded to an effective ~16% opacity (0.4 × 0.4) instead of the intended single 40%, most
+  visibly on `ButtonPriority::danger` (white text on red faded to ~16% read as nearly invisible
+  white-on-pale-pink). Caught via a screenshot of a disabled "Stop" button in a consuming app.
+  Fixed by removing the redundant manual pre-fade in all three and keeping the single outer
+  `Opacity` wrap as the sole source of disabled dimming. `campello_fluent`'s `buildButton()` never
+  had this pattern and was unaffected. Verified against all four `*_tests` binaries (855 passing,
+  69 pre-existing GPU-visual skips, 0 failures) — the existing `BuildDisabledButtonReturnsWidget`-
+  style tests only assert the widget is returned, not exact opacity math, so this class of bug
+  wasn't caught by them; not adding a stricter regression test in this pass since none of the
+  three affected files have an existing pattern for asserting composited/effective opacity through
+  a nested `Opacity` widget.
+
 ## [0.8.1] - 2026-09-04
 
 ### Fixed
