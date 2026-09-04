@@ -9,6 +9,24 @@
 #include <atomic>
 #include <unordered_set>
 
+// On Windows, campello_widgets builds as a DLL with WINDOWS_EXPORT_ALL_SYMBOLS
+// ON (windows.cmake) — but that CMake mechanism only auto-exports *function*
+// symbols, not *data* symbols. Without an explicit dllexport/dllimport
+// annotation, the DLL and any executable linking against it (e.g. the test
+// binary) each get their own private copy of every `inline static` member
+// below, so setting one from outside the DLL is invisible to framework code
+// running inside it — see debug_flags.hpp's identical pattern/comment, which
+// this mirrors. CAMPELLO_WIDGETS_BUILDING_DLL is a PRIVATE compile
+// definition on the campello_widgets target itself, so it's defined while
+// compiling the library but not for consumers.
+#if defined(_WIN32) && defined(CAMPELLO_WIDGETS_BUILDING_DLL)
+    #define CW_RENDER_OBJECT_API __declspec(dllexport)
+#elif defined(_WIN32)
+    #define CW_RENDER_OBJECT_API __declspec(dllimport)
+#else
+    #define CW_RENDER_OBJECT_API
+#endif
+
 namespace systems::leal::campello_widgets
 {
 
@@ -321,10 +339,10 @@ namespace systems::leal::campello_widgets
         std::string toStringShort() const override;
 
     private:
-        inline static std::atomic<IDrawBackend*> s_active_backend_{nullptr};
-        inline static std::atomic<float> s_active_dpr_{1.0f};
-        inline static std::atomic<float> s_active_paint_origin_x_{0.0f};
-        inline static std::atomic<float> s_active_paint_origin_y_{0.0f};
+        CW_RENDER_OBJECT_API inline static std::atomic<IDrawBackend*> s_active_backend_{nullptr};
+        CW_RENDER_OBJECT_API inline static std::atomic<float> s_active_dpr_{1.0f};
+        CW_RENDER_OBJECT_API inline static std::atomic<float> s_active_paint_origin_x_{0.0f};
+        CW_RENDER_OBJECT_API inline static std::atomic<float> s_active_paint_origin_y_{0.0f};
         static std::unordered_set<const RenderObject*> s_alive_;
     };
 
