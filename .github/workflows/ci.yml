@@ -215,10 +215,26 @@ jobs:
       - name: Verify GDK environment
         shell: pwsh
         run: |
-          Write-Host "GameDKCoreLatest = $env:GameDKCoreLatest"
-          if (-not $env:GameDKCoreLatest) {
-            Write-Host "::warning::GameDKCoreLatest not set in this step's environment -- the GDK installer may need a fresh shell/runner restart for machine-level env vars to propagate. If the Configure step below fails to locate the GDK, this is why."
+          # winget's GDK installer sets GameDKCoreLatest as a
+          # machine-level environment variable via the registry, but this
+          # step's own PowerShell process was already running before the
+          # installer wrote it -- a live process never picks up another
+          # process's environment-block change, so $env:GameDKCoreLatest
+          # here is genuinely empty even though installation succeeded.
+          # Read it back explicitly from the Machine (and User, in case
+          # winget elevated differently) registry scope and forward it
+          # into $GITHUB_ENV so the fresh shells GitHub Actions spawns for
+          # the later Configure/Build steps actually see it.
+          $gdk = [System.Environment]::GetEnvironmentVariable("GameDKCoreLatest", "Machine")
+          if (-not $gdk) {
+            $gdk = [System.Environment]::GetEnvironmentVariable("GameDKCoreLatest", "User")
           }
+          if (-not $gdk) {
+            Write-Host "::error::GameDKCoreLatest not found in the Machine or User registry environment scope after installing the GDK -- the installer may have failed, or changed the variable it sets."
+            exit 1
+          }
+          Write-Host "GameDKCoreLatest = $gdk"
+          "GameDKCoreLatest=$gdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Cache dependency sources
         uses: actions/cache@v5
