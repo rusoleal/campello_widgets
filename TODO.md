@@ -1148,6 +1148,45 @@ backlog, no bloquea declarar 1.0.0.
       Android fullscreen/edge-to-edge mode, then verifying `SafeArea` insets
       correctly account for the system bars once content is drawn behind
       them.
+- [ ] **D3DDrawBackend's text pipeline needs rewriting onto DirectWrite/
+      Direct2D — classic GDI doesn't exist on the Xbox/Gaming.Desktop.x64
+      GDK partition** (found 2026-09-04, CI: `.github/workflows/ci.yml`'s
+      `windows-gdk` job, once a separate CI env-var-propagation bug in that
+      same job was fixed first) — `createFontForStyle()`/`getOrCreateFont()`/
+      `measureText()`/`rasterizeText()` in `src/windows/d3d_draw_backend.cpp`
+      are entirely GDI-based (`LOGFONTW`, `CreateFontIndirectW`, `HDC`,
+      `CreateDIBSection`, `GetTextExtentPoint32W`, `DrawTextW`, …) —
+      undeclared under the GDK partition's restricted Windows API surface,
+      breaking that build with dozens of C2065/C3861 errors. Scope is small
+      and well-isolated (those 4 functions + the `font_cache_`/`FontCacheKey`
+      map + one destructor cleanup loop — no other GDI call sites in the
+      file), but the fix isn't a drop-in swap: DirectWrite/Direct2D's core
+      interfaces (`IDWriteFactory`, `IDWriteTextFormat`, `IDWriteTextLayout`,
+      `ID2D1Factory1`, `ID2D1DeviceContext`) are partition-compatible, but
+      the commonly-documented *GDI-interop bridges*
+      (`IDWriteGdiInterop`/`ID2D1GdiInteropRenderTarget`) are not, since they
+      bridge directly into classic GDI — rasterization has to go through
+      Direct2D's own CPU-readable bitmap target instead
+      (`ID2D1Bitmap1` created with `D2D1_BITMAP_OPTIONS_TARGET |
+      D2D1_BITMAP_OPTIONS_CPU_READ`, `Map()`/`Unmap()` for pixel access,
+      replacing the DIB-plus-luminance-to-alpha trick the GDI path needs).
+      `measureText()` would become an `IDWriteTextLayout` +
+      `DWRITE_TEXT_METRICS`. Needs a small standalone `ID3D11Device`
+      (`D3D11_CREATE_DEVICE_BGRA_SUPPORT`) to back the D2D device, decoupled
+      from the existing D3D12 pipeline — no new link dependencies either
+      way, `d2d1`/`dwrite`/`d3d11` are already linked in `windows.cmake`,
+      just unused until now. **The real risk**: this isn't GDK-only code —
+      it's the *only* text rendering path for the regular Windows D3D12
+      backend too, currently working and covered by the Fluent-2 visual-
+      fidelity pass. A rewrite here needs local regression testing on the
+      regular Windows path *before* ever touching CI, since the GDK-specific
+      compile path itself can't be verified locally at all (no Xbox GDK
+      installed on this machine) — only through CI's own feedback loop.
+      Estimated ~150-250 lines of new COM-heavy code; pixel-format/stride
+      handling (D2D bitmaps can have padded stride, unlike the current
+      tightly-packed DIB) is the likeliest place to get subtly wrong.
+      Deliberately deferred rather than rushed into the same session as the
+      CI-log-triage loop that found it.
 
 ### Gesture Arena / Recognizer Arbitration (found 2026-06-18)
 
