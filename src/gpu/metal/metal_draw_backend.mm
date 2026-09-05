@@ -2269,10 +2269,18 @@ struct alignas(16) ShaderMaskUniforms {
     float viewport[2];
     float gradient_type;     // 0 = linear, 1 = radial, 2 = sweep
     float tile_mode;         // 0 = clamp, 1 = repeated, 2 = mirror
-    float gradient_p1[4];    // linear: begin.xy; radial/sweep: center.xy
-    float gradient_p2[4];    // linear: end.xy; radial: radius in [0]; sweep: start/end angle in [0]/[1]
+    // The Metal-side ShaderMaskUniforms declares these as float4/float3,
+    // which the Metal Shading Language aligns to 16 bytes -- unlike a plain
+    // C++ float[4]/float[3] array, which only has 4-byte natural alignment.
+    // Without alignas(16) here, this struct lays out 16 bytes smaller than
+    // the shader's (64 vs 80), since the compiler never inserts the padding
+    // before _pad1 that Metal requires -- Metal API Validation catches the
+    // resulting out-of-bounds read as "length(64) ... but argument has a
+    // length(80)" in shaderMaskVertex.
+    alignas(16) float gradient_p1[4]; // linear: begin.xy; radial/sweep: center.xy
+    alignas(16) float gradient_p2[4]; // linear: end.xy; radial: radius in [0]; sweep: start/end angle in [0]/[1]
     float blend_mode;        // 0 = srcIn, 1 = modulate
-    float _pad1[3];
+    alignas(16) float _pad1[3];
 };
 
 struct alignas(16) ClipShapeUniforms {

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-05
+
+### Fixed
+
+- **`ShaderMaskUniforms` (Metal) laid out 16 bytes smaller than the shader expected, tripping
+  Metal API Validation** — the CPU-side struct in `metal_draw_backend.mm` declared
+  `gradient_p1`/`gradient_p2`/`_pad1` as plain `float[4]`/`float[3]` arrays, which only have 4-byte
+  natural alignment in C++. The Metal-side struct (`widgets/metal.metal`'s `ShaderMaskUniforms`)
+  declares the equivalent fields as `float4`/`float3`, which MSL aligns to 16 bytes — so the
+  compiler never inserted the padding before `_pad1` that Metal requires, producing a struct 64
+  bytes instead of the required 80. Under a plain `.app` launch (no Metal API Validation) this was
+  silently tolerated as an out-of-bounds buffer read; running under Xcode's debugger (which enables
+  validation automatically) surfaced it as a `shaderMaskVertex` assertion: "buffer ... has space for
+  64 bytes, but argument has a length(80)". Fixed by adding `alignas(16)` to the three affected
+  fields, matching the Metal-side layout exactly (verified `sizeof(ShaderMaskUniforms) == 80` via a
+  standalone compile check). Found while debugging an unrelated rendering issue in a consuming app
+  under Xcode's GPU frame-capture tooling. Verified via `./build.sh darwin` (clean build, all
+  examples) and `./test.sh` (1073/1073 passing).
+
 ## [0.8.2] - 2026-09-04
 
 ### Fixed
