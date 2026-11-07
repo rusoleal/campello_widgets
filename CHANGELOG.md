@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-07
+
+### Fixed
+
+- **`Positioned::fill` assigned `int` literals to its `std::optional<float>` edges**, which MSVC
+  reports as C4244 (`int` to `float`) inside `<optional>` at template instantiation. Consumers
+  building with `/W4 /WX` failed, and `/external:W0` can't silence it because the warning surfaces
+  in the standard library header. Fixed by using `0.0f`. Found in campello_bim's Windows CI (#2).
+
 ## [0.8.3] - 2026-09-05
 
 ### Fixed
