@@ -70,10 +70,10 @@ namespace systems::leal::campello_widgets
          */
         static std::shared_ptr<Positioned> fill(const WidgetRef& child) {
             auto p = std::make_shared<Positioned>();
-            p->left = 0;
-            p->top = 0;
-            p->right = 0;
-            p->bottom = 0;
+            p->left = 0.0f;
+            p->top = 0.0f;
+            p->right = 0.0f;
+            p->bottom = 0.0f;
             p->child = child;
             return p;
         }
