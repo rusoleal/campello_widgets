@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-11-08
+
+### Changed
+
+- **campello_gpu v0.26.0** (was v0.24.1). Brings MSAA on DirectX (0.24.x line), UWP/Xbox support and the feature level 11_0 fallback (0.25.0), the Metal readback fix under API Validation and the emdawnwebgpu WebGPU backend (0.26.0). No API changes affect campello_widgets.
+
 ## [0.8.4] - 2026-11-07
 
 ### Fixed
