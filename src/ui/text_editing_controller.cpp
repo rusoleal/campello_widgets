@@ -18,6 +18,22 @@ namespace systems::leal::campello_widgets
     TextEditingController* TextEditingController::s_focused_ = nullptr;
     bool TextEditingController::s_focused_obscured_ = false;
 
+    TextEditingController* TextEditingController::focused() noexcept
+    {
+        return s_focused_;
+    }
+
+    bool TextEditingController::focusedIsObscured() noexcept
+    {
+        return s_focused_obscured_;
+    }
+
+    void TextEditingController::setFocused(TextEditingController* controller, bool obscured) noexcept
+    {
+        s_focused_          = controller;
+        s_focused_obscured_ = controller ? obscured : false;
+    }
+
     TextEditingController::TextEditingController(std::string initial_text)
         : text_(std::move(initial_text))
         , selection_start_(static_cast<int>(text_.size()))

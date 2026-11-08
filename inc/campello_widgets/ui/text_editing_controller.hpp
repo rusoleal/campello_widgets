@@ -195,7 +195,7 @@ namespace systems::leal::campello_widgets
          * document-level undo. Kept in sync by TextField's FocusNode
          * focus-change callback — not meant to be set from application code.
          */
-        static TextEditingController* focused() noexcept { return s_focused_; }
+        static TextEditingController* focused() noexcept;
 
         /**
          * @brief True if the currently-focused TextField has obscure_text
@@ -209,14 +209,10 @@ namespace systems::leal::campello_widgets
          * clipboard — same reasoning a native password field never lets
          * its real contents get copied.
          */
-        static bool focusedIsObscured() noexcept { return s_focused_obscured_; }
+        static bool focusedIsObscured() noexcept;
 
         /** @brief Sets/clears the focused() controller. Called by TextField's focus handling. */
-        static void setFocused(TextEditingController* controller, bool obscured = false) noexcept
-        {
-            s_focused_          = controller;
-            s_focused_obscured_ = controller ? obscured : false;
-        }
+        static void setFocused(TextEditingController* controller, bool obscured = false) noexcept;
 
         // ------------------------------------------------------------------
         // Listener API
@@ -267,6 +263,10 @@ namespace systems::leal::campello_widgets
         std::vector<EditSnapshot> redo_stack_;
         uint64_t last_snapshot_time_ms_ = 0;
 
+        // Defined (and only touched) in text_editing_controller.cpp: the
+        // accessors above are out of line so these never need exporting
+        // from the Windows DLL, where WINDOWS_EXPORT_ALL_SYMBOLS exports
+        // functions but not data.
         static TextEditingController* s_focused_;
         static bool s_focused_obscured_;
 
