@@ -241,3 +241,35 @@ TEST(Renderer, PresentFpsSamplerDoesNotResetForOrdinaryJank)
 
     EXPECT_EQ(sampler.count(), 2) << "Both deltas should be kept — no reset for ordinary jank";
 }
+
+// ---------------------------------------------------------------------------
+// requestFrameCapture(): the request rides on the next built frame only, and
+// forces that frame even when nothing changed. (The GPU side -- the offscreen
+// redraw and PNG -- is covered by tests/platform/test_frame_capture.cpp.)
+// ---------------------------------------------------------------------------
+
+TEST(Renderer, FrameCaptureRequestGoesToTheNextFrameOnly)
+{
+    auto root = std::make_shared<SimplePaintingBox>();
+    cw::Renderer renderer(/*device=*/nullptr, root, cw::Color::white());
+
+    auto first = renderer.buildFrame(100.0f, 100.0f);
+    ASSERT_TRUE(first.has_value());
+    EXPECT_TRUE(first->capture_path.empty());
+
+    // Nothing changed: no frame...
+    EXPECT_FALSE(renderer.buildFrame(100.0f, 100.0f).has_value());
+
+    // ...until a capture is requested, which forces one carrying the path.
+    renderer.requestFrameCapture("frame.png");
+    auto captured = renderer.buildFrame(100.0f, 100.0f);
+    ASSERT_TRUE(captured.has_value());
+    EXPECT_EQ(captured->capture_path, "frame.png");
+
+    // The request is consumed: later frames carry no path.
+    root->markNeedsPaint();
+    renderer.notePaintRequested();
+    auto after = renderer.buildFrame(100.0f, 100.0f);
+    ASSERT_TRUE(after.has_value());
+    EXPECT_TRUE(after->capture_path.empty());
+}

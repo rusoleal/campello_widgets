@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Debug frame capture: `Renderer::requestFrameCapture(path)`** saves the next frame, meaning the whole
+  window in physical pixels, as a PNG. That frame is presented as usual and also drawn a second time
+  into an offscreen texture, which is read back on the raster thread. The texture the window
+  presents (e.g. a `CAMetalDrawable`) usually can't be read back, while this one can on every backend.
+  The request forces a repaint, so it works while the UI is idle, and normal frames are unaffected.
+  Without code changes: `CAMPELLO_WIDGETS_CAPTURE=<file.png>`, optionally with
+  `CAMPELLO_WIDGETS_CAPTURE_FRAME=<n>` (frame ticks to wait first, default 60). `FramePackage` gains a
+  `capture_path` field.
+
+### Fixed
+
+- **The GPU integration tests didn't link outside Linux**: the `EmbeddedApp` and GTK menu tests
+  were compiled on every platform. They now build only on Linux.
+
 ### Changed
 
 - **campello_gpu v0.27.1** (was v0.26.0). Brings the 0.27.0 WebGPU work and the Metal cull-mode fix (0.27.1). campello_widgets' pipelines use `CullMode::none`, so drawing is unchanged. No API changes affect campello_widgets.

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -162,6 +164,26 @@ namespace systems::leal::campello_widgets
          *                 `target` assigned.
          */
         bool rasterFrame(const FramePackage& package);
+
+        /**
+         * @brief Debug aid: saves the next frame — the whole window, in
+         *        physical pixels — as a PNG file.
+         *
+         * Call on the UI thread. Forces a full repaint so a frame is
+         * produced even when the UI is idle. That frame is presented as
+         * usual and also drawn a second time into an offscreen texture,
+         * which is read back and written to `png_path` on the raster thread
+         * (a "[campello_widgets] frame captured" line is printed on stderr).
+         * Normal frames are unaffected. A second request before the first is
+         * built replaces it.
+         *
+         * The same is available without code changes through environment
+         * variables, read once at startup:
+         *   CAMPELLO_WIDGETS_CAPTURE=<file.png>       capture once
+         *   CAMPELLO_WIDGETS_CAPTURE_FRAME=<n>        after n frame ticks
+         *                                             (default 60, lets layout settle)
+         */
+        void requestFrameCapture(std::string png_path);
 
         /**
          * @brief Renders one frame to `target` — `buildFrame()` followed by
@@ -1049,6 +1071,20 @@ namespace systems::leal::campello_widgets
 
         // Native drawable to present after this frame's command buffer (MTLDrawable / CAMetalDrawable).
         void* pending_drawable_ = nullptr;
+
+        // --- debug frame capture (requestFrameCapture()) ---
+        // UI-thread side: the path for the next built frame, and the
+        // environment-variable request waiting for its frame tick.
+        std::string pending_capture_path_;
+        std::string env_capture_path_;
+        uint64_t    env_capture_tick_  = 0;
+        uint64_t    build_ticks_       = 0;
+        bool        env_capture_read_  = false;
+        void pollCaptureEnvironment();
+        // Raster-thread side: true while rasterFrame() redraws a frame
+        // offscreen for a capture (skips presentation and frame timing).
+        bool        capture_pass_      = false;
+        void captureFrame(const FramePackage& package);
     };
 
 } // namespace systems::leal::campello_widgets
