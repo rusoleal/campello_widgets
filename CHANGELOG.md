@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **campello_gpu v0.27.1** (was v0.26.0). Brings the 0.27.0 WebGPU work and the Metal cull-mode fix (0.27.1). campello_widgets' pipelines use `CullMode::none`, so drawing is unchanged. No API changes affect campello_widgets.
+
 ## [0.8.5] - 2026-11-08
 
 ### Changed
