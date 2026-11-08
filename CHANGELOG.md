@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`TextEditingController::focused()` didn't link from apps on Windows.** It was inline and read a
+  static data member, which the Windows DLL doesn't export (`WINDOWS_EXPORT_ALL_SYMBOLS` covers
+  functions only), giving LNK2001 for `s_focused_`. `focused()`, `focusedIsObscured()` and
+  `setFocused()` are now defined in the library.
+
 ## [0.9.0] - 2026-11-08
 
 ### Added
