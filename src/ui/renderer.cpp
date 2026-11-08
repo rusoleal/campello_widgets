@@ -10,6 +10,7 @@
 #include <campello_widgets/ui/text_style.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 #include "gpu/path_tessellation.hpp"
+#include "diagnostics/frame_capture.hpp"
 #include <vector_math/vector3.hpp>
 
 #include <algorithm>
@@ -17,6 +18,8 @@
 #include <cmath>
 #include <limits>
 #include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <utility>
 
 #include <campello_gpu/device.hpp>
@@ -177,6 +180,8 @@ namespace systems::leal::campello_widgets
         if (auto* ts = TickerScheduler::active())
             ts->tick(now_ms);
 
+        pollCaptureEnvironment();
+
         // "Build" phase: widget rebuild, layout, and paint-command recording —
         // mirrors Flutter's UI-thread timing. Bracketed with wall-clock
         // timestamps so the overlay shows actual work cost, not request rate.
@@ -280,6 +285,7 @@ namespace systems::leal::campello_widgets
         package.has_backdrop_filter = needs_backdrop_capture;
         package.max_sigma_x         = max_sigma_x_;
         package.max_sigma_y         = max_sigma_y_;
+        package.capture_path        = std::exchange(pending_capture_path_, std::string{});
 
         // Consume-and-clear the pending drawable, mirroring the old
         // single-threaded contract exactly. Wrapped in a non-owning
@@ -462,7 +468,7 @@ namespace systems::leal::campello_widgets
         // Schedule swapchain presentation just before our submit() so that
         // nested submit() calls (e.g. from offscreen renderers triggered
         // during the layout pass) cannot steal the drawable.
-        if (package.retained_drawable) {
+        if (package.retained_drawable && !capture_pass_) {
             device_->scheduleNextPresent(package.retained_drawable.get());
         }
 
@@ -499,6 +505,13 @@ namespace systems::leal::campello_widgets
                 std::chrono::duration<float, std::milli>(
                     std::chrono::steady_clock::now() - raster_start).count());
 
+        if (capture_pass_) {
+            return true;  // offscreen redraw for a capture: not a presented frame
+        }
+        if (!package.capture_path.empty()) {
+            captureFrame(package);
+        }
+
         const auto raster_end = std::chrono::steady_clock::now();
         {
             std::lock_guard<std::mutex> lock(sampler_mutex_);
@@ -511,6 +524,72 @@ namespace systems::leal::campello_widgets
         }
 
         return true;
+    }
+
+    void Renderer::requestFrameCapture(std::string png_path)
+    {
+        pending_capture_path_ = std::move(png_path);
+        forceRefresh();
+        notePaintRequested();
+        FrameScheduler::scheduleFrame();
+    }
+
+    void Renderer::pollCaptureEnvironment()
+    {
+        ++build_ticks_;
+        if (!env_capture_read_) {
+            env_capture_read_ = true;
+            if (const char* path = std::getenv("CAMPELLO_WIDGETS_CAPTURE"); path && *path) {
+                env_capture_path_ = path;
+                env_capture_tick_ = 60;
+                if (const char* frame = std::getenv("CAMPELLO_WIDGETS_CAPTURE_FRAME"))
+                    env_capture_tick_ = std::strtoull(frame, nullptr, 10);
+            }
+        }
+        if (!env_capture_path_.empty() && build_ticks_ >= env_capture_tick_) {
+            requestFrameCapture(std::exchange(env_capture_path_, std::string{}));
+        }
+    }
+
+    void Renderer::captureFrame(const FramePackage& package)
+    {
+        namespace GPU = campello_gpu;
+        const uint32_t w = static_cast<uint32_t>(package.viewport_width);
+        const uint32_t h = static_cast<uint32_t>(package.viewport_height);
+        const GPU::PixelFormat format =
+            draw_backend_ ? draw_backend_->offscreenPixelFormat() : GPU::PixelFormat::bgra8unorm;
+        auto texture = (w > 0 && h > 0)
+            ? device_->createTexture(GPU::TextureType::tt2d, format, w, h, 1, 1, 1,
+                  static_cast<GPU::TextureUsage>(
+                      static_cast<int>(GPU::TextureUsage::renderTarget) |
+                      static_cast<int>(GPU::TextureUsage::copySrc)))
+            : nullptr;
+        auto view = texture ? texture->createView(format, 1) : nullptr;
+        if (!view) {
+            std::fprintf(stderr, "[campello_widgets] frame capture: could not create a %ux%u target\n", w, h);
+            return;
+        }
+
+        // Same frame, drawn again into our own texture: the presented one
+        // (e.g. a CAMetalDrawable) usually can't be read back.
+        FramePackage copy = package;
+        copy.target = view;
+        copy.retained_drawable.reset();
+        copy.capture_path.clear();
+        copy.clear_target = true;
+        capture_pass_ = true;
+        const bool drawn = rasterFrame(copy);
+        capture_pass_ = false;
+
+        std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+        if (!drawn || !texture->download(0, 0, pixels.data(), pixels.size())) {
+            std::fprintf(stderr, "[campello_widgets] frame capture: drawing or reading back the frame failed\n");
+            return;
+        }
+        if (detail::writeFramePng(package.capture_path, w, h, pixels.data(), format)) {
+            std::fprintf(stderr, "[campello_widgets] frame captured to %s (%ux%u)\n",
+                         package.capture_path.c_str(), w, h);
+        }
     }
 
     void Renderer::recordPresentSample(

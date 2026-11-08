@@ -95,6 +95,10 @@ if(BUILD_INTEGRATION_TESTS)
         )
         list(APPEND PLATFORM_TEST_SOURCES ${PLATFORM_TEST_OBJC_SOURCES})
     endif()
+    # EmbeddedApp and the GTK platform menu exist only in the Linux build.
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        list(FILTER PLATFORM_TEST_SOURCES EXCLUDE REGEX ".*/platform/test_(embedded_app|linux_platform_menu)\\.cpp$")
+    endif()
 
     if(PLATFORM_TEST_SOURCES)
         add_executable(campello_widgets_integration_tests ${PLATFORM_TEST_SOURCES})

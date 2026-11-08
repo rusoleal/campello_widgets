@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include <campello_widgets/ui/draw_command.hpp>
 #include <campello_widgets/ui/color.hpp>
 
@@ -49,6 +51,11 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<void> retained_drawable;
 
         uint64_t frame_id = 0; // diagnostics only
+
+        // Debug frame capture (see Renderer::requestFrameCapture()): when
+        // non-empty, rasterFrame() also draws this frame into an offscreen
+        // texture and saves it to this PNG path. Empty on normal frames.
+        std::string capture_path;
     };
 
 } // namespace systems::leal::campello_widgets
