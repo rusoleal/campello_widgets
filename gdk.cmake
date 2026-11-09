@@ -51,7 +51,7 @@ endif()
 file(GLOB_RECURSE CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
-list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|linux|windows)/.*")
+list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/(android|macos|ios|linux|windows|web)/.*")
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 # Same reasoning as windows.cmake: this target uses its own D3D12 backend
 # (src/gdk/, src/windows/d3d_draw_backend.* below), not Vulkan or Metal.

@@ -22,7 +22,7 @@ if(NOT campello_input_POPULATED)
     FetchContent_Populate(campello_input)
     include_directories(${campello_input_SOURCE_DIR}/inc)
 
-    if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Android" OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR CMAKE_SYSTEM_NAME STREQUAL "iOS" OR EMSCRIPTEN)
         # campello_input v0.2.1 has broken platform cmake/source files on Android,
         # Linux, and iOS that prevent a clean add_subdirectory build:
         #   - android.cmake: find_package(game-activity REQUIRED) — AGDK not
@@ -32,6 +32,7 @@ if(NOT campello_input_POPULATED)
         #   - touch_apple.mm (iOS): references UITraitCollection.maximumNumberOfTouches
         #     (non-existent property) and CHHapticPatternPlayer (missing import),
         #     causing compile errors on the iOS SDK.
+        #   - Emscripten: no web platform in campello_input.
         # In all three cases campello_widgets' platform code does not reference any
         # campello_input symbols, so an INTERFACE stub satisfies the link
         # dependency without requiring a working campello_input build.

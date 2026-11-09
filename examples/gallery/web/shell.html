@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>campello_widgets</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #fff; }
+  #canvas { display: block; width: 100vw; height: 100vh; outline: none; }
+  #status { position: fixed; left: 12px; bottom: 12px; font: 13px system-ui, sans-serif; color: #888; }
+</style>
+</head>
+<body>
+<canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div id="status"></div>
+<script>
+  var Module = {
+    print: function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); },
+    setStatus: function (t) { document.getElementById('status').textContent = t; },
+  };
+  if (!navigator.gpu) {
+    document.getElementById('status').textContent = 'This browser has no WebGPU.';
+  }
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

@@ -25,7 +25,14 @@
 #include <campello_gpu/constants/primitive_topology.hpp>
 #include <campello_gpu/descriptors/begin_render_pass_descriptor.hpp>
 
+#if defined(__EMSCRIPTEN__)
+// Web: WGSL ports of the shaders (shaders/webgpu/, build_webgpu_shaders.sh).
+#include <shaders/webgpu_widgets.h>
+#define WIDGET_SHADER(name) device_->createShaderModule(shaders::k##name##_wgsl)
+#else
 #include <shaders/vulkan_widgets.h>
+#define WIDGET_SHADER(name) loadSpv(device_, shaders::k##name##_spv, shaders::k##name##_spvSize)
+#endif
 
 #include <algorithm>
 #include <cmath>
@@ -167,6 +174,7 @@ struct alignas(16) BlurUniforms
 // Helpers
 // ---------------------------------------------------------------------------
 
+#if !defined(__EMSCRIPTEN__)
 static std::shared_ptr<GPU::ShaderModule> loadSpv(
     std::shared_ptr<GPU::Device> device,
     const unsigned char* data,
@@ -174,6 +182,7 @@ static std::shared_ptr<GPU::ShaderModule> loadSpv(
 {
     return device->createShaderModule(data, size);
 }
+#endif
 
 VulkanDrawBackend::~VulkanDrawBackend()
 {
@@ -282,23 +291,23 @@ VulkanDrawBackend::VulkanDrawBackend(
     , pixel_format_(pixel_format)
 {
     // Load SPIR-V shader modules
-    auto rect_vert         = loadSpv(device_, shaders::krect_vert_spv,         shaders::krect_vert_spvSize);
-    auto rect_frag         = loadSpv(device_, shaders::krect_frag_spv,         shaders::krect_frag_spvSize);
-    auto colored_quad_vert = loadSpv(device_, shaders::kcolored_quad_vert_spv, shaders::kcolored_quad_vert_spvSize);
-    auto rect_aa_vert      = loadSpv(device_, shaders::krect_aa_vert_spv,      shaders::krect_aa_vert_spvSize);
-    auto rect_aa_frag      = loadSpv(device_, shaders::krect_aa_frag_spv,      shaders::krect_aa_frag_spvSize);
-    auto vertices_vert     = loadSpv(device_, shaders::kvertices_vert_spv,     shaders::kvertices_vert_spvSize);
-    auto vertices_frag     = loadSpv(device_, shaders::kvertices_frag_spv,     shaders::kvertices_frag_spvSize);
-    auto rrect_vert        = loadSpv(device_, shaders::krrect_vert_spv,        shaders::krrect_vert_spvSize);
-    auto rrect_frag        = loadSpv(device_, shaders::krrect_frag_spv,        shaders::krrect_frag_spvSize);
-    auto arc_vert          = loadSpv(device_, shaders::karc_vert_spv,          shaders::karc_vert_spvSize);
-    auto arc_frag          = loadSpv(device_, shaders::karc_frag_spv,          shaders::karc_frag_spvSize);
-    auto line_vert         = loadSpv(device_, shaders::kline_vert_spv,         shaders::kline_vert_spvSize);
-    auto line_frag         = loadSpv(device_, shaders::kline_frag_spv,         shaders::kline_frag_spvSize);
-    auto quad_vert         = loadSpv(device_, shaders::kquad_vert_spv,         shaders::kquad_vert_spvSize);
-    auto quad_frag         = loadSpv(device_, shaders::kquad_frag_spv,         shaders::kquad_frag_spvSize);
-    auto shader_mask_vert  = loadSpv(device_, shaders::kshader_mask_vert_spv,  shaders::kshader_mask_vert_spvSize);
-    auto shader_mask_frag  = loadSpv(device_, shaders::kshader_mask_frag_spv,  shaders::kshader_mask_frag_spvSize);
+    auto rect_vert         = WIDGET_SHADER(rect_vert);
+    auto rect_frag         = WIDGET_SHADER(rect_frag);
+    auto colored_quad_vert = WIDGET_SHADER(colored_quad_vert);
+    auto rect_aa_vert      = WIDGET_SHADER(rect_aa_vert);
+    auto rect_aa_frag      = WIDGET_SHADER(rect_aa_frag);
+    auto vertices_vert     = WIDGET_SHADER(vertices_vert);
+    auto vertices_frag     = WIDGET_SHADER(vertices_frag);
+    auto rrect_vert        = WIDGET_SHADER(rrect_vert);
+    auto rrect_frag        = WIDGET_SHADER(rrect_frag);
+    auto arc_vert          = WIDGET_SHADER(arc_vert);
+    auto arc_frag          = WIDGET_SHADER(arc_frag);
+    auto line_vert         = WIDGET_SHADER(line_vert);
+    auto line_frag         = WIDGET_SHADER(line_frag);
+    auto quad_vert         = WIDGET_SHADER(quad_vert);
+    auto quad_frag         = WIDGET_SHADER(quad_frag);
+    auto shader_mask_vert  = WIDGET_SHADER(shader_mask_vert);
+    auto shader_mask_frag  = WIDGET_SHADER(shader_mask_frag);
 
     if (!rect_vert || !rect_frag || !colored_quad_vert || !rrect_vert || !rrect_frag ||
         !line_vert || !line_frag || !quad_vert || !quad_frag ||
@@ -906,8 +915,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     // own pipeline layout (icon_layout_ — IconUniforms need fragment-stage
     // visibility for `tint`, unlike quad_layout_).
     {
-        auto icon_vert = loadSpv(device_, shaders::kicon_vert_spv, shaders::kicon_vert_spvSize);
-        auto icon_frag = loadSpv(device_, shaders::kicon_frag_spv, shaders::kicon_frag_spvSize);
+        auto icon_vert = WIDGET_SHADER(icon_vert);
+        auto icon_frag = WIDGET_SHADER(icon_frag);
         if (!icon_vert || !icon_frag) {
             std::fprintf(stderr, "[VulkanDrawBackend] icon shader module load FAILED\n");
         } else {
@@ -937,8 +946,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     // Used for all normal UI image/text draws; falls back to quad_pipeline_
     // for perspective-rotated quads where w≠1 or edges aren't grid-aligned.
     {
-        auto aa_vert = loadSpv(device_, shaders::kquad_aa_vert_spv, shaders::kquad_aa_vert_spvSize);
-        auto aa_frag = loadSpv(device_, shaders::kquad_frag_spv,    shaders::kquad_frag_spvSize);
+        auto aa_vert = WIDGET_SHADER(quad_aa_vert);
+        auto aa_frag = WIDGET_SHADER(quad_frag);
         if (aa_vert && aa_frag)
         {
             GPU::RenderPipelineDescriptor desc{};
@@ -966,8 +975,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     // texture back to the main pass through an SDF rounded-rect/oval mask.
     // Reuses quad_layout_ (same BGL: texture@1, sampler@2; uniform data rides a push constant).
     {
-        auto cs_vert = loadSpv(device_, shaders::kclip_shape_vert_spv,  shaders::kclip_shape_vert_spvSize);
-        auto cs_frag = loadSpv(device_, shaders::kclip_shape_frag_spv,  shaders::kclip_shape_frag_spvSize);
+        auto cs_vert = WIDGET_SHADER(clip_shape_vert);
+        auto cs_frag = WIDGET_SHADER(clip_shape_frag);
         if (cs_vert && cs_frag)
         {
             GPU::RenderPipelineDescriptor desc{};
@@ -1016,8 +1025,8 @@ VulkanDrawBackend::VulkanDrawBackend(
     // Uses gl_VertexIndex to generate corners (no vertex buffer needed).
     // Reuses quad_layout_ (same BGL: texture@1, sampler@2; uniform data rides a push constant).
     {
-        auto bv = loadSpv(device_, shaders::kblur_vert_spv, shaders::kblur_vert_spvSize);
-        auto bf = loadSpv(device_, shaders::kblur_frag_spv, shaders::kblur_frag_spvSize);
+        auto bv = WIDGET_SHADER(blur_vert);
+        auto bf = WIDGET_SHADER(blur_frag);
         if (bv && bf)
         {
             GPU::RenderPipelineDescriptor desc{};
