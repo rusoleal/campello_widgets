@@ -38,6 +38,24 @@ addToLibrary({
     return changed ? 1 : 0;
   },
 
+  // The frame loop: requestAnimationFrame calling cw_web_frame(). If a frame
+  // yields (an ASYNCIFY sleep in a blocking campello_gpu call), the next
+  // frame is requested once it has finished, instead of the loop ending.
+  cw_web_start_frame_loop__deps: ['cw_web_frame'],
+  cw_web_start_frame_loop: function () {
+    function tick() {
+      _cw_web_frame();
+#if ASYNCIFY == 1
+      if (Asyncify.currData) {
+        Asyncify.whenDone().then(function () { requestAnimationFrame(tick); });
+        return;
+      }
+#endif
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  },
+
   cw_web_set_title: function (titlePtr) {
     document.title = UTF8ToString(titlePtr);
   },

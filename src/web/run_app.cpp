@@ -40,6 +40,7 @@ void cw_web_set_title(const char* title);
 void cw_web_set_cursor(const char* selector, const char* cursor);
 int  cw_web_prefers_dark();
 void cw_web_install_paste_listener();
+void cw_web_start_frame_loop();
 }
 
 namespace GPU     = ::systems::leal::campello_gpu;
@@ -130,15 +131,13 @@ void renderFrame(WebAppState* state)
     state->renderer->rasterFrame(*package);
 }
 
-EM_BOOL onAnimationFrame(double /*time*/, void* user)
+void onAnimationFrame(WebAppState* state)
 {
-    auto* state = static_cast<WebAppState*>(user);
     syncCanvasSize(state);
     if (state->needs_redraw) {
         state->needs_redraw = false;
         renderFrame(state);
     }
-    return EM_TRUE;  // keep the loop running
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +315,12 @@ const char* cssCursor(Widgets::SystemMouseCursor cursor)
 
 } // namespace
 
+// One requestAnimationFrame tick (the loop is cw_web_start_frame_loop()).
+extern "C" EMSCRIPTEN_KEEPALIVE void cw_web_frame()
+{
+    if (gState) onAnimationFrame(gState);
+}
+
 // The page's paste listener (src/web/campello_widgets_web.js): stores the
 // text for Clipboard::getText(), then delivers the held-back shortcut.
 extern "C" EMSCRIPTEN_KEEPALIVE void cw_web_on_paste(const char* text)
@@ -432,7 +437,7 @@ int runApp(const std::string& title, WidgetRef root_widget, const std::string& c
     cw_web_install_paste_listener();
 
     state->needs_redraw = true;
-    emscripten_request_animation_frame_loop(onAnimationFrame, state);
+    cw_web_start_frame_loop();
     return 0;
 }
 
