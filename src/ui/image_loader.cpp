@@ -5,6 +5,15 @@
 
 namespace systems::leal::campello_widgets
 {
+    namespace {
+        // Web builds without pthreads can't start worker threads: loads run
+        // inline in loadAsync(), and the returned future is already settled.
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+        constexpr bool kInlineLoads = true;
+#else
+        constexpr bool kInlineLoads = false;
+#endif
+    }
 
 
     ImageLoader::~ImageLoader()
@@ -20,6 +29,7 @@ namespace systems::leal::campello_widgets
 
     void ImageLoader::initialize(size_t num_threads)
     {
+        if (kInlineLoads) return;
         if (num_threads == 0) {
             num_threads = std::max(1u, std::thread::hardware_concurrency());
         }
@@ -83,7 +93,7 @@ namespace systems::leal::campello_widgets
         const ImageConfiguration& config)
     {
         // Ensure initialized
-        if (threads_.empty()) {
+        if (threads_.empty() && !kInlineLoads) {
             initialize();
         }
 
@@ -117,6 +127,11 @@ namespace systems::leal::campello_widgets
         task->config = config;
 
         std::shared_future<ImageLoadResult> future = task->promise.get_future().share();
+
+        if (kInlineLoads) {
+            task->promise.set_value(executeTask(*task));
+            return future;
+        }
 
         {
             std::lock_guard<std::mutex> lock(queue_mutex_);

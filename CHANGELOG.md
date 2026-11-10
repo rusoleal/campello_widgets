@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Web platform (Emscripten + WebGPU).** `web.cmake` builds the library with emcmake, reusing the
+  campello_gpu backend from Linux/Android (`src/gpu/vulkan/`) with WGSL ports of its 24 shaders
+  (`shaders/webgpu/`, embedded by `build_webgpu_shaders.sh`; WebGPU's clip space is y-up, so the
+  ports flip y). The platform layer (`src/web/`) provides `runApp()` for a `<canvas>`
+  (requestAnimationFrame loop, devicePixelRatio, DOM mouse/wheel/keyboard input, CSS cursors,
+  `prefers-color-scheme`), a Canvas2D text rasterizer, a clipboard, the in-window menu delegate and a
+  video stub. The gallery example builds for the web (`examples/gallery/web/`).
+
+### Changed
+
+- **`ImageLoader` on single-threaded web builds** runs loads inline in `loadAsync()` (the returned
+  future is already settled) instead of starting worker threads, which aborted.
+- **campello_gpu v0.28.0** (was v0.27.1): WebGPU push constants and buffer fixes the web platform
+  needs; Vulkan/DirectX vertex formats and Metal topology fixes don't change widgets' drawing.
+- **vector_math v0.6.1** (was v0.6.0): Emscripten builds.
+
 ## [0.9.1] - 2026-11-08
 
 ### Fixed

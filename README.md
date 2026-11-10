@@ -359,6 +359,27 @@ Supported ABIs: `arm64-v8a`, `x86_64`. Minimum API level: 26 (Android 8.0).
 
 ---
 
+### Web (WebGPU)
+
+**Requirements:** Emscripten 4.0.10 or later, and a browser with WebGPU (Chrome/Edge 113+, Safari 26, Firefox 141+ on Windows).
+
+```bash
+source ~/emsdk/emsdk_env.sh
+emcmake cmake -S . -B build/web -DBUILD_EXAMPLES=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build/web
+cd build/web && python3 -m http.server   # open http://localhost:8000/campello_widgets_gallery.html
+```
+
+The web build uses the same campello_gpu backend as Linux/Android (`src/gpu/vulkan/`) with hand-written WGSL ports of its shaders (`shaders/webgpu/`; regenerate `src/shaders/webgpu_widgets.h` with `./build_webgpu_shaders.sh` after editing them). The platform layer is in `src/web/`:
+
+- `runApp(title, root, "#canvas")` (`<campello_widgets/web/run_app.hpp>`) renders into a `<canvas>` sized by its CSS box times `devicePixelRatio`, and returns once the first frame is scheduled: the browser then drives frames (`requestAnimationFrame`) and input (DOM mouse, wheel and keyboard events).
+- Text is rasterized by the browser's Canvas2D (`measureText`/`fillText`), so system fonts and emoji work.
+- The clipboard is backed by a local copy: `setText()` also writes to `navigator.clipboard`, and Ctrl/Cmd+V is delivered after the page's `paste` event has stored the pasted text.
+- Menus use the in-window `PlatformMenuBarView` (no native menu bar).
+- No threads: images decode inline in `ImageLoader::loadAsync()` and frames are rastered on the main thread. Video is not supported yet.
+
+---
+
 ## License
 
 See [LICENSE](LICENSE).
