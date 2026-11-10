@@ -22,7 +22,7 @@ else()
     FetchContent_Declare(
         campello_gpu
         GIT_REPOSITORY https://github.com/rusoleal/campello_gpu.git
-        GIT_TAG        v0.27.1
+        GIT_TAG        v0.28.0
     )
 endif()
 
