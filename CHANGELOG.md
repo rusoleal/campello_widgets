@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Text ignored rotation in the canvas transform**: only the origin was transformed, so rotated text (e.g. vertical dimension values in a drawing) was drawn horizontally. Text quads now follow the transform's rotation and mirroring, keeping their rasterized size (`textQuadCorners()` in `src/gpu/text_quad.hpp`, shared by the Metal, Vulkan and D3D backends). Found in campello_bim. Tests: `TextQuad.*`.
+
 ## [0.10.0] - 2026-11-10
 
 ### Added

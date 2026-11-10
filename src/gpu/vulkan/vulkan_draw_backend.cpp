@@ -1,5 +1,6 @@
 #include "vulkan_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
+#include "gpu/text_quad.hpp"
 #include "gpu/stroke_geometry.hpp"
 #include "gpu/path_fill_aa.hpp"
 #include "text_rasterizer.hpp"
@@ -2374,18 +2375,16 @@ std::shared_ptr<GPU::BindGroup> VulkanDrawBackend::drawTextTexture(
 
     // Transform origin to physical pixels. Text quads always use w=1 (no
     // perspective foreshortening on rasterized glyphs), matching Metal.
-    namespace vm = systems::leal::vector_math;
-    auto t_origin = transform * vm::Vector4<float>(origin.x, origin.y, 0.0f, 1.0f);
-    const float x0 = t_origin.x(), y0 = t_origin.y();
-    const float x1 = x0 + static_cast<float>(width);
-    const float y1 = y0 + static_cast<float>(height);
+    // The quad follows any rotation in `transform` (see textQuadCorners).
+    const auto c = textQuadCorners(transform, origin.x, origin.y,
+                                   static_cast<float>(width), static_cast<float>(height), 0.0f);
 
     return drawTexturedQuad(
         texture,
-        {x0, y0, 1.0f, 0.0f, 0.0f},
-        {x1, y0, 1.0f, 1.0f, 0.0f},
-        {x0, y1, 1.0f, 0.0f, 1.0f},
-        {x1, y1, 1.0f, 1.0f, 1.0f},
+        {c[0].x, c[0].y, 1.0f, 0.0f, 0.0f},
+        {c[1].x, c[1].y, 1.0f, 1.0f, 0.0f},
+        {c[2].x, c[2].y, 1.0f, 0.0f, 1.0f},
+        {c[3].x, c[3].y, 1.0f, 1.0f, 1.0f},
         1.0f,   // opacity baked into texture
         clip,
         encoder,

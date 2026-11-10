@@ -1,5 +1,6 @@
 #include "d3d_draw_backend.hpp"
 #include "gpu/path_tessellation.hpp"
+#include "gpu/text_quad.hpp"
 #include "gpu/stroke_geometry.hpp"
 #include "gpu/path_fill_aa.hpp"
 #include <campello_widgets/ui/draw_command.hpp>
@@ -2540,21 +2541,15 @@ std::shared_ptr<GPU::BindGroup> D3DDrawBackend::drawTextTexture(
     if (!texture) return nullptr;
     if (!applyScissor(clip, encoder)) return nullptr;
 
-    auto t_origin = transform * vm::Vector4<float>(origin.x, origin.y, 0.0f, 1.0f);
-
-    // Subtract the 1-physical-pixel padding baked into the rasterized
-    // texture. Width/height are added post-transform in physical pixels —
-    // text rotation/perspective is out of scope for this pass, matching
-    // Metal.
-    const float x0 = t_origin.x() - 1.0f;
-    const float y0 = t_origin.y() - 1.0f;
-    const float x1 = x0 + static_cast<float>(width);
-    const float y1 = y0 + static_cast<float>(height);
+    // Physical-pixel quad at the transformed origin, following any rotation
+    // in `transform` (see textQuadCorners); 1 px padding baked into the texture.
+    const auto c = textQuadCorners(transform, origin.x, origin.y,
+                                   static_cast<float>(width), static_cast<float>(height), 1.0f);
 
     return drawTexturedQuad(
         texture,
-        ProjectedCorner{x0, y0, 1.0f, 0.0f, 0.0f}, ProjectedCorner{x1, y0, 1.0f, 1.0f, 0.0f},
-        ProjectedCorner{x0, y1, 1.0f, 0.0f, 1.0f}, ProjectedCorner{x1, y1, 1.0f, 1.0f, 1.0f},
+        ProjectedCorner{c[0].x, c[0].y, 1.0f, 0.0f, 0.0f}, ProjectedCorner{c[1].x, c[1].y, 1.0f, 1.0f, 0.0f},
+        ProjectedCorner{c[2].x, c[2].y, 1.0f, 0.0f, 1.0f}, ProjectedCorner{c[3].x, c[3].y, 1.0f, 1.0f, 1.0f},
         1.0f,  // text colour alpha is already baked into the glyph texture
         encoder,
         cached_bind_group);
