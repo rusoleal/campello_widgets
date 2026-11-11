@@ -23,6 +23,7 @@ target_link_libraries(campello_gallery
     campello_ui
     campello_material
     campello_cupertino
+    campello_fluent
     android
     log
 )
