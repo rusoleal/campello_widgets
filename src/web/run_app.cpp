@@ -2,6 +2,7 @@
 // requestAnimationFrame loop and DOM input events. Rendering is the shared
 // campello_gpu backend (src/gpu/vulkan/) with WGSL shaders.
 
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/web/run_app.hpp>
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/widgets/element.hpp>
@@ -55,6 +56,8 @@ namespace {
 
 struct WebAppState
 {
+    // This canvas's View (Phase 17). Declared first so it is destroyed last.
+    std::unique_ptr<Widgets::View>              view;
     std::string                                 canvas_selector;
     std::shared_ptr<GPU::Device>                device;
     std::shared_ptr<Widgets::Renderer>          renderer;
@@ -63,7 +66,7 @@ struct WebAppState
     std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
     std::shared_ptr<Widgets::FocusManager>      focus_manager;
     std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
-    std::unique_ptr<Widgets::TextInputManager>  text_input_manager;
+    std::shared_ptr<Widgets::TextInputManager>  text_input_manager;
 
     Widgets::MediaQueryData media_data;
     Widgets::WidgetRef      user_root_widget;
@@ -377,16 +380,18 @@ int runApp(const std::string& title, WidgetRef root_widget, const std::string& c
         return 1;
     }
 
-    state->dispatcher = std::make_shared<PointerDispatcher>();
-    PointerDispatcher::setActiveDispatcher(state->dispatcher.get());
-    state->focus_manager = std::make_shared<FocusManager>();
-    FocusManager::setActiveManager(state->focus_manager.get());
-    state->text_input_manager = std::make_unique<TextInputManager>();
-    TextInputManager::setActiveManager(state->text_input_manager.get());
+    // This canvas's View owns its dispatcher, focus and text input managers
+    // and frame hook; makePrimary() also installs them as the process-wide
+    // fallbacks, so code without a window context behaves as before.
+    state->view = std::make_unique<View>();
+    state->view->makePrimary();
+    state->dispatcher         = state->view->sharedPointerDispatcher();
+    state->focus_manager      = state->view->sharedFocusManager();
+    state->text_input_manager = state->view->sharedTextInputManager();
     state->ticker_scheduler = std::make_unique<TickerScheduler>();
     TickerScheduler::setActive(state->ticker_scheduler.get());
 
-    FrameScheduler::setCallback([state]() { state->needs_redraw = true; });
+    state->view->setFrameRequestCallback([state]() { state->needs_redraw = true; });
     registerCursorHandler([state](SystemMouseCursor cursor) {
         cw_web_set_cursor(state->canvas_selector.c_str(), cssCursor(cursor));
     });
@@ -403,7 +408,10 @@ int runApp(const std::string& title, WidgetRef root_widget, const std::string& c
 
     auto wrapped = std::make_shared<MediaQuery>(media, state->user_root_widget);
     state->root_element = wrapped->createElement();
-    state->root_element->mount(nullptr);
+    {
+        View::Scope view_scope(state->view.get());
+        state->root_element->mount(nullptr);
+    }
 
     auto* roe = state->root_element->findDescendantRenderObjectElement();
     if (!roe) {
@@ -422,6 +430,7 @@ int runApp(const std::string& title, WidgetRef root_widget, const std::string& c
         state->device, background, state->device->getSwapchainPixelFormat());
     state->renderer = std::make_shared<Renderer>(state->device, state->render_box, background);
     state->renderer->setDrawBackend(std::move(backend));
+    state->view->setRenderer(state->renderer.get());
     state->renderer->setDevicePixelRatio(dpr);
 
     const char* target = state->canvas_selector.c_str();
