@@ -36,7 +36,7 @@ namespace systems::leal::campello_widgets
         {
             if (auto* mgr = DragManager::active())
                 registerWithManager(mgr);
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 registerTickHandler(d);
         }
 
@@ -44,7 +44,7 @@ namespace systems::leal::campello_widgets
         {
             if (auto* mgr = DragManager::active())
                 mgr->unregisterTarget(this);
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = tick_dispatcher_; PointerDispatcher::isAlive(d))
                 d->removeTickHandler(this);
         }
 
@@ -86,7 +86,7 @@ namespace systems::leal::campello_widgets
 
             if (!tick_registered_)
             {
-                if (auto* d = PointerDispatcher::activeDispatcher())
+                if (auto* d = pointerDispatcher())
                     registerTickHandler(d);
             }
 
@@ -112,6 +112,7 @@ namespace systems::leal::campello_widgets
         void registerTickHandler(PointerDispatcher* dispatcher)
         {
             tick_registered_ = true;
+            tick_dispatcher_ = dispatcher;  // unregister from the same one (see ~RenderDragTarget)
             dispatcher->addTickHandler(this, [this](uint64_t now_ms) { onTick(now_ms); });
         }
 
@@ -138,6 +139,7 @@ namespace systems::leal::campello_widgets
 
         bool   registered_      = false;
         bool   tick_registered_ = false;
+        PointerDispatcher* tick_dispatcher_ = nullptr;
         Offset global_offset_;
     };
 

@@ -13,19 +13,19 @@ namespace systems::leal::campello_widgets
 
     RenderDrawSurface::~RenderDrawSurface()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->removeHandler(this);
     }
 
     void RenderDrawSurface::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
     }
 
     void RenderDrawSurface::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -170,7 +170,7 @@ namespace systems::leal::campello_widgets
             lost_arena_ = false;
             last_point_ = event.local_position;
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
             {
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
                 // Claims immediately (no slop) — a draw surface should never

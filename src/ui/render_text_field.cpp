@@ -37,7 +37,7 @@ namespace systems::leal::campello_widgets
 
     RenderTextField::~RenderTextField()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -48,7 +48,7 @@ namespace systems::leal::campello_widgets
 
     void RenderTextField::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this,     [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now_ms)        { onTick(now_ms);   });
@@ -61,7 +61,7 @@ namespace systems::leal::campello_widgets
 
     void RenderTextField::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -699,7 +699,7 @@ namespace systems::leal::campello_widgets
             pointer_id_ = event.pointer_id;
 
             // Capture the pointer so parent scroll views don't scroll
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 d->capturePointer(pointer_id_, this);
 
             if (on_tap) {
@@ -735,7 +735,7 @@ namespace systems::leal::campello_widgets
                 return;
 
             // Release the pointer capture
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 d->releasePointer(pointer_id_);
 
             pressed_ = false;

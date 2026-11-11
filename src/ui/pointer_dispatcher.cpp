@@ -1,4 +1,6 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <unordered_set>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/gesture_constants.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/render_object.hpp>
@@ -18,14 +20,60 @@ namespace systems::leal::campello_widgets
         s_active_dispatcher_.store(dispatcher, std::memory_order_release);
     }
 
+    namespace
+    {
+        // The dispatcher currently delivering an event or tick on this
+        // thread (see DispatchScope below). Everything that runs inside
+        // dispatch (gesture recognizers joining the arena, handlers capturing
+        // the pointer, ...) then talks to the window the event came from,
+        // without having to be told which one it is.
+        thread_local PointerDispatcher* t_dispatching = nullptr;
+
+        struct DispatchScope
+        {
+            PointerDispatcher* previous;
+            explicit DispatchScope(PointerDispatcher* d) : previous(t_dispatching) { t_dispatching = d; }
+            ~DispatchScope() { t_dispatching = previous; }
+        };
+    }
+
     PointerDispatcher* PointerDispatcher::activeDispatcher() noexcept
     {
+        // 1. the dispatcher delivering the current event/tick, 2. the window
+        // an explicit View::Scope made current, 3. the process-wide fallback
+        // (single-window apps: the primary view's; unit tests: whatever the
+        // test installed).
+        if (t_dispatching) return t_dispatching;
+        if (View* v = View::scoped()) return &v->pointerDispatcher();
         return s_active_dispatcher_.load(std::memory_order_acquire);
+    }
+
+    namespace
+    {
+        // UI-thread only, like RenderObject::s_alive_.
+        std::unordered_set<const PointerDispatcher*>& aliveDispatchers()
+        {
+            static std::unordered_set<const PointerDispatcher*> s;
+            return s;
+        }
     }
 
     PointerDispatcher::PointerDispatcher(std::shared_ptr<RenderBox> root)
         : root_(std::move(root))
     {
+        aliveDispatchers().insert(this);
+    }
+
+    PointerDispatcher::~PointerDispatcher()
+    {
+        aliveDispatchers().erase(this);
+        if (s_active_dispatcher_.load(std::memory_order_acquire) == this)
+            s_active_dispatcher_.store(nullptr, std::memory_order_release);
+    }
+
+    bool PointerDispatcher::isAlive(const PointerDispatcher* dispatcher) noexcept
+    {
+        return dispatcher && aliveDispatchers().count(dispatcher) != 0;
     }
 
     void PointerDispatcher::setRoot(std::shared_ptr<RenderBox> root) noexcept
@@ -64,6 +112,7 @@ namespace systems::leal::campello_widgets
 
     void PointerDispatcher::tick(uint64_t now_ms)
     {
+        DispatchScope dispatch_scope(this);
         // Snapshot alive handlers to avoid iterator invalidation if a callback
         // mutates tick_handlers_ (e.g. calls removeTickHandler).
         std::vector<std::pair<RenderBox*, TickHandler>> snapshot;
@@ -88,6 +137,7 @@ namespace systems::leal::campello_widgets
     void PointerDispatcher::handlePointerEvent(const PointerEvent& event)
     {
         ThreadChecker::instance().assertOnBoundThread("PointerDispatcher::handlePointerEvent");
+        DispatchScope dispatch_scope(this);
 
         // Stamp a real dispatch-time timestamp onto every event that didn't
         // already arrive with one -- the single choke point every real and

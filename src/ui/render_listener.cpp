@@ -8,19 +8,19 @@ namespace systems::leal::campello_widgets
 
     RenderListener::~RenderListener()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->removeHandler(this);
     }
 
     void RenderListener::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
     }
 
     void RenderListener::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->removeHandler(this);
     }
 

@@ -9,7 +9,7 @@ namespace systems::leal::campello_widgets
 
     RenderMouseRegion::~RenderMouseRegion()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -18,7 +18,7 @@ namespace systems::leal::campello_widgets
 
     void RenderMouseRegion::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this,     [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t t)             { onTick(t);         });
@@ -27,7 +27,7 @@ namespace systems::leal::campello_widgets
 
     void RenderMouseRegion::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);

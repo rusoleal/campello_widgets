@@ -14,19 +14,19 @@ namespace systems::leal::campello_widgets
 
     RenderSlider::~RenderSlider()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->removeHandler(this);
     }
 
     void RenderSlider::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
     }
 
     void RenderSlider::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -104,7 +104,7 @@ namespace systems::leal::campello_widgets
             won_arena_  = false;
             lost_arena_ = false;
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
             {
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
                 // Slider claims immediately (no slop) so it reliably preempts

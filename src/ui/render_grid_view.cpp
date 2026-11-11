@@ -20,7 +20,7 @@ namespace systems::leal::campello_widgets
 
     RenderGridView::~RenderGridView()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -30,7 +30,7 @@ namespace systems::leal::campello_widgets
 
     void RenderGridView::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
@@ -39,7 +39,7 @@ namespace systems::leal::campello_widgets
 
     void RenderGridView::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -334,7 +334,7 @@ namespace systems::leal::campello_widgets
             velocity_tracker_.reset();
             velocity_tracker_.addPosition(event.timestamp_ms, event.position.y);
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 
@@ -421,7 +421,7 @@ namespace systems::leal::campello_widgets
             const bool overscrolled = (raw_offset_ < min_extent_ || raw_offset_ > max_extent_);
             if (overscrolled && std::abs(delta) < kSignificantScrollDelta)
                 break;
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
             {
                 // Only a meaningful delta refreshes the "still actively
                 // scrolling" gate, so spring-back isn't held hostage by

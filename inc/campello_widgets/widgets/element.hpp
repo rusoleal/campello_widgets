@@ -11,6 +11,7 @@
 
 namespace systems::leal::campello_widgets
 {
+    class View;
 
     class RenderObjectElement;
     class InheritedElement;
@@ -64,6 +65,15 @@ namespace systems::leal::campello_widgets
          * `State::initState()`) should override this and call the base last.
          */
         virtual void mount(Element* parent);
+
+        /**
+         * @brief The View (window) this element belongs to, or nullptr.
+         *
+         * Inherited from the parent at mount(); a root element takes the
+         * ambient View::current(). Prefer View::of(context), which also
+         * checks the view is still alive.
+         */
+        View* view() const noexcept { return view_; }
 
         /**
          * @brief Removes this element from the tree.
@@ -213,6 +223,7 @@ namespace systems::leal::campello_widgets
 
         WidgetRef widget_;
         Element*  parent_   = nullptr;
+        View*     view_     = nullptr;  ///< Owning window; see view().
         bool      dirty_    = true;
         bool      mounted_  = false;
         bool      building_ = false;

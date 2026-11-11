@@ -17,7 +17,7 @@ namespace systems::leal::campello_widgets
 
     RenderTableView::~RenderTableView()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -28,7 +28,7 @@ namespace systems::leal::campello_widgets
 
     void RenderTableView::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
@@ -37,7 +37,7 @@ namespace systems::leal::campello_widgets
 
     void RenderTableView::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);

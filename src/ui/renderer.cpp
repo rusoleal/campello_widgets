@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/renderer.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/post_frame_callbacks.hpp>
 #include <campello_widgets/widgets/element.hpp>
@@ -174,8 +175,18 @@ namespace systems::leal::campello_widgets
         const uint64_t now_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
 
-        if (auto* d = PointerDispatcher::activeDispatcher())
-            d->tick(now_ms);
+        // With several windows (Phase 17) each one's frame runs here in
+        // turn on the UI thread: make this window ambient, and make this
+        // renderer the one paint()-time dirty-region notes and other
+        // currentRenderer() users report to. It used to be set only by the
+        // constructor, so the last-created window's renderer won.
+        View::Scope view_scope(view_ ? view_ : View::current());
+        detail::currentRenderer().store(this, std::memory_order_release);
+
+        PointerDispatcher* dispatcher = (view_ && View::isAlive(view_))
+            ? &view_->pointerDispatcher() : PointerDispatcher::activeDispatcher();
+        if (dispatcher)
+            dispatcher->tick(now_ms);
 
         if (auto* ts = TickerScheduler::active())
             ts->tick(now_ms);

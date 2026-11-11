@@ -15,7 +15,7 @@ namespace systems::leal::campello_widgets
 
     RenderViewport::~RenderViewport()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -26,7 +26,7 @@ namespace systems::leal::campello_widgets
 
     void RenderViewport::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
@@ -35,7 +35,7 @@ namespace systems::leal::campello_widgets
 
     void RenderViewport::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -331,7 +331,7 @@ namespace systems::leal::campello_widgets
                 event.timestamp_ms,
                 axis == Axis::vertical ? event.position.y : event.position.x);
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 
@@ -405,7 +405,7 @@ namespace systems::leal::campello_widgets
             const bool  overscrolled = (raw_offset_ < min_extent_ || raw_offset_ > max_extent_);
             if (overscrolled && std::abs(delta) < kSignificantScrollDelta)
                 break;
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
             {
                 if (std::abs(delta) >= kSignificantScrollDelta)
                 {

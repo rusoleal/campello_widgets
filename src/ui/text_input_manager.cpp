@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/text_editing_controller.hpp>
 
 namespace systems::leal::campello_widgets
@@ -13,6 +14,10 @@ namespace systems::leal::campello_widgets
 
     TextInputManager* TextInputManager::activeManager() noexcept
     {
+        // The window an explicit View::Scope made current (e.g. the runner
+        // delivering a key event to that window) first, then the
+        // process-wide fallback (the primary view's, or a test's).
+        if (View* v = View::scoped()) return &v->textInputManager();
         return s_active_manager_.load(std::memory_order_acquire);
     }
 

@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/element.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/widgets/inherited_element.hpp>
 #include <campello_widgets/widgets/inherited_widget.hpp>
 #include <campello_widgets/ui/key.hpp>
@@ -41,6 +42,7 @@ namespace systems::leal::campello_widgets
     void Element::mount(Element* parent)
     {
         parent_ = parent;
+        view_    = parent_ ? parent_->view_ : View::current();
         mounted_ = true;
         if (parent_)
             inherited_widgets_ = parent_->inherited_widgets_;

@@ -17,7 +17,7 @@ namespace systems::leal::campello_widgets
 
     RenderTreeView::~RenderTreeView()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -28,7 +28,7 @@ namespace systems::leal::campello_widgets
 
     void RenderTreeView::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
@@ -37,7 +37,7 @@ namespace systems::leal::campello_widgets
 
     void RenderTreeView::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -404,7 +404,7 @@ namespace systems::leal::campello_widgets
             velocity_tracker_x_.addPosition(event.timestamp_ms, event.position.x);
             velocity_tracker_y_.addPosition(event.timestamp_ms, event.position.y);
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 

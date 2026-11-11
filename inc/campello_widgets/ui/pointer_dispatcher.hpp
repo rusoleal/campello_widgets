@@ -40,6 +40,19 @@ namespace systems::leal::campello_widgets
         using TickHandler = std::function<void(uint64_t now_ms)>;
 
         explicit PointerDispatcher(std::shared_ptr<RenderBox> root = nullptr);
+        ~PointerDispatcher();
+
+        PointerDispatcher(const PointerDispatcher&)            = delete;
+        PointerDispatcher& operator=(const PointerDispatcher&) = delete;
+
+        /**
+         * @brief Whether `dispatcher` points at a live PointerDispatcher.
+         *
+         * For objects that remember the dispatcher they registered with
+         * (rather than looking one up) and may outlive it, e.g. a render
+         * object torn down after its window. Mirrors RenderObject::isAlive().
+         */
+        static bool isAlive(const PointerDispatcher* dispatcher) noexcept;
 
         /**
          * @brief Sets (or replaces) the root render box used for hit-testing.
