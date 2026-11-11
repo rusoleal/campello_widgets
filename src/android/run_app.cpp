@@ -10,6 +10,7 @@
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/key_event.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 #include <campello_widgets/ui/raster_thread.hpp>
@@ -50,13 +51,17 @@ namespace Widgets = ::systems::leal::campello_widgets;
 
 struct WidgetSession
 {
+    // This window's View (Phase 17). Declared first so it is destroyed last:
+    // the element/render trees below may still reference it while they're
+    // torn down. ~WidgetSession detaches the renderer before that.
+    std::unique_ptr<Widgets::View>             view;
     std::shared_ptr<GPU::Device>               device;
     std::shared_ptr<Widgets::Renderer>         renderer;
     std::shared_ptr<Widgets::Element>          root_element;
     std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
     std::shared_ptr<Widgets::FocusManager>       focus_manager;
     std::unique_ptr<Widgets::TickerScheduler>    ticker_scheduler;
-    std::unique_ptr<Widgets::TextInputManager>   text_input_manager;
+    std::shared_ptr<Widgets::TextInputManager>   text_input_manager;
     android_app*                               app = nullptr;  // For accessing contentRect
     Widgets::WidgetRef                         user_root_widget;
     Widgets::MediaQueryData                    media_data;
@@ -66,6 +71,13 @@ struct WidgetSession
     // ordering (see run_app.mm's doc comment on _rasterThread). Ensures no
     // in-flight raster call can ever observe a half-destroyed Renderer/Device.
     std::unique_ptr<Widgets::RasterThread>     raster_thread;
+
+    ~WidgetSession()
+    {
+        // `renderer` is destroyed before `view` (reverse declaration order);
+        // never leave the View holding a dangling Renderer*.
+        if (view) view->setRenderer(nullptr);
+    }
 };
 
 // Forward declaration — defined after createSession.
@@ -649,18 +661,20 @@ static std::unique_ptr<WidgetSession> createSession(
     auto session = std::make_unique<WidgetSession>();
     session->app = app;  // Store for later access to contentRect
 
-    // Create dispatcher and focus manager before mounting.
-    session->dispatcher = std::make_shared<Widgets::PointerDispatcher>();
-    Widgets::PointerDispatcher::setActiveDispatcher(session->dispatcher.get());
-
-    session->focus_manager = std::make_shared<Widgets::FocusManager>();
-    Widgets::FocusManager::setActiveManager(session->focus_manager.get());
+    // This window's View owns its dispatcher, focus and text input managers;
+    // makePrimary() also installs them as the process-wide fallbacks, so code
+    // without a window context behaves exactly as before. The frame hook
+    // stays the global choreographer callback installed in runApp() (it
+    // outlives sessions, which are recreated with the native window).
+    session->view = std::make_unique<Widgets::View>();
+    session->view->makePrimary();
+    session->dispatcher    = session->view->sharedPointerDispatcher();
+    session->focus_manager = session->view->sharedFocusManager();
 
     session->ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(session->ticker_scheduler.get());
 
-    session->text_input_manager = std::make_unique<Widgets::TextInputManager>();
-    Widgets::TextInputManager::setActiveManager(session->text_input_manager.get());
+    session->text_input_manager = session->view->sharedTextInputManager();
 
     // Show / hide the software keyboard when a TextField gains or loses focus.
     session->text_input_manager->setOnInputTargetChanged([app](bool has_target) {
@@ -685,7 +699,12 @@ static std::unique_ptr<WidgetSession> createSession(
 
     // Mount widget tree.
     session->root_element = wrappedRoot->createElement();
-    session->root_element->mount(nullptr);
+    {
+        // Elements and render objects created during the initial mount
+        // belong to this window.
+        Widgets::View::Scope view_scope(session->view.get());
+        session->root_element->mount(nullptr);
+    }
 
     auto* roe = session->root_element->findDescendantRenderObjectElement();
     if (!roe)
@@ -716,6 +735,7 @@ static std::unique_ptr<WidgetSession> createSession(
     // subclass Renderer or supply an IDrawBackend to enable GPU drawing).
     session->renderer = std::make_shared<Widgets::Renderer>(
         session->device, render_box, Widgets::Color::black());
+    session->view->setRenderer(session->renderer.get());
 
     // Set initial device pixel ratio
     float dpr = getDevicePixelRatio(app);

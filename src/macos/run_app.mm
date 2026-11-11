@@ -8,6 +8,7 @@
 #import <campello_widgets/ui/render_box.hpp>
 #import <campello_widgets/ui/pointer_event.hpp>
 #import <campello_widgets/ui/pointer_dispatcher.hpp>
+#import <campello_widgets/ui/view.hpp>
 #import <campello_widgets/ui/key_event.hpp>
 #import <campello_widgets/ui/focus_manager.hpp>
 #import <campello_widgets/ui/text_input_manager.hpp>
@@ -873,6 +874,10 @@ static float macosScreenRefreshHz(NSScreen* screen)
     CampelloMTKView*                      _metalView;
     CampelloMTKDelegate*                  _mtkDelegate;
 
+    // Declared first so it is destroyed last (C++ ivars are destroyed in
+    // reverse declaration order): the element/render trees below may still
+    // reference it while they're torn down.
+    std::unique_ptr<Widgets::View>             _view;
     std::shared_ptr<GPU::Device>               _device;
     std::shared_ptr<Widgets::Renderer>         _renderer;
     std::shared_ptr<Widgets::Element>          _rootElement;
@@ -896,6 +901,9 @@ static float macosScreenRefreshHz(NSScreen* screen)
     // deallocated view or use a destroyed renderer.
     gMetalView = nullptr;
     gRenderer.reset();
+    // The renderer ivar is destroyed after this body; detach it first so the
+    // View never holds a dangling Renderer*.
+    if (_view) _view->setRenderer(nullptr);
 #if !__has_feature(objc_arc)
     [super dealloc];
 #endif
@@ -947,9 +955,16 @@ static float macosScreenRefreshHz(NSScreen* screen)
     _metalView.paused               = YES;
     _metalView.enableSetNeedsDisplay = YES;
 
-    // Register the FrameScheduler callback before mounting the widget tree so
+    // This window's View (Phase 17): owns its pointer dispatcher, focus and
+    // text input managers, and its frame-request hook. makePrimary() also
+    // installs them as the process-wide fallbacks, so code without a window
+    // context behaves exactly as before.
+    _view = std::make_unique<Widgets::View>();
+    _view->makePrimary();
+
+    // Register the frame-request hook before mounting the widget tree so
     // that markNeedsPaint() calls triggered during mount already reach the view.
-    Widgets::FrameScheduler::setCallback([] {
+    _view->setFrameRequestCallback([] {
         if (gMetalView) [gMetalView setNeedsDisplay:YES];
     });
 
@@ -978,16 +993,13 @@ static float macosScreenRefreshHz(NSScreen* screen)
     // Create PointerDispatcher and FocusManager early so render objects can
     // register during widget tree mount.
     // -----------------------------------------------------------------------
-    _dispatcher = std::make_shared<Widgets::PointerDispatcher>();
-    Widgets::PointerDispatcher::setActiveDispatcher(_dispatcher.get());
+    _dispatcher = _view->sharedPointerDispatcher();
     [_metalView setDispatcher:_dispatcher.get()];
 
-    _focusManager = std::make_shared<Widgets::FocusManager>();
-    Widgets::FocusManager::setActiveManager(_focusManager.get());
+    _focusManager = _view->sharedFocusManager();
     [_metalView setFocusManager:_focusManager.get()];
 
-    _textInputManager = std::make_shared<Widgets::TextInputManager>();
-    Widgets::TextInputManager::setActiveManager(_textInputManager.get());
+    _textInputManager = _view->sharedTextInputManager();
     [_metalView setTextInputManager:_textInputManager.get()];
 
     _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
@@ -1018,7 +1030,12 @@ static float macosScreenRefreshHz(NSScreen* screen)
     Widgets::ThreadChecker::instance().bindToCurrentThread();
 
     _rootElement = wrappedRoot->createElement();
-    _rootElement->mount(nullptr);
+    {
+        // Elements and render objects created during the initial mount
+        // belong to this window.
+        Widgets::View::Scope view_scope(_view.get());
+        _rootElement->mount(nullptr);
+    }
 
     Widgets::WidgetInspector::instance().setRootElement(_rootElement);
 
@@ -1050,6 +1067,7 @@ static float macosScreenRefreshHz(NSScreen* screen)
     _renderer = std::make_shared<Widgets::Renderer>(
         _device, renderBox, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
+    _view->setRenderer(_renderer.get());
     gRenderer = _renderer;  // Store globally for requestRefresh()
 
     // Seeds the performance overlay's budget line with this window's
