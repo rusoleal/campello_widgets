@@ -950,13 +950,46 @@ device->submit(cmd);
         which no earlier test did. Most likely a false positive, because the
         happens-before edge goes through Metal's driver, which TSAN can't
         see. Confirm before M2, where several raster threads will submit.
-- [ ] **M0.2** Vulkan: move swapchain, image views, framebuffers,
-      acquire/render-finished semaphores and `currentImageIndex` out of
-      `DeviceData` into a per-surface struct. The legacy `pd` device surface
-      becomes an internal implicit `Surface`, so `createDefaultDevice(pd)`
-      keeps working. `schedulePresent` makes `submit()` wait on the
-      surface's acquire semaphore and `vkQueuePresentKHR` that surface's
-      image. Handle OUT_OF_DATE per surface.
+- [x] **M0.2** Vulkan (2026-11-11), on `campello_gpu`'s
+      `feature/multi-surface` branch. One self-contained `SurfaceData` per
+      surface: its own VkSurfaceKHR/swapchain/views, a `renderFinished`
+      semaphore per image, and a 3-slot acquire ring whose fences are
+      signalled by a chained empty submit (the pattern
+      `submit(cmd, fence)` already uses). One command buffer can present
+      several surfaces in one `vkQueuePresentKHR`. OUT_OF_DATE marks the
+      surface, which then rebuilds on its own thread at the next acquire.
+      - **Deliberate deviation from the plan**: the device's legacy
+        implicit swapchain was **not** turned into an internal `Surface`.
+        It stays exactly as it was, with its many hard-won on-device fixes,
+        so current single-window apps carry no risk. Folding it into
+        `Surface` is a later cleanup, once widgets runs on `Surface`
+        (M1/M2).
+      - Also: a headless device now enables `VK_KHR_swapchain` whenever
+        the GPU supports it, and Android links `libandroid`.
+      - Verified on a Redmi Note 10 Pro (Adreno 618, Vulkan 1.1, so the
+        **traditional render-pass path**). 10 Surface tests use
+        `AImageReader` windows as headless `ANativeWindow`s and **read
+        back the presented pixels** (each window gets only its own
+        colour). Full suite: 214 passed, 43 skipped (ray tracing), 0
+        failed; baseline was 206/43/0. Mutation-checked (wrong swapchain
+        image, missing slot-fence signal): 4 and 3 tests fail
+        respectively. The gallery APK (legacy swapchain path, local
+        `campello_gpu`) launches, navigates and scrolls normally.
+      - **Not verified**: the dynamic-rendering path (needs a Vulkan 1.3
+        device or lavapipe; the code is the same barrier code with the
+        surface's view swapped in), Linux X11/Wayland surfaces (compiled
+        logic only, not built on Linux this session), and validation
+        layers. A non-debuggable phone only loads layers packaged in a
+        debuggable APK; `setprop debug.vulkan.layers` makes
+        `vkCreateInstance` fail with -6 for a shell binary.
+      - **M2 prerequisite found**: the Vulkan backend is not safe for
+        several raster threads. Every `createCommandEncoder()` shares one
+        `VkCommandPool`, which needs external synchronization even for
+        recording, and `beginFrameRing()` / `currentFrameGen` aren't
+        designed for concurrent callers. This needs per-thread command
+        pools and a per-thread (or locked) frame ring before one raster
+        thread per window works on Vulkan. Check DX12 for the same
+        before M3.
 - [ ] **M0.3** DX12: one `IDXGISwapChain` (plus RTV heap and back buffers)
       per `HWND` on the shared queue; `Present()` after `ExecuteCommandLists`.
 - [ ] **M0.4** WebGPU: one `wgpu::Surface` / `GPUCanvasContext` per canvas
@@ -1057,6 +1090,22 @@ device->submit(cmd);
       edge (`xdg_popup` on Wayland, borderless child windows elsewhere).
 
 **Out of scope**: GDK/Xbox and Android TV (single window by platform design).
+
+**Found during M0.2 verification (pre-existing, unrelated to multi-window)**:
+- [ ] Gallery "STACK + POSITIONED" card renders empty (the 3 coloured
+      `Positioned` boxes are missing) on **both** macOS/Metal and Android/Vulkan,
+      so it's a widget or layout bug, not a GPU-backend one
+      (`examples/gallery/gallery_app.cpp` `stack_bg`).
+- [x] Android gallery didn't build: `gallery_app.cpp` includes
+      `campello_fluent` but `android/app/src/main/cpp/CMakeLists.txt` didn't
+      link it. Fixed 2026-11-11.
+- [ ] Android Studio's bundled JBR is now JDK 25, which Gradle 8.13 rejects
+      (the error is just "25.0.3"). Build with Gradle's JDK 17 instead:
+      `JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-17-*/jdk-17*/Contents/Home`.
+- [ ] `dependencies/campello_gpu.cmake` has a committed "temporary
+      local-testing override" (sibling `../campello_gpu` `SOURCE_DIR`,
+      since #7). Restore `GIT_REPOSITORY`/`GIT_TAG`-only before the next
+      release (M0.5 bumps the pin anyway).
 
 ---
 
