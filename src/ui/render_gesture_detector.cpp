@@ -52,7 +52,7 @@ namespace systems::leal::campello_widgets
         {
             registered_node_->on_key           = nullptr;
             registered_node_->on_focus_changed = nullptr;
-            if (auto* fm = FocusManager::activeManager())
+            if (auto* fm = focusManager())
                 fm->unregisterNode(registered_node_.get());
         }
     }
@@ -67,7 +67,7 @@ namespace systems::leal::campello_widgets
         attached_ = true;
         if (registered_node_)
         {
-            if (auto* fm = FocusManager::activeManager())
+            if (auto* fm = focusManager())
             {
                 fm->registerNode(registered_node_.get());
                 if (autofocus_) fm->requestFocus(registered_node_.get());
@@ -97,7 +97,7 @@ namespace systems::leal::campello_widgets
         }
         if (registered_node_)
         {
-            if (auto* fm = FocusManager::activeManager())
+            if (auto* fm = focusManager())
                 fm->unregisterNode(registered_node_.get());
             registered_node_->setOwner(nullptr);
         }
@@ -135,7 +135,7 @@ namespace systems::leal::campello_widgets
         if (desired.get() == registered_node_.get())
             return;
 
-        auto* fm = FocusManager::activeManager();
+        auto* fm = focusManager();
 
         if (registered_node_)
         {

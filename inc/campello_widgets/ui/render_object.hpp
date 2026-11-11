@@ -31,6 +31,8 @@ namespace systems::leal::campello_widgets
 {
     class View;
     class PointerDispatcher;
+    class FocusManager;
+    class TextInputManager;
 
     class FocusNode;
 
@@ -253,6 +255,14 @@ namespace systems::leal::campello_widgets
          * active one at that moment may belong to another window.
          */
         PointerDispatcher* pointerDispatcher() const noexcept;
+
+        /// This object's window's focus manager, falling back to
+        /// FocusManager::activeManager() (same rules as pointerDispatcher()).
+        FocusManager* focusManager() const noexcept;
+
+        /// This object's window's text input manager, falling back to
+        /// TextInputManager::activeManager().
+        TextInputManager* textInputManager() const noexcept;
 
         /**
          * @brief This object's parent in the render tree, or nullptr at the root.

@@ -20,6 +20,10 @@
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
+#include <campello_widgets/widgets/focus.hpp>
+#include <campello_widgets/widgets/stateful_widget.hpp>
+#include <campello_widgets/ui/focus_node.hpp>
+#include <campello_widgets/ui/key_event.hpp>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -228,5 +232,121 @@ TEST(View, ElementsInheritTheRootElementsView)
     extra->mount(root.get());
     EXPECT_EQ(extra->view(), &a);
     extra->unmount();
+    root->unmount();
+}
+
+// ---------------------------------------------------------------------------
+// Frame scheduling (M1.3)
+// ---------------------------------------------------------------------------
+
+TEST(View, GlobalScheduleFrameAsksEveryWindow)
+{
+    cw::View a, b;
+    int frames_a = 0, frames_b = 0;
+    a.setFrameRequestCallback([&] { ++frames_a; });
+    b.setFrameRequestCallback([&] { ++frames_b; });
+    EXPECT_TRUE(cw::FrameScheduler::hasCallback());
+    cw::FrameScheduler::scheduleFrame();  // no window context: everyone
+    EXPECT_EQ(frames_a, 1);
+    EXPECT_EQ(frames_b, 1);
+}
+
+TEST(View, NoCallbacksMeansNoFrameHook)
+{
+    cw::View a;  // no frame request callback set
+    EXPECT_FALSE(cw::FrameScheduler::hasCallback());
+}
+
+TEST(View, MarkNeedsBuildRequestsAFrameOnlyForTheOwningWindow)
+{
+    cw::View a, b;
+    std::shared_ptr<cw::Element> root;
+    {
+        cw::View::Scope sa(&a);
+        root = std::make_shared<cw::SizedBox>(1.0f, 1.0f)->createElement();
+        root->mount(nullptr);
+    }
+    int frames_a = 0, frames_b = 0;
+    a.setFrameRequestCallback([&] { ++frames_a; });
+    b.setFrameRequestCallback([&] { ++frames_b; });
+
+    root->markNeedsBuild();
+    EXPECT_EQ(frames_a, 1);
+    EXPECT_EQ(frames_b, 0);
+
+    cw::Element::buildScope();  // what A's next frame would do
+    root->unmount();
+}
+
+// ---------------------------------------------------------------------------
+// Focus follows the element's window (M1.5/M1.6)
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Shows a Focus (auto-focused) once `show` is set and it rebuilds.
+    class ViewTestFocusToggle : public cw::StatefulWidget
+    {
+    public:
+        std::shared_ptr<cw::FocusNode> node;
+        bool*                          show = nullptr;
+        std::unique_ptr<cw::StateBase> createState() const override;
+    };
+
+    class ViewTestFocusToggleState : public cw::State<ViewTestFocusToggle>
+    {
+    public:
+        cw::WidgetRef build(cw::BuildContext&) override
+        {
+            if (!*widget().show) return std::make_shared<cw::SizedBox>(1.0f, 1.0f);
+            auto focus        = std::make_shared<cw::Focus>();
+            focus->focus_node = widget().node;
+            focus->auto_focus = true;
+            focus->child      = std::make_shared<cw::SizedBox>(1.0f, 1.0f);
+            return focus;
+        }
+    };
+
+    std::unique_ptr<cw::StateBase> ViewTestFocusToggle::createState() const
+    {
+        return std::make_unique<ViewTestFocusToggleState>();
+    }
+}
+
+TEST(View, FocusRegistersWithItsOwnWindowEvenWhenAnotherWindowRebuilds)
+{
+    cw::View a, b;
+    a.makePrimary();  // process-wide fallback is A's
+
+    bool show = false;
+    int  keys_seen = 0;
+    auto widget  = std::make_shared<ViewTestFocusToggle>();
+    widget->node = std::make_shared<cw::FocusNode>();
+    widget->node->on_key = [&](const cw::KeyEvent&) { ++keys_seen; return true; };
+    widget->show = &show;
+
+    std::shared_ptr<cw::Element> root;
+    {
+        cw::View::Scope sb(&b);  // the tree lives in window B
+        root = widget->createElement();
+        root->mount(nullptr);
+    }
+
+    // The Focus appears in a rebuild run while window A is ambient (A's
+    // frame runs the shared buildScope()). It must still register with B.
+    show = true;
+    {
+        cw::View::Scope sa(&a);
+        root->markNeedsBuild();
+        cw::Element::buildScope();
+    }
+
+    cw::KeyEvent key;
+    key.key_code = cw::KeyCode::space;
+    a.focusManager().handleKeyEvent(key);
+    EXPECT_EQ(keys_seen, 0) << "focus leaked into window A";
+    b.focusManager().handleKeyEvent(key);
+    EXPECT_EQ(keys_seen, 1) << "window B's focus manager doesn't route to its node";
+
     root->unmount();
 }

@@ -5,15 +5,23 @@
 namespace systems::leal::campello_widgets
 {
 
+    // A node owned by a render object belongs to that object's window
+    // (Phase 17); an unowned node uses the ambient/process-wide manager.
+    static FocusManager* managerFor(const RenderObject* owner) noexcept
+    {
+        if (owner && RenderObject::isAlive(owner)) return owner->focusManager();
+        return FocusManager::activeManager();
+    }
+
     void FocusNode::requestFocus()
     {
-        if (auto* m = FocusManager::activeManager())
+        if (auto* m = managerFor(owner_))
             m->requestFocus(this);
     }
 
     void FocusNode::unfocus()
     {
-        if (auto* m = FocusManager::activeManager())
+        if (auto* m = managerFor(owner_))
             m->unfocus(this);
     }
 

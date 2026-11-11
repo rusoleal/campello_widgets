@@ -76,6 +76,18 @@ namespace systems::leal::campello_widgets
         View* view() const noexcept { return view_; }
 
         /**
+         * @brief The view to make ambient while working on this element:
+         *        its own if still alive, else the current ambient one.
+         *
+         * mount/rebuild/unmount run inside `View::Scope(scopeView())`, so
+         * code there without a context of its own (createRenderObject(),
+         * State lifecycle methods, render object constructors) resolves the
+         * legacy accessors (FocusManager::activeManager(), ...) to this
+         * element's window.
+         */
+        View* scopeView() const noexcept;
+
+        /**
          * @brief Removes this element from the tree.
          *
          * Subclasses should clean up resources and call the base implementation.

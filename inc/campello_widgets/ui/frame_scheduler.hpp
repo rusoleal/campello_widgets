@@ -42,9 +42,14 @@ public:
     /// Request that the platform draw one frame.
     /// Safe to call many times per event cycle — the underlying platform
     /// primitive (setNeedsDisplay:YES, invalidate(), etc.) is idempotent.
+    ///
+    /// With several windows (Phase 17), this asks *every* View for a frame
+    /// (on top of the legacy callback): it is for callers with no window
+    /// context. Code that knows its window should call View::requestFrame().
     static void scheduleFrame();
 
-    /// Returns true if a frame callback has been registered.
+    /// Returns true if a frame callback has been registered (the legacy one
+    /// or any View's).
     static bool hasCallback() noexcept;
 
 private:

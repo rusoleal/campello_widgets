@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/multi_child_render_object_element.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/key.hpp>
 #include <unordered_map>
@@ -73,6 +74,7 @@ namespace systems::leal::campello_widgets
                     {
                         old_el->unmount();
                         old_el = new_widget->createElement();
+                        View::Scope view_scope(scopeView());
                         old_el->mount(this);
                     }
                     new_elements.push_back(std::move(old_el));
@@ -81,7 +83,10 @@ namespace systems::leal::campello_widgets
                 {
                     // No old element with this key — create fresh
                     auto el = new_widget->createElement();
-                    el->mount(this);
+                    {
+                        View::Scope view_scope(scopeView());
+                        el->mount(this);
+                    }
                     new_elements.push_back(std::move(el));
                 }
             }

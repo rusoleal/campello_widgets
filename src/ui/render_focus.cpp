@@ -17,7 +17,7 @@ namespace systems::leal::campello_widgets
     {
         if (focus_node)
         {
-            if (auto* m = FocusManager::activeManager())
+            if (auto* m = focusManager())
                 m->unregisterNode(focus_node.get());
         }
     }

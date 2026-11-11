@@ -5,6 +5,8 @@
 #include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/focus_manager.hpp>
+#include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
 
 #include <iostream>
@@ -31,6 +33,18 @@ namespace systems::leal::campello_widgets
     {
         if (View* v = view()) return &v->pointerDispatcher();
         return PointerDispatcher::activeDispatcher();
+    }
+
+    FocusManager* RenderObject::focusManager() const noexcept
+    {
+        if (View* v = view()) return &v->focusManager();
+        return FocusManager::activeManager();
+    }
+
+    TextInputManager* RenderObject::textInputManager() const noexcept
+    {
+        if (View* v = view()) return &v->textInputManager();
+        return TextInputManager::activeManager();
     }
 
     namespace

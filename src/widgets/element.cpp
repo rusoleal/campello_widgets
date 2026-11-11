@@ -91,6 +91,16 @@ namespace systems::leal::campello_widgets
         if (dirty_) return;
         dirty_ = true;
         dirty_elements_.push_back(this);
+
+        // Ask this element's own window for a frame (its buildFrame runs
+        // buildScope(), which rebuilds dirty elements of every window: one
+        // shared element tree); elements outside any view use the global path.
+        View* owner = View::isAlive(view_) ? view_ : nullptr;
+        if (owner && owner->hasFrameRequestCallback())
+        {
+            owner->requestFrame();
+            return;
+        }
         FrameScheduler::scheduleFrame();
 
         // In test environments where no frame callback is registered, rebuild
@@ -115,9 +125,17 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    View* Element::scopeView() const noexcept
+    {
+        return View::isAlive(view_) ? view_ : View::current();
+    }
+
     void Element::rebuild()
     {
         if (!dirty_ || building_) return;
+        // buildScope() rebuilds dirty elements of every window from whichever
+        // window's frame runs first; build in this element's own window.
+        View::Scope view_scope(scopeView());
         building_ = true;
         dirty_    = false;
 
@@ -225,7 +243,11 @@ namespace systems::leal::campello_widgets
         }
 
         auto new_element = new_widget->createElement();
-        new_element->mount(parent);
+        {
+            // The child joins the parent's window (see Element::view()).
+            View::Scope view_scope(parent ? parent->scopeView() : View::current());
+            new_element->mount(parent);
+        }
         return new_element;
     }
 
