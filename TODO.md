@@ -885,6 +885,181 @@ backlog, no bloquea declarar 1.0.0.
 
 ---
 
+## Phase 17 — Multi-window support (started 2026-11-11)
+
+**Goal**: an app can open several native windows (and, on web, several
+canvases) driven by a single widget tree.
+
+**Architecture decisions (agreed 2026-11-11)**, modelled on Flutter's
+windowing work: one engine, one isolate, one widget tree, many `FlutterView`s.
+Flutter's version is experimental, flag-gated on `master`, desktop only.
+- **One UI thread and one element tree for every window of an app.** Windows
+  share state for free (a `ValueNotifier` in a common ancestor). The thread
+  stays bound by `ThreadChecker`, and AppKit, UIKit and Win32 need window
+  calls on their owning thread anyway. Trade-off we accept: a slow build in
+  one window delays the others, so heavy work belongs off the UI thread.
+- **One raster thread per window.** GPU encode and present stalls stay
+  isolated, as each `MTKView` delegate's `RasterThread` already does today.
+  This means every paint-time static has to become per-renderer.
+- **Build only dirty windows**, each window on its own display's vsync.
+- **One shared `campello_gpu::Device`.** Device-bound resources
+  (`ImageCache` textures, glyph atlases, pipelines) can't be shared across
+  devices, so one device per window is ruled out.
+- **Later, optional**: separate "engines" (independent `runApp` roots, each
+  with its own thread and tree, communicating only by messages) for truly
+  independent tool windows. This comes almost for free once the singletons
+  are gone.
+
+### M0 — `campello_gpu`: `Surface` API (one swapchain per window)
+
+Today one `Device` owns exactly one swapchain (`createDefaultDevice(pd)`,
+`getSwapchainTextureView()`), and Vulkan/DX12 present implicitly inside
+`submit()`. Metal's `scheduleNextPresent()` is a single slot per device, so
+two windows on two raster threads would race: one window's `submit()` can
+present the other window's drawable.
+
+New API (design follows wgpu's surface, with present bound to a command
+buffer instead of a device-global slot):
+```cpp
+auto surface = device->createSurface(native, width, height);
+auto view    = surface->acquireNextTexture();   // nullptr → skip this frame
+/* encode render passes into view */
+surface->schedulePresent(cmd);                  // present after *this* cmd buffer
+device->submit(cmd);
+```
+- [x] **M0.1** Public header `inc/campello_gpu/surface.hpp`, plus
+      `Device::createSurface()` (2026-11-11). Metal implementation wraps a
+      `CAMetalLayer` (`nextDrawable` → `acquireNextTexture`,
+      `presentDrawable:` on the given command buffer → `schedulePresent`).
+      Vulkan/DX12/WebGPU are stubs that return `nullptr` until M0.2–M0.4.
+      Integration tests: two surfaces on two threads, each presenting only
+      its own drawable.
+      - Done on branch `feature/multi-surface` in `campello_gpu`
+        (uncommitted). `tests/platform/test_surface.cpp` has 9 tests; the
+        full suite passes (255 integration + 76 universal tests, with 2
+        ray-tracing tests skipped as before).
+      - Finding: an off-screen `CAMetalLayer` does **not** enforce its
+        drawable pool (`nextDrawable` never blocks there), so a leaked
+        drawable can't be detected by pool exhaustion. The leak tests use an
+        ObjC weak reference to the drawable instead. Mutation-checked: each
+        test fails when its `release` is removed.
+      - Follow-up (pre-existing, not Surface code): TSAN reports a race in
+        `Device::submit(cmd, fence)`'s `addCompletedHandler` block (the
+        `std::function` is copied on the submitting thread and read on a
+        GCD worker). It only shows when `submit` runs off the main thread,
+        which no earlier test did. Most likely a false positive, because the
+        happens-before edge goes through Metal's driver, which TSAN can't
+        see. Confirm before M2, where several raster threads will submit.
+- [ ] **M0.2** Vulkan: move swapchain, image views, framebuffers,
+      acquire/render-finished semaphores and `currentImageIndex` out of
+      `DeviceData` into a per-surface struct. The legacy `pd` device surface
+      becomes an internal implicit `Surface`, so `createDefaultDevice(pd)`
+      keeps working. `schedulePresent` makes `submit()` wait on the
+      surface's acquire semaphore and `vkQueuePresentKHR` that surface's
+      image. Handle OUT_OF_DATE per surface.
+- [ ] **M0.3** DX12: one `IDXGISwapChain` (plus RTV heap and back buffers)
+      per `HWND` on the shared queue; `Present()` after `ExecuteCommandLists`.
+- [ ] **M0.4** WebGPU: one `wgpu::Surface` / `GPUCanvasContext` per canvas
+      selector, configured with the shared device.
+- [ ] **M0.5** Deprecate `scheduleNextPresent()` and
+      `getSwapchainTextureView()` in the docs (keep them working), write the
+      CHANGELOG entry, tag a `campello_gpu` release and bump
+      `dependencies/campello_gpu.cmake`.
+
+### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
+
+- [ ] **M1.1** Introduce `View`, one per window, owning: `Renderer`, root
+      `RenderBox`, `PointerDispatcher`, `TextInputManager`, the frame-request
+      callback, `MediaQueryData`, root `Overlay`, plus a native-window handle
+      and surface. Reach it through `View::of(context)` / an owner pointer
+      on `RenderObject`.
+- [ ] **M1.2** `PointerDispatcher::activeDispatcher()` (~70 call sites)
+      becomes a lookup of the owning view.
+- [ ] **M1.3** `FrameScheduler::scheduleFrame()` (~60 call sites) becomes
+      per view, and frames run only for dirty views.
+      `PostFrameCallbacks` stays global but drains once per view frame.
+- [ ] **M1.4** Paint-time statics become per-renderer:
+      `RenderObject::activeBackend()`, `activeDevicePixelRatio()`,
+      `activePaintOriginOffset()` and `currentRenderer()`. These are real
+      races once two raster threads exist. Add a TSAN test.
+- [ ] **M1.5** `TextInputManager::activeManager()` and
+      `TextEditingController::s_focused_` become per view (the IME belongs
+      to one window).
+- [ ] **M1.6** `FocusManager`: one global manager, a root `FocusScope` per
+      view, and key events routed to the OS-focused window's scope. Window
+      activate/deactivate updates the primary focus.
+- [ ] **M1.7** Keep global: `TickerScheduler` (ticked once per UI-thread
+      frame), `DragManager` (prerequisite for drag between windows),
+      `ImageCache`, `HardwareKeyboard`, `ThreadChecker`.
+- [ ] **M1.8** Platform runners build one implicit `View` through the new
+      path; all existing tests and examples pass unchanged.
+
+### M2 — Windowing API and macOS (first platform)
+
+- [ ] **M2.1** `PlatformWindowing` interface: create, destroy, setTitle,
+      setSize/position (requests the platform may refuse), show/hide/focus,
+      DPI, close-requested and destroyed callbacks, native handle. Also
+      covers part of the Phase 10 "platform channel" gap.
+- [ ] **M2.2** Widgets: a `WindowController` (imperative; its lifetime owns
+      the native window) and a `Window` widget that hosts its child in the
+      controller's `View`. `runApp` keeps its single-window behaviour; a
+      `runMultiWindowApp` / `ViewCollection` root covers the multi-window
+      case. Window kinds: regular and dialog (modal to a parent) first;
+      popup, tooltip and satellite later (see M7).
+- [ ] **M2.3** macOS implementation: one `NSWindow` + `MTKView` + `Surface`
+      + `RasterThread` per window; per-screen refresh rate; app
+      termination policy (last window closed).
+- [ ] **M2.4** `examples/multi_window` (main window + inspector + modal
+      dialog). Verify by running it, sampling pixels from screenshots, and
+      interacting with it — not only with tests (see the memory notes on
+      rendering and interactive verification).
+
+### M3 — Windows and Linux
+
+- [ ] **M3.1** Windows: multiple `HWND`s on one message loop, per-monitor
+      DPI v2, one `Surface` per `HWND`.
+- [ ] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each.
+- [ ] **M3.3** Linux Wayland: `g_wayland_state` becomes one state per
+      window, with multiple `xdg_toplevel`s. Client-side positioning isn't
+      possible on Wayland, so position requests are no-ops there.
+
+### M4 — Web: several canvases
+
+- [ ] **M4.1** `runApp` accepts several canvas selectors / a
+      `ViewCollection`; one `GPUCanvasContext` per canvas on the shared
+      device. Input is routed per canvas.
+- [ ] **M4.2** (experimental) `window.open()` pop-ups driven by the
+      opener's WASM. First prototype whether a canvas in another document
+      accepts the opener's `GPUDevice`. Document Picture-in-Picture is a
+      Chromium-only option.
+
+### M5 — iPadOS (multiple scenes)
+
+- [ ] **M5.1** Migrate the iOS runner from the legacy `UIApplicationDelegate`
+      + single `UIWindow` to the `UIScene` lifecycle (Apple is making this
+      mandatory anyway).
+- [ ] **M5.2** `UIApplicationSupportsMultipleScenes`: one `View` per
+      `UIWindowScene`, opened through `requestSceneSessionActivation`, plus
+      an external-display scene. iPhone gets the external display only.
+
+### M6 — Android
+
+- [ ] **M6.1** Replace `android_native_app_glue` (one activity, one
+      `ANativeWindow`) with a host that maps several native windows to
+      views, using `GameActivity` or a custom `Activity` + `SurfaceView`.
+- [ ] **M6.2** Extra windows as separate activities
+      (`FLAG_ACTIVITY_LAUNCH_ADJACENT` / `NEW_DOCUMENT`, desktop
+      windowing); `Presentation` API for secondary displays.
+
+### M7 — Native popup windows (optional)
+
+- [ ] Menus, tooltips and dropdowns that extend past the parent window's
+      edge (`xdg_popup` on Wayland, borderless child windows elsewhere).
+
+**Out of scope**: GDK/Xbox and Android TV (single window by platform design).
+
+---
+
 ## Backlog / Future
 
 - Accessibility (semantic tree, screen reader support)
