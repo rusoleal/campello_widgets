@@ -992,8 +992,28 @@ device->submit(cmd);
         before M3.
 - [ ] **M0.3** DX12: one `IDXGISwapChain` (plus RTV heap and back buffers)
       per `HWND` on the shared queue; `Present()` after `ExecuteCommandLists`.
-- [ ] **M0.4** WebGPU: one `wgpu::Surface` / `GPUCanvasContext` per canvas
-      selector, configured with the shared device.
+- [x] **M0.4** WebGPU (2026-11-11), on `campello_gpu`'s
+      `feature/multi-surface` branch. Each `Surface` is its own
+      `WGPUSurface` (a `GPUCanvasContext` on one `<canvas>` CSS selector),
+      configured on the shared device. The swapchain size is the canvas
+      drawing-buffer size: `createSurface(sel, w, h)` and `resize()` set
+      `canvas.width/height`, and `acquireNextTexture()` follows page-code
+      changes. Present is implicit (at the end of the browser task), so
+      `schedulePresent()` only does bookkeeping. The legacy
+      `createDefaultDevice("#canvas")` path is unchanged; its internal
+      helper was renamed `createLegacyCanvasSurface` (it clashed with the
+      new member).
+      - Verified in headless Chrome (local GPU), both ASYNCIFY and JSPI
+        builds. 10 Surface tests read canvas pixels; the full suite reports
+        `failures=0 tests=257 skipped=44` and `webgpu_browser_test` (legacy
+        canvas) passes. Mutation-checked: skipping the reconfigure on
+        canvas resize fails the resize test.
+      - **Readback finding**: once presented, a WebGPU canvas reads back as
+        transparent black through `drawImage` (like WebGL without
+        `preserveDrawingBuffer`). The tests therefore sample in the same
+        task as the submit, which is exactly the texture about to be
+        presented. Remember this for M4 web fidelity screenshots: capture
+        before yielding, or use a CDP `Page.captureScreenshot`.
 - [ ] **M0.5** Deprecate `scheduleNextPresent()` and
       `getSwapchainTextureView()` in the docs (keep them working), write the
       CHANGELOG entry, tag a `campello_gpu` release and bump
