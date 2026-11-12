@@ -35,6 +35,17 @@ namespace systems::leal::campello_widgets
         WindowKind              kind      = WindowKind::regular;
         PlatformWindow*         parent    = nullptr;   ///< Required for WindowKind::dialog.
         bool                    resizable = true;
+        /// Web only: CSS selector of an existing `<canvas>` to host the
+        /// window (e.g. a sidebar laid out by the page). Empty: a new canvas
+        /// is created, see web/run_app.hpp. Ignored on other platforms.
+        std::string             host_element;
+        /// Web only (experimental): open a separate browser window
+        /// (`window.open()`, same origin) drawn with the app's GPU device,
+        /// instead of a canvas on the page. Must be created from a user
+        /// gesture (a tap handler) or popup blockers refuse it, and then
+        /// WindowController::create() returns nullptr. The user closing it
+        /// can't be vetoed: on_close_requested runs after the fact.
+        bool                    web_popup = false;
     };
 
     /// A window's current geometry, as the widget tree sees it (MediaQuery).
