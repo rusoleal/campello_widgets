@@ -1284,12 +1284,87 @@ renders in the Simulator (taps not automatable).
 
 ### M5 — iPadOS (multiple scenes)
 
-- [ ] **M5.1** Migrate the iOS runner from the legacy `UIApplicationDelegate`
-      + single `UIWindow` to the `UIScene` lifecycle (Apple is making this
-      mandatory anyway).
-- [ ] **M5.2** `UIApplicationSupportsMultipleScenes`: one `View` per
-      `UIWindowScene`, opened through `requestSceneSessionActivation`, plus
-      an external-display scene. iPhone gets the external display only.
+**Status (2026-11-12): done (Simulator).** Branch `feature/multi-window`.
+
+- [x] **M5.1** The iOS runner uses the `UIScene` lifecycle.
+      - **Delegate in code:** the app delegate configures
+        `CampelloSceneDelegate` for every scene, so apps only add
+        `UIApplicationSceneManifest` to Info.plist (no class names). The
+        gallery now declares it, with `UIApplicationSupportsMultipleScenes`
+        false.
+      - **App-level state:** the widget tree, the main `View`, the GPU device
+        and the ticker moved out of the view into the app. A scene only
+        *hosts* a View (`CampelloUIWindow` + `CampelloViewController` +
+        `CampelloMTKView`), so iPadOS can disconnect the main scene and
+        connect it again later without losing the tree.
+      - **Input scoping:** touches and presses are scoped to their window's
+        View (`CampelloUIWindow::sendEvent:`), and so is text input.
+      - Found while verifying: because the delegate implements
+        `configurationForConnectingSceneSession:`, UIKit uses scenes **even
+        without the manifest**. The old window-only path then left a black
+        screen, so a window of our own is now only a fallback, used if no
+        scene connects.
+      - **Regressions:** the gallery matches its M1 capture on iPhone (only
+        the clock and timing overlay differ), with and without the
+        manifest, and renders its iPad layout on iPad.
+- [x] **M5.2** iPadOS multiple windows (`src/ios/platform_windowing.mm`).
+      - **Opening:** `WindowController::create()` asks for a scene
+        (`activateSceneSessionForRequest:`, or
+        `requestSceneSessionActivation:` before iOS 17) and returns a
+        *pending* window at once. Its View exists and the subtree mounts;
+        the content appears when the scene connects, matched by an id in an
+        `NSUserActivity`. The id is also kept in the session's `userInfo`,
+        so a window restored from an earlier run is closed instead of
+        becoming a duplicate main window.
+      - **Windows iPadOS opens by itself** (the dock or the app switcher's
+        "+", and external displays) go to the new
+        `WindowController::setPlatformWindowHandler()`. Without a handler
+        they are closed, and an external display keeps mirroring. New
+        `WindowKind::external_display` and `PlatformWindow::kind()`.
+      - **Closing:** closing a window destroys its scene. A scene that
+        disconnects is reported as a close request.
+      - **iPhone:** `createWindow()` returns nullptr
+        (`supportsMultipleScenes` is false).
+
+      `examples/ios_multi_window` (`CW_SCENES_DEMO=2`) on the iPad Pro 13"
+      Simulator, iOS 18.6, 3/3 identical runs:
+      1. the Inspector opens as a second window in Split View
+         (375×1376 @2x);
+      2. two taps dispatched into its View update the counter in both
+         windows (screenshots);
+      3. closing it disconnects its scene (scene count 2 → 1);
+      4. a scene requested like the dock does reaches the handler and shows
+         the counter;
+      5. closing that one disconnects it too.
+
+      On the iPhone Simulator, create() returns nullptr and UIKit refuses
+      extra scenes ("does not support multiple scenes").
+      Unit tests: handler + kind (1105/1105).
+
+**Known gaps / follow-ups**
+- [ ] Taps were injected into the window's View (no UIKit touch synthesis
+      here: no idb/XCTest UI automation). UIKit routes each window's
+      touches to its own `CampelloMTKView`, but a manual tap pass on an iPad
+      is worth doing.
+- [ ] Destroying a window whose scene is in the **background** (e.g.
+      replaced in Split View) doesn't disconnect it within seconds: iPadOS
+      defers it. The window is gone from the app, but the scene lingers in
+      the app switcher for a while.
+- [ ] A scene disconnecting is treated as "closed", but iPadOS also
+      disconnects background scenes to reclaim memory and may reconnect them
+      later (the session survives). Such a window is closed in the app; when
+      its scene comes back, its id no longer matches and the scene is
+      destroyed. Keeping windows alive across that needs a policy.
+- [ ] External displays: implemented (non-interactive role, offered to the
+      handler) but not exercised; the Simulator's external display is only
+      reachable from its menu.
+- [ ] `setSize()` is ignored (iPadOS decides sizes). `dialog` is an
+      ordinary window. Main-window reconnection after a disconnect is
+      untested.
+- [ ] Each window still renders through `view.currentDrawable` +
+      `Device::scheduleNextPresent()` on the main thread, one window at a
+      time: safe today (no raster threads on iOS), but switching to the
+      per-window `Surface` path as on macOS would remove the shared slot.
 
 ### M6 — Android
 
