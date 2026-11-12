@@ -20,11 +20,18 @@ namespace systems::leal::campello_widgets
     {
         /// An ordinary top-level window.
         regular,
-        /// A secondary window that stays above `WindowOptions::parent` and is
-        /// centred on it when first shown. Not modal yet: the parent keeps
-        /// receiving input (see TODO.md, Phase 17 M2). Where windows can't
-        /// be parented (iPadOS scenes) it is an ordinary window.
+        /// A secondary window that stays above its parent and is centred on
+        /// it when first shown (see WindowOptions::modal to block the
+        /// parent). Where windows can't be parented (iPadOS scenes, Android
+        /// activities) it is an ordinary window.
         dialog,
+        /// A borderless window for a menu, dropdown or tooltip that may
+        /// extend past its parent's edges (Phase 17 M7). `position` is
+        /// relative to the parent's content (logical pixels); it moves with
+        /// the parent and closes when it loses focus. Platforms without
+        /// such windows (iOS, Android) return nullptr: PopupWindowAnchor then
+        /// falls back to the parent window's Overlay.
+        popup,
         /// A window on an external display (a monitor, AirPlay), opened by
         /// the platform when one is connected (iOS/iPadOS). Not created
         /// through createWindow(); non-interactive.
@@ -38,7 +45,13 @@ namespace systems::leal::campello_widgets
         Size                    size{640.0f, 480.0f};  ///< Content size, logical pixels.
         std::optional<Offset>   position;              ///< Top-left on screen; platform default if unset.
         WindowKind              kind      = WindowKind::regular;
-        PlatformWindow*         parent    = nullptr;   ///< Required for WindowKind::dialog.
+        /// The owning window (nullptr: the main window, for dialogs, popups
+        /// and modal windows). An owned window closes with its owner.
+        PlatformWindow*         parent    = nullptr;
+        /// Blocks pointer and key input to the parent window while open
+        /// (its View's inputBlocker()); clicking the parent brings this one
+        /// forward.
+        bool                    modal     = false;
         bool                    resizable = true;
         /// Web only: CSS selector of an existing `<canvas>` to host the
         /// window (e.g. a sidebar laid out by the page). Empty: a new canvas

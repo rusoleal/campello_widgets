@@ -497,11 +497,13 @@ TEST(Window, PlatformOpenedWindowsGoToTheHandler)
     cw::WindowController::setPlatformWindowHandler(nullptr);
 }
 
-TEST(Window, KindDefaultsToRegular)
+TEST(Window, KindIsTheOneRequested)
 {
     WinTestPlatform platform;
     auto controller = cw::WindowController::create({.kind = cw::WindowKind::dialog});
     ASSERT_NE(controller, nullptr);
-    // The fake doesn't override kind(): regular, like a platform without dialogs.
-    EXPECT_EQ(controller->kind(), cw::WindowKind::regular);
+    // create() remembers the requested kind even when the platform window
+    // doesn't report one (the fake's kind() is the default, regular).
+    EXPECT_EQ(controller->kind(), cw::WindowKind::dialog);
+    EXPECT_EQ(controller->platformWindow()->kind(), cw::WindowKind::regular);
 }

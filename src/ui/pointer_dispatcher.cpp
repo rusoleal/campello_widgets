@@ -134,6 +134,49 @@ namespace systems::leal::campello_widgets
         }
     }
 
+    void PointerDispatcher::setInputBlocked(bool blocked)
+    {
+        if (blocked == input_blocked_) return;
+        if (blocked)
+        {
+            // Finish what's in progress first: cancel each active pointer
+            // (gestures resolve as cancelled) and end hovers with a move far
+            // outside the window.
+            std::vector<std::pair<int32_t, Offset>> active;
+            for (const auto& [id, pointer] : active_pointers_) active.emplace_back(id, pointer.down_position);
+            for (const auto& [id, position] : active)
+            {
+                PointerEvent cancel;
+                cancel.kind       = PointerEventKind::cancel;
+                cancel.pointer_id = id;
+                cancel.position   = position;
+                handlePointerEvent(cancel);
+            }
+            if (!last_hover_path_.empty())
+            {
+                PointerEvent away;
+                away.kind        = PointerEventKind::move;
+                away.position    = {-1.0e6f, -1.0e6f};
+                away.pressure    = 0.0f;
+                away.device_kind = PointerDeviceKind::mouse;
+                handlePointerEvent(away);
+            }
+        }
+        input_blocked_ = blocked;
+    }
+
+    PointerDispatcher::DownObserverId PointerDispatcher::addPointerDownObserver(Handler observer)
+    {
+        const DownObserverId id = next_down_observer_++;
+        down_observers_.emplace_back(id, std::move(observer));
+        return id;
+    }
+
+    void PointerDispatcher::removePointerDownObserver(DownObserverId id)
+    {
+        std::erase_if(down_observers_, [id](const auto& entry) { return entry.first == id; });
+    }
+
     void PointerDispatcher::handlePointerEvent(const PointerEvent& event)
     {
         ThreadChecker::instance().assertOnBoundThread("PointerDispatcher::handlePointerEvent");
@@ -150,6 +193,15 @@ namespace systems::leal::campello_widgets
         PointerEvent stamped = event;
         if (stamped.timestamp_ms == 0)
             stamped.timestamp_ms = currentMonotonicMs();
+
+        if (stamped.kind == PointerEventKind::down && !down_observers_.empty())
+        {
+            // A copy: an observer may close a window, removing observers.
+            const auto observers = down_observers_;
+            for (const auto& [id, observer] : observers)
+                if (observer) observer(stamped);
+        }
+        if (input_blocked_) return;
 
         // Record position for debug visualization
         if (stamped.kind == PointerEventKind::down ||

@@ -7,12 +7,15 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
+#include <vector>
 #include <memory>
 #include <string>
 
 namespace systems::leal::campello_widgets
 {
     class RenderBox;
+    class OverlayEntry;
 
     /**
      * @brief Owns one native window (Phase 17, multi-window).
@@ -68,7 +71,21 @@ namespace systems::leal::campello_widgets
         static bool offerPlatformWindow(std::unique_ptr<PlatformWindow>& window);
 
         bool            isOpen() const noexcept { return window_ != nullptr; }
-        WindowKind      kind() const { return window_ ? window_->kind() : WindowKind::regular; }
+        /// The kind it was created with (create()), else the platform's.
+        WindowKind      kind() const { return kind_ ? *kind_ : (window_ ? window_->kind() : WindowKind::regular); }
+
+        /// The controller whose window owns `view`, or nullptr (e.g. the
+        /// main window, which has no controller).
+        static WindowController* forView(const View* view) noexcept;
+
+        /// What closing the main (runApp) window does on desktop platforms.
+        enum class MainWindowClose
+        {
+            quit_app,      ///< Closes every window and quits (default).
+            keep_running,  ///< Other windows stay; the app quits after the last one.
+        };
+        static void            setMainWindowClosePolicy(MainWindowClose policy) noexcept;
+        static MainWindowClose mainWindowClosePolicy() noexcept;
         PlatformWindow* platformWindow() const noexcept { return window_.get(); }
         View*           view() const noexcept;
         WindowMetrics   metrics() const;
@@ -105,7 +122,13 @@ namespace systems::leal::campello_widgets
         explicit WindowController(std::unique_ptr<PlatformWindow> window);
         void notify(Event event);
         void finishDestroy();
+        void releaseOwnerLinks();
         bool destroy_pending_ = false;
+
+        std::optional<WindowKind>                          kind_;
+        View*                                              blocked_view_ = nullptr;  ///< modal: the parent it blocks
+        std::weak_ptr<WindowController>                    owner_;
+        std::vector<std::weak_ptr<WindowController>>       owned_;
 
         std::unique_ptr<PlatformWindow>                    window_;
         std::map<ListenerId, std::function<void(Event)>>   listeners_;
@@ -167,6 +190,8 @@ namespace systems::leal::campello_widgets
         WindowController::ListenerId      listener_ = 0;
         std::shared_ptr<Element>          child_;
         RenderBox*                        root_ = nullptr;
+        std::shared_ptr<OverlayEntry>     overlay_entry_;  ///< hosts `child` in the window's Overlay
+        WidgetRef                         overlay_;
     };
 
 } // namespace systems::leal::campello_widgets

@@ -117,4 +117,31 @@ namespace systems::leal::campello_widgets
         t_scoped = previous_;
     }
 
+
+    void View::addInputBlocker(View* blocker)
+    {
+        if (!blocker || blocker == this) return;
+        input_blockers_.push_back(blocker);
+        pointer_dispatcher_->setInputBlocked(true);
+        focus_manager_->setInputBlocked(true);
+    }
+
+    void View::removeInputBlocker(View* blocker)
+    {
+        auto it = std::find(input_blockers_.rbegin(), input_blockers_.rend(), blocker);
+        if (it != input_blockers_.rend()) input_blockers_.erase(std::next(it).base());
+        if (inputBlocker() == nullptr)
+        {
+            input_blockers_.clear();
+            pointer_dispatcher_->setInputBlocked(false);
+            focus_manager_->setInputBlocked(false);
+        }
+    }
+
+    View* View::inputBlocker() const noexcept
+    {
+        for (auto it = input_blockers_.rbegin(); it != input_blockers_.rend(); ++it)
+            if (isAlive(*it)) return *it;
+        return nullptr;
+    }
 } // namespace systems::leal::campello_widgets

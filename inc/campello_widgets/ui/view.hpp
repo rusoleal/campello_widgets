@@ -83,6 +83,20 @@ namespace systems::leal::campello_widgets
         void requestFrame();
 
         // ------------------------------------------------------------------
+        // Modal blocking (Phase 17)
+        // ------------------------------------------------------------------
+
+        /// A modal window (`blocker`'s) opened over this one: this view's
+        /// pointer and key input is blocked until every blocker is removed.
+        /// Platforms use inputBlocker() to bring the modal window forward
+        /// when the user clicks this one.
+        void addInputBlocker(View* blocker);
+        void removeInputBlocker(View* blocker);
+        /// The most recently added live blocker, or nullptr.
+        View* inputBlocker() const noexcept;
+        bool  isInputBlocked() const noexcept { return inputBlocker() != nullptr; }
+
+        // ------------------------------------------------------------------
         // Single-window compatibility
         // ------------------------------------------------------------------
 
@@ -139,6 +153,7 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<TextInputManager>  text_input_manager_;
         Renderer*                          renderer_ = nullptr;
         std::function<void()>              frame_request_;
+        std::vector<View*>                 input_blockers_;
     };
 
 } // namespace systems::leal::campello_widgets

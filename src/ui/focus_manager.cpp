@@ -183,6 +183,7 @@ namespace systems::leal::campello_widgets
         // that never reach here as a KeyEvent at all (e.g. macOS's
         // flagsChanged: for a bare Cmd/Shift/Ctrl/Option press).
         HardwareKeyboard::current().updateModifiers(event.modifiers);
+        if (input_blocked_) return;
 
         // Any key event reaching here implies the user is currently
         // interacting via keyboard -- switches focus-ring visibility on

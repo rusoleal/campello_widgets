@@ -11,6 +11,7 @@ namespace systems::leal::campello_widgets
 {
 
     // Forward declarations
+    class View;
     class OverlayEntry;
     class Overlay;
     class OverlayState;
@@ -101,9 +102,13 @@ namespace systems::leal::campello_widgets
 
         void didUpdateWidget(const Widget& old_widget) override;
 
+        /// The window (View) this overlay belongs to.
+        View* view() const noexcept { return view_; }
+
     private:
         void _markDirty();
         bool removing_ = false;
+        View* view_ = nullptr;
     };
 
     /**
@@ -145,7 +150,10 @@ namespace systems::leal::campello_widgets
         /**
          * @brief Inserts an entry into the overlay.
          *
-         * The entry is inserted at the end of the list (on top).
+         * The entry is inserted at the end of the list (on top), in the
+         * overlay of the window being handled (View::current(), Phase 17):
+         * a menu or dialog opened from a secondary window appears in that
+         * window. Falls back to the most recently created overlay.
          */
         static void insert(std::shared_ptr<OverlayEntry> entry);
 
@@ -155,9 +163,13 @@ namespace systems::leal::campello_widgets
         static void insertAt(int index, std::shared_ptr<OverlayEntry> entry);
 
         /**
-         * @brief Removes an entry from the overlay.
+         * @brief Removes an entry from whichever overlay holds it.
          */
         static void remove(std::shared_ptr<OverlayEntry> entry);
+
+        /// The overlay of `view`'s window (its most recently created one),
+        /// or nullptr.
+        static OverlayState* forView(const View* view) noexcept;
 
         // Internal state management
         static void setGlobalState(OverlayState* state) noexcept;
