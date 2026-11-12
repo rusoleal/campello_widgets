@@ -37,6 +37,10 @@ namespace systems::leal::campello_widgets
         explicit RasterThread(RasterFn raster_fn);
         ~RasterThread();
 
+        /// True on a RasterThread worker thread (any of them: there is one
+        /// per window). Renderer uses it to bind its raster-thread check.
+        static bool isCurrentThreadRasterThread() noexcept;
+
         RasterThread(const RasterThread&) = delete;
         RasterThread& operator=(const RasterThread&) = delete;
 

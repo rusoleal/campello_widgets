@@ -88,6 +88,16 @@ namespace systems::leal::campello_widgets
         View* scopeView() const noexcept;
 
         /**
+         * @brief The view this element's *children* belong to.
+         *
+         * Normally the element's own view. An element that hosts a subtree in
+         * another window (the Window widget's element) returns that window's
+         * View, so its descendants are owned by, and mounted in, the new
+         * window even though they sit under it in the one shared element tree.
+         */
+        virtual View* childView() const noexcept { return view_; }
+
+        /**
          * @brief Removes this element from the tree.
          *
          * Subclasses should clean up resources and call the base implementation.

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <thread>
+
 #include <string>
 
 #include <functional>
@@ -497,6 +500,12 @@ namespace systems::leal::campello_widgets
 
     private:
         View* view_ = nullptr;
+
+        // The raster thread this renderer is rasterized on, bound by its
+        // first rasterFrame() call from a RasterThread worker. Per renderer,
+        // not the global ThreadChecker::rasterInstance(): with several
+        // windows there is one raster thread per window.
+        std::atomic<std::thread::id> raster_thread_id_{};
         void layoutPass(float viewport_width, float viewport_height);
 
         // Generates the draw list headlessly (no GPU encoder) so it can be

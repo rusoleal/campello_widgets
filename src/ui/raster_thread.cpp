@@ -63,8 +63,19 @@ namespace systems::leal::campello_widgets
         idle_cv_.wait(lock, [&] { return (!busy_ && !pending_.has_value()) || stop_requested_; });
     }
 
+    namespace
+    {
+        thread_local bool t_is_raster_thread = false;
+    }
+
+    bool RasterThread::isCurrentThreadRasterThread() noexcept
+    {
+        return t_is_raster_thread;
+    }
+
     void RasterThread::workerLoop()
     {
+        t_is_raster_thread = true;
         ThreadChecker::rasterInstance().bindToCurrentThread();
 
         for (;;)

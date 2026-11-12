@@ -42,7 +42,7 @@ namespace systems::leal::campello_widgets
     void Element::mount(Element* parent)
     {
         parent_ = parent;
-        view_    = parent_ ? parent_->view_ : View::current();
+        view_    = parent_ ? parent_->childView() : View::current();
         mounted_ = true;
         if (parent_)
             inherited_widgets_ = parent_->inherited_widgets_;
@@ -242,12 +242,15 @@ namespace systems::leal::campello_widgets
             child->unmount();
         }
 
+        // The child joins the window its parent hosts children in (see
+        // Element::childView()). Created inside the scope too: render object
+        // elements build their render object in the constructor, and a
+        // render tree root (no render parent to inherit from) takes the
+        // ambient view at construction.
+        View* child_view = parent ? parent->childView() : nullptr;
+        View::Scope view_scope(View::isAlive(child_view) ? child_view : View::current());
         auto new_element = new_widget->createElement();
-        {
-            // The child joins the parent's window (see Element::view()).
-            View::Scope view_scope(parent ? parent->scopeView() : View::current());
-            new_element->mount(parent);
-        }
+        new_element->mount(parent);
         return new_element;
     }
 
