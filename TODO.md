@@ -1210,13 +1210,77 @@ renders in the Simulator (taps not automatable).
 
 ### M4 — Web: several canvases
 
-- [ ] **M4.1** `runApp` accepts several canvas selectors / a
-      `ViewCollection`; one `GPUCanvasContext` per canvas on the shared
-      device. Input is routed per canvas.
-- [ ] **M4.2** (experimental) `window.open()` pop-ups driven by the
-      opener's WASM. First prototype whether a canvas in another document
-      accepts the opener's `GPUDevice`. Document Picture-in-Picture is a
-      Chromium-only option.
+**Status (2026-11-12): done (M4.2 experimental).** Branch `feature/multi-window`.
+
+- [x] **M4.1** Several canvases through the same windowing API as desktop,
+      not a separate `ViewCollection`: the web runner installs a
+      `PlatformWindowing` (`src/web/platform_windowing.cpp`), so
+      `WindowController` + `Window` work unchanged. A web "window" is
+      either:
+      - an **existing canvas** laid out by the page:
+        `WindowOptions::host_element = "#sidebar"`; or
+      - a **new canvas** the framework creates and removes. It goes inside
+        the page's `[data-cw-windows]` element if there is one; otherwise
+        it floats (`position: fixed`) at `position`, or cascaded. Dialogs
+        are centred on their parent canvas.
+
+      Each canvas is a `WebCanvas` (`src/web/web_canvas.*`) with its own
+      `View`, its own campello_gpu `Surface` (`GPUCanvasContext`) and its
+      own `Renderer`, on one shared `GPUDevice`. The `runApp()` canvas is
+      one too, now that the device is created without a canvas.
+      - **Frames:** one `requestAnimationFrame` loop draws every canvas that
+        requested a frame.
+      - **Pointer input:** a press goes to its canvas, which then gets the
+        moves and the release (drags may leave it). Hover goes to the
+        **topmost** canvas under the pointer (`elementFromPoint`), and the
+        canvas it left gets an out-of-bounds move, so its hovers end even
+        when a canvas above covers it.
+      - **Keys and paste:** go to the last canvas pressed or shown.
+      - **Cursors:** the CSS cursor is set per canvas, on the ambient
+        View's canvas.
+
+      `examples/web_multi_window` (main canvas, a page-laid-out sidebar, a
+      floating Inspector with a `TextField`, an About dialog, a pop-out) was
+      verified in headless Chrome over CDP with real `Input.dispatch*`
+      events:
+      - the counter is shared across all canvases;
+      - "Close" on a floating canvas over the main canvas's "+1" doesn't
+        reach "+1";
+      - keys typed while the main canvas has focus don't reach the
+        Inspector's field (the field shows "abe" after "ab" in it, "cd" on
+        main, "e" back in it);
+      - per-canvas cursors work, and hover leaves the canvas underneath;
+      - closing removes the `<canvas>`, and reopening creates a fresh one;
+      - resizing the sidebar from the page re-lays out both canvases.
+
+      The single-canvas gallery is **pixel-identical** to before.
+- [x] **M4.2** (experimental) `WindowOptions::web_popup`: a same-origin
+      `window.open()` whose canvas is drawn with the opener's `GPUDevice`
+      (prototyped first: a popup canvas accepts it). The popup's canvas and
+      root element are registered in emscripten's `specialHTMLTargets`, so
+      `Device::createSurface()`, canvas sizing and the html5 event APIs
+      resolve them like page elements. The popup's moves, releases and
+      keys go to its canvas.
+      - **Closing:** when the user closes the popup, the next frame
+        notices, stops drawing it and fires `on_close_requested` (it can't
+        be vetoed any more).
+      - **Verified:** clicks in the popup update the page's canvases; the
+        page updates the popup; the user closing it reaches the app; it can
+        be reopened.
+
+**Known gaps / follow-ups**
+- [ ] Popups: they must be opened from a user gesture. Otherwise the
+      browser blocks them and `WindowController::create()` returns nullptr;
+      that path is not exercised by a test. A drag that leaves the popup
+      window loses its release. Keys in a popup are untested (the demo's
+      pop-out has no text field). Size is a request: headless Chrome
+      ignored it, and the canvas follows the popup's actual size.
+- [ ] Document Picture-in-Picture (Chromium only) is not tried.
+- [ ] Touch / pen input on the web is still mouse-only (pre-existing,
+      single canvas too).
+- [ ] Floating canvases can't be moved or resized by the user (no
+      title bar); the page's CSS decides.
+- [ ] A host canvas keeps its last frame after its window is destroyed.
 
 ### M5 — iPadOS (multiple scenes)
 
