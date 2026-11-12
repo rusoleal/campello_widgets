@@ -36,6 +36,16 @@ namespace systems::leal::campello_widgets
 
     void InheritedElement::unmount()
     {
+        // Unmount the subtree too, like StatelessElement/StatefulElement do.
+        // Without this, removing a subtree headed by an InheritedWidget
+        // (MediaQuery, Theme, ...) never disposed the States below it nor
+        // unregistered their render objects (found via Phase 17's Window
+        // widget, whose hosted content is wrapped in a MediaQuery).
+        if (child_)
+        {
+            child_->unmount();
+            child_.reset();
+        }
         dependents_.clear();
         Element::unmount();
     }
