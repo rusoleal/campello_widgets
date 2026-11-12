@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`MouseRegion::on_hover` reported window coordinates.** It passed the pointer's surface position, while GestureDetector callbacks get local positions, so a region away from the window's top-left corner (e.g. a 3D viewport beside a side panel) saw its hover points shifted by its offset. It now passes the position local to the region. Found by Campello BIM's door and window previews.
+
 ## [0.10.1] - 2026-11-10
 
 ### Fixed
