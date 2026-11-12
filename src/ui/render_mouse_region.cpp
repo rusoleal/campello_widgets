@@ -76,7 +76,7 @@ namespace systems::leal::campello_widgets
             setSystemCursor(cursor);
             if (on_enter) on_enter();
         }
-        if (on_hover) on_hover(event.position);
+        if (on_hover) on_hover(event.local_position);  // the region's own coordinates, as gestures
     }
 
     void RenderMouseRegion::onTick(uint64_t /*now_ms*/)

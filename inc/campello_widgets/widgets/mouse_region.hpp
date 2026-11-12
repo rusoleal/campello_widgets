@@ -14,6 +14,8 @@ namespace systems::leal::campello_widgets
      *
      * Callbacks fire when the cursor enters or leaves the widget's bounds, and
      * on every hover move within the bounds. All three callbacks are optional.
+     * on_hover receives the pointer in the region's local coordinates (origin
+     * at its top-left corner), like GestureDetector's local positions.
      *
      * @code
      * auto region = std::make_shared<MouseRegion>();
