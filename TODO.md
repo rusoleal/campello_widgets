@@ -1090,10 +1090,31 @@ window, in priority order:
 - [ ] **M1.8b** Windows, Linux X11, Wayland, Linux embedded and GDK
       runners: same mechanical migration, but they can't be built on this
       Mac. Do it on the machine used for M0.3/M3.
-- [ ] **M1.9** Vulkan backend safe for several raster threads (one per
-      window): per-thread `VkCommandPool` and a thread-safe frame ring in
-      `campello_gpu` (found in M0.2). Prerequisite for M2 on Android/Linux.
-      Check DX12 for the same.
+- [x] **M1.9** Vulkan with several raster threads (2026-11-12, `campello_gpu`
+      `feature/multi-surface`). **Design choice:** recording is serialized
+      per device with a frame lock (from `createCommandEncoder()` until
+      that command buffer is submitted or dropped; re-entrant for the
+      owning thread; bounded wait, then `nullptr`), instead of a frame ring
+      per thread. A ring per thread would also need deferred texture
+      destruction to wait for every thread's ring, including buffers still
+      being *recorded* on another thread. Windows therefore encode one
+      after another (like Flutter's single raster thread), while the
+      per-window stalls stay separate (surface acquire happens before the
+      encoder exists; GPU execution is asynchronous). Revisit with a ring
+      per thread only if profiling shows encoding contention.
+      - Verified on the Redmi: two threads × 300 frames on two surfaces keep
+        their own pixels. Serialization, release on a dropped encoder or
+        command buffer, and same-thread re-entry each have a test, and
+        removing each mechanism fails its test. The full gpu suite passes
+        (219 passed, 43 skipped). The gallery APK runs and fling-scrolls
+        normally. In widgets, only `Renderer::rasterFrame()` (raster
+        thread) creates encoders, so there is no UI-thread deadlock path.
+      - **Honest limit:** with the lock removed, the two-thread stress test
+        still *passed* on this driver. The race is established by code
+        reading and by Vulkan's external-synchronization rules for
+        `VkCommandPool`, not by a reproducing test. Validation layers
+        (unavailable on this phone) would be the way to catch it.
+      - DX12: check the same assumption on the M0.3 machine.
 
 **Verification**: 15 new `View` tests (`tests/universal/test_view.cpp`),
 covering ownership, parent-wins inheritance, per-window frames, dispatch
