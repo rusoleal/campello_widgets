@@ -50,6 +50,14 @@ namespace systems::leal::campello_widgets
         /// on_metrics_changed if either changed.
         void sync();
 
+        /// Top-left in the page's viewport, CSS pixels.
+        float originX() const noexcept { return origin_x_; }
+        float originY() const noexcept { return origin_y_; }
+
+        /// A popup canvas: any press on another canvas runs on_outside_press.
+        bool                  is_popup = false;
+        std::function<void()> on_outside_press;
+
         int   width() const noexcept { return width_; }   ///< Physical pixels.
         int   height() const noexcept { return height_; }
         float devicePixelRatio() const noexcept { return dpr_; }

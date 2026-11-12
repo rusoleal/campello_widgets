@@ -44,9 +44,10 @@ namespace systems::leal::campello_widgets
         {
         public:
             WebPlatformWindow(std::shared_ptr<GPU::Device> device, const WindowOptions& options,
-                              std::string parent_selector)
+                              std::string parent_selector, Offset parent_origin = {})
                 : view_(std::make_unique<View>())
                 , parent_selector_(std::move(parent_selector))
+                , kind_(options.kind)
             {
                 static int next_id = 1;
                 if (options.web_popup) {
@@ -67,12 +68,14 @@ namespace systems::leal::campello_widgets
                     selector_ = options.host_element;
                 } else {
                     const std::string id = "cw-window-" + std::to_string(next_id++);
+                    // A popup's position is relative to its parent canvas.
+                    const bool popup = options.kind == WindowKind::popup;
+                    Offset at = options.position ? *options.position : Offset{};
+                    if (popup) at = Offset{ parent_origin.x + at.x, parent_origin.y + at.y };
                     cw_web_create_canvas(id.c_str(), options.title.c_str(),
                                          (int)options.size.width, (int)options.size.height,
-                                         options.position ? 1 : 0,
-                                         options.position ? (int)options.position->x : 0,
-                                         options.position ? (int)options.position->y : 0,
-                                         options.kind == WindowKind::dialog ? 1 : 0);
+                                         options.position ? 1 : 0, (int)at.x, (int)at.y,
+                                         popup ? 2 : (options.kind == WindowKind::dialog ? 1 : 0));
                     selector_     = "#" + id;
                     owns_element_ = true;
                     centre_       = options.kind == WindowKind::dialog && !options.position;
@@ -83,6 +86,10 @@ namespace systems::leal::campello_widgets
                     auto callback = on_metrics_changed;
                     if (callback) callback();
                 };
+                if (kind_ == WindowKind::popup) {
+                    canvas_->is_popup = true;
+                    canvas_->on_outside_press = [this] { requestClose(); };
+                }
                 if (popup_) {
                     // The user closed the popup: tell the app (it can't veto
                     // it any more; the default handler destroys the window).
@@ -108,7 +115,9 @@ namespace systems::leal::campello_widgets
             bool ok() const noexcept { return canvas_ && canvas_->ok(); }
             const std::string& selector() const noexcept { return selector_; }
 
-            View& view() override { return *view_; }
+            View&      view() override { return *view_; }
+            WindowKind kind() const override { return kind_; }
+            WebCanvas* canvas() const noexcept { return canvas_.get(); }
 
             void setRootRenderBox(std::shared_ptr<RenderBox> root) override
             {
@@ -168,6 +177,7 @@ namespace systems::leal::campello_widgets
         private:
             std::unique_ptr<View>      view_;  // first: outlives the canvas
             std::string                parent_selector_;
+            WindowKind                 kind_ = WindowKind::regular;
             std::string                selector_;
             std::unique_ptr<WebCanvas> canvas_;
             bool                       owns_element_ = false;
@@ -186,12 +196,21 @@ namespace systems::leal::campello_widgets
             {
                 if (!device_) return nullptr;
                 std::string parent;
-                if (auto* p = dynamic_cast<WebPlatformWindow*>(options.parent)) parent = p->selector();
-                else if (options.kind == WindowKind::dialog) {
-                    // e.g. a dialog over the runApp() canvas
-                    if (WebCanvas* key = WebCanvas::keyCanvas()) parent = key->selector();
+                Offset      parent_origin;
+                if (auto* p = dynamic_cast<WebPlatformWindow*>(options.parent)) {
+                    parent        = p->selector();
+                    parent_origin = Offset{ p->canvas()->originX(), p->canvas()->originY() };
+                } else if (options.kind != WindowKind::regular || options.modal) {
+                    // Over the runApp() canvas (the primary View's).
+                    WebCanvas* main = WebCanvas::forView(View::primary());
+                    if (!main) main = WebCanvas::keyCanvas();
+                    if (main) {
+                        parent        = main->selector();
+                        parent_origin = Offset{ main->originX(), main->originY() };
+                    }
                 }
-                auto window = std::make_unique<WebPlatformWindow>(device_, options, std::move(parent));
+                auto window = std::make_unique<WebPlatformWindow>(device_, options, std::move(parent),
+                                                                  parent_origin);
                 if (!window->ok()) {
                     std::fprintf(stderr, "[Web] Could not open a window on canvas %s\n",
                                  window->selector().c_str());

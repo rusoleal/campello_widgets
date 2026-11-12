@@ -46,6 +46,14 @@ namespace systems::leal::campello_widgets
             return r;
         }
 
+        // Renderers no longer drawn, released at the start of the next frame
+        // (see WebCanvas::setRoot()).
+        std::vector<std::shared_ptr<Renderer>>& retiredRenderers()
+        {
+            static std::vector<std::shared_ptr<Renderer>> retired;
+            return retired;
+        }
+
         WebCanvas* g_key      = nullptr;  // receives keys
         WebCanvas* g_pressed  = nullptr;  // has the mouse button down: gets moves/release
         WebCanvas* g_hovered  = nullptr;  // under the pointer (when no button is down)
@@ -180,6 +188,23 @@ namespace systems::leal::campello_widgets
         {
             auto* c = static_cast<WebCanvas*>(user);
             if (!isLive(c)) return EM_FALSE;
+
+            // Popups close when the user presses anywhere else.
+            const std::vector<WebCanvas*> canvases = canvasRegistry();
+            for (WebCanvas* other : canvases)
+                if (other != c && isLive(other) && other->is_popup && other->on_outside_press)
+                {
+                    auto callback = other->on_outside_press;
+                    callback();
+                }
+
+            // A modal window blocks this canvas: focus the modal instead
+            // (the View drops the input anyway).
+            if (c->view_.isInputBlocked())
+            {
+                if (WebCanvas* modal = forView(c->view_.inputBlocker())) modal->makeKey();
+                return EM_TRUE;
+            }
             if (g_hovered && g_hovered != c && isLive(g_hovered)) leave(g_hovered);
             g_hovered = c;
             g_pressed = c;
@@ -393,8 +418,16 @@ namespace systems::leal::campello_widgets
 
     void WebCanvas::setRoot(std::shared_ptr<RenderBox> root, Color background)
     {
-        if (renderer_) view_.setRenderer(nullptr);
-        renderer_.reset();
+        if (renderer_)
+        {
+            // Not destroyed here: a renderer's destructor waits for the GPU,
+            // which on the web yields to the browser (ASYNCIFY), and other
+            // tasks (e.g. this window's own deferred destroy) would then run
+            // in the middle of whatever called us. Released at the start of
+            // the next frame instead, where yielding is harmless.
+            view_.setRenderer(nullptr);
+            retiredRenderers().push_back(std::move(renderer_));
+        }
         root_ = std::move(root);
         view_.pointerDispatcher().setRoot(root_);
         if (!root_ || !surface_) return;
@@ -434,18 +467,29 @@ namespace systems::leal::campello_widgets
         sync();
         if (!needs_redraw_ || !renderer_) return;
         needs_redraw_ = false;
-        auto package = renderer_->buildFrame(static_cast<float>(width_), static_cast<float>(height_));
-        if (!package) return;
+        // Held for the whole frame: building it runs every window's pending
+        // rebuilds, which may replace or drop this canvas's renderer (e.g. a
+        // popup closing itself), so renderer_ may change under us.
+        const auto renderer = renderer_;
+        const auto surface  = surface_;
+        auto package = renderer->buildFrame(static_cast<float>(width_), static_cast<float>(height_));
+        if (!package || renderer != renderer_) return;
         // No raster thread on the web: the frame is encoded and submitted
         // here, and the browser presents the canvas when this task returns.
-        package->surface = surface_;
-        renderer_->rasterFrame(*package);
+        package->surface = surface;
+        renderer->rasterFrame(*package);
     }
 
     void WebCanvas::makeKey() noexcept { g_key = this; }
 
     void WebCanvas::frameAll()
     {
+        if (!retiredRenderers().empty())
+        {
+            auto retired = std::move(retiredRenderers());
+            retiredRenderers().clear();
+            retired.clear();  // may yield: nothing is in progress here
+        }
         // A frame may open or close windows (a rebuild mounting a Window
         // widget): iterate over a snapshot, skipping canvases gone meanwhile.
         const std::vector<WebCanvas*> canvases = canvasRegistry();

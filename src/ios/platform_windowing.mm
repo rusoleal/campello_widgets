@@ -271,6 +271,9 @@ namespace
         {
             // iPhone (or no UIApplicationSupportsMultipleScenes): one window only.
             if (!device_ || !UIApplication.sharedApplication.supportsMultipleScenes) return nullptr;
+            // No borderless popup windows on iOS: PopupWindowAnchor falls
+            // back to the window's Overlay.
+            if (options.kind == Widgets::WindowKind::popup) return nullptr;
             auto window = std::make_unique<IOSPlatformWindow>(device_, options.title, options.size,
                                                               Widgets::WindowKind::regular);
             window->requestScene();

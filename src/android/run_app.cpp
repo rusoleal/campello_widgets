@@ -705,10 +705,15 @@ struct ActivityHost
         needs_frame = false;
         const float w = static_cast<float>(ANativeWindow_getWidth(window));
         const float h = static_cast<float>(ANativeWindow_getHeight(window));
-        auto package = renderer->buildFrame(w, h);
-        if (!package) return;
+        // Held for the whole frame: building it runs every window's pending
+        // rebuilds, which may replace or drop this window's renderer (e.g. a
+        // window closing itself), so the members may change under us.
+        const auto frame_renderer = renderer;
+        const auto frame_surface  = surface;
+        auto package = frame_renderer->buildFrame(w, h);
+        if (!package || frame_renderer != renderer || !raster) return;
         // This window's surface: acquired and presented on its raster thread.
-        package->surface = surface;
+        package->surface = frame_surface;
         raster->submit(std::move(*package));
     }
 };
@@ -1147,6 +1152,9 @@ class AndroidPlatformWindowing final : public Widgets::PlatformWindowing
 public:
     std::unique_ptr<Widgets::PlatformWindow> createWindow(const Widgets::WindowOptions& options) override
     {
+        // No borderless popup windows (an activity is a whole window):
+        // PopupWindowAnchor falls back to the window's Overlay.
+        if (options.kind == Widgets::WindowKind::popup) return nullptr;
         // Started from any live activity (the main one if possible).
         ActivityHost* from = gApp->main_host ? gApp->main_host
                            : (gApp->hosts.empty() ? nullptr : gApp->hosts.front());

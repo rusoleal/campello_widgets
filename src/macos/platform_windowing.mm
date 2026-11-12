@@ -38,9 +38,11 @@ namespace
             , view_(std::make_unique<Widgets::View>())
             , kind_(options.kind)
         {
+            const bool popup = options.kind == Widgets::WindowKind::popup;
             NSWindowStyleMask style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
                                       NSWindowStyleMaskMiniaturizable;
             if (options.resizable) style |= NSWindowStyleMaskResizable;
+            if (popup) style = NSWindowStyleMaskBorderless;
 
             const NSRect frame = NSMakeRect(0, 0, options.size.width, options.size.height);
             window_ = [[CampelloWindow alloc] initWithContentRect:frame
@@ -73,13 +75,29 @@ namespace
             bridge_.owner = this;
             window_.delegate = bridge_;
 
-            if (options.kind == Widgets::WindowKind::dialog)
+            if (options.kind == Widgets::WindowKind::dialog || popup || options.modal)
             {
                 parent_ = parentWindow(options.parent);
                 if (parent_) [parent_ addChildWindow:window_ ordered:NSWindowAbove];
             }
 
-            if (options.position)
+            if (popup)
+            {
+                // A menu-like window: no title bar, above normal windows,
+                // takes keys (Escape), moves with its parent (child window).
+                window_.acceptsKey = YES;
+                window_.level      = NSPopUpMenuWindowLevel;
+                window_.hasShadow  = YES;
+                if (parent_ && options.position)
+                {
+                    // `position` is relative to the parent's content top-left.
+                    const NSRect content = [parent_ contentRectForFrameRect:parent_.frame];
+                    [window_ setFrameTopLeftPoint:NSMakePoint(NSMinX(content) + options.position->x,
+                                                              NSMaxY(content) - options.position->y)];
+                    positioned_ = true;
+                }
+            }
+            else if (options.position)
             {
                 // AppKit's origin is bottom-left of the main screen.
                 const CGFloat screen_h = NSScreen.mainScreen.frame.size.height;
@@ -102,7 +120,8 @@ namespace
             [window_ close];
         }
 
-        Widgets::View& view() override { return *view_; }
+        Widgets::View&      view() override { return *view_; }
+        Widgets::WindowKind kind() const override { return kind_; }
 
         void setRootRenderBox(std::shared_ptr<Widgets::RenderBox> root) override
         {
@@ -116,6 +135,7 @@ namespace
             renderer_->setDrawBackend(std::make_unique<Widgets::MetalDrawBackend>(
                 device_, background, surface_->getPixelFormat()));
             renderer_->setDevicePixelRatio(static_cast<float>(window_.backingScaleFactor));
+            updateRefreshRate();
             view_->setRenderer(renderer_.get());
 
             delegate_ = [[CampelloMTKDelegate alloc] initWithDevice:device_
@@ -178,6 +198,19 @@ namespace
             if (callback) callback();
         }
 
+        void fireResignedKey()
+        {
+            // A popup closes when the user goes elsewhere.
+            if (kind_ == Widgets::WindowKind::popup) fireCloseRequested();
+        }
+
+        void updateRefreshRate()
+        {
+            const float hz = campelloScreenRefreshHz(window_.screen);
+            mtk_.preferredFramesPerSecond = static_cast<NSInteger>(hz);
+            if (renderer_) renderer_->setDisplayRefreshHz(hz);
+        }
+
         void fireMetricsChanged()
         {
             if (renderer_) renderer_->setDevicePixelRatio((float)window_.backingScaleFactor);
@@ -190,7 +223,9 @@ namespace
         static NSWindow* parentWindow(Widgets::PlatformWindow* parent)
         {
             if (auto* mac = dynamic_cast<MacPlatformWindow*>(parent)) return mac->window_;
-            return NSApp.mainWindow;  // e.g. a dialog over the runApp() window
+            // e.g. a dialog over the runApp() window
+            if (CampelloWindow* main = campelloWindowForView(Widgets::View::primary())) return main;
+            return NSApp.mainWindow;
         }
 
         void teardownRenderer()
@@ -255,6 +290,23 @@ namespace
         if (strong_self && strong_self.owner) strong_self.owner->fireCloseRequested();
     });
     return NO;
+}
+
+- (void)windowDidResignKey:(NSNotification*)notification
+{
+    (void)notification;
+    // Asynchronous, like a close request: the popup may be destroyed.
+    __weak CampelloPlatformWindowBridge* weak_self = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CampelloPlatformWindowBridge* strong_self = weak_self;
+        if (strong_self && strong_self.owner) strong_self.owner->fireResignedKey();
+    });
+}
+
+- (void)windowDidChangeScreen:(NSNotification*)notification
+{
+    (void)notification;
+    if (_owner) _owner->updateRefreshRate();
 }
 
 - (void)windowDidResize:(NSNotification*)notification

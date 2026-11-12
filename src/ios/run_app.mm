@@ -456,7 +456,10 @@ namespace {
 
 - (void)drawInMTKView:(MTKView*)view
 {
-    if (!_renderer) return;
+    // Held for the whole frame: building it runs every window's pending
+    // rebuilds, which may replace or drop this view's renderer.
+    const std::shared_ptr<Widgets::Renderer> renderer = _renderer;
+    if (!renderer) return;
 
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!drawable) return;
@@ -477,7 +480,7 @@ namespace {
     float physical_width = (float)drawableSize.width;
     float physical_height= (float)drawableSize.height;
 
-    _renderer->setDevicePixelRatio(static_cast<float>(scale));
+    renderer->setDevicePixelRatio(static_cast<float>(scale));
     if (_backendPtr) _backendPtr->setViewport(physical_width, physical_height);
 
     // Tie presentation to GPU completion + vsync via presentDrawable: on the
@@ -487,8 +490,8 @@ namespace {
     // Note: PointerDispatcher/TickerScheduler are ticked inside
     // Renderer::renderFrame() itself — don't duplicate that here.
     auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
-    _renderer->setPendingDrawable((__bridge void*)drawable);
-    bool rendered = colorView && _renderer->renderFrame(colorView, physical_width, physical_height);
+    renderer->setPendingDrawable((__bridge void*)drawable);
+    bool rendered = colorView && renderer->renderFrame(colorView, physical_width, physical_height);
     if (!rendered)
         _device->scheduleNextPresent(nullptr);
 }

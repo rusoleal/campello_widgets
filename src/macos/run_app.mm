@@ -1,6 +1,7 @@
 #import <campello_widgets/macos/run_app.hpp>
 #import <campello_widgets/campello_widgets.hpp>
 #import <campello_widgets/ui/system_mouse_cursor.hpp>
+#import <campello_widgets/widgets/window.hpp>
 #import <campello_widgets/widgets/element.hpp>
 #import <campello_widgets/widgets/render_object_element.hpp>
 #import <campello_widgets/widgets/platform_menu_delegate.hpp>
@@ -78,13 +79,47 @@ namespace {
 // CampelloMTKView, CampelloMTKDelegate and CampelloWindow are declared in
 // macos_window_internal.h (shared with platform_windowing.mm).
 
+CampelloWindow* campelloWindowForView(const Widgets::View* view)
+{
+    if (!view) return nil;
+    for (NSWindow* w in NSApp.windows)
+        if ([w isKindOfClass:CampelloWindow.class] && ((CampelloWindow*)w).widgetsView == view)
+            return (CampelloWindow*)w;
+    return nil;
+}
+
 @implementation CampelloWindow
+
+- (BOOL)canBecomeKeyWindow
+{
+    return self.acceptsKey || [super canBecomeKeyWindow];
+}
 
 - (void)sendEvent:(NSEvent*)event
 {
     // Everything AppKit dispatches for this window (keys, text input,
     // mouse...) runs with this window's View ambient (Phase 17).
     Widgets::View* view = Widgets::View::isAlive(_widgetsView) ? _widgetsView : Widgets::View::current();
+
+    // A modal window blocks this one: a click or key press here brings the
+    // modal forward instead (the View drops the input anyway).
+    if (view && view == _widgetsView && view->isInputBlocked())
+    {
+        switch (event.type)
+        {
+        case NSEventTypeLeftMouseDown:
+        case NSEventTypeRightMouseDown:
+        case NSEventTypeOtherMouseDown:
+        case NSEventTypeKeyDown:
+            if (CampelloWindow* modal = campelloWindowForView(view->inputBlocker()))
+                [modal makeKeyAndOrderFront:nil];
+            NSBeep();
+            return;
+        default:
+            break;
+        }
+    }
+
     Widgets::View::Scope scope(view);
     [super sendEvent:event];
 }
@@ -351,6 +386,14 @@ static uint32_t macosModifiersToKeyModifiers(NSEventModifierFlags flags)
 // attached) when `screen` is nil — e.g. before the window has been placed
 // on a screen yet — and to a hardcoded 60 pre-macOS 12, where
 // maximumFramesPerSecond doesn't exist.
+float campelloScreenRefreshHz(NSScreen* screen)
+{
+    NSScreen* effective = screen ?: NSScreen.mainScreen;
+    if (@available(macOS 12.0, *))
+        return effective ? static_cast<float>(effective.maximumFramesPerSecond) : 60.0f;
+    return 60.0f;
+}
+
 static float macosScreenRefreshHz(NSScreen* screen)
 {
     NSScreen* effective = screen ?: NSScreen.mainScreen;
@@ -1196,6 +1239,19 @@ static float macosScreenRefreshHz(NSScreen* screen)
 }
 
 
+
+// The main window closed: by default the app quits, closing every window
+// (WindowController::setMainWindowClosePolicy(): keep_running leaves the
+// others open; then the app quits after the last one).
+- (void)windowWillClose:(NSNotification*)notification
+{
+    if (notification.object != _window) return;
+    if (Widgets::WindowController::mainWindowClosePolicy() ==
+        Widgets::WindowController::MainWindowClose::quit_app)
+    {
+        dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
+    }
+}
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender
 {

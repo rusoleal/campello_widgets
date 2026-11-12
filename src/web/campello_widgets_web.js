@@ -86,7 +86,8 @@ addToLibrary({
   // A new, hidden <canvas id=...> of w x h CSS pixels. Placement: inside the
   // page's [data-cw-windows] element if there is one (the page lays it out),
   // otherwise floating (position: fixed) at (x, y), or cascaded when
-  // hasPosition is 0. Dialogs float above everything.
+  // hasPosition is 0. Dialogs (dialog = 1) float above everything, popups
+  // (dialog = 2: menus, tooltips) above dialogs.
   cw_web_create_canvas: function (idPtr, titlePtr, w, h, hasPosition, x, y, dialog) {
     var canvas = document.createElement('canvas');
     canvas.id = UTF8ToString(idPtr);
@@ -107,9 +108,9 @@ addToLibrary({
       s.position = 'fixed';
       s.left = (hasPosition ? x : 24 + 32 * CW.cascade) + 'px';
       s.top = (hasPosition ? y : 24 + 32 * CW.cascade) + 'px';
-      s.zIndex = dialog ? '1001' : '1000';
-      s.boxShadow = '0 8px 32px rgba(0,0,0,0.25)';
-      s.borderRadius = '8px';
+      s.zIndex = dialog === 2 ? '1002' : (dialog ? '1001' : '1000');
+      s.boxShadow = dialog === 2 ? '0 4px 16px rgba(0,0,0,0.3)' : '0 8px 32px rgba(0,0,0,0.25)';
+      s.borderRadius = dialog === 2 ? '4px' : '8px';
       document.body.appendChild(canvas);
     }
   },

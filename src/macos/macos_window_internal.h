@@ -61,6 +61,17 @@ makeMacPlatformWindowing(std::shared_ptr<systems::leal::campello_gpu::Device> de
 /// An NSWindow that runs every event it dispatches inside its View's
 /// View::Scope, so code reached from AppKit event handling (key handlers,
 /// text input, focus traversal...) resolves to this window.
+///
+/// While a modal window blocks its View (View::inputBlocker()), clicks and
+/// key presses bring that modal window forward (with a beep) instead.
 @interface CampelloWindow : NSWindow
 @property (nonatomic, assign) systems::leal::campello_widgets::View* widgetsView;
+/// Lets a borderless window (a popup) become key, to get keys like Escape.
+@property (nonatomic, assign) BOOL acceptsKey;
 @end
+
+/// The CampelloWindow showing `view`, if any.
+CampelloWindow* campelloWindowForView(const systems::leal::campello_widgets::View* view);
+
+/// The display's refresh rate (60 if unknown).
+float campelloScreenRefreshHz(NSScreen* screen);
