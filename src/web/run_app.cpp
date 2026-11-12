@@ -2,8 +2,8 @@
 // requestAnimationFrame loop and DOM input events. Rendering is the shared
 // campello_gpu backend (src/gpu/vulkan/) with WGSL shaders.
 
-#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/web/run_app.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>

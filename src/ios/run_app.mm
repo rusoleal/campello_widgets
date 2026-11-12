@@ -1,4 +1,5 @@
 #import <campello_widgets/ios/run_app.hpp>
+#import <campello_widgets/ui/view.hpp>
 #import <campello_widgets/campello_widgets.hpp>
 #import <campello_widgets/widgets/element.hpp>
 #import <campello_widgets/widgets/render_object_element.hpp>
@@ -200,13 +201,17 @@ namespace {
 @end
 
 @implementation CampelloMTKView {
+    // This window's View (Phase 17). Declared first so it is destroyed last
+    // (C++ ivars go in reverse declaration order); -dealloc detaches the
+    // renderer before that.
+    std::unique_ptr<Widgets::View>            _view;
     std::shared_ptr<GPU::Device>              _device;
     std::shared_ptr<Widgets::Renderer>        _renderer;
     std::shared_ptr<Widgets::Element>         _rootElement;
     std::shared_ptr<Widgets::PointerDispatcher> _dispatcher;
     std::shared_ptr<Widgets::FocusManager>      _focusManager;
     std::unique_ptr<Widgets::TickerScheduler>   _tickerScheduler;
-    std::unique_ptr<Widgets::TextInputManager>  _textInputManager;
+    std::shared_ptr<Widgets::TextInputManager>  _textInputManager;
     Widgets::MetalDrawBackend*                  _backendPtr;
     Widgets::MediaQueryData                     _mediaData;
 
@@ -298,19 +303,19 @@ namespace {
 {
     _device = gpuDevice;
 
-    // Create dispatcher and focus manager before mounting so render
-    // objects register during construction.
-    _dispatcher = std::make_shared<Widgets::PointerDispatcher>();
-    Widgets::PointerDispatcher::setActiveDispatcher(_dispatcher.get());
-
-    _focusManager = std::make_shared<Widgets::FocusManager>();
-    Widgets::FocusManager::setActiveManager(_focusManager.get());
+    // This window's View owns its dispatcher, focus and text input managers
+    // and frame hook; makePrimary() also installs them as the process-wide
+    // fallbacks, so code without a window context behaves as before.
+    // Created before mounting so render objects register during construction.
+    _view = std::make_unique<Widgets::View>();
+    _view->makePrimary();
+    _dispatcher   = _view->sharedPointerDispatcher();
+    _focusManager = _view->sharedFocusManager();
 
     _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(_tickerScheduler.get());
 
-    _textInputManager = std::make_unique<Widgets::TextInputManager>();
-    Widgets::TextInputManager::setActiveManager(_textInputManager.get());
+    _textInputManager = _view->sharedTextInputManager();
 
     // Show/hide the software keyboard when a TextField gains or loses focus.
     __weak CampelloMTKView* weakSelf = self;
@@ -352,7 +357,7 @@ namespace {
     // get the same run-loop-friendly scheduling as MTKView's own
     // CADisplayLink-paced path.
     self.enableSetNeedsDisplay = NO;
-    Widgets::FrameScheduler::setCallback([weakSelf] {
+    _view->setFrameRequestCallback([weakSelf] {
         if (weakSelf) [weakSelf setNeedsDisplay];
     });
 
@@ -381,7 +386,10 @@ namespace {
 
     // Mount widget tree.
     _rootElement = wrappedRoot->createElement();
-    _rootElement->mount(nullptr);
+    {
+        Widgets::View::Scope view_scope(_view.get());
+        _rootElement->mount(nullptr);
+    }
 
     auto* roe = _rootElement->findDescendantRenderObjectElement();
     if (!roe) return nullptr;
@@ -402,8 +410,19 @@ namespace {
 
     _renderer = std::make_shared<Widgets::Renderer>(_device, renderBox, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
-    
+    _view->setRenderer(_renderer.get());
+
     return _renderer;
+}
+
+- (void)dealloc
+{
+    // The renderer ivar may be destroyed before _view; never leave the View
+    // holding a dangling Renderer*.
+    if (_view) _view->setRenderer(nullptr);
+#if !__has_feature(objc_arc)
+    [super dealloc];
+#endif
 }
 
 // ------------------------------------------------------------------

@@ -52,6 +52,7 @@ target_link_libraries(campello_widgets_gallery
     campello_ui
     campello_material
     campello_cupertino
+    campello_fluent
     "-framework UIKit"
     "-framework Metal"
     "-framework MetalKit"
