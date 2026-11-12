@@ -11,6 +11,8 @@
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/text_field.hpp>
 #include <campello_widgets/widgets/window.hpp>
+#include <campello_widgets/widgets/popup_window_anchor.hpp>
+#include <campello_widgets/widgets/overlay.hpp>
 
 #include <cstdio>
 #include <vector>
@@ -95,6 +97,7 @@ public:
             demoButton(inspector_ ? "Inspector is open" : "Open inspector window",
                        cw::Color::fromRGB(0.2f, 0.6f, 0.35f),
                        [this] { if (!inspector_) openInspector(); }),
+            optionsMenu(increment),
         };
 
         if (inspector_)
@@ -120,6 +123,34 @@ public:
     }
 
 private:
+    // A popup menu: no popup windows on Android, so it's drawn in this
+    // window's Overlay (PopupWindowAnchor's fallback).
+    cw::WidgetRef optionsMenu(std::function<void()> increment)
+    {
+        auto item = [this](const std::string& label, std::function<void()> action) {
+            return demoButton(label, cw::Color::fromRGB(0.25f, 0.25f, 0.3f), [this, action] {
+                if (action) action();
+                setState([this] { menu_open_ = false; });
+            });
+        };
+        auto menu_bg   = std::make_shared<cw::Container>();
+        menu_bg->color = cw::Color::fromRGB(0.16f, 0.16f, 0.19f);
+        menu_bg->child = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+            std::vector<cw::WidgetRef>{
+                item("+1 from the menu", increment),
+                item("Reset counter", [this] { setState([this] { count_ = 0; }); std::printf("[demo] reset\n"); }),
+            });
+        auto anchor        = std::make_shared<cw::PopupWindowAnchor>();
+        anchor->child      = demoButton("Options", cw::Color::fromRGB(0.3f, 0.3f, 0.35f),
+                                        [this] { setState([this] { menu_open_ = !menu_open_; }); });
+        anchor->popup      = menu_bg;
+        anchor->open       = menu_open_;
+        anchor->popup_size = {300.0f, 168.0f};
+        anchor->offset     = {40.0f, -250.0f};  // above the button: it's near the bottom
+        anchor->on_dismiss = [this] { setState([this] { menu_open_ = false; }); };
+        return anchor;
+    }
+
     void openInspector()
     {
         inspector_ = cw::WindowController::create({.title = "Inspector", .size = {360.0f, 640.0f}});
@@ -137,6 +168,7 @@ private:
     }
 
     int                                                 count_ = 0;
+    bool                                                menu_open_ = false;
     std::shared_ptr<cw::WindowController>               inspector_;
     std::vector<std::shared_ptr<cw::WindowController>>  extra_;
 };
@@ -152,5 +184,7 @@ public:
 
 cw::WidgetRef buildMultiWindowDemo()
 {
-    return std::make_shared<MultiWindowDemo>();
+    // An Overlay for the main window (popup menus fall back to it here).
+    return std::make_shared<cw::Overlay>(std::vector<std::shared_ptr<cw::OverlayEntry>>{
+        std::make_shared<cw::OverlayEntry>(std::make_shared<MultiWindowDemo>())});
 }

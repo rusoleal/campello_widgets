@@ -7,6 +7,8 @@
 //  - Inspector  a floating canvas the framework creates (no host element),
 //               with a TextField: each canvas has its own focus and keys;
 //  - About      a dialog, centred over the main canvas;
+//  - Preferences a modal dialog: the main canvas takes no input meanwhile;
+//  - Options    a popup menu canvas that extends past the main canvas;
 //  - Pop-out    (experimental) a separate browser window, window.open(),
 //               drawn with the same GPU device; opened from a tap because
 //               popup blockers refuse it otherwise.
@@ -20,6 +22,7 @@
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/text_field.hpp>
 #include <campello_widgets/widgets/window.hpp>
+#include <campello_widgets/widgets/popup_window_anchor.hpp>
 
 #include <cstdio>
 
@@ -92,7 +95,7 @@ public:
 
     void dispose() override
     {
-        for (auto* w : {&sidebar_, &inspector_, &about_, &popout_})
+        for (auto* w : {&sidebar_, &inspector_, &about_, &popout_, &prefs_})
             if (*w) (*w)->destroy();
     }
 
@@ -111,7 +114,17 @@ public:
                    [this] { if (!about_) openAbout(); else about_->show(); }),
             button(popout_ ? "Pop-out is open" : "Pop out a window", cw::Color::fromRGB(0.55f, 0.3f, 0.7f),
                    [this] { if (!popout_) openPopout(); else popout_->show(); }),
+            button("Preferences… (modal)", cw::Color::fromRGB(0.6f, 0.4f, 0.2f),
+                   [this] { if (!prefs_) openPreferences(); }),
+            optionsMenu(increment),
         };
+        if (prefs_)
+        {
+            actions.push_back(std::make_shared<cw::Window>(prefs_, page(
+                "Preferences", count_,
+                {button("Done", cw::Color::fromRGB(0.2f, 0.6f, 0.35f), [this] { prefs_->destroy(); })},
+                cw::Color::fromRGB(0.95f, 0.93f, 0.98f))));
+        }
 
         // Every other window's content lives here, in the main tree; each
         // Window widget is an empty leaf in this canvas.
@@ -176,6 +189,46 @@ private:
         setState([] {});
     }
 
+    cw::WidgetRef optionsMenu(std::function<void()> increment)
+    {
+        auto item = [this](const std::string& label, std::function<void()> action) {
+            return button(label, cw::Color::fromRGB(0.25f, 0.25f, 0.3f), [this, action] {
+                if (action) action();
+                setState([this] { menu_open_ = false; });
+            });
+        };
+        auto menu_bg   = std::make_shared<cw::Container>();
+        menu_bg->color = cw::Color::fromRGB(0.16f, 0.16f, 0.19f);
+        menu_bg->child = cw::mw<cw::Column>(cw::MainAxisAlignment::start, cw::CrossAxisAlignment::stretch,
+            std::vector<cw::WidgetRef>{
+                item("+1 from the menu", increment),
+                item("Reset counter", [this] { setState([this] { count_ = 0; }); }),
+            });
+
+        auto anchor        = std::make_shared<cw::PopupWindowAnchor>();
+        anchor->child      = button("Options ▾", cw::Color::fromRGB(0.3f, 0.3f, 0.35f),
+                                    [this] { setState([this] { menu_open_ = !menu_open_; }); });
+        anchor->popup      = menu_bg;
+        anchor->open       = menu_open_;
+        anchor->popup_size = {380.0f, 108.0f};
+        anchor->offset     = {480.0f, 4.0f};  // reaches over the sidebar canvas
+        anchor->on_dismiss = [this] { setState([this] { menu_open_ = false; }); };
+        return anchor;
+    }
+
+    void openPreferences()
+    {
+        prefs_ = cw::WindowController::create({.title = "Preferences", .size = {300.0f, 240.0f},
+                                               .kind = cw::WindowKind::dialog, .modal = true});
+        if (!prefs_) return;
+        prefs_->on_destroyed = [this] {
+            std::printf("[demo] preferences closed\n");
+            setState([this] { prefs_.reset(); });
+        };
+        std::printf("[demo] preferences opened\n");
+        setState([] {});
+    }
+
     void openPopout()
     {
         popout_ = cw::WindowController::create({.title = "Pop-out", .size = {320.0f, 300.0f},
@@ -194,6 +247,8 @@ private:
     std::shared_ptr<cw::WindowController> inspector_;
     std::shared_ptr<cw::WindowController> about_;
     std::shared_ptr<cw::WindowController> popout_;
+    std::shared_ptr<cw::WindowController> prefs_;
+    bool                                  menu_open_ = false;
 };
 
 class WebMultiWindowApp : public cw::StatefulWidget
