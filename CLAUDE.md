@@ -17,7 +17,7 @@ src/                    # Implementations (.cpp)
   ui/                   # RenderObject types and low-level UI primitives
   macos/                # macOS platform entry point
   ios/                  # iOS platform entry point
-  android/              # Android platform entry point
+  android/              # Android platform entry point (NativeActivity host)
 tests/
   universal/            # CPU-only unit tests (no GPU required)
   platform/             # Platform integration tests
@@ -156,4 +156,4 @@ Constraints-down, sizes-up (identical to Flutter's box model):
 | 11 — Developer Experience | Complete (`GpuVisualRenderer` replaced by a leaner offscreen-draw-backend capture path shared with a new cross-platform visual fidelity testing framework — real-device references on iOS/Android/Windows) |
 | 15 — Design System | Complete (`DesignSystem` abstract interface + `Theme` propagation; see `TODO.md`) |
 | 16 — Design System Decoupling | In Progress (M0–M9 done: `campello_ui`/`campello_material`/`campello_cupertino` split out as sibling libraries with 35 builders each, MD3 container color roles, wave-3 components wired into `examples/gallery`; `campello_fluent` added as a 4th sibling `DesignSystem`, all 30 builders implemented and validated against real WinUI 3 captures; see `TODO.md`) |
-| 17 — Multi-window | In Progress (one UI thread + one element tree, a `View` per window; campello_gpu `Surface` per window on Metal/Vulkan/WebGPU; `WindowController` + `Window` widget; macOS multi-window done; web: several canvases + experimental `window.open()` popups; iOS on the UIScene lifecycle, iPadOS multiple windows — see `TODO.md` Phase 17) |
+| 17 — Multi-window | In Progress (one UI thread + one element tree, a `View` per window; campello_gpu `Surface` per window on Metal/Vulkan/WebGPU; `WindowController` + `Window` widget; macOS multi-window done; web: several canvases + experimental `window.open()` popups; iOS on the UIScene lifecycle, iPadOS multiple windows; Android without native_app_glue, one activity per window — see `TODO.md` Phase 17) |

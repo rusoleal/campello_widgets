@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Multiple windows (Phase 17).** One UI thread and one element tree, with a `View` per window
+  (its pointer dispatcher, focus, text input and renderer). `WindowController` + the `Window` widget
+  open a native window whose content is a subtree of the app's tree, so windows share state with no
+  messaging; `PlatformWindowing` is the per-platform backend, and
+  `WindowController::setPlatformWindowHandler()` receives windows the platform opens by itself.
+  Implemented on macOS (NSWindows), the web (extra canvases, experimental `window.open()` popups),
+  iPadOS (UIWindowScenes, external displays) and Android (one activity per window). See
+  `examples/macos_multi_window`, `examples/web_multi_window`, `examples/ios_multi_window` and the
+  Android gallery's `debug.cw_multiwindow` demo.
+
+### Changed
+
+- **Android entry point (breaking).** The runner no longer uses `android_native_app_glue`: call
+  `runApp(activity, saved_state, saved_state_size, make_root)` from your library's
+  `ANativeActivity_onCreate` instead of `runApp(android_app*, root)` from `android_main`, and drop
+  `android_native_app_glue.c` from your build. Everything now runs on the Java main thread, and the
+  widget tree survives backgrounding (it used to be rebuilt whenever the window was destroyed).
+- **iOS uses the UIScene lifecycle.** Declare `UIApplicationSceneManifest` in Info.plist (the scene
+  delegate is configured in code).
+
+### Fixed
+
+- **Android text colours**: red and blue were swapped in all rasterized text (blue drawn orange).
+- **`InheritedElement::unmount()`** now unmounts its child: `State`s under a removed `MediaQuery` /
+  `Theme` subtree were never disposed.
+
 ## [0.10.1] - 2026-11-10
 
 ### Fixed

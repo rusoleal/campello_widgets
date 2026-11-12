@@ -1368,12 +1368,84 @@ renders in the Simulator (taps not automatable).
 
 ### M6 — Android
 
-- [ ] **M6.1** Replace `android_native_app_glue` (one activity, one
-      `ANativeWindow`) with a host that maps several native windows to
-      views, using `GameActivity` or a custom `Activity` + `SurfaceView`.
-- [ ] **M6.2** Extra windows as separate activities
-      (`FLAG_ACTIVITY_LAUNCH_ADJACENT` / `NEW_DOCUMENT`, desktop
-      windowing); `Presentation` API for secondary displays.
+**Status (2026-11-12): done on the Redmi Note 10 Pro (Android 13, MIUI).**
+Branch `feature/multi-window`.
+
+- [x] **M6.1** `android_native_app_glue` replaced by our own NativeActivity
+      host (`src/android/run_app.cpp`).
+      - **New entry point (breaking):** apps call
+        `runApp(activity, saved_state, size, make_root)` from their
+        `ANativeActivity_onCreate`, which Android calls for **every**
+        activity instance.
+      - **One UI thread:** every NativeActivity callback, input queue (on the
+        main looper), AChoreographer vsync and `postTask()` (a pipe on the
+        main looper) arrives on the Java main thread, which is the one UI
+        thread.
+      - **Per activity:** each activity is an `ActivityHost` with its own
+        campello_gpu `Surface` (on its `ANativeWindow`), `Renderer` and
+        `RasterThread`, on a windowless shared Vulkan device.
+      - **App level:** the tree, main `View` and device live for the process,
+        so backgrounding the app keeps state. The glue tore the whole tree
+        down whenever the window went away; verified: Home and relaunch keep
+        the count.
+      - **Per-window input:** touches are relative to the content rect, and
+        the soft keyboard is per activity.
+- [x] **M6.2** Extra windows are new instances of the app's own activity
+      class (no Java code needed).
+      - **Launch:** `FLAG_ACTIVITY_NEW_DOCUMENT | MULTIPLE_TASK`, carrying a
+        window id extra, with ActivityOptions launch bounds in freeform.
+        `LAUNCH_ADJACENT` is added only when the app is already in
+        multi-window mode: from full screen, MIUI otherwise entered split
+        screen with the new window parked off screen.
+      - **Closing:** closing the window (`finishAndRemoveTask`) removes its
+        task, and its activity being destroyed is a close request. A stale
+        window activity (restored from Recents after process death) is
+        finished. Other launcher instances go to the platform-window handler.
+
+      Demo: the gallery app with `adb shell setprop debug.cw_multiwindow 1`
+      (`multi_window_demo.cpp`). Verified with real `adb` input:
+      1. "Open inspector window" opens a second task;
+      2. taps in it update the counter shown in both windows;
+      3. the soft keyboard opens in the Inspector's activity, typed text lands
+         in its field, and the layout moves above the keyboard;
+      4. Close removes its task from Recents;
+      5. removing the task (`am stack remove`, as a Recents swipe) reports a
+         close;
+      6. Home and relaunch keep state;
+      7. losing the main activity: the Inspector keeps working, and a new
+         main activity later shows the same tree;
+      8. rotation renders correctly in both windows.
+
+      Gallery regression pass: navigation, scrolling (~120 fps) and text
+      input. campello_gpu Android suite: 219 passed / 43 skipped (unchanged).
+      - Found and fixed along the way:
+        1. **Android text had red and blue swapped**, in every app since the
+           Android text rasterizer existed (`Bitmap` buffers are RGBA, the
+           contract is BGRA).
+        2. **Rotation left frames cropped**: campello_gpu's Vulkan Surface
+           now sizes Android swapchains from the `ANativeWindow`, because
+           `currentExtent` lags and Android never reports out-of-date. The
+           renderer also repaints fully on any window metrics change.
+        3. stdout to logcat is line-buffered.
+
+**Known gaps / follow-ups**
+- [ ] Every window is the same activity component, so launching the app
+      while a window's task exists brings *that* task back (Android matches
+      it). The main window returns once those are closed. A distinct
+      component would need app-side manifest/Java (an `<activity-alias>`
+      can't set `taskAffinity`).
+- [ ] Back on a window moves its task to the background (Android 12+
+      default for root activities) instead of closing it.
+- [ ] `Presentation` on secondary displays needs a Java `Presentation`
+      subclass: not done (no secondary display to test; the
+      `overlay_display_devices` developer option could simulate one).
+- [ ] Split-screen / freeform placement depends on the launcher: launch
+      bounds and adjacent launch are untested on a freeform-capable device
+      (Android 15 desktop windowing, DeX, ChromeOS).
+- [ ] The platform-window handler path (a second launcher instance) is not
+      reachable on this device (the launcher reuses the task).
+- [ ] An activity destroyed by the system to reclaim memory is treated as
+      closed, like iPadOS (see M5).
 
 ### M7 — Native popup windows (optional)
 
