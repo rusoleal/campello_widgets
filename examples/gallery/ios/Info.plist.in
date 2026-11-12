@@ -26,6 +26,14 @@
 	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- UIScene lifecycle (Phase 17 M5). campello_widgets configures the
+	     scene delegate in code; one window (see examples/ios_multi_window
+	     for several). -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
