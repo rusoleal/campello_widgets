@@ -22,8 +22,13 @@ namespace systems::leal::campello_widgets
         regular,
         /// A secondary window that stays above `WindowOptions::parent` and is
         /// centred on it when first shown. Not modal yet: the parent keeps
-        /// receiving input (see TODO.md, Phase 17 M2).
+        /// receiving input (see TODO.md, Phase 17 M2). Where windows can't
+        /// be parented (iPadOS scenes) it is an ordinary window.
         dialog,
+        /// A window on an external display (a monitor, AirPlay), opened by
+        /// the platform when one is connected (iOS/iPadOS). Not created
+        /// through createWindow(); non-interactive.
+        external_display,
     };
 
     /// Creation parameters for PlatformWindowing::createWindow().
@@ -75,6 +80,8 @@ namespace systems::leal::campello_widgets
 
         /// The window's View (its pointer dispatcher, focus, text input, frame hook).
         virtual View& view() = 0;
+
+        virtual WindowKind kind() const { return WindowKind::regular; }
 
         /// Sets (or replaces, or clears with nullptr) the root of the
         /// window's render tree. The window lays it out at its size, draws

@@ -51,7 +51,24 @@ namespace systems::leal::campello_widgets
         WindowController(const WindowController&)            = delete;
         WindowController& operator=(const WindowController&) = delete;
 
+        /**
+         * Windows the platform opens by itself rather than through create():
+         * on iPadOS the user can ask for another window of the app (the dock,
+         * the app switcher's "+"), and an external display can connect
+         * (WindowKind::external_display). The handler adopts the controller:
+         * keeps it and hosts a Window widget for it. Without a handler, such
+         * windows are closed again (an external display keeps mirroring).
+         */
+        using PlatformWindowHandler = std::function<void(std::shared_ptr<WindowController>)>;
+        static void setPlatformWindowHandler(PlatformWindowHandler handler);
+
+        /// For platform layers: hands a platform-opened window to the
+        /// handler. Returns false, leaving `window` untouched, if there is no
+        /// handler (the platform then closes it).
+        static bool offerPlatformWindow(std::unique_ptr<PlatformWindow>& window);
+
         bool            isOpen() const noexcept { return window_ != nullptr; }
+        WindowKind      kind() const { return window_ ? window_->kind() : WindowKind::regular; }
         PlatformWindow* platformWindow() const noexcept { return window_.get(); }
         View*           view() const noexcept;
         WindowMetrics   metrics() const;

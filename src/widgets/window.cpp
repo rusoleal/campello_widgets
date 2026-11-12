@@ -39,6 +39,28 @@ namespace systems::leal::campello_widgets
         return controller;
     }
 
+    namespace
+    {
+        WindowController::PlatformWindowHandler& platformWindowHandler()
+        {
+            static WindowController::PlatformWindowHandler handler;
+            return handler;
+        }
+    }
+
+    void WindowController::setPlatformWindowHandler(PlatformWindowHandler handler)
+    {
+        platformWindowHandler() = std::move(handler);
+    }
+
+    bool WindowController::offerPlatformWindow(std::unique_ptr<PlatformWindow>& window)
+    {
+        auto handler = platformWindowHandler();  // a copy: it may replace itself
+        if (!window || !handler) return false;
+        handler(adopt(std::move(window)));
+        return true;
+    }
+
     WindowController::WindowController(std::unique_ptr<PlatformWindow> window)
         : window_(std::move(window))
     {

@@ -450,3 +450,58 @@ TEST(Window, DestroyIsDeferredToTheNextUiTurn)
     }
     cw::PlatformWindowing::setInstance(nullptr);
 }
+
+namespace
+{
+    // A window of the given kind, as a platform layer would open it by itself.
+    class WinTestKindWindow : public WinTestFakeWindow
+    {
+    public:
+        WinTestKindWindow(WinTestLog& log, cw::WindowKind kind)
+            : WinTestFakeWindow(log, cw::WindowOptions{}), kind_(kind) {}
+        cw::WindowKind kind() const override { return kind_; }
+    private:
+        cw::WindowKind kind_;
+    };
+}
+
+TEST(Window, PlatformOpenedWindowsGoToTheHandler)
+{
+    // iPadOS: the user asks for another window, or a display connects.
+    WinTestLog log;
+    cw::WindowController::setPlatformWindowHandler(nullptr);
+
+    // No handler: the platform keeps the window (and closes it).
+    std::unique_ptr<cw::PlatformWindow> window =
+        std::make_unique<WinTestKindWindow>(log, cw::WindowKind::external_display);
+    EXPECT_FALSE(cw::WindowController::offerPlatformWindow(window));
+    ASSERT_NE(window, nullptr);
+    EXPECT_EQ(log.windows_alive, 1);
+
+    // With a handler: it gets an open controller of that kind.
+    std::shared_ptr<cw::WindowController> adopted;
+    cw::WindowController::setPlatformWindowHandler([&](std::shared_ptr<cw::WindowController> c) {
+        adopted = std::move(c);
+    });
+    EXPECT_TRUE(cw::WindowController::offerPlatformWindow(window));
+    EXPECT_EQ(window, nullptr);
+    ASSERT_NE(adopted, nullptr);
+    EXPECT_TRUE(adopted->isOpen());
+    EXPECT_EQ(adopted->kind(), cw::WindowKind::external_display);
+
+    // Its close requests work as for created windows (default: destroy).
+    adopted->requestClose();
+    EXPECT_FALSE(adopted->isOpen());
+    EXPECT_EQ(log.windows_alive, 0);
+
+    cw::WindowController::setPlatformWindowHandler(nullptr);
+}
+
+TEST(Window, KindDefaultsToRegular)
+{
+    WinTestPlatform platform;
+    auto controller = cw::WindowController::create({.kind = cw::WindowKind::dialog});
+    ASSERT_NE(controller, nullptr);
+    // The fake doesn't override kind(): regular, like a platform without dialogs.
+    EXPECT_EQ(controller->kind(), cw::WindowKind::regular);
+}
