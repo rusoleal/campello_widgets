@@ -1129,23 +1129,75 @@ renders in the Simulator (taps not automatable).
 
 ### M2 — Windowing API and macOS (first platform)
 
-- [ ] **M2.1** `PlatformWindowing` interface: create, destroy, setTitle,
-      setSize/position (requests the platform may refuse), show/hide/focus,
-      DPI, close-requested and destroyed callbacks, native handle. Also
-      covers part of the Phase 10 "platform channel" gap.
-- [ ] **M2.2** Widgets: a `WindowController` (imperative; its lifetime owns
-      the native window) and a `Window` widget that hosts its child in the
-      controller's `View`. `runApp` keeps its single-window behaviour; a
-      `runMultiWindowApp` / `ViewCollection` root covers the multi-window
-      case. Window kinds: regular and dialog (modal to a parent) first;
-      popup, tooltip and satellite later (see M7).
-- [ ] **M2.3** macOS implementation: one `NSWindow` + `MTKView` + `Surface`
-      + `RasterThread` per window; per-screen refresh rate; app
-      termination policy (last window closed).
-- [ ] **M2.4** `examples/multi_window` (main window + inspector + modal
-      dialog). Verify by running it, sampling pixels from screenshots, and
-      interacting with it — not only with tests (see the memory notes on
-      rendering and interactive verification).
+**Status (2026-11-12): done on macOS.** Branch `feature/multi-window`.
+
+- [x] **M2.1** `PlatformWindowing` / `PlatformWindow`
+      (`inc/campello_widgets/ui/platform_windowing.hpp`): create (title,
+      size, position, kind, parent, resizable), setTitle/setSize (requests),
+      metrics, show, requestClose, `on_close_requested` /
+      `on_metrics_changed`. `postTask()` runs work on the next UI-thread
+      turn; the default runs it immediately.
+- [x] **M2.2** `WindowController` + `Window` widget
+      (`inc/campello_widgets/widgets/window.hpp`). The `Window` element is a
+      zero-size leaf in its parent window; its child becomes the root of the
+      other window's render tree, wrapped in a `MediaQuery` for that window,
+      and belongs to that window's `View` (`Element::childView()`).
+      `destroy()` is **deferred** through `postTask()`. It unmounts the
+      hosted subtree first, then destroys the window, then calls
+      `on_destroyed`. The default close request destroys the window.
+      - Found two bugs. **(a)** `InheritedElement::unmount()` didn't unmount
+        its child, so `State`s under any `MediaQuery`/`Theme` subtree were
+        never disposed (pre-existing, fixed separately). **(b)**
+        Destroying a window synchronously from its own button's tap handler
+        crashed (`GestureArenaManager::sweep` inside the destroyed
+        dispatcher), hence the deferral.
+- [x] **M2.3** macOS. `MacPlatformWindowing`
+      (`src/macos/platform_windowing.mm`): each window is a
+      `CampelloWindow` + `CampelloMTKView` with its own `View`, its own
+      `campello_gpu::Surface` (over the view's `CAMetalLayer`), and its own
+      `Renderer` + raster thread, on the shared device. The **main window
+      now also presents through a `Surface`**, because Metal's device-wide
+      `scheduleNextPresent()` slot would race across raster threads; the
+      single-window gallery is pixel-identical to before apart from the
+      timing overlay. Supporting changes:
+      - `CampelloWindow::sendEvent:` scopes every AppKit event to its View.
+      - The view's safe-area insets come from its own renderer.
+      - `acceptsFirstMouse:` returns YES, so a click on a background
+        window acts immediately.
+      - The renderer's raster-thread check is per renderer.
+      - `FramePackage::surface` carries the window's surface to the raster
+        thread.
+      - Close requests are delivered asynchronously.
+- [x] **M2.4** `examples/macos_multi_window` (`./run_macos_multi_window.sh`):
+      main window + Inspector (with a `TextField`) + About dialog, sharing
+      one counter. `CW_MULTIWINDOW_DEMO=2` runs a self-test that sends
+      synthesized `NSEvent`s through AppKit (real event path, not the
+      dispatcher directly):
+      1. a click in the Inspector updates the counter in **all three**
+         windows;
+      2. clicking the TextField and typing "hi" lands in the Inspector's
+         field;
+      3. About's Close destroys the dialog and app state drops it.
+      Frames are captured per window via the renderer's capture
+      (`CAMPELLO_WIDGETS_CAPTURE` paths now expand `{renderer}`). 5/5 runs
+      gave identical results. Full suite: 1103/1103.
+
+**Known gaps / follow-ups**
+- [ ] `WindowKind::dialog` is a child window that stays above its parent
+      and is centred on it, but it is **not modal** (the parent still gets
+      input).
+- [ ] Popup / tooltip / satellite kinds (M7).
+- [ ] App lifetime policy: closing the main window while secondary windows
+      are open keeps the app running (macOS terminates after the *last*
+      window). Decide: "main closes all" vs "last window quits".
+- [ ] Secondary windows always clear to white and don't set a per-screen
+      refresh rate for the performance overlay (main window does).
+- [ ] Synthesized-event self-test only. Real hand clicks weren't possible
+      here (no Accessibility permission for automation); worth a quick
+      manual pass.
+- [ ] The Metal TSAN report on `Device::submit(cmd, fence)` (see M0.1) is
+      now more relevant, with several raster threads submitting: confirm
+      it's a false positive.
 
 ### M3 — Windows and Linux
 
