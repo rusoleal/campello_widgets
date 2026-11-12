@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   iPadOS (UIWindowScenes, external displays) and Android (one activity per window). See
   `examples/macos_multi_window`, `examples/web_multi_window`, `examples/ios_multi_window` and the
   Android gallery's `debug.cw_multiwindow` demo.
+- **Modal and owned windows.** `WindowOptions::modal` blocks the parent window's input while open
+  (`View::addInputBlocker()`; core-level, so every platform); a window with a `parent` closes with
+  it. `WindowController::setMainWindowClosePolicy()` decides what closing the main window does
+  (default: quit, closing every window; macOS).
+- **Popup windows.** `WindowKind::popup` (macOS borderless child window, web floating canvas) and the
+  `PopupWindowAnchor` widget: a menu or dropdown anchored to a widget, in its own window so it can
+  extend past the parent's edge, falling back to the window's Overlay elsewhere (iOS, Android);
+  dismissed by a press elsewhere, Escape, or losing focus.
+- **Per-window overlays.** `Overlay::insert()` targets the window being handled, and every
+  `WindowController` window gets its own Overlay.
 
 ### Changed
 

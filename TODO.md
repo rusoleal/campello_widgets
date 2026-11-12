@@ -1182,16 +1182,24 @@ renders in the Simulator (taps not automatable).
       (`CAMPELLO_WIDGETS_CAPTURE` paths now expand `{renderer}`). 5/5 runs
       gave identical results. Full suite: 1103/1103.
 
-**Known gaps / follow-ups**
-- [ ] `WindowKind::dialog` is a child window that stays above its parent
-      and is centred on it, but it is **not modal** (the parent still gets
-      input).
-- [ ] Popup / tooltip / satellite kinds (M7).
-- [ ] App lifetime policy: closing the main window while secondary windows
-      are open keeps the app running (macOS terminates after the *last*
-      window). Decide: "main closes all" vs "last window quits".
-- [ ] Secondary windows always clear to white and don't set a per-screen
-      refresh rate for the performance overlay (main window does).
+**Known gaps / follow-ups** (most done 2026-11-12, together with M7)
+- [x] **Modal windows**: `WindowOptions::modal` blocks the parent window's
+      input while open (`View::addInputBlocker()`). The parent's
+      `PointerDispatcher` first cancels pointers in progress and ends hovers,
+      then drops input, and its `FocusManager` drops keys. This lives in core,
+      so it works on every platform. Platform touches:
+      - macOS: a click or key in the blocked window brings the modal forward,
+        with a beep.
+      - Web: a press on a blocked canvas focuses the modal.
+- [x] **Owned windows**: a window created with a `parent` closes with it.
+      `WindowController::forView()` maps a View to its controller.
+- [x] **App lifetime policy**: closing the main window quits the app and
+      closes every window (`WindowController::setMainWindowClosePolicy()`,
+      default `quit_app`; `keep_running` keeps the old behaviour). This is
+      implemented on macOS.
+- [x] Secondary windows follow their screen's refresh rate
+      (`windowDidChangeScreen:`). They already clear to white, the same as
+      the main window.
 - [ ] Synthesized-event self-test only. Real hand clicks weren't possible
       here (no Accessibility permission for automation); worth a quick
       manual pass.
@@ -1447,10 +1455,79 @@ Branch `feature/multi-window`.
 - [ ] An activity destroyed by the system to reclaim memory is treated as
       closed, like iPadOS (see M5).
 
-### M7 — Native popup windows (optional)
+### M7 — Native popup windows
 
-- [ ] Menus, tooltips and dropdowns that extend past the parent window's
-      edge (`xdg_popup` on Wayland, borderless child windows elsewhere).
+**Status (2026-11-12): done on macOS and the web; Overlay fallback on iOS
+and Android.**
+
+- [x] `WindowKind::popup`: a borderless window placed relative to its
+      parent's content, which moves with the parent and closes when it loses
+      focus.
+      - macOS: a key-capable `CampelloWindow` child window at
+        `NSPopUpMenuWindowLevel`.
+      - Web: a floating canvas (z-index above dialogs).
+      - iOS and Android return nullptr.
+- [x] `PopupWindowAnchor` widget: `child` is the anchor, and `popup` opens
+      below it while `open` is true. It uses a native popup window where
+      there is one, and otherwise an entry in the window's Overlay at the
+      same place. It is dismissed by a press anywhere else in the parent
+      window (`PointerDispatcher::addPointerDownObserver()`; presses on the
+      anchor itself are left to it), by Escape, or by the popup losing
+      focus.
+- [x] **Per-window overlays**: `Overlay::insert()` targets the overlay of the
+      window being handled (`Overlay::forView(View::current())`), and every
+      window opened with `WindowController` gets its own Overlay, so
+      dialogs, menus and tooltips opened from a secondary window appear in
+      it. Before this, they went to the last-created overlay, wherever it
+      was.
+- [x] **Bug found: renderer destroyed inside its own frame.**
+      `Element::buildScope()` is global, so a window's `buildFrame()` can run
+      a rebuild that removes that same window (a popup closing itself).
+      - The web, Android and iOS hosts now hold their renderer for the whole
+        frame (macOS already did, through the delegate).
+      - On the web, a renderer's destructor waits for the GPU, which yields
+        to the browser (ASYNCIFY), and the window's own deferred destroy ran
+        during that yield. Renderers are now released at the start of the
+        next frame, and `WindowElement::dropChild()` clears its state before
+        calling out.
+- [x] Verified:
+      - **macOS** (`examples/macos_multi_window`, `CW_MULTIWINDOW_DEMO=3`,
+        synthesized AppKit events): a click in the blocked main window
+        doesn't count and brings Preferences back to the front; after Done
+        the main window works again. The menu window extends 70 points below
+        the main window. An item runs and closes the menu, and a click
+        elsewhere or Escape closes it. Closing the main window quits the app.
+        The last 13 runs were identical; one earlier run lost the item click
+        (the menu closed without running it), not reproduced since.
+      - **Web** (headless Chrome, real input events), both Release and Debug
+        builds: the modal blocks; the menu canvas reaches over the sidebar
+        canvas; an item runs; a press on another canvas closes the menu and
+        still reaches that canvas; Escape closes it.
+      - **Android** (Redmi, real taps): the Overlay fallback menu shows; an
+        item runs; a tap outside closes it.
+      - **Unit tests**: 13 new ones (modal, owned windows, per-window
+        overlays, PopupWindowAnchor, native and fallback).
+      - **Regressions:** 1117/1117 unit tests pass, and the web gallery is
+        pixel-identical with its overlay dropdown working.
+
+**Known gaps / follow-ups (M2 + M7)**
+- [ ] Windows/Linux: modal, popups and the close policy aren't implemented
+      (M3). The web and iPad have no main-window close policy (no such
+      concept).
+- [ ] An app's main window needs an `Overlay` in its tree for the fallback
+      (secondary windows always have one); without it,
+      `PopupWindowAnchor` logs a warning.
+- [ ] Popups open below the anchor at a fixed offset: no flipping or
+      clamping to the screen or page edge yet.
+- [ ] Existing overlay-based widgets (`PopupMenuButton`, `DropdownButton`,
+      `Tooltip`) don't use `PopupWindowAnchor` yet, so they still clip to
+      their window.
+- [ ] The macOS self-test runs with the app inactive (no key window), so
+      popup focus is exercised through direct events; a manual pass is still
+      worth doing.
+- [ ] Earlier macOS re-checks after M4 and M5 (2026-11-12) ran a stale
+      example binary (wrong target name in the build command). The current
+      code has since been verified with demo 2 and demo 3.
 
 **Out of scope**: GDK/Xbox and Android TV (single window by platform design).
 
