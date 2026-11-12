@@ -25,6 +25,9 @@
 #import <campello_gpu/constants/pixel_format.hpp>
 
 #import "../gpu/metal/metal_draw_backend.hpp"
+#import "macos_window_internal.h"
+#import <campello_widgets/ui/platform_windowing.hpp>
+#import <campello_gpu/surface.hpp>
 
 #import <Cocoa/Cocoa.h>
 #import <MetalKit/MetalKit.h>
@@ -51,6 +54,7 @@ namespace {
     // When non-null, runApp() will use this device instead of creating one.
     // This lets the host application share its GPU device with the widget framework.
     std::shared_ptr<GPU::Device> gExternalDevice;
+    std::unique_ptr<Widgets::PlatformWindowing> gWindowing;  // secondary windows (Phase 17)
 
     static Widgets::Brightness getSystemBrightness()
     {
@@ -71,11 +75,20 @@ namespace {
 // MTKView subclass — forwards mouse events to the PointerDispatcher
 // ---------------------------------------------------------------------------
 
-@interface CampelloMTKView : MTKView <NSTextInputClient>
-- (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher;
-- (void)setFocusManager:(Widgets::FocusManager*)focusManager;
-- (void)setTextInputManager:(Widgets::TextInputManager*)textInputManager;
-- (void)setAppearanceChangedCallback:(std::function<void()>)callback;
+// CampelloMTKView, CampelloMTKDelegate and CampelloWindow are declared in
+// macos_window_internal.h (shared with platform_windowing.mm).
+
+@implementation CampelloWindow
+
+- (void)sendEvent:(NSEvent*)event
+{
+    // Everything AppKit dispatches for this window (keys, text input,
+    // mouse...) runs with this window's View ambient (Phase 17).
+    Widgets::View* view = Widgets::View::isAlive(_widgetsView) ? _widgetsView : Widgets::View::current();
+    Widgets::View::Scope scope(view);
+    [super sendEvent:event];
+}
+
 @end
 
 @implementation CampelloMTKView {
@@ -83,6 +96,15 @@ namespace {
     Widgets::FocusManager*      _focusManager;
     Widgets::TextInputManager*  _textInputManager;
     std::function<void()>       _appearanceChangedCallback;
+    Widgets::View*              _widgetsView;
+}
+
+- (void)setWidgetsView:(Widgets::View*)view
+{
+    _widgetsView = view;
+    _dispatcher       = view ? &view->pointerDispatcher() : nullptr;
+    _focusManager     = view ? &view->focusManager() : nullptr;
+    _textInputManager = view ? &view->textInputManager() : nullptr;
 }
 
 - (void)setDispatcher:(Widgets::PointerDispatcher*)dispatcher
@@ -115,6 +137,10 @@ namespace {
 
 - (BOOL)acceptsFirstResponder { return YES; }
 
+// With several windows (Phase 17), a click on a background window (e.g. a
+// button in an inspector) should act immediately, not just activate it.
+- (BOOL)acceptsFirstMouse:(NSEvent*)event { (void)event; return YES; }
+
 - (Widgets::Offset)pointerOffsetForEvent:(NSEvent*)event
 {
     // Return coordinates in logical pixels (points), not physical pixels.
@@ -129,7 +155,10 @@ namespace {
     // that same tree-local space, so this must subtract the same insets, or
     // clicks land offset from what's visually under the cursor whenever the
     // inset is non-zero.
-    Widgets::EdgeInsets insets = gRenderer ? gRenderer->viewInsets() : Widgets::EdgeInsets::zero();
+    // This window's renderer (Phase 17); the main window's global as fallback.
+    Widgets::Renderer* renderer = Widgets::View::isAlive(_widgetsView) ? _widgetsView->renderer() : nullptr;
+    if (!renderer) renderer = gRenderer.get();
+    Widgets::EdgeInsets insets = renderer ? renderer->viewInsets() : Widgets::EdgeInsets::zero();
     return { (float)pt.x - insets.left, flipped_y - insets.top };
 }
 
@@ -742,19 +771,10 @@ static float macosScreenRefreshHz(NSScreen* screen)
 // MTKView delegate — per-frame rendering
 // ---------------------------------------------------------------------------
 
-@interface CampelloMTKDelegate : NSObject <MTKViewDelegate>
-- (instancetype)initWithDevice:(std::shared_ptr<GPU::Device>)device
-                      renderer:(std::shared_ptr<Widgets::Renderer>)renderer;
-
-/// Stops and joins the raster thread immediately. Safe to call defensively
-/// from applicationWillTerminate: in case process exit short-circuits
-/// normal Cocoa dealloc ordering. Idempotent — -dealloc calls this again.
-- (void)stopRasterThread;
-@end
-
 @implementation CampelloMTKDelegate {
     std::shared_ptr<GPU::Device>           _device;
     std::shared_ptr<Widgets::Renderer>     _renderer;
+    std::shared_ptr<GPU::Surface>          _surface;  // per-window present path (may be null)
     // Declared last so its destructor (stop()+join) runs before _device/
     // _renderer would otherwise be released by ARC's reverse-declaration-
     // order ivar teardown — but -dealloc below resets it explicitly first
@@ -778,6 +798,15 @@ static float macosScreenRefreshHz(NSScreen* screen)
     return self;
 }
 
+- (instancetype)initWithDevice:(std::shared_ptr<GPU::Device>)device
+                      renderer:(std::shared_ptr<Widgets::Renderer>)renderer
+                       surface:(std::shared_ptr<GPU::Surface>)surface
+{
+    if (!(self = [self initWithDevice:device renderer:renderer])) return nil;
+    _surface = std::move(surface);
+    return self;
+}
+
 - (void)stopRasterThread
 {
     _rasterThread.reset();
@@ -797,6 +826,21 @@ static float macosScreenRefreshHz(NSScreen* screen)
 - (void)drawInMTKView:(MTKView *)view
 {
     if (!_renderer) return;
+
+    if (_surface) {
+        // Per-window path (Phase 17): build here on the UI thread; the raster
+        // thread acquires this window's image from its Surface and presents
+        // it with its own command buffer (FramePackage::surface).
+        const CGSize drawableSize = view.drawableSize;
+        if (drawableSize.width < 1.0 || drawableSize.height < 1.0) return;
+        _renderer->setDevicePixelRatio(static_cast<float>(view.window.backingScaleFactor));
+        auto package = _renderer->buildFrame((float)drawableSize.width, (float)drawableSize.height);
+        if (!package) return;
+        package->surface = _surface;
+        if (_rasterThread) _rasterThread->submit(std::move(*package));
+        else               _renderer->rasterFrame(*package);
+        return;
+    }
 
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!drawable) return;
@@ -879,6 +923,7 @@ static float macosScreenRefreshHz(NSScreen* screen)
     // reference it while they're torn down.
     std::unique_ptr<Widgets::View>             _view;
     std::shared_ptr<GPU::Device>               _device;
+    std::shared_ptr<GPU::Surface>              _surface;
     std::shared_ptr<Widgets::Renderer>         _renderer;
     std::shared_ptr<Widgets::Element>          _rootElement;
     std::shared_ptr<Widgets::PointerDispatcher>  _dispatcher;
@@ -904,6 +949,7 @@ static float macosScreenRefreshHz(NSScreen* screen)
     // The renderer ivar is destroyed after this body; detach it first so the
     // View never holds a dangling Renderer*.
     if (_view) _view->setRenderer(nullptr);
+    Widgets::PlatformWindowing::setInstance(nullptr);
 #if !__has_feature(objc_arc)
     [super dealloc];
 #endif
@@ -926,7 +972,7 @@ static float macosScreenRefreshHz(NSScreen* screen)
         NSWindowStyleMaskMiniaturizable |
         NSWindowStyleMaskResizable;
 
-    _window = [[NSWindow alloc] initWithContentRect:frame
+    _window = [[CampelloWindow alloc] initWithContentRect:frame
                                           styleMask:style
                                             backing:NSBackingStoreBuffered
                                               defer:NO];
@@ -1001,6 +1047,16 @@ static float macosScreenRefreshHz(NSScreen* screen)
 
     _textInputManager = _view->sharedTextInputManager();
     [_metalView setTextInputManager:_textInputManager.get()];
+
+    // Per-window event routing (Phase 17): insets from this window's
+    // renderer, and every AppKit event scoped to this window's View.
+    [_metalView setWidgetsView:_view.get()];
+    ((CampelloWindow*)_window).widgetsView = _view.get();
+
+    // Secondary windows (WindowController / Window widget). Installed before
+    // the tree mounts, since a State's initState() may open one.
+    gWindowing = makeMacPlatformWindowing(_device);
+    Widgets::PlatformWindowing::setInstance(gWindowing.get());
 
     _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(_tickerScheduler.get());
@@ -1085,9 +1141,16 @@ static float macosScreenRefreshHz(NSScreen* screen)
     // -----------------------------------------------------------------------
     // Wire up the MTKView delegate
     // -----------------------------------------------------------------------
-    _mtkDelegate = [[CampelloMTKDelegate alloc]
-        initWithDevice:_device
-              renderer:_renderer];
+    // Present through this window's own campello_gpu Surface (over the
+    // MTKView's CAMetalLayer) rather than the device-wide present slot: with
+    // secondary windows on their own raster threads, the slot would let one
+    // window's submit present another window's drawable.
+    _surface = _device->createSurface((__bridge void*)_metalView.layer);
+    if (_surface) {
+        _mtkDelegate = [[CampelloMTKDelegate alloc] initWithDevice:_device renderer:_renderer surface:_surface];
+    } else {
+        _mtkDelegate = [[CampelloMTKDelegate alloc] initWithDevice:_device renderer:_renderer];
+    }
     _metalView.delegate = _mtkDelegate;
 
     // -----------------------------------------------------------------------
