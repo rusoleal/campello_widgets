@@ -1021,31 +1021,90 @@ device->submit(cmd);
 
 ### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
 
-- [ ] **M1.1** Introduce `View`, one per window, owning: `Renderer`, root
-      `RenderBox`, `PointerDispatcher`, `TextInputManager`, the frame-request
-      callback, `MediaQueryData`, root `Overlay`, plus a native-window handle
-      and surface. Reach it through `View::of(context)` / an owner pointer
-      on `RenderObject`.
-- [ ] **M1.2** `PointerDispatcher::activeDispatcher()` (~70 call sites)
-      becomes a lookup of the owning view.
-- [ ] **M1.3** `FrameScheduler::scheduleFrame()` (~60 call sites) becomes
-      per view, and frames run only for dirty views.
-      `PostFrameCallbacks` stays global but drains once per view frame.
-- [ ] **M1.4** Paint-time statics become per-renderer:
-      `RenderObject::activeBackend()`, `activeDevicePixelRatio()`,
-      `activePaintOriginOffset()` and `currentRenderer()`. These are real
-      races once two raster threads exist. Add a TSAN test.
-- [ ] **M1.5** `TextInputManager::activeManager()` and
-      `TextEditingController::s_focused_` become per view (the IME belongs
-      to one window).
-- [ ] **M1.6** `FocusManager`: one global manager, a root `FocusScope` per
-      view, and key events routed to the OS-focused window's scope. Window
-      activate/deactivate updates the primary focus.
-- [ ] **M1.7** Keep global: `TickerScheduler` (ticked once per UI-thread
-      frame), `DragManager` (prerequisite for drag between windows),
-      `ImageCache`, `HardwareKeyboard`, `ThreadChecker`.
-- [ ] **M1.8** Platform runners build one implicit `View` through the new
-      path; all existing tests and examples pass unchanged.
+**Status (2026-11-12): done for macOS, iOS, Android and web; the Windows,
+Linux (X11/Wayland/embedded) and GDK runners still use the legacy path,**
+which keeps working unchanged because nothing was removed. Branch
+`feature/multi-window`.
+
+**Design as built** (`inc/campello_widgets/ui/view.hpp`). How code finds its
+window, in priority order:
+1. **Owner.** Every `RenderObject` and `Element` records a `View*`
+   inherited from its **parent** when it joins the tree; only roots take the
+   ambient view. The parent must be the source of truth, because one
+   window's frame runs the shared `buildScope()` and can rebuild another
+   window's elements. Lifecycle registrations use the owner:
+   `RenderObject::pointerDispatcher()/focusManager()/textInputManager()`,
+   and invalidations go to the owning window's renderer and frame hook.
+2. **Dispatch scope.** While a `PointerDispatcher` delivers an event or
+   tick, `activeDispatcher()` returns that dispatcher, so gesture
+   recognizers and in-event code needed no changes.
+3. **Element scope.** Mount, rebuild and unmount (State `dispose()`) run
+   inside `View::Scope(element's view)`. Context-free code there
+   (`createRenderObject()`, State lifecycle, render object constructors)
+   resolves `FocusManager::activeManager()` etc. to the right window.
+4. **Legacy fallback.** The process-wide statics stay; `View::makePrimary()`
+   points them at the first window. Unit tests that install a dispatcher
+   by hand behave as before.
+
+- [x] **M1.1** `View`: owns `PointerDispatcher`, `FocusManager`,
+      `TextInputManager` and the frame-request hook; points at (doesn't
+      own) its `Renderer`. Provides a registry, `isAlive()`, `View::Scope`
+      and `View::of(context)`.
+- [x] **M1.2** Render objects register with their owner's dispatcher (about
+      55 sites). The dispatch scope covers recognizers.
+      `GestureRecognizer::dispose(dispatcher)` takes the owner's
+      dispatcher. `RenderDraggable`/`RenderDragTarget` register in their
+      constructor, so they remember that dispatcher and check
+      `PointerDispatcher::isAlive()` (new) in their destructor.
+- [x] **M1.3** `View::requestFrame()`. `FrameScheduler::scheduleFrame()`
+      (about 60 callers with no window context) also fans out to every
+      View; a clean window skips its frame cheaply. `markNeedsPaint` and
+      `markNeedsBuild` target only the owner. `hasCallback()` counts View
+      hooks.
+- [x] **M1.4** **Plan correction:** the paint-time statics
+      (`activeBackend()`, `activeDevicePixelRatio()`, paint origin) are read
+      only during layout/paint, which run in `buildFrame` on the **UI
+      thread**, not on the raster thread. Windows building one after another
+      is therefore safe as long as each frame sets them, which it does, so
+      no TSAN race exists. The real bug was `currentRenderer()`: it was set
+      only in the `Renderer` constructor, so the last-created window's
+      renderer received every window's paint notes. `buildFrame` now sets
+      it and scopes its view.
+- [x] **M1.5** `TextInputManager` is per window. **Deliberately kept
+      global:** `TextEditingController`'s single focused controller (only
+      one window has OS keyboard focus at a time).
+- [x] **M1.6** **Plan change:** one `FocusManager` **per window** instead
+      of one global manager with a root scope per window. It's simpler,
+      matches per-window key routing, and cross-window traversal isn't a
+      requirement. The global key handler and highlight mode stay global.
+      Revisit if a "focus next window" feature appears.
+- [x] **M1.7** Kept global: `TickerScheduler`, `DragManager`, `ImageCache`,
+      `HardwareKeyboard`, `ThreadChecker`, `Element::dirty_elements_`. Note
+      for M2: with N windows the ticker is ticked by each window's
+      `buildFrame` (an extra tick at the same timestamp is harmless; dedupe
+      if profiling says so).
+- [x] **M1.8** macOS, iOS, Android and web runners: View owned by the
+      window, made primary, subsystems taken from it, mount inside its
+      scope, renderer attached and detached before it's destroyed (View
+      declared first so it is destroyed last).
+- [ ] **M1.8b** Windows, Linux X11, Wayland, Linux embedded and GDK
+      runners: same mechanical migration, but they can't be built on this
+      Mac. Do it on the machine used for M0.3/M3.
+- [ ] **M1.9** Vulkan backend safe for several raster threads (one per
+      window): per-thread `VkCommandPool` and a thread-safe frame ring in
+      `campello_gpu` (found in M0.2). Prerequisite for M2 on Android/Linux.
+      Check DX12 for the same.
+
+**Verification**: 15 new `View` tests (`tests/universal/test_view.cpp`),
+covering ownership, parent-wins inheritance, per-window frames, dispatch
+scope, and a `Focus` subtree created while another window rebuilds.
+Mutation-checked: owner frame routing, parent inheritance and the rebuild
+scope each fail their test when removed. Full suite green. macOS gallery
+frame is pixel-identical to the pre-M1 capture (only the timing overlay
+differs). The Android gallery (Redmi) navigates, scrolls, and its
+TextField gets focus, raises the IME and receives typed text. The web
+gallery renders, navigates on click and toggles a checkbox. The iOS gallery
+renders in the Simulator (taps not automatable).
 
 ### M2 — Windowing API and macOS (first platform)
 
@@ -1116,6 +1175,12 @@ device->submit(cmd);
       `Positioned` boxes are missing) on **both** macOS/Metal and Android/Vulkan,
       so it's a widget or layout bug, not a GPU-backend one
       (`examples/gallery/gallery_app.cpp` `stack_bg`).
+- [x] iOS gallery didn't build either (same missing `campello_fluent` link).
+      Fixed 2026-11-12.
+- [ ] **Likely the same on Windows and Linux (unverified, can't build here):**
+      the Windows gallery doesn't link `campello_fluent`, and the Linux
+      gallery links only `campello_widgets` while `gallery_app.cpp`
+      includes all four design systems.
 - [x] Android gallery didn't build: `gallery_app.cpp` includes
       `campello_fluent` but `android/app/src/main/cpp/CMakeLists.txt` didn't
       link it. Fixed 2026-11-11.
