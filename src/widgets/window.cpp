@@ -86,6 +86,19 @@ namespace systems::leal::campello_widgets
 
     void WindowController::destroy()
     {
+        if (!window_ || destroy_pending_) return;
+        destroy_pending_ = true;
+        // Deferred (see PlatformWindowing::postTask()): we may be inside one
+        // of this window's own event handlers right now.
+        auto self = shared_from_this();  // alive until the task has run
+        auto task = [self] { self->finishDestroy(); };
+        if (auto* windowing = PlatformWindowing::instance()) windowing->postTask(std::move(task));
+        else task();
+    }
+
+    void WindowController::finishDestroy()
+    {
+        destroy_pending_ = false;
         if (!window_) return;
         // Hosted subtree first (its render objects and focus nodes are
         // registered with the window's View), then the window itself.

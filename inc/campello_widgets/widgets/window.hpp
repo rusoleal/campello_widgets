@@ -62,8 +62,11 @@ namespace systems::leal::campello_widgets
         void show();
         void requestClose();
 
-        /// Closes the native window now: the hosted widget subtree is
-        /// unmounted first, then the window (renderer, surface, View) goes.
+        /// Closes the native window: the hosted widget subtree is unmounted
+        /// first, then the window (renderer, surface, View) goes, then
+        /// on_destroyed runs. Deferred to the next UI-thread turn
+        /// (PlatformWindowing::postTask()), so it is safe to call from one of
+        /// the window's own event handlers; isOpen() stays true until then.
         void destroy();
 
         /// The user asked to close the window. Default (unset): destroy().
@@ -84,6 +87,8 @@ namespace systems::leal::campello_widgets
     private:
         explicit WindowController(std::unique_ptr<PlatformWindow> window);
         void notify(Event event);
+        void finishDestroy();
+        bool destroy_pending_ = false;
 
         std::unique_ptr<PlatformWindow>                    window_;
         std::map<ListenerId, std::function<void(Event)>>   listeners_;

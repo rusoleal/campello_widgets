@@ -102,6 +102,17 @@ namespace systems::leal::campello_widgets
         /// Creates (but doesn't show) a window. nullptr on failure.
         virtual std::unique_ptr<PlatformWindow> createWindow(const WindowOptions& options) = 0;
 
+        /**
+         * Runs `task` on the UI thread once the current event (or frame) has
+         * been handled, e.g. dispatch_async on the main queue.
+         * WindowController::destroy() uses it: a window is often closed from
+         * one of its own event handlers (a "Close" button), and tearing it
+         * down synchronously would destroy the dispatcher and render objects
+         * that are still delivering that event. The default runs `task`
+         * immediately, for platforms (and tests) without a run loop to post to.
+         */
+        virtual void postTask(std::function<void()> task) { if (task) task(); }
+
         static PlatformWindowing* instance() noexcept;
         /// Installs the platform implementation (not owned). Pass nullptr to remove it.
         static void setInstance(PlatformWindowing* windowing) noexcept;

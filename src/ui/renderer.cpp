@@ -580,6 +580,11 @@ namespace systems::leal::campello_widgets
             env_capture_read_ = true;
             if (const char* path = std::getenv("CAMPELLO_WIDGETS_CAPTURE"); path && *path) {
                 env_capture_path_ = path;
+                // Several windows (Phase 17) each have a renderer: "{renderer}"
+                // in the path becomes 0, 1, 2... in the order renderers start.
+                static int s_capture_renderer_index = 0;
+                if (const auto at = env_capture_path_.find("{renderer}"); at != std::string::npos)
+                    env_capture_path_.replace(at, 10, std::to_string(s_capture_renderer_index++));
                 env_capture_tick_ = 60;
                 if (const char* frame = std::getenv("CAMPELLO_WIDGETS_CAPTURE_FRAME"))
                     env_capture_tick_ = std::strtoull(frame, nullptr, 10);

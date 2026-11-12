@@ -405,3 +405,48 @@ TEST(Window, RemovingTheWindowWidgetUnmountsTheHostedTree)
     (void)alive_at_dispose;
     root->unmount();
 }
+
+namespace
+{
+    // A platform with a real "next UI turn": posted tasks wait in a queue.
+    class WinTestQueuedWindowing : public WinTestFakeWindowing
+    {
+    public:
+        std::vector<std::function<void()>> tasks;
+        void postTask(std::function<void()> task) override { tasks.push_back(std::move(task)); }
+        void runPostedTasks()
+        {
+            auto pending = std::move(tasks);
+            tasks.clear();
+            for (auto& t : pending) t();
+        }
+    };
+}
+
+TEST(Window, DestroyIsDeferredToTheNextUiTurn)
+{
+    // A "Close" button calls destroy() from inside the window's own event
+    // dispatch: the window (its dispatcher, the button's render object) must
+    // survive until that dispatch has unwound.
+    WinTestQueuedWindowing windowing;
+    cw::PlatformWindowing::setInstance(&windowing);
+    {
+        auto controller = cw::WindowController::create({});
+        bool destroyed = false;
+        controller->on_destroyed = [&] { destroyed = true; };
+
+        controller->destroy();
+        EXPECT_TRUE(controller->isOpen()) << "torn down synchronously";
+        EXPECT_FALSE(destroyed);
+        EXPECT_EQ(windowing.log.windows_alive, 1);
+
+        controller->destroy();  // a second request while pending is a no-op
+        EXPECT_EQ(windowing.tasks.size(), 1u);
+
+        windowing.runPostedTasks();
+        EXPECT_FALSE(controller->isOpen());
+        EXPECT_TRUE(destroyed);
+        EXPECT_EQ(windowing.log.windows_alive, 0);
+    }
+    cw::PlatformWindowing::setInstance(nullptr);
+}
