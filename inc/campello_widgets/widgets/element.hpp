@@ -11,6 +11,7 @@
 
 namespace systems::leal::campello_widgets
 {
+    class View;
 
     class RenderObjectElement;
     class InheritedElement;
@@ -64,6 +65,37 @@ namespace systems::leal::campello_widgets
          * `State::initState()`) should override this and call the base last.
          */
         virtual void mount(Element* parent);
+
+        /**
+         * @brief The View (window) this element belongs to, or nullptr.
+         *
+         * Inherited from the parent at mount(); a root element takes the
+         * ambient View::current(). Prefer View::of(context), which also
+         * checks the view is still alive.
+         */
+        View* view() const noexcept { return view_; }
+
+        /**
+         * @brief The view to make ambient while working on this element:
+         *        its own if still alive, else the current ambient one.
+         *
+         * mount/rebuild/unmount run inside `View::Scope(scopeView())`, so
+         * code there without a context of its own (createRenderObject(),
+         * State lifecycle methods, render object constructors) resolves the
+         * legacy accessors (FocusManager::activeManager(), ...) to this
+         * element's window.
+         */
+        View* scopeView() const noexcept;
+
+        /**
+         * @brief The view this element's *children* belong to.
+         *
+         * Normally the element's own view. An element that hosts a subtree in
+         * another window (the Window widget's element) returns that window's
+         * View, so its descendants are owned by, and mounted in, the new
+         * window even though they sit under it in the one shared element tree.
+         */
+        virtual View* childView() const noexcept { return view_; }
 
         /**
          * @brief Removes this element from the tree.
@@ -213,9 +245,16 @@ namespace systems::leal::campello_widgets
 
         WidgetRef widget_;
         Element*  parent_   = nullptr;
+        View*     view_     = nullptr;  ///< Owning window; see view().
         bool      dirty_    = true;
         bool      mounted_  = false;
         bool      building_ = false;
+        /// Set when unmount() starts, before the subtree goes. A State's
+        /// dispose() below may touch an ancestor that is itself being torn
+        /// down (e.g. removing an OverlayEntry from an Overlay that is being
+        /// unmounted); rebuilding that ancestor then would rewrite the child
+        /// list its unmount() is iterating. markNeedsBuild() ignores it.
+        bool      unmounting_ = false;
 
         static std::vector<Element*> dirty_elements_;
         static std::unordered_set<const Element*> s_alive_;

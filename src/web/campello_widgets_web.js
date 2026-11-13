@@ -12,16 +12,34 @@ addToLibrary({
       }
       return CW.textContext;
     },
+    // A canvas by selector: a popup's canvas (registered in
+    // specialHTMLTargets, which emscripten's own lookups also check first)
+    // or an element of this document.
+    find: function (selector) {
+      return specialHTMLTargets[selector] || document.querySelector(selector);
+    },
+    onPaste: function (e) {
+      var text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+      e.preventDefault();
+      var len = lengthBytesUTF8(text) + 1;
+      var ptr = _malloc(len);
+      stringToUTF8(text, ptr, len);
+      _cw_web_on_paste(ptr);
+      _free(ptr);
+    },
+    popups: {},  // selector -> popup Window
   },
+  $CW__deps: ['$specialHTMLTargets', 'malloc', 'free', 'cw_web_on_paste'],
 
   // Resizes the canvas backing store to its CSS box times devicePixelRatio.
   // Writes [width, height] (physical pixels), the ratio and the canvas's
   // viewport origin [left, top] (CSS pixels); returns 1 if the size changed.
   cw_web_sync_canvas__deps: ['$CW'],
   cw_web_sync_canvas: function (selectorPtr, outSizePtr, outDprPtr, outOriginPtr) {
-    var canvas = document.querySelector(UTF8ToString(selectorPtr));
+    var canvas = CW.find(UTF8ToString(selectorPtr));
     if (!canvas) return 0;
-    var dpr = window.devicePixelRatio || 1;
+    var view = canvas.ownerDocument.defaultView || window;  // a popup has its own ratio
+    var dpr = view.devicePixelRatio || 1;
     var rect = canvas.getBoundingClientRect();
     var w = Math.max(1, Math.round(rect.width * dpr));
     var h = Math.max(1, Math.round(rect.height * dpr));
@@ -56,27 +74,159 @@ addToLibrary({
     requestAnimationFrame(tick);
   },
 
+  // 1 if the canvas matching the selector is the topmost element at the
+  // client point (so hover goes to a dialog canvas, not the one under it).
+  cw_web_is_topmost_at__deps: ['$CW'],
+  cw_web_is_topmost_at: function (selectorPtr, x, y) {
+    var canvas = CW.find(UTF8ToString(selectorPtr));
+    return canvas && canvas.ownerDocument.elementFromPoint(x, y) === canvas ? 1 : 0;
+  },
+
+  // --- Canvases opened by WindowController (src/web/platform_windowing.cpp).
+  // A new, hidden <canvas id=...> of w x h CSS pixels. Placement: inside the
+  // page's [data-cw-windows] element if there is one (the page lays it out),
+  // otherwise floating (position: fixed) at (x, y), or cascaded when
+  // hasPosition is 0. Dialogs (dialog = 1) float above everything, popups
+  // (dialog = 2: menus, tooltips) above dialogs.
+  cw_web_create_canvas: function (idPtr, titlePtr, w, h, hasPosition, x, y, dialog) {
+    var canvas = document.createElement('canvas');
+    canvas.id = UTF8ToString(idPtr);
+    canvas.tabIndex = 0;
+    canvas.className = dialog ? 'cw-window cw-dialog' : 'cw-window';
+    canvas.setAttribute('aria-label', UTF8ToString(titlePtr));
+    canvas.oncontextmenu = function (e) { e.preventDefault(); };
+    var s = canvas.style;
+    s.display = 'none';
+    s.width = w + 'px';
+    s.height = h + 'px';
+    s.outline = 'none';
+    var host = dialog ? null : document.querySelector('[data-cw-windows]');
+    if (host) {
+      host.appendChild(canvas);
+    } else {
+      CW.cascade = ((CW.cascade || 0) % 8) + 1;
+      s.position = 'fixed';
+      s.left = (hasPosition ? x : 24 + 32 * CW.cascade) + 'px';
+      s.top = (hasPosition ? y : 24 + 32 * CW.cascade) + 'px';
+      s.zIndex = dialog === 2 ? '1002' : (dialog ? '1001' : '1000');
+      s.boxShadow = dialog === 2 ? '0 4px 16px rgba(0,0,0,0.3)' : '0 8px 32px rgba(0,0,0,0.25)';
+      s.borderRadius = dialog === 2 ? '4px' : '8px';
+      document.body.appendChild(canvas);
+    }
+  },
+  cw_web_create_canvas__deps: ['$CW'],
+
+  cw_web_remove_canvas__deps: ['$CW'],
+  cw_web_remove_canvas: function (selectorPtr) {
+    var canvas = CW.find(UTF8ToString(selectorPtr));
+    if (canvas) canvas.remove();
+  },
+
+  // Shows the canvas; a floating dialog is centred on `parentPtr`'s canvas
+  // (or the viewport) the first time.
+  cw_web_show_canvas__deps: ['$CW'],
+  cw_web_show_canvas: function (selectorPtr, parentPtr, centre) {
+    var canvas = CW.find(UTF8ToString(selectorPtr));
+    if (!canvas) return;
+    canvas.style.display = 'block';
+    if (centre && canvas.style.position === 'fixed') {
+      var parent = parentPtr ? CW.find(UTF8ToString(parentPtr)) : null;
+      var p = parent ? parent.getBoundingClientRect()
+                     : { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+      var r = canvas.getBoundingClientRect();
+      canvas.style.left = Math.round(p.left + (p.width - r.width) / 2) + 'px';
+      canvas.style.top = Math.round(p.top + (p.height - r.height) / 2) + 'px';
+    }
+    canvas.focus({ preventScroll: true });
+  },
+
+  cw_web_set_canvas_size__deps: ['$CW'],
+  cw_web_set_canvas_size: function (selectorPtr, w, h) {
+    var canvas = CW.find(UTF8ToString(selectorPtr));
+    if (!canvas) return;
+    canvas.style.width = w + 'px';
+    canvas.style.height = h + 'px';
+  },
+
+  cw_web_set_canvas_title__deps: ['$CW'],
+  cw_web_set_canvas_title: function (selectorPtr, titlePtr) {
+    var canvas = CW.find(UTF8ToString(selectorPtr));
+    if (canvas) canvas.setAttribute('aria-label', UTF8ToString(titlePtr));
+  },
+
+  // --- Popup windows (WindowOptions::web_popup, experimental). A same-origin
+  // window.open() whose canvas is drawn with the opener's GPUDevice. The
+  // canvas is registered as specialHTMLTargets[selector] and the popup's
+  // root element as specialHTMLTargets[selector + '-window'], so emscripten's event
+  // and canvas lookups (and WebGPU surface creation) find them. Returns 0 if
+  // the browser blocked the popup.
+  cw_web_open_popup__deps: ['$CW'],
+  cw_web_open_popup: function (selectorPtr, titlePtr, w, h, hasPosition, x, y) {
+    var selector = UTF8ToString(selectorPtr);
+    var features = 'popup,width=' + w + ',height=' + h +
+                   (hasPosition ? ',left=' + x + ',top=' + y : '');
+    var win = window.open('', selector.replace(/[^a-zA-Z0-9_-]/g, '_'), features);
+    if (!win) return 0;
+    var doc = win.document;
+    doc.title = UTF8ToString(titlePtr);
+    var style = doc.createElement('style');
+    style.textContent = 'html,body{margin:0;height:100%;overflow:hidden;background:#fff}' +
+                        'canvas{display:block;width:100vw;height:100vh;outline:none}';
+    doc.head.appendChild(style);
+    var canvas = doc.createElement('canvas');
+    canvas.tabIndex = 0;
+    canvas.oncontextmenu = function (e) { e.preventDefault(); };
+    doc.body.appendChild(canvas);
+    doc.addEventListener('paste', CW.onPaste);
+    specialHTMLTargets[selector] = canvas;
+    // The popup's own events: its root element, not its Window, because
+    // emscripten's mouse events read getBoundingClientRect() of the target.
+    specialHTMLTargets[selector + '-window'] = doc.documentElement;
+    CW.popups[selector] = win;
+    return 1;
+  },
+
+  // 1 once the user (or the browser) has closed the popup.
+  cw_web_popup_closed__deps: ['$CW'],
+  cw_web_popup_closed: function (selectorPtr) {
+    var win = CW.popups[UTF8ToString(selectorPtr)];
+    return !win || win.closed ? 1 : 0;
+  },
+
+  cw_web_close_popup__deps: ['$CW'],
+  cw_web_close_popup: function (selectorPtr) {
+    var selector = UTF8ToString(selectorPtr);
+    var win = CW.popups[selector];
+    delete CW.popups[selector];
+    delete specialHTMLTargets[selector];
+    delete specialHTMLTargets[selector + '-window'];
+    if (win && !win.closed) win.close();
+  },
+
+  cw_web_popup_command__deps: ['$CW'],
+  // 0 = focus, 1 = set title (str), 2 = resize content to (w, h).
+  cw_web_popup_command: function (selectorPtr, command, strPtr, w, h) {
+    var win = CW.popups[UTF8ToString(selectorPtr)];
+    if (!win || win.closed) return;
+    if (command === 0) win.focus();
+    else if (command === 1) win.document.title = UTF8ToString(strPtr);
+    else if (command === 2) win.resizeBy(w - win.innerWidth, h - win.innerHeight);
+  },
+
   cw_web_set_title: function (titlePtr) {
     document.title = UTF8ToString(titlePtr);
   },
 
+  cw_web_set_cursor__deps: ['$CW'],
   cw_web_set_cursor: function (selectorPtr, cursorPtr) {
-    var canvas = document.querySelector(UTF8ToString(selectorPtr));
+    var canvas = CW.find(UTF8ToString(selectorPtr));
     if (canvas) canvas.style.cursor = UTF8ToString(cursorPtr);
   },
 
+  cw_web_install_paste_listener__deps: ['$CW'],
   cw_web_install_paste_listener: function () {
-    document.addEventListener('paste', function (e) {
-      var text = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
-      e.preventDefault();
-      var len = lengthBytesUTF8(text) + 1;
-      var ptr = _malloc(len);
-      stringToUTF8(text, ptr, len);
-      _cw_web_on_paste(ptr);
-      _free(ptr);
-    });
+    document.addEventListener('paste', CW.onPaste);
   },
-  cw_web_install_paste_listener__deps: ['malloc', 'free', 'cw_web_on_paste'],
 
   cw_web_prefers_dark: function () {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 1 : 0;

@@ -885,6 +885,801 @@ backlog, no bloquea declarar 1.0.0.
 
 ---
 
+## Phase 17 — Multi-window support (started 2026-11-11)
+
+**Goal**: an app can open several native windows (and, on web, several
+canvases) driven by a single widget tree.
+
+**Architecture decisions (agreed 2026-11-11)**, modelled on Flutter's
+windowing work: one engine, one isolate, one widget tree, many `FlutterView`s.
+Flutter's version is experimental, flag-gated on `master`, desktop only.
+- **One UI thread and one element tree for every window of an app.** Windows
+  share state for free (a `ValueNotifier` in a common ancestor). The thread
+  stays bound by `ThreadChecker`, and AppKit, UIKit and Win32 need window
+  calls on their owning thread anyway. Trade-off we accept: a slow build in
+  one window delays the others, so heavy work belongs off the UI thread.
+- **One raster thread per window.** GPU encode and present stalls stay
+  isolated, as each `MTKView` delegate's `RasterThread` already does today.
+  This means every paint-time static has to become per-renderer.
+- **Build only dirty windows**, each window on its own display's vsync.
+- **One shared `campello_gpu::Device`.** Device-bound resources
+  (`ImageCache` textures, glyph atlases, pipelines) can't be shared across
+  devices, so one device per window is ruled out.
+- **Later, optional**: separate "engines" (independent `runApp` roots, each
+  with its own thread and tree, communicating only by messages) for truly
+  independent tool windows. This comes almost for free once the singletons
+  are gone.
+
+### M0 — `campello_gpu`: `Surface` API (one swapchain per window)
+
+Today one `Device` owns exactly one swapchain (`createDefaultDevice(pd)`,
+`getSwapchainTextureView()`), and Vulkan/DX12 present implicitly inside
+`submit()`. Metal's `scheduleNextPresent()` is a single slot per device, so
+two windows on two raster threads would race: one window's `submit()` can
+present the other window's drawable.
+
+New API (design follows wgpu's surface, with present bound to a command
+buffer instead of a device-global slot):
+```cpp
+auto surface = device->createSurface(native, width, height);
+auto view    = surface->acquireNextTexture();   // nullptr → skip this frame
+/* encode render passes into view */
+surface->schedulePresent(cmd);                  // present after *this* cmd buffer
+device->submit(cmd);
+```
+- [x] **M0.1** Public header `inc/campello_gpu/surface.hpp`, plus
+      `Device::createSurface()` (2026-11-11). Metal implementation wraps a
+      `CAMetalLayer` (`nextDrawable` → `acquireNextTexture`,
+      `presentDrawable:` on the given command buffer → `schedulePresent`).
+      Vulkan/DX12/WebGPU are stubs that return `nullptr` until M0.2–M0.4.
+      Integration tests: two surfaces on two threads, each presenting only
+      its own drawable.
+      - Done on branch `feature/multi-surface` in `campello_gpu`
+        (uncommitted). `tests/platform/test_surface.cpp` has 9 tests; the
+        full suite passes (255 integration + 76 universal tests, with 2
+        ray-tracing tests skipped as before).
+      - Finding: an off-screen `CAMetalLayer` does **not** enforce its
+        drawable pool (`nextDrawable` never blocks there), so a leaked
+        drawable can't be detected by pool exhaustion. The leak tests use an
+        ObjC weak reference to the drawable instead. Mutation-checked: each
+        test fails when its `release` is removed.
+      - Follow-up (pre-existing, not Surface code): TSAN reports a race in
+        `Device::submit(cmd, fence)`'s `addCompletedHandler` block (the
+        `std::function` is copied on the submitting thread and read on a
+        GCD worker). It only shows when `submit` runs off the main thread,
+        which no earlier test did. Most likely a false positive, because the
+        happens-before edge goes through Metal's driver, which TSAN can't
+        see. Confirm before M2, where several raster threads will submit.
+- [x] **M0.2** Vulkan (2026-11-11), on `campello_gpu`'s
+      `feature/multi-surface` branch. One self-contained `SurfaceData` per
+      surface: its own VkSurfaceKHR/swapchain/views, a `renderFinished`
+      semaphore per image, and a 3-slot acquire ring whose fences are
+      signalled by a chained empty submit (the pattern
+      `submit(cmd, fence)` already uses). One command buffer can present
+      several surfaces in one `vkQueuePresentKHR`. OUT_OF_DATE marks the
+      surface, which then rebuilds on its own thread at the next acquire.
+      - **Deliberate deviation from the plan**: the device's legacy
+        implicit swapchain was **not** turned into an internal `Surface`.
+        It stays exactly as it was, with its many hard-won on-device fixes,
+        so current single-window apps carry no risk. Folding it into
+        `Surface` is a later cleanup, once widgets runs on `Surface`
+        (M1/M2).
+      - Also: a headless device now enables `VK_KHR_swapchain` whenever
+        the GPU supports it, and Android links `libandroid`.
+      - Verified on a Redmi Note 10 Pro (Adreno 618, Vulkan 1.1, so the
+        **traditional render-pass path**). 10 Surface tests use
+        `AImageReader` windows as headless `ANativeWindow`s and **read
+        back the presented pixels** (each window gets only its own
+        colour). Full suite: 214 passed, 43 skipped (ray tracing), 0
+        failed; baseline was 206/43/0. Mutation-checked (wrong swapchain
+        image, missing slot-fence signal): 4 and 3 tests fail
+        respectively. The gallery APK (legacy swapchain path, local
+        `campello_gpu`) launches, navigates and scrolls normally.
+      - **Not verified**: the dynamic-rendering path (needs a Vulkan 1.3
+        device or lavapipe; the code is the same barrier code with the
+        surface's view swapped in), Linux X11/Wayland surfaces (compiled
+        logic only, not built on Linux this session), and validation
+        layers. A non-debuggable phone only loads layers packaged in a
+        debuggable APK; `setprop debug.vulkan.layers` makes
+        `vkCreateInstance` fail with -6 for a shell binary.
+      - **M2 prerequisite found**: the Vulkan backend is not safe for
+        several raster threads. Every `createCommandEncoder()` shares one
+        `VkCommandPool`, which needs external synchronization even for
+        recording, and `beginFrameRing()` / `currentFrameGen` aren't
+        designed for concurrent callers. This needs per-thread command
+        pools and a per-thread (or locked) frame ring before one raster
+        thread per window works on Vulkan. Check DX12 for the same
+        before M3.
+- [x] **M0.3** DX12 (2026-11-13), on `campello_gpu`'s `feature/multi-surface`
+      branch (uncommitted). One flip-model `IDXGISwapChain3` per `HWND`, with
+      its own back buffers and RTV heap, on the device's single queue
+      (`SurfaceData` in `src/directx/common.hpp`).
+      - **Barriers:** a back buffer is a `TextureHandle` flagged
+        `isSurfaceImage`. `beginRenderPass()` moves it PRESENT->RENDER_TARGET
+        like any attachment; `RenderPassEncoder::end()` leaves it there;
+        `CommandEncoder::finish()` returns it to PRESENT. An encoder dropped
+        without `finish()` resets the tracked state (its barriers never ran).
+      - **Present:** `schedulePresent()` moves the acquisition into the
+        command buffer; `submit()` calls `Present(1, 0)` for each scheduled
+        surface after `ExecuteCommandLists`. The command buffer keeps the
+        swapchain alive until the frame ring retires it, and
+        `Device::~Device` retires the ring before releasing its fence.
+      - **Sizing:** follows the client rect unless an explicit size was
+        given; `ResizeBuffers` after a full GPU idle wait. A minimised or 0x0
+        window acquires nothing. An abandoned acquisition returns the same
+        image (the index only advances on `Present()`).
+      - **One swapchain per HWND** (a DXGI rule): a second `createSurface()`
+        on the same window returns nullptr.
+      - **Verified** on an Intel Iris 550 (Windows 10), Debug with the D3D12
+        debug layer: 17 Surface tests on real borderless HWNDs, reading back
+        what DWM shows with `PrintWindow(PW_RENDERFULLCONTENT)` (two windows
+        interleaved, one command buffer presenting two windows, resize,
+        explicit size, minimise, surface destroyed with a pending present,
+        device destroyed with retained frames). Zero debug-layer messages.
+        Mutation-checked: skipping `Present()` fails 10 tests; removing the
+        dropped-encoder state reset is caught only by the debug layer (two
+        `ResourceBarrier` / `ClearRenderTargetView` state errors), not by an
+        assertion. Full DX12 suite: 221 passed, 43 skipped, 1 failed
+        (`Texture.DroppingTextureImmediatelyAfterSubmitTriggersNoValidationError`,
+        which fails the same way without these changes).
+      - **M1.9 question for DX12 answered: not thread-safe.** The frame ring,
+        command allocators and descriptor-slot recycling assume one recording
+        thread, and there is no per-device recording lock like Vulkan's. The
+        Windows runner encodes every window on the UI thread, so this isn't
+        hit; a raster thread per window on Windows would need the Vulkan lock
+        ported first.
+- [x] **M0.4** WebGPU (2026-11-11), on `campello_gpu`'s
+      `feature/multi-surface` branch. Each `Surface` is its own
+      `WGPUSurface` (a `GPUCanvasContext` on one `<canvas>` CSS selector),
+      configured on the shared device. The swapchain size is the canvas
+      drawing-buffer size: `createSurface(sel, w, h)` and `resize()` set
+      `canvas.width/height`, and `acquireNextTexture()` follows page-code
+      changes. Present is implicit (at the end of the browser task), so
+      `schedulePresent()` only does bookkeeping. The legacy
+      `createDefaultDevice("#canvas")` path is unchanged; its internal
+      helper was renamed `createLegacyCanvasSurface` (it clashed with the
+      new member).
+      - Verified in headless Chrome (local GPU), both ASYNCIFY and JSPI
+        builds. 10 Surface tests read canvas pixels; the full suite reports
+        `failures=0 tests=257 skipped=44` and `webgpu_browser_test` (legacy
+        canvas) passes. Mutation-checked: skipping the reconfigure on
+        canvas resize fails the resize test.
+      - **Readback finding**: once presented, a WebGPU canvas reads back as
+        transparent black through `drawImage` (like WebGL without
+        `preserveDrawingBuffer`). The tests therefore sample in the same
+        task as the submit, which is exactly the texture about to be
+        presented. Remember this for M4 web fidelity screenshots: capture
+        before yielding, or use a CDP `Page.captureScreenshot`.
+- [x] **M0.5** Deprecate `scheduleNextPresent()` and
+      `getSwapchainTextureView()` in the docs (keep them working), write the
+      CHANGELOG entry, tag a `campello_gpu` release and bump
+      `dependencies/campello_gpu.cmake`. Done 2026-11-13: campello_gpu
+      v0.29.0, pinned with `GIT_REPOSITORY`/`GIT_TAG`.
+
+### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
+
+**Status (2026-11-13): done for macOS, iOS, Android, web and Windows; the
+Linux (X11/Wayland/embedded) and GDK runners still use the legacy path,**
+which keeps working unchanged because nothing was removed. Branch
+`feature/multi-window`.
+
+**Design as built** (`inc/campello_widgets/ui/view.hpp`). How code finds its
+window, in priority order:
+1. **Owner.** Every `RenderObject` and `Element` records a `View*`
+   inherited from its **parent** when it joins the tree; only roots take the
+   ambient view. The parent must be the source of truth, because one
+   window's frame runs the shared `buildScope()` and can rebuild another
+   window's elements. Lifecycle registrations use the owner:
+   `RenderObject::pointerDispatcher()/focusManager()/textInputManager()`,
+   and invalidations go to the owning window's renderer and frame hook.
+2. **Dispatch scope.** While a `PointerDispatcher` delivers an event or
+   tick, `activeDispatcher()` returns that dispatcher, so gesture
+   recognizers and in-event code needed no changes.
+3. **Element scope.** Mount, rebuild and unmount (State `dispose()`) run
+   inside `View::Scope(element's view)`. Context-free code there
+   (`createRenderObject()`, State lifecycle, render object constructors)
+   resolves `FocusManager::activeManager()` etc. to the right window.
+4. **Legacy fallback.** The process-wide statics stay; `View::makePrimary()`
+   points them at the first window. Unit tests that install a dispatcher
+   by hand behave as before.
+
+- [x] **M1.1** `View`: owns `PointerDispatcher`, `FocusManager`,
+      `TextInputManager` and the frame-request hook; points at (doesn't
+      own) its `Renderer`. Provides a registry, `isAlive()`, `View::Scope`
+      and `View::of(context)`.
+- [x] **M1.2** Render objects register with their owner's dispatcher (about
+      55 sites). The dispatch scope covers recognizers.
+      `GestureRecognizer::dispose(dispatcher)` takes the owner's
+      dispatcher. `RenderDraggable`/`RenderDragTarget` register in their
+      constructor, so they remember that dispatcher and check
+      `PointerDispatcher::isAlive()` (new) in their destructor.
+- [x] **M1.3** `View::requestFrame()`. `FrameScheduler::scheduleFrame()`
+      (about 60 callers with no window context) also fans out to every
+      View; a clean window skips its frame cheaply. `markNeedsPaint` and
+      `markNeedsBuild` target only the owner. `hasCallback()` counts View
+      hooks.
+- [x] **M1.4** **Plan correction:** the paint-time statics
+      (`activeBackend()`, `activeDevicePixelRatio()`, paint origin) are read
+      only during layout/paint, which run in `buildFrame` on the **UI
+      thread**, not on the raster thread. Windows building one after another
+      is therefore safe as long as each frame sets them, which it does, so
+      no TSAN race exists. The real bug was `currentRenderer()`: it was set
+      only in the `Renderer` constructor, so the last-created window's
+      renderer received every window's paint notes. `buildFrame` now sets
+      it and scopes its view.
+- [x] **M1.5** `TextInputManager` is per window. **Deliberately kept
+      global:** `TextEditingController`'s single focused controller (only
+      one window has OS keyboard focus at a time).
+- [x] **M1.6** **Plan change:** one `FocusManager` **per window** instead
+      of one global manager with a root scope per window. It's simpler,
+      matches per-window key routing, and cross-window traversal isn't a
+      requirement. The global key handler and highlight mode stay global.
+      Revisit if a "focus next window" feature appears.
+- [x] **M1.7** Kept global: `TickerScheduler`, `DragManager`, `ImageCache`,
+      `HardwareKeyboard`, `ThreadChecker`, `Element::dirty_elements_`. Note
+      for M2: with N windows the ticker is ticked by each window's
+      `buildFrame` (an extra tick at the same timestamp is harmless; dedupe
+      if profiling says so).
+- [x] **M1.8** macOS, iOS, Android and web runners: View owned by the
+      window, made primary, subsystems taken from it, mount inside its
+      scope, renderer attached and detached before it's destroyed (View
+      declared first so it is destroyed last).
+- [ ] **M1.8b** Windows, Linux X11, Wayland, Linux embedded and GDK
+      runners: same mechanical migration, but they can't be built on this
+      Mac. Do it on the machine used for M0.3/M3.
+      - [x] **Windows** (2026-11-13), as part of M3.1 below.
+      - [ ] Linux X11, Wayland, Linux embedded, GDK.
+- [x] **M1.9** Vulkan with several raster threads (2026-11-12, `campello_gpu`
+      `feature/multi-surface`). **Design choice:** recording is serialized
+      per device with a frame lock (from `createCommandEncoder()` until
+      that command buffer is submitted or dropped; re-entrant for the
+      owning thread; bounded wait, then `nullptr`), instead of a frame ring
+      per thread. A ring per thread would also need deferred texture
+      destruction to wait for every thread's ring, including buffers still
+      being *recorded* on another thread. Windows therefore encode one
+      after another (like Flutter's single raster thread), while the
+      per-window stalls stay separate (surface acquire happens before the
+      encoder exists; GPU execution is asynchronous). Revisit with a ring
+      per thread only if profiling shows encoding contention.
+      - Verified on the Redmi: two threads × 300 frames on two surfaces keep
+        their own pixels. Serialization, release on a dropped encoder or
+        command buffer, and same-thread re-entry each have a test, and
+        removing each mechanism fails its test. The full gpu suite passes
+        (219 passed, 43 skipped). The gallery APK runs and fling-scrolls
+        normally. In widgets, only `Renderer::rasterFrame()` (raster
+        thread) creates encoders, so there is no UI-thread deadlock path.
+      - **Honest limit:** with the lock removed, the two-thread stress test
+        still *passed* on this driver. The race is established by code
+        reading and by Vulkan's external-synchronization rules for
+        `VkCommandPool`, not by a reproducing test. Validation layers
+        (unavailable on this phone) would be the way to catch it.
+      - DX12: check the same assumption on the M0.3 machine.
+
+**Verification**: 15 new `View` tests (`tests/universal/test_view.cpp`),
+covering ownership, parent-wins inheritance, per-window frames, dispatch
+scope, and a `Focus` subtree created while another window rebuilds.
+Mutation-checked: owner frame routing, parent inheritance and the rebuild
+scope each fail their test when removed. Full suite green. macOS gallery
+frame is pixel-identical to the pre-M1 capture (only the timing overlay
+differs). The Android gallery (Redmi) navigates, scrolls, and its
+TextField gets focus, raises the IME and receives typed text. The web
+gallery renders, navigates on click and toggles a checkbox. The iOS gallery
+renders in the Simulator (taps not automatable).
+
+### M2 — Windowing API and macOS (first platform)
+
+**Status (2026-11-12): done on macOS.** Branch `feature/multi-window`.
+
+- [x] **M2.1** `PlatformWindowing` / `PlatformWindow`
+      (`inc/campello_widgets/ui/platform_windowing.hpp`): create (title,
+      size, position, kind, parent, resizable), setTitle/setSize (requests),
+      metrics, show, requestClose, `on_close_requested` /
+      `on_metrics_changed`. `postTask()` runs work on the next UI-thread
+      turn; the default runs it immediately.
+- [x] **M2.2** `WindowController` + `Window` widget
+      (`inc/campello_widgets/widgets/window.hpp`). The `Window` element is a
+      zero-size leaf in its parent window; its child becomes the root of the
+      other window's render tree, wrapped in a `MediaQuery` for that window,
+      and belongs to that window's `View` (`Element::childView()`).
+      `destroy()` is **deferred** through `postTask()`. It unmounts the
+      hosted subtree first, then destroys the window, then calls
+      `on_destroyed`. The default close request destroys the window.
+      - Found two bugs. **(a)** `InheritedElement::unmount()` didn't unmount
+        its child, so `State`s under any `MediaQuery`/`Theme` subtree were
+        never disposed (pre-existing, fixed separately). **(b)**
+        Destroying a window synchronously from its own button's tap handler
+        crashed (`GestureArenaManager::sweep` inside the destroyed
+        dispatcher), hence the deferral.
+- [x] **M2.3** macOS. `MacPlatformWindowing`
+      (`src/macos/platform_windowing.mm`): each window is a
+      `CampelloWindow` + `CampelloMTKView` with its own `View`, its own
+      `campello_gpu::Surface` (over the view's `CAMetalLayer`), and its own
+      `Renderer` + raster thread, on the shared device. The **main window
+      now also presents through a `Surface`**, because Metal's device-wide
+      `scheduleNextPresent()` slot would race across raster threads; the
+      single-window gallery is pixel-identical to before apart from the
+      timing overlay. Supporting changes:
+      - `CampelloWindow::sendEvent:` scopes every AppKit event to its View.
+      - The view's safe-area insets come from its own renderer.
+      - `acceptsFirstMouse:` returns YES, so a click on a background
+        window acts immediately.
+      - The renderer's raster-thread check is per renderer.
+      - `FramePackage::surface` carries the window's surface to the raster
+        thread.
+      - Close requests are delivered asynchronously.
+- [x] **M2.4** `examples/macos_multi_window` (`./run_macos_multi_window.sh`):
+      main window + Inspector (with a `TextField`) + About dialog, sharing
+      one counter. `CW_MULTIWINDOW_DEMO=2` runs a self-test that sends
+      synthesized `NSEvent`s through AppKit (real event path, not the
+      dispatcher directly):
+      1. a click in the Inspector updates the counter in **all three**
+         windows;
+      2. clicking the TextField and typing "hi" lands in the Inspector's
+         field;
+      3. About's Close destroys the dialog and app state drops it.
+      Frames are captured per window via the renderer's capture
+      (`CAMPELLO_WIDGETS_CAPTURE` paths now expand `{renderer}`). 5/5 runs
+      gave identical results. Full suite: 1103/1103.
+
+**Known gaps / follow-ups** (most done 2026-11-12, together with M7)
+- [x] **Modal windows**: `WindowOptions::modal` blocks the parent window's
+      input while open (`View::addInputBlocker()`). The parent's
+      `PointerDispatcher` first cancels pointers in progress and ends hovers,
+      then drops input, and its `FocusManager` drops keys. This lives in core,
+      so it works on every platform. Platform touches:
+      - macOS: a click or key in the blocked window brings the modal forward,
+        with a beep.
+      - Web: a press on a blocked canvas focuses the modal.
+- [x] **Owned windows**: a window created with a `parent` closes with it.
+      `WindowController::forView()` maps a View to its controller.
+- [x] **App lifetime policy**: closing the main window quits the app and
+      closes every window (`WindowController::setMainWindowClosePolicy()`,
+      default `quit_app`; `keep_running` keeps the old behaviour). This is
+      implemented on macOS.
+- [x] Secondary windows follow their screen's refresh rate
+      (`windowDidChangeScreen:`). They already clear to white, the same as
+      the main window.
+- [ ] Synthesized-event self-test only. Real hand clicks weren't possible
+      here (no Accessibility permission for automation); worth a quick
+      manual pass.
+- [ ] The Metal TSAN report on `Device::submit(cmd, fence)` (see M0.1) is
+      now more relevant, with several raster threads submitting: confirm
+      it's a false positive.
+
+### M3 — Windows and Linux
+
+- [x] **M3.1** Windows (2026-11-13). The runner was rewritten around a
+      per-window host (`src/windows/win32_host.{hpp,cpp}`): each
+      `Win32Window` is an `HWND` with its own `View`, campello_gpu `Surface`
+      and `Renderer` + `D3DDrawBackend`, on one headless shared device. The
+      **main window also presents through a `Surface`** (the device is
+      created without a window), so both take one path.
+      - **Frames:** one vsync thread (`DwmFlush()`) posts a frame message to
+        a message-only host window; the UI thread then draws every window
+        that asked for one (`View::requestFrame()`). Drawing stays on the UI
+        thread (no raster threads on Windows, as before). `WM_SIZE` draws
+        immediately so live resizing doesn't show stretched frames. A frame
+        holds its renderer and surface, so a window removed by its own
+        rebuild (a popup closing itself) is safe.
+      - **Tasks:** `postTask()` queues on the host window, so tasks also run
+        inside modal loops (window drags). `WM_CLOSE` and popup deactivation
+        are delivered through it.
+      - **Input:** every message is handled inside `View::Scope(view)`.
+        Pointer coordinates are divided by that window's DPI, mouse events
+        are `PointerDeviceKind::mouse` (they used the touch default), the
+        pointer leaving a window sends an out-of-bounds move so its hovers
+        end, IME and keys go to the window's own managers, and windows are
+        Unicode (`WM_CHAR` surrogate pairs combined).
+      - **Per-monitor DPI v2:** sizes are logical (`runApp()`'s width and
+        height too, as on macOS); `WM_DPICHANGED` applies the suggested rect
+        and updates the pixel ratio. Fixed a pre-existing bug on the way:
+        `MediaQuery.logical_size` was the physical client size.
+      - **Kinds** (`src/windows/platform_windowing.cpp`): regular
+        (`WS_OVERLAPPEDWINDOW`); dialog (captioned and owned: above its
+        owner, no taskbar button, centred on it); modal (also disables its
+        owner with `EnableWindow`, the Win32 idiom: a click on the owner
+        rings and flashes the modal); popup (owned `WS_POPUP` tool window
+        with `CS_DROPSHADOW`, placed relative to the owner's client area,
+        closes when it loses activation).
+      - **Close policy:** `quit_app` posts `WM_QUIT`; `keep_running` hides
+        the main window and quits when the last window is destroyed.
+        Teardown destroys every secondary window *before* unmounting the
+        tree (their `on_destroyed` callbacks usually point into States).
+      - Also: `SystemMouseCursor` now works on Windows (no cursor handler
+        was registered), and the performance overlay's budget uses the
+        monitor's refresh rate.
+
+      `examples/windows_multi_window` (Debug, `build/windows-debug`) has the
+      macOS example's windows and three self-tests. They post real Win32
+      input messages to the HWNDs (through each window's real window
+      procedure) and save `PrintWindow` captures:
+      - `CW_MULTIWINDOW_DEMO=2`: a click in the Inspector updates the counter
+        in all windows; clicking its TextField and typing "hi" lands there,
+        while typing into the main window doesn't; About's Close destroys it.
+      - `CW_MULTIWINDOW_DEMO=3`: Preferences (modal) disables the main window
+        and a click on it doesn't count; +10 and Done work; the main window
+        works again afterwards. The Options popup is a separate window that
+        extends below the main window; an item runs and closes it; a click
+        elsewhere, Escape, and losing activation each close it. Closing the
+        main window with two other windows open quits cleanly (exit 0).
+      - `CW_MULTIWINDOW_DEMO=4`: with `keep_running`, closing the main window
+        leaves the Inspector working; closing it quits.
+      5 runs of each gave identical results, every run exited 0, and the
+      D3D12 debug layer reported nothing. Captures (200% scaling) show the
+      right content in every window.
+
+      Regressions: the single-window gallery renders through the new path
+      at 200% and re-lays out on a live resize (its only debug-layer output
+      is `ClearRenderTargetView` clear-value performance hints from
+      offscreen textures). Unit tests: 900 passed, 69 skipped on Windows.
+      - Found and fixed along the way: **an element could rebuild in the
+        middle of its own unmount** (`Element::unmounting_`, test
+        `ElementUnmount.*`). `PopupWindowAnchor.FallsBackToTheWindowsOverlay...`
+        was a use-after-free that crashed under the Windows debug heap (and
+        cascaded into 28 more failures) but was silent on macOS. Also, the
+        Windows unit tests could run a stale `campello_widgets.dll` (a
+        POST_BUILD copy; now an OUTPUT command that depends on the DLLs).
+
+      **Not done / not verified on Windows:**
+      - Input was posted as window messages, not hardware input (`SendInput`
+        would move the user's real mouse), so the system's routing to a
+        disabled owner (the modal ring/flash) wasn't exercised; the owner's
+        `EnableWindow` state was checked instead. A manual pass is worth it.
+      - One vsync thread for all windows (DWM's clock), not each window's
+        own display.
+      - Per-monitor DPI changes (dragging between monitors) and IME were not
+        exercised (one monitor here).
+      - The Release build of the example wasn't run (Debug only).
+      - Popups open below the anchor without flipping at the screen edge
+        (same as macOS).
+- [ ] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each.
+- [ ] **M3.3** Linux Wayland: `g_wayland_state` becomes one state per
+      window, with multiple `xdg_toplevel`s. Client-side positioning isn't
+      possible on Wayland, so position requests are no-ops there.
+
+### M4 — Web: several canvases
+
+**Status (2026-11-12): done (M4.2 experimental).** Branch `feature/multi-window`.
+
+- [x] **M4.1** Several canvases through the same windowing API as desktop,
+      not a separate `ViewCollection`: the web runner installs a
+      `PlatformWindowing` (`src/web/platform_windowing.cpp`), so
+      `WindowController` + `Window` work unchanged. A web "window" is
+      either:
+      - an **existing canvas** laid out by the page:
+        `WindowOptions::host_element = "#sidebar"`; or
+      - a **new canvas** the framework creates and removes. It goes inside
+        the page's `[data-cw-windows]` element if there is one; otherwise
+        it floats (`position: fixed`) at `position`, or cascaded. Dialogs
+        are centred on their parent canvas.
+
+      Each canvas is a `WebCanvas` (`src/web/web_canvas.*`) with its own
+      `View`, its own campello_gpu `Surface` (`GPUCanvasContext`) and its
+      own `Renderer`, on one shared `GPUDevice`. The `runApp()` canvas is
+      one too, now that the device is created without a canvas.
+      - **Frames:** one `requestAnimationFrame` loop draws every canvas that
+        requested a frame.
+      - **Pointer input:** a press goes to its canvas, which then gets the
+        moves and the release (drags may leave it). Hover goes to the
+        **topmost** canvas under the pointer (`elementFromPoint`), and the
+        canvas it left gets an out-of-bounds move, so its hovers end even
+        when a canvas above covers it.
+      - **Keys and paste:** go to the last canvas pressed or shown.
+      - **Cursors:** the CSS cursor is set per canvas, on the ambient
+        View's canvas.
+
+      `examples/web_multi_window` (main canvas, a page-laid-out sidebar, a
+      floating Inspector with a `TextField`, an About dialog, a pop-out) was
+      verified in headless Chrome over CDP with real `Input.dispatch*`
+      events:
+      - the counter is shared across all canvases;
+      - "Close" on a floating canvas over the main canvas's "+1" doesn't
+        reach "+1";
+      - keys typed while the main canvas has focus don't reach the
+        Inspector's field (the field shows "abe" after "ab" in it, "cd" on
+        main, "e" back in it);
+      - per-canvas cursors work, and hover leaves the canvas underneath;
+      - closing removes the `<canvas>`, and reopening creates a fresh one;
+      - resizing the sidebar from the page re-lays out both canvases.
+
+      The single-canvas gallery is **pixel-identical** to before.
+- [x] **M4.2** (experimental) `WindowOptions::web_popup`: a same-origin
+      `window.open()` whose canvas is drawn with the opener's `GPUDevice`
+      (prototyped first: a popup canvas accepts it). The popup's canvas and
+      root element are registered in emscripten's `specialHTMLTargets`, so
+      `Device::createSurface()`, canvas sizing and the html5 event APIs
+      resolve them like page elements. The popup's moves, releases and
+      keys go to its canvas.
+      - **Closing:** when the user closes the popup, the next frame
+        notices, stops drawing it and fires `on_close_requested` (it can't
+        be vetoed any more).
+      - **Verified:** clicks in the popup update the page's canvases; the
+        page updates the popup; the user closing it reaches the app; it can
+        be reopened.
+
+**Known gaps / follow-ups**
+- [ ] Popups: they must be opened from a user gesture. Otherwise the
+      browser blocks them and `WindowController::create()` returns nullptr;
+      that path is not exercised by a test. A drag that leaves the popup
+      window loses its release. Keys in a popup are untested (the demo's
+      pop-out has no text field). Size is a request: headless Chrome
+      ignored it, and the canvas follows the popup's actual size.
+- [ ] Document Picture-in-Picture (Chromium only) is not tried.
+- [ ] Touch / pen input on the web is still mouse-only (pre-existing,
+      single canvas too).
+- [ ] Floating canvases can't be moved or resized by the user (no
+      title bar); the page's CSS decides.
+- [ ] A host canvas keeps its last frame after its window is destroyed.
+
+### M5 — iPadOS (multiple scenes)
+
+**Status (2026-11-12): done (Simulator).** Branch `feature/multi-window`.
+
+- [x] **M5.1** The iOS runner uses the `UIScene` lifecycle.
+      - **Delegate in code:** the app delegate configures
+        `CampelloSceneDelegate` for every scene, so apps only add
+        `UIApplicationSceneManifest` to Info.plist (no class names). The
+        gallery now declares it, with `UIApplicationSupportsMultipleScenes`
+        false.
+      - **App-level state:** the widget tree, the main `View`, the GPU device
+        and the ticker moved out of the view into the app. A scene only
+        *hosts* a View (`CampelloUIWindow` + `CampelloViewController` +
+        `CampelloMTKView`), so iPadOS can disconnect the main scene and
+        connect it again later without losing the tree.
+      - **Input scoping:** touches and presses are scoped to their window's
+        View (`CampelloUIWindow::sendEvent:`), and so is text input.
+      - Found while verifying: because the delegate implements
+        `configurationForConnectingSceneSession:`, UIKit uses scenes **even
+        without the manifest**. The old window-only path then left a black
+        screen, so a window of our own is now only a fallback, used if no
+        scene connects.
+      - **Regressions:** the gallery matches its M1 capture on iPhone (only
+        the clock and timing overlay differ), with and without the
+        manifest, and renders its iPad layout on iPad.
+- [x] **M5.2** iPadOS multiple windows (`src/ios/platform_windowing.mm`).
+      - **Opening:** `WindowController::create()` asks for a scene
+        (`activateSceneSessionForRequest:`, or
+        `requestSceneSessionActivation:` before iOS 17) and returns a
+        *pending* window at once. Its View exists and the subtree mounts;
+        the content appears when the scene connects, matched by an id in an
+        `NSUserActivity`. The id is also kept in the session's `userInfo`,
+        so a window restored from an earlier run is closed instead of
+        becoming a duplicate main window.
+      - **Windows iPadOS opens by itself** (the dock or the app switcher's
+        "+", and external displays) go to the new
+        `WindowController::setPlatformWindowHandler()`. Without a handler
+        they are closed, and an external display keeps mirroring. New
+        `WindowKind::external_display` and `PlatformWindow::kind()`.
+      - **Closing:** closing a window destroys its scene. A scene that
+        disconnects is reported as a close request.
+      - **iPhone:** `createWindow()` returns nullptr
+        (`supportsMultipleScenes` is false).
+
+      `examples/ios_multi_window` (`CW_SCENES_DEMO=2`) on the iPad Pro 13"
+      Simulator, iOS 18.6, 3/3 identical runs:
+      1. the Inspector opens as a second window in Split View
+         (375×1376 @2x);
+      2. two taps dispatched into its View update the counter in both
+         windows (screenshots);
+      3. closing it disconnects its scene (scene count 2 → 1);
+      4. a scene requested like the dock does reaches the handler and shows
+         the counter;
+      5. closing that one disconnects it too.
+
+      On the iPhone Simulator, create() returns nullptr and UIKit refuses
+      extra scenes ("does not support multiple scenes").
+      Unit tests: handler + kind (1105/1105).
+
+**Known gaps / follow-ups**
+- [ ] Taps were injected into the window's View (no UIKit touch synthesis
+      here: no idb/XCTest UI automation). UIKit routes each window's
+      touches to its own `CampelloMTKView`, but a manual tap pass on an iPad
+      is worth doing.
+- [ ] Destroying a window whose scene is in the **background** (e.g.
+      replaced in Split View) doesn't disconnect it within seconds: iPadOS
+      defers it. The window is gone from the app, but the scene lingers in
+      the app switcher for a while.
+- [ ] A scene disconnecting is treated as "closed", but iPadOS also
+      disconnects background scenes to reclaim memory and may reconnect them
+      later (the session survives). Such a window is closed in the app; when
+      its scene comes back, its id no longer matches and the scene is
+      destroyed. Keeping windows alive across that needs a policy.
+- [ ] External displays: implemented (non-interactive role, offered to the
+      handler) but not exercised; the Simulator's external display is only
+      reachable from its menu.
+- [ ] `setSize()` is ignored (iPadOS decides sizes). `dialog` is an
+      ordinary window. Main-window reconnection after a disconnect is
+      untested.
+- [ ] Each window still renders through `view.currentDrawable` +
+      `Device::scheduleNextPresent()` on the main thread, one window at a
+      time: safe today (no raster threads on iOS), but switching to the
+      per-window `Surface` path as on macOS would remove the shared slot.
+
+### M6 — Android
+
+**Status (2026-11-12): done on the Redmi Note 10 Pro (Android 13, MIUI).**
+Branch `feature/multi-window`.
+
+- [x] **M6.1** `android_native_app_glue` replaced by our own NativeActivity
+      host (`src/android/run_app.cpp`).
+      - **New entry point (breaking):** apps call
+        `runApp(activity, saved_state, size, make_root)` from their
+        `ANativeActivity_onCreate`, which Android calls for **every**
+        activity instance.
+      - **One UI thread:** every NativeActivity callback, input queue (on the
+        main looper), AChoreographer vsync and `postTask()` (a pipe on the
+        main looper) arrives on the Java main thread, which is the one UI
+        thread.
+      - **Per activity:** each activity is an `ActivityHost` with its own
+        campello_gpu `Surface` (on its `ANativeWindow`), `Renderer` and
+        `RasterThread`, on a windowless shared Vulkan device.
+      - **App level:** the tree, main `View` and device live for the process,
+        so backgrounding the app keeps state. The glue tore the whole tree
+        down whenever the window went away; verified: Home and relaunch keep
+        the count.
+      - **Per-window input:** touches are relative to the content rect, and
+        the soft keyboard is per activity.
+- [x] **M6.2** Extra windows are new instances of the app's own activity
+      class (no Java code needed).
+      - **Launch:** `FLAG_ACTIVITY_NEW_DOCUMENT | MULTIPLE_TASK`, carrying a
+        window id extra, with ActivityOptions launch bounds in freeform.
+        `LAUNCH_ADJACENT` is added only when the app is already in
+        multi-window mode: from full screen, MIUI otherwise entered split
+        screen with the new window parked off screen.
+      - **Closing:** closing the window (`finishAndRemoveTask`) removes its
+        task, and its activity being destroyed is a close request. A stale
+        window activity (restored from Recents after process death) is
+        finished. Other launcher instances go to the platform-window handler.
+
+      Demo: the gallery app with `adb shell setprop debug.cw_multiwindow 1`
+      (`multi_window_demo.cpp`). Verified with real `adb` input:
+      1. "Open inspector window" opens a second task;
+      2. taps in it update the counter shown in both windows;
+      3. the soft keyboard opens in the Inspector's activity, typed text lands
+         in its field, and the layout moves above the keyboard;
+      4. Close removes its task from Recents;
+      5. removing the task (`am stack remove`, as a Recents swipe) reports a
+         close;
+      6. Home and relaunch keep state;
+      7. losing the main activity: the Inspector keeps working, and a new
+         main activity later shows the same tree;
+      8. rotation renders correctly in both windows.
+
+      Gallery regression pass: navigation, scrolling (~120 fps) and text
+      input. campello_gpu Android suite: 219 passed / 43 skipped (unchanged).
+      - Found and fixed along the way:
+        1. **Android text had red and blue swapped**, in every app since the
+           Android text rasterizer existed (`Bitmap` buffers are RGBA, the
+           contract is BGRA).
+        2. **Rotation left frames cropped**: campello_gpu's Vulkan Surface
+           now sizes Android swapchains from the `ANativeWindow`, because
+           `currentExtent` lags and Android never reports out-of-date. The
+           renderer also repaints fully on any window metrics change.
+        3. stdout to logcat is line-buffered.
+
+**Known gaps / follow-ups**
+- [ ] Every window is the same activity component, so launching the app
+      while a window's task exists brings *that* task back (Android matches
+      it). The main window returns once those are closed. A distinct
+      component would need app-side manifest/Java (an `<activity-alias>`
+      can't set `taskAffinity`).
+- [ ] Back on a window moves its task to the background (Android 12+
+      default for root activities) instead of closing it.
+- [ ] `Presentation` on secondary displays needs a Java `Presentation`
+      subclass: not done (no secondary display to test; the
+      `overlay_display_devices` developer option could simulate one).
+- [ ] Split-screen / freeform placement depends on the launcher: launch
+      bounds and adjacent launch are untested on a freeform-capable device
+      (Android 15 desktop windowing, DeX, ChromeOS).
+- [ ] The platform-window handler path (a second launcher instance) is not
+      reachable on this device (the launcher reuses the task).
+- [ ] An activity destroyed by the system to reclaim memory is treated as
+      closed, like iPadOS (see M5).
+
+### M7 — Native popup windows
+
+**Status (2026-11-12): done on macOS and the web; Overlay fallback on iOS
+and Android.**
+
+- [x] `WindowKind::popup`: a borderless window placed relative to its
+      parent's content, which moves with the parent and closes when it loses
+      focus.
+      - macOS: a key-capable `CampelloWindow` child window at
+        `NSPopUpMenuWindowLevel`.
+      - Web: a floating canvas (z-index above dialogs).
+      - iOS and Android return nullptr.
+- [x] `PopupWindowAnchor` widget: `child` is the anchor, and `popup` opens
+      below it while `open` is true. It uses a native popup window where
+      there is one, and otherwise an entry in the window's Overlay at the
+      same place. It is dismissed by a press anywhere else in the parent
+      window (`PointerDispatcher::addPointerDownObserver()`; presses on the
+      anchor itself are left to it), by Escape, or by the popup losing
+      focus.
+- [x] **Per-window overlays**: `Overlay::insert()` targets the overlay of the
+      window being handled (`Overlay::forView(View::current())`), and every
+      window opened with `WindowController` gets its own Overlay, so
+      dialogs, menus and tooltips opened from a secondary window appear in
+      it. Before this, they went to the last-created overlay, wherever it
+      was.
+- [x] **Bug found: renderer destroyed inside its own frame.**
+      `Element::buildScope()` is global, so a window's `buildFrame()` can run
+      a rebuild that removes that same window (a popup closing itself).
+      - The web, Android and iOS hosts now hold their renderer for the whole
+        frame (macOS already did, through the delegate).
+      - On the web, a renderer's destructor waits for the GPU, which yields
+        to the browser (ASYNCIFY), and the window's own deferred destroy ran
+        during that yield. Renderers are now released at the start of the
+        next frame, and `WindowElement::dropChild()` clears its state before
+        calling out.
+- [x] Verified:
+      - **macOS** (`examples/macos_multi_window`, `CW_MULTIWINDOW_DEMO=3`,
+        synthesized AppKit events): a click in the blocked main window
+        doesn't count and brings Preferences back to the front; after Done
+        the main window works again. The menu window extends 70 points below
+        the main window. An item runs and closes the menu, and a click
+        elsewhere or Escape closes it. Closing the main window quits the app.
+        The last 13 runs were identical; one earlier run lost the item click
+        (the menu closed without running it), not reproduced since.
+      - **Web** (headless Chrome, real input events), both Release and Debug
+        builds: the modal blocks; the menu canvas reaches over the sidebar
+        canvas; an item runs; a press on another canvas closes the menu and
+        still reaches that canvas; Escape closes it.
+      - **Android** (Redmi, real taps): the Overlay fallback menu shows; an
+        item runs; a tap outside closes it.
+      - **Unit tests**: 13 new ones (modal, owned windows, per-window
+        overlays, PopupWindowAnchor, native and fallback).
+      - **Regressions:** 1117/1117 unit tests pass, and the web gallery is
+        pixel-identical with its overlay dropdown working.
+
+**Known gaps / follow-ups (M2 + M7)**
+- [x] Windows: modal, popups and the close policy (M3.1, 2026-11-13).
+- [ ] Linux: modal, popups and the close policy aren't implemented (M3).
+      The web and iPad have no main-window close policy (no such concept).
+- [ ] An app's main window needs an `Overlay` in its tree for the fallback
+      (secondary windows always have one); without it,
+      `PopupWindowAnchor` logs a warning.
+- [ ] Popups open below the anchor at a fixed offset: no flipping or
+      clamping to the screen or page edge yet.
+- [ ] Existing overlay-based widgets (`PopupMenuButton`, `DropdownButton`,
+      `Tooltip`) don't use `PopupWindowAnchor` yet, so they still clip to
+      their window.
+- [ ] The macOS self-test runs with the app inactive (no key window), so
+      popup focus is exercised through direct events; a manual pass is still
+      worth doing.
+- [ ] Earlier macOS re-checks after M4 and M5 (2026-11-12) ran a stale
+      example binary (wrong target name in the build command). The current
+      code has since been verified with demo 2 and demo 3.
+
+**Out of scope**: GDK/Xbox and Android TV (single window by platform design).
+
+**Found during M0.2 verification (pre-existing, unrelated to multi-window)**:
+- [ ] Gallery "STACK + POSITIONED" card renders empty (the 3 coloured
+      `Positioned` boxes are missing) on **both** macOS/Metal and Android/Vulkan,
+      so it's a widget or layout bug, not a GPU-backend one
+      (`examples/gallery/gallery_app.cpp` `stack_bg`).
+- [x] iOS gallery didn't build either (same missing `campello_fluent` link).
+      Fixed 2026-11-12.
+- [x] Windows gallery: links `campello_fluent` (1a24972); builds and runs
+      (verified 2026-11-13).
+- [x] Linux gallery: it linked only `campello_widgets` (all four design
+      systems needed), and Linux had no `VideoPlayerController` at all, so
+      it didn't link. Fixed 2026-11-13: design systems linked, plus a stub
+      `src/linux/video_player_controller.cpp` (like the web's: sources never
+      become ready). Verified in Docker (Ubuntu 24.04, lavapipe, Xvfb): the
+      full Linux build (library, tests, both examples) succeeds, 1119/1119
+      tests pass, and the gallery renders through the X11 runner.
+- [x] Android gallery didn't build: `gallery_app.cpp` includes
+      `campello_fluent` but `android/app/src/main/cpp/CMakeLists.txt` didn't
+      link it. Fixed 2026-11-11.
+- [ ] Android Studio's bundled JBR is now JDK 25, which Gradle 8.13 rejects
+      (the error is just "25.0.3"). Build with Gradle's JDK 17 instead:
+      `JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-17-*/jdk-17*/Contents/Home`.
+- [x] `dependencies/campello_gpu.cmake` had a committed "temporary
+      local-testing override" (sibling `../campello_gpu` `SOURCE_DIR`,
+      since #7). Removed 2026-11-13: `GIT_REPOSITORY`/`GIT_TAG v0.29.0` only.
+
+---
+
 ## Backlog / Future
 
 - Accessibility (semantic tree, screen reader support)

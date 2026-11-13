@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>campello_widgets</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #e9e9ee; }
+  /* Two canvases laid out by the page: the app (runApp) and a sidebar the
+     app opens as a window with WindowOptions::host_element = "#sidebar".
+     Windows without a host element float above the page. */
+  #layout { display: flex; height: 100%; gap: 1px; }
+  #canvas { flex: 1; min-width: 0; display: block; outline: none; }
+  #sidebar { width: 280px; display: block; outline: none; }
+  #status { position: fixed; left: 12px; bottom: 12px; font: 13px system-ui, sans-serif; color: #888; }
+</style>
+</head>
+<body>
+<div id="layout">
+  <canvas id="canvas" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+  <canvas id="sidebar" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+</div>
+<div id="status"></div>
+<script>
+  var Module = {
+    print: function (t) { console.log(t); },
+    printErr: function (t) { console.error(t); },
+    setStatus: function (t) { document.getElementById('status').textContent = t; },
+  };
+  if (!navigator.gpu) {
+    document.getElementById('status').textContent = 'This browser has no WebGPU.';
+  }
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

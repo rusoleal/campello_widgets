@@ -24,6 +24,15 @@ namespace systems::leal::campello_widgets
      *     return runApp("My App", std::make_shared<MyApp>());
      * }
      * @endcode
+     *
+     * More canvases (Phase 17): WindowController / the Window widget work
+     * as on desktop, with every canvas drawn by this one WebGPU device. A
+     * window is an existing canvas (WindowOptions::host_element, e.g.
+     * "#sidebar") or a new one: placed inside the page's
+     * `[data-cw-windows]` element if there is one, otherwise floating above
+     * the page (dialogs centred on their parent). WindowOptions::web_popup
+     * opens a same-origin popup window instead (experimental; needs a user
+     * gesture). See examples/web_multi_window.
      */
     int runApp(
         const std::string& title,

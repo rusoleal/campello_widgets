@@ -3,6 +3,10 @@
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 #include <campello_widgets/ui/renderer.hpp>
+#include <campello_widgets/ui/view.hpp>
+#include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/focus_manager.hpp>
+#include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/diagnostics/diagnostic_property.hpp>
 
 #include <iostream>
@@ -15,8 +19,52 @@ namespace systems::leal::campello_widgets
     std::unordered_set<const RenderObject*> RenderObject::s_alive_;
 
     RenderObject::RenderObject()
+        : view_(View::current())
     {
         s_alive_.insert(this);
+    }
+
+    View* RenderObject::view() const noexcept
+    {
+        return View::isAlive(view_) ? view_ : nullptr;
+    }
+
+    PointerDispatcher* RenderObject::pointerDispatcher() const noexcept
+    {
+        if (View* v = view()) return &v->pointerDispatcher();
+        return PointerDispatcher::activeDispatcher();
+    }
+
+    FocusManager* RenderObject::focusManager() const noexcept
+    {
+        if (View* v = view()) return &v->focusManager();
+        return FocusManager::activeManager();
+    }
+
+    TextInputManager* RenderObject::textInputManager() const noexcept
+    {
+        if (View* v = view()) return &v->textInputManager();
+        return TextInputManager::activeManager();
+    }
+
+    namespace
+    {
+        // Invalidations go to the owning window's renderer and frame hook;
+        // objects outside any view (unit tests) keep the old global path.
+        Renderer* ownerRenderer(const RenderObject& ro) noexcept
+        {
+            if (View* v = ro.view())
+                if (Renderer* r = v->renderer()) return r;
+            return detail::currentRenderer().load(std::memory_order_acquire);
+        }
+
+        void requestOwnerFrame(const RenderObject& ro)
+        {
+            if (View* v = ro.view(); v && v->hasFrameRequestCallback())
+                v->requestFrame();
+            else
+                FrameScheduler::scheduleFrame();
+        }
     }
 
     RenderObject::~RenderObject()
@@ -90,8 +138,8 @@ namespace systems::leal::campello_widgets
         // just when reaching the true root. Both calls are idempotent/cheap
         // to call repeatedly (see FrameScheduler's and Renderer::
         // notePaintRequested()'s doc comments).
-        FrameScheduler::scheduleFrame();
-        if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+        requestOwnerFrame(*this);
+        if (auto* r = ownerRenderer(*this))
             r->notePaintRequested();
 
         // Stop bubbling the full signal once we reach a node that owns its
@@ -116,8 +164,8 @@ namespace systems::leal::campello_widgets
         if (needs_descendant_paint_) return;
         needs_descendant_paint_ = true;
 
-        FrameScheduler::scheduleFrame();
-        if (auto* r = detail::currentRenderer().load(std::memory_order_acquire))
+        requestOwnerFrame(*this);
+        if (auto* r = ownerRenderer(*this))
             r->notePaintRequested();
 
         // Unlike markNeedsPaint(), this weaker signal must cross every

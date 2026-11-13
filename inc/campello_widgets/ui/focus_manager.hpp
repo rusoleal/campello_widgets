@@ -103,6 +103,11 @@ namespace systems::leal::campello_widgets
          */
         void handleKeyEvent(const KeyEvent& event);
 
+        /// While blocked (a modal window is open over this one, Phase 17),
+        /// handleKeyEvent() drops key events.
+        void setInputBlocked(bool blocked) noexcept { input_blocked_ = blocked; }
+        bool isInputBlocked() const noexcept { return input_blocked_; }
+
         // ------------------------------------------------------------------
         // Tab traversal
         // ------------------------------------------------------------------
@@ -221,6 +226,7 @@ namespace systems::leal::campello_widgets
         static std::function<bool(const KeyEvent&)> globalKeyHandler();
 
     private:
+        bool input_blocked_ = false;
         // Tries `event` against `node`, then each ancestor in turn (see
         // FocusNode::parent()'s doc comment), stopping at the first one
         // whose on_key returns true. Returns true iff something consumed

@@ -34,16 +34,16 @@ namespace systems::leal::campello_widgets
 
     RenderGestureDetector::~RenderGestureDetector()
     {
-        tap_recognizer_->dispose();
-        secondary_tap_recognizer_->dispose();
-        tertiary_tap_recognizer_->dispose();
-        long_press_recognizer_->dispose();
-        pan_recognizer_->dispose();
-        horizontal_drag_recognizer_->dispose();
-        vertical_drag_recognizer_->dispose();
-        scale_recognizer_->dispose();
-        force_press_recognizer_->dispose();
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        tap_recognizer_->dispose(pointerDispatcher());
+        secondary_tap_recognizer_->dispose(pointerDispatcher());
+        tertiary_tap_recognizer_->dispose(pointerDispatcher());
+        long_press_recognizer_->dispose(pointerDispatcher());
+        pan_recognizer_->dispose(pointerDispatcher());
+        horizontal_drag_recognizer_->dispose(pointerDispatcher());
+        vertical_drag_recognizer_->dispose(pointerDispatcher());
+        scale_recognizer_->dispose(pointerDispatcher());
+        force_press_recognizer_->dispose(pointerDispatcher());
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -52,14 +52,14 @@ namespace systems::leal::campello_widgets
         {
             registered_node_->on_key           = nullptr;
             registered_node_->on_focus_changed = nullptr;
-            if (auto* fm = FocusManager::activeManager())
+            if (auto* fm = focusManager())
                 fm->unregisterNode(registered_node_.get());
         }
     }
 
     void RenderGestureDetector::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
@@ -67,7 +67,7 @@ namespace systems::leal::campello_widgets
         attached_ = true;
         if (registered_node_)
         {
-            if (auto* fm = FocusManager::activeManager())
+            if (auto* fm = focusManager())
             {
                 fm->registerNode(registered_node_.get());
                 if (autofocus_) fm->requestFocus(registered_node_.get());
@@ -81,23 +81,23 @@ namespace systems::leal::campello_widgets
 
     void RenderGestureDetector::detach()
     {
-        tap_recognizer_->dispose();
-        secondary_tap_recognizer_->dispose();
-        tertiary_tap_recognizer_->dispose();
-        long_press_recognizer_->dispose();
-        pan_recognizer_->dispose();
-        horizontal_drag_recognizer_->dispose();
-        vertical_drag_recognizer_->dispose();
-        scale_recognizer_->dispose();
-        force_press_recognizer_->dispose();
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        tap_recognizer_->dispose(pointerDispatcher());
+        secondary_tap_recognizer_->dispose(pointerDispatcher());
+        tertiary_tap_recognizer_->dispose(pointerDispatcher());
+        long_press_recognizer_->dispose(pointerDispatcher());
+        pan_recognizer_->dispose(pointerDispatcher());
+        horizontal_drag_recognizer_->dispose(pointerDispatcher());
+        vertical_drag_recognizer_->dispose(pointerDispatcher());
+        scale_recognizer_->dispose(pointerDispatcher());
+        force_press_recognizer_->dispose(pointerDispatcher());
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
         if (registered_node_)
         {
-            if (auto* fm = FocusManager::activeManager())
+            if (auto* fm = focusManager())
                 fm->unregisterNode(registered_node_.get());
             registered_node_->setOwner(nullptr);
         }
@@ -135,7 +135,7 @@ namespace systems::leal::campello_widgets
         if (desired.get() == registered_node_.get())
             return;
 
-        auto* fm = FocusManager::activeManager();
+        auto* fm = focusManager();
 
         if (registered_node_)
         {

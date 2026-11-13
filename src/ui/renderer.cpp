@@ -1,4 +1,7 @@
 #include <campello_widgets/ui/renderer.hpp>
+#include <campello_widgets/ui/raster_thread.hpp>
+#include <campello_gpu/surface.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/paint_context.hpp>
 #include <campello_widgets/ui/post_frame_callbacks.hpp>
 #include <campello_widgets/widgets/element.hpp>
@@ -174,8 +177,18 @@ namespace systems::leal::campello_widgets
         const uint64_t now_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(now_tp).count();
 
-        if (auto* d = PointerDispatcher::activeDispatcher())
-            d->tick(now_ms);
+        // With several windows (Phase 17) each one's frame runs here in
+        // turn on the UI thread: make this window ambient, and make this
+        // renderer the one paint()-time dirty-region notes and other
+        // currentRenderer() users report to. It used to be set only by the
+        // constructor, so the last-created window's renderer won.
+        View::Scope view_scope(view_ ? view_ : View::current());
+        detail::currentRenderer().store(this, std::memory_order_release);
+
+        PointerDispatcher* dispatcher = (view_ && View::isAlive(view_))
+            ? &view_->pointerDispatcher() : PointerDispatcher::activeDispatcher();
+        if (dispatcher)
+            dispatcher->tick(now_ms);
 
         if (auto* ts = TickerScheduler::active())
             ts->tick(now_ms);
@@ -305,13 +318,35 @@ namespace systems::leal::campello_widgets
 
     bool Renderer::rasterFrame(const FramePackage& package)
     {
-        if (ThreadChecker::rasterInstance().hasBinding())
-            ThreadChecker::rasterInstance().assertOnBoundThread("Renderer::rasterFrame");
+        // Each window's renderer must always be rasterized on the same raster
+        // thread (its window's). Bound on the first call from a RasterThread
+        // worker; platforms that rasterize on the UI thread aren't checked.
+        if (RasterThread::isCurrentThreadRasterThread())
+        {
+            const auto self = std::this_thread::get_id();
+            std::thread::id expected{};
+            if (!raster_thread_id_.compare_exchange_strong(expected, self) && expected != self)
+            {
+#ifndef NDEBUG
+                std::fprintf(stderr, "[campello_widgets] FATAL: Renderer::rasterFrame called from "
+                                     "a different raster thread than this renderer's.\n");
+                std::abort();
+#endif
+            }
+        }
 
         // target may be nullptr on Vulkan — that signals "render to swapchain".
         // campello_gpu's beginRenderPass acquires the swapchain image automatically
         // when view == nullptr, so we do not guard against null here.
         std::shared_ptr<campello_gpu::TextureView> target = package.target;
+
+        // Per-window surface: acquire this frame's image here, on the raster
+        // thread that will also present it (see FramePackage::surface).
+        if (!target && package.surface)
+        {
+            target = package.surface->acquireNextTexture();
+            if (!target) return false;  // minimised / out of date / GPU behind: skip
+        }
 
         ++frame_counter_;
         evictStaleGpuCaches();
@@ -468,11 +503,15 @@ namespace systems::leal::campello_widgets
         // Schedule swapchain presentation just before our submit() so that
         // nested submit() calls (e.g. from offscreen renderers triggered
         // during the layout pass) cannot steal the drawable.
-        if (package.retained_drawable && !capture_pass_) {
+        if (package.retained_drawable && !package.surface && !capture_pass_) {
             device_->scheduleNextPresent(package.retained_drawable.get());
         }
 
         auto cmd_buffer = encoder->finish();
+        // A per-window surface presents with *this* command buffer only.
+        if (package.surface && cmd_buffer && !capture_pass_) {
+            package.surface->schedulePresent(cmd_buffer);
+        }
         markSubPhase("finish");
 
         // TEMP diagnostic — measuring real GPU execution time (not just
@@ -541,6 +580,11 @@ namespace systems::leal::campello_widgets
             env_capture_read_ = true;
             if (const char* path = std::getenv("CAMPELLO_WIDGETS_CAPTURE"); path && *path) {
                 env_capture_path_ = path;
+                // Several windows (Phase 17) each have a renderer: "{renderer}"
+                // in the path becomes 0, 1, 2... in the order renderers start.
+                static int s_capture_renderer_index = 0;
+                if (const auto at = env_capture_path_.find("{renderer}"); at != std::string::npos)
+                    env_capture_path_.replace(at, 10, std::to_string(s_capture_renderer_index++));
                 env_capture_tick_ = 60;
                 if (const char* frame = std::getenv("CAMPELLO_WIDGETS_CAPTURE_FRAME"))
                     env_capture_tick_ = std::strtoull(frame, nullptr, 10);

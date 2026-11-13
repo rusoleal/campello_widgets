@@ -292,6 +292,12 @@ AndroidTextRasterizer::Bitmap AndroidTextRasterizer::rasterize(const TextSpan& s
         env->DeleteLocalRef(byte_buffer);
     }
 
+    // An ARGB_8888 Bitmap's buffer is R,G,B,A bytes; TextBitmap::pixels is
+    // BGRA8 (uploaded as bgra8unorm). Without this, coloured text came out
+    // with red and blue swapped (blue as orange, teal as olive).
+    for (size_t i = 0; i + 3 < bmp.pixels.size(); i += 4)
+        std::swap(bmp.pixels[i], bmp.pixels[i + 2]);
+
     env->DeleteLocalRef(paint);
     env->DeleteLocalRef(canvas);
     env->DeleteLocalRef(bitmap);

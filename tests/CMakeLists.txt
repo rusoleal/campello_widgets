@@ -61,22 +61,37 @@ if(UNIVERSAL_TEST_SOURCES)
         campello_fluent
     )
 
-    # On Windows the DLLs must live next to the test EXE so it can load them.
+    # On Windows the DLLs must live next to the test EXEs so they can load
+    # them. An OUTPUT-based command that DEPENDS on the DLLs, not a POST_BUILD
+    # step on the executables: POST_BUILD only reruns when an executable
+    # relinks, so a change confined to campello_widgets.dll (most library
+    # edits) left the tests running a stale copy of it (see the same note in
+    # examples/gallery/windows/CMakeLists.txt).
     if(WIN32)
-        add_custom_command(TARGET campello_widgets_tests POST_BUILD
+        set(_cw_test_dll_stamp ${CMAKE_CURRENT_BINARY_DIR}/campello_widgets_tests_dlls.stamp)
+        add_custom_command(
+            OUTPUT  ${_cw_test_dll_stamp}
+            COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:campello_widgets_tests>
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:campello_widgets>
                 $<TARGET_FILE:campello_gpu>
                 $<TARGET_FILE:campello_image>
                 $<TARGET_FILE_DIR:campello_widgets_tests>
-        )
-        add_custom_command(TARGET campello_widgets_thematic_fidelity POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 $<TARGET_FILE:campello_widgets>
                 $<TARGET_FILE:campello_gpu>
                 $<TARGET_FILE:campello_image>
                 $<TARGET_FILE_DIR:campello_widgets_thematic_fidelity>
+            COMMAND ${CMAKE_COMMAND} -E touch ${_cw_test_dll_stamp}
+            DEPENDS campello_widgets campello_gpu campello_image
+                    $<TARGET_FILE:campello_widgets>
+                    $<TARGET_FILE:campello_gpu>
+                    $<TARGET_FILE:campello_image>
+            VERBATIM
         )
+        add_custom_target(campello_widgets_tests_copy_dlls DEPENDS ${_cw_test_dll_stamp})
+        add_dependencies(campello_widgets_tests campello_widgets_tests_copy_dlls)
+        add_dependencies(campello_widgets_thematic_fidelity campello_widgets_tests_copy_dlls)
     endif()
 
     include(GoogleTest)

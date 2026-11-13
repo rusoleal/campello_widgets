@@ -1,5 +1,8 @@
 #pragma once
 
+#include <atomic>
+#include <thread>
+
 #include <string>
 
 #include <functional>
@@ -39,6 +42,7 @@ namespace systems::leal::campello_gpu
 
 namespace systems::leal::campello_widgets
 {
+    class View;
 
     // Forward declaration for static accessor
     class Renderer;
@@ -484,7 +488,24 @@ namespace systems::leal::campello_widgets
             uint64_t                        now_ms,
             uint64_t                        idle_gap_reset_ms = 200);
 
+        /**
+         * @brief The window (View) this renderer draws, or nullptr.
+         *
+         * Set by View::setRenderer(). buildFrame() makes it the ambient view
+         * and ticks its pointer dispatcher; without one (tests, legacy
+         * runners) the process-wide fallbacks are used as before.
+         */
+        void  setView(View* view) noexcept { view_ = view; }
+        View* view() const noexcept { return view_; }
+
     private:
+        View* view_ = nullptr;
+
+        // The raster thread this renderer is rasterized on, bound by its
+        // first rasterFrame() call from a RasterThread worker. Per renderer,
+        // not the global ThreadChecker::rasterInstance(): with several
+        // windows there is one raster thread per window.
+        std::atomic<std::thread::id> raster_thread_id_{};
         void layoutPass(float viewport_width, float viewport_height);
 
         // Generates the draw list headlessly (no GPU encoder) so it can be

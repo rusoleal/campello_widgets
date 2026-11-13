@@ -42,7 +42,7 @@ namespace systems::leal::campello_widgets
 
     RenderPageView::~RenderPageView()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher()) {
+        if (auto* d = pointerDispatcher()) {
             d->removeHandler(this);
             d->removeTickHandler(this);
         }
@@ -51,7 +51,7 @@ namespace systems::leal::campello_widgets
 
     void RenderPageView::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher()) {
+        if (auto* d = pointerDispatcher()) {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
         }
@@ -59,7 +59,7 @@ namespace systems::leal::campello_widgets
 
     void RenderPageView::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher()) {
+        if (auto* d = pointerDispatcher()) {
             d->arena().removeMember(this);
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -293,7 +293,7 @@ namespace systems::leal::campello_widgets
             pan_velocity_  = 0.0f;
             last_pan_time_ = std::chrono::steady_clock::now();
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 

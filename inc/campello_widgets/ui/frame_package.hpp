@@ -11,6 +11,7 @@
 namespace systems::leal::campello_gpu
 {
     class TextureView;
+    class Surface;
 }
 
 namespace systems::leal::campello_widgets
@@ -42,6 +43,25 @@ namespace systems::leal::campello_widgets
         float max_sigma_y = 0.0f;
 
         std::shared_ptr<campello_gpu::TextureView> target;
+
+
+        /**
+
+         * Optional presentable surface (one per window, Phase 17). When set
+
+         * and `target` is null, Renderer::rasterFrame() acquires the target
+
+         * from it on the raster thread and binds the present to its own
+
+         * command buffer (Surface::schedulePresent()) instead of the
+
+         * device-wide Device::scheduleNextPresent() slot, which several
+
+         * windows on separate raster threads could otherwise race on.
+
+         */
+
+        std::shared_ptr<campello_gpu::Surface> surface;
 
         // Owning handle for a platform-native drawable (e.g. CAMetalDrawable)
         // that must stay alive until raster has presented it. Platform code

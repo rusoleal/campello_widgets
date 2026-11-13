@@ -29,6 +29,10 @@
 
 namespace systems::leal::campello_widgets
 {
+    class View;
+    class PointerDispatcher;
+    class FocusManager;
+    class TextInputManager;
 
     class FocusNode;
 
@@ -220,9 +224,45 @@ namespace systems::leal::campello_widgets
             if (old_parent && !parent)
                 detach();
             parent_ = parent;
+            // The parent is the source of truth for which window (View) this
+            // object belongs to; set it before attach() so registrations done
+            // there (pointer handlers, focus nodes) go to the right window.
+            if (parent && parent->view_)
+                view_ = parent->view_;
             if (parent && !old_parent)
                 attach();
         }
+
+        // ------------------------------------------------------------------
+        // Owning window (Phase 17, multi-window)
+        // ------------------------------------------------------------------
+
+        /**
+         * @brief The View (window) this render object belongs to, or nullptr.
+         *
+         * Inherited from the parent in setParent(); a root takes the ambient
+         * View::current() at construction. nullptr when built outside any
+         * view (e.g. unit tests), or once that view has been destroyed.
+         */
+        View* view() const noexcept;
+
+        /**
+         * @brief The pointer dispatcher of this object's window, falling back
+         *        to the process-wide PointerDispatcher::activeDispatcher().
+         *
+         * Use this, not activeDispatcher(), for registrations made outside
+         * event dispatch (attach/detach/destructors): with several windows the
+         * active one at that moment may belong to another window.
+         */
+        PointerDispatcher* pointerDispatcher() const noexcept;
+
+        /// This object's window's focus manager, falling back to
+        /// FocusManager::activeManager() (same rules as pointerDispatcher()).
+        FocusManager* focusManager() const noexcept;
+
+        /// This object's window's text input manager, falling back to
+        /// TextInputManager::activeManager().
+        TextInputManager* textInputManager() const noexcept;
 
         /**
          * @brief This object's parent in the render tree, or nullptr at the root.
@@ -334,6 +374,7 @@ namespace systems::leal::campello_widgets
         // first paint always descends, matching needs_paint_'s own default.
         bool            needs_descendant_paint_ = true;
         RenderObject*   parent_       = nullptr;
+        View*           view_         = nullptr;  ///< Owning window; see view().
 
         void debugFillProperties(DiagnosticsPropertyBuilder& properties) const override;
         std::string toStringShort() const override;

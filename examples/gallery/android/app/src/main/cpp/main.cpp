@@ -2,8 +2,9 @@
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/android/run_app.hpp>
 #include <campello_widgets/ui/debug_flags.hpp>
-#include <android_native_app_glue.h>
 #include <android/asset_manager.h>
+#include <android/native_activity.h>
+#include <jni.h>
 #include <sys/system_properties.h>
 #include <cstdio>
 #include <string>
@@ -19,11 +20,11 @@ namespace cw = systems::leal::campello_widgets;
 // main.mm resolves the same bundled asset via NSBundle to a real path
 // rather than teaching VideoPlayerController's Android backend anything
 // about AAssetManager.
-static std::string copySampleVideoToInternalStorage(struct android_app* app)
+static std::string copySampleVideoToInternalStorage(ANativeActivity* activity)
 {
-    const std::string dest_path = std::string(app->activity->internalDataPath) + "/sample_video.mp4";
+    const std::string dest_path = std::string(activity->internalDataPath) + "/sample_video.mp4";
 
-    AAsset* asset = AAssetManager_open(app->activity->assetManager, "sample_video.mp4", AASSET_MODE_STREAMING);
+    AAsset* asset = AAssetManager_open(activity->assetManager, "sample_video.mp4", AASSET_MODE_STREAMING);
     if (!asset) return {};
 
     FILE* out = std::fopen(dest_path.c_str(), "wb");
@@ -57,17 +58,31 @@ static bool debugPropEnabled(const char* name)
     return value[0] == '1';
 }
 
-void android_main(struct android_app* app)
+cw::WidgetRef buildMultiWindowDemo();  // multi_window_demo.cpp
+
+// NativeActivity's entry point, once per activity instance: the launcher
+// activity and every extra window (see campello_widgets/android/run_app.hpp).
+extern "C" JNIEXPORT void ANativeActivity_onCreate(ANativeActivity* activity,
+                                                   void* saved_state, size_t saved_state_size)
 {
-    cw::DebugFlags::showPerformanceOverlay = true;
-    if (debugPropEnabled("debug.cw_trace_raster"))
-        cw::DebugFlags::printRasterSubPhaseTimings = true;
-    if (debugPropEnabled("debug.cw_trace_dirty"))
-        cw::DebugFlags::printDirtyRegionTrace = true;
+    cw::runApp(activity, saved_state, saved_state_size, [activity]() -> cw::WidgetRef {
+        cw::DebugFlags::showPerformanceOverlay = true;
+        if (debugPropEnabled("debug.cw_trace_raster"))
+            cw::DebugFlags::printRasterSubPhaseTimings = true;
+        if (debugPropEnabled("debug.cw_trace_dirty"))
+            cw::DebugFlags::printDirtyRegionTrace = true;
 
-    const std::string video_path = copySampleVideoToInternalStorage(app);
-    if (!video_path.empty())
-        cw::setSampleVideoPath(video_path);
+        // `adb shell setprop debug.cw_multiwindow 1` (then relaunch): the
+        // Phase 17 multi-window demo instead of the gallery.
+        if (debugPropEnabled("debug.cw_multiwindow"))
+        {
+            cw::DebugFlags::showPerformanceOverlay = false;
+            return buildMultiWindowDemo();
+        }
 
-    cw::runApp(app, cw::buildGalleryApp());
+        const std::string video_path = copySampleVideoToInternalStorage(activity);
+        if (!video_path.empty())
+            cw::setSampleVideoPath(video_path);
+        return cw::buildGalleryApp();
+    });
 }

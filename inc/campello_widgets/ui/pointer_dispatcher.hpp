@@ -40,6 +40,19 @@ namespace systems::leal::campello_widgets
         using TickHandler = std::function<void(uint64_t now_ms)>;
 
         explicit PointerDispatcher(std::shared_ptr<RenderBox> root = nullptr);
+        ~PointerDispatcher();
+
+        PointerDispatcher(const PointerDispatcher&)            = delete;
+        PointerDispatcher& operator=(const PointerDispatcher&) = delete;
+
+        /**
+         * @brief Whether `dispatcher` points at a live PointerDispatcher.
+         *
+         * For objects that remember the dispatcher they registered with
+         * (rather than looking one up) and may outlive it, e.g. a render
+         * object torn down after its window. Mirrors RenderObject::isAlive().
+         */
+        static bool isAlive(const PointerDispatcher* dispatcher) noexcept;
 
         /**
          * @brief Sets (or replaces) the root render box used for hit-testing.
@@ -101,6 +114,24 @@ namespace systems::leal::campello_widgets
          * not use pointer capture.
          */
         void handlePointerEvent(const PointerEvent& event);
+
+        /**
+         * Blocks (or unblocks) all pointer input, e.g. while a modal window
+         * owns the app's attention (Phase 17). Blocking first cancels every
+         * pointer in progress and ends hovers, so no gesture is left half
+         * done; while blocked, handlePointerEvent() drops events.
+         */
+        void setInputBlocked(bool blocked);
+        bool isInputBlocked() const noexcept { return input_blocked_; }
+
+        /**
+         * Observers of every pointer-down this dispatcher receives (before
+         * hit testing, even when input is blocked): e.g. a popup window
+         * closing when the user presses anywhere in its parent window.
+         */
+        using DownObserverId = uint64_t;
+        DownObserverId addPointerDownObserver(Handler observer);
+        void           removePointerDownObserver(DownObserverId id);
 
         // ------------------------------------------------------------------
         // Global accessor (set by the platform adapter, used by render objects)
@@ -207,6 +238,10 @@ namespace systems::leal::campello_widgets
         std::vector<PointerPosition>                     recent_positions_;
         GestureArenaManager                              arena_;
         PointerSignalResolver                            signal_resolver_;
+
+        bool                                             input_blocked_ = false;
+        std::vector<std::pair<DownObserverId, Handler>>  down_observers_;
+        DownObserverId                                   next_down_observer_ = 1;
 
         static std::atomic<PointerDispatcher*> s_active_dispatcher_;
     };

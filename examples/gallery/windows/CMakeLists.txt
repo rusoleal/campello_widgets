@@ -29,6 +29,7 @@ target_link_libraries(campello_widgets_gallery PRIVATE
     campello_ui
     campello_material
     campello_cupertino
+    campello_fluent
 )
 
 set_target_properties(campello_widgets_gallery PROPERTIES

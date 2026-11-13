@@ -20,7 +20,7 @@ namespace systems::leal::campello_widgets
 
     RenderSingleChildScrollView::~RenderSingleChildScrollView()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->removeHandler(this);
             d->removeTickHandler(this);
@@ -30,7 +30,7 @@ namespace systems::leal::campello_widgets
 
     void RenderSingleChildScrollView::attach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
             d->addTickHandler(this, [this](uint64_t now) { onTick(now); });
@@ -39,7 +39,7 @@ namespace systems::leal::campello_widgets
 
     void RenderSingleChildScrollView::detach()
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = pointerDispatcher())
         {
             d->arena().removeMember(this);
             d->removeHandler(this);
@@ -269,7 +269,7 @@ namespace systems::leal::campello_widgets
                 scroll_axis == Axis::vertical ? event.position.y : event.position.x);
             device_kind_   = event.device_kind;
             arena_entry_.reset();
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
                 arena_entry_.emplace(d->arena().add(event.pointer_id, this));
             break;
 
@@ -379,7 +379,7 @@ namespace systems::leal::campello_widgets
             const bool overscrolled = (raw_offset_ < min_extent_ || raw_offset_ > max_extent_);
             if (overscrolled && std::abs(delta) < kSignificantScrollDelta)
                 break;
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            if (auto* d = pointerDispatcher())
             {
                 // Only a meaningful delta refreshes the "still actively
                 // scrolling" gate, so spring-back isn't held hostage by

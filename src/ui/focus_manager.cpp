@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <campello_widgets/ui/view.hpp>
 #include <cmath>
 #include <unordered_map>
 #include <campello_widgets/ui/focus_manager.hpp>
@@ -50,6 +51,10 @@ namespace systems::leal::campello_widgets
 
     FocusManager* FocusManager::activeManager() noexcept
     {
+        // The window an explicit View::Scope made current (e.g. the runner
+        // delivering a key event to that window) first, then the
+        // process-wide fallback (the primary view's, or a test's).
+        if (View* v = View::scoped()) return &v->focusManager();
         return s_active_manager_.load(std::memory_order_acquire);
     }
 
@@ -178,6 +183,7 @@ namespace systems::leal::campello_widgets
         // that never reach here as a KeyEvent at all (e.g. macOS's
         // flagsChanged: for a bare Cmd/Shift/Ctrl/Option press).
         HardwareKeyboard::current().updateModifiers(event.modifiers);
+        if (input_blocked_) return;
 
         // Any key event reaching here implies the user is currently
         // interacting via keyboard -- switches focus-ring visibility on

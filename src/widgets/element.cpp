@@ -1,4 +1,5 @@
 #include <campello_widgets/widgets/element.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/widgets/inherited_element.hpp>
 #include <campello_widgets/widgets/inherited_widget.hpp>
 #include <campello_widgets/ui/key.hpp>
@@ -41,7 +42,9 @@ namespace systems::leal::campello_widgets
     void Element::mount(Element* parent)
     {
         parent_ = parent;
+        view_    = parent_ ? parent_->childView() : View::current();
         mounted_ = true;
+        unmounting_ = false;
         if (parent_)
             inherited_widgets_ = parent_->inherited_widgets_;
         onMountInheritance();
@@ -73,6 +76,7 @@ namespace systems::leal::campello_widgets
         if (auto* gk = dynamic_cast<GlobalKey*>(widget_->key.get()))
             GlobalKey::_unregister(gk);
 
+        unmounting_ = true;
         mounted_ = false;
         parent_  = nullptr;
     }
@@ -86,9 +90,19 @@ namespace systems::leal::campello_widgets
     void Element::markNeedsBuild()
     {
         ThreadChecker::instance().assertOnBoundThread("Element::markNeedsBuild");
-        if (dirty_) return;
+        if (dirty_ || unmounting_) return;
         dirty_ = true;
         dirty_elements_.push_back(this);
+
+        // Ask this element's own window for a frame (its buildFrame runs
+        // buildScope(), which rebuilds dirty elements of every window: one
+        // shared element tree); elements outside any view use the global path.
+        View* owner = View::isAlive(view_) ? view_ : nullptr;
+        if (owner && owner->hasFrameRequestCallback())
+        {
+            owner->requestFrame();
+            return;
+        }
         FrameScheduler::scheduleFrame();
 
         // In test environments where no frame callback is registered, rebuild
@@ -107,15 +121,23 @@ namespace systems::leal::campello_widgets
             if (dirty.empty()) break;
             for (Element* e : dirty)
             {
-                if (isAlive(e) && e->mounted_)
+                if (isAlive(e) && e->mounted_ && !e->unmounting_)
                     e->rebuild();
             }
         }
     }
 
+    View* Element::scopeView() const noexcept
+    {
+        return View::isAlive(view_) ? view_ : View::current();
+    }
+
     void Element::rebuild()
     {
         if (!dirty_ || building_) return;
+        // buildScope() rebuilds dirty elements of every window from whichever
+        // window's frame runs first; build in this element's own window.
+        View::Scope view_scope(scopeView());
         building_ = true;
         dirty_    = false;
 
@@ -222,6 +244,13 @@ namespace systems::leal::campello_widgets
             child->unmount();
         }
 
+        // The child joins the window its parent hosts children in (see
+        // Element::childView()). Created inside the scope too: render object
+        // elements build their render object in the constructor, and a
+        // render tree root (no render parent to inherit from) takes the
+        // ambient view at construction.
+        View* child_view = parent ? parent->childView() : nullptr;
+        View::Scope view_scope(View::isAlive(child_view) ? child_view : View::current());
         auto new_element = new_widget->createElement();
         new_element->mount(parent);
         return new_element;

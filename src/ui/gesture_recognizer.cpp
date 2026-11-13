@@ -4,9 +4,9 @@
 namespace systems::leal::campello_widgets
 {
 
-    void GestureRecognizer::dispose()
+    void GestureRecognizer::dispose(PointerDispatcher* dispatcher)
     {
-        if (auto* d = PointerDispatcher::activeDispatcher())
+        if (auto* d = dispatcher ? dispatcher : PointerDispatcher::activeDispatcher())
             d->arena().removeMember(this);
     }
 

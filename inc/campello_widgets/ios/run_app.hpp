@@ -32,6 +32,14 @@ namespace systems::leal::campello_widgets
      * }
      * @endcode
      *
+     * Windows (Phase 17): the app runs on the UIScene lifecycle. Declare
+     * `UIApplicationSceneManifest` in Info.plist (the scene delegate is
+     * configured in code). With `UIApplicationSupportsMultipleScenes` on
+     * iPadOS, WindowController / the Window widget open more windows (each
+     * a UIWindowScene), and WindowController::setPlatformWindowHandler()
+     * receives windows the user opens from the dock and external displays.
+     * See examples/ios_multi_window.
+     *
      * @param argc         Forwarded to UIApplicationMain.
      * @param argv         Forwarded to UIApplicationMain.
      * @param root_widget  Root widget of the application.

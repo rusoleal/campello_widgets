@@ -1,7 +1,24 @@
+// Android platform layer (Phase 17 M6): a host for NativeActivity without
+// android_native_app_glue.
+//
+// Every activity instance of the app (the launcher one, and one per extra
+// window opened through WindowController) calls runApp() from its
+// ANativeActivity_onCreate, and gets an ActivityHost. All NativeActivity
+// callbacks, the input queues and AChoreographer's vsync arrive on the Java
+// main thread, which is therefore the one UI thread: one widget tree for all
+// windows, as on desktop. Each activity's ANativeWindow gets its own
+// campello_gpu Surface, Renderer and RasterThread on the shared device.
+//
+// The tree lives as long as the process: unlike with the glue (which tore
+// the whole session down on APP_CMD_TERM_WINDOW), backgrounding the app or
+// destroying the main activity keeps all state; the next main activity
+// shows it again.
+
 #include <campello_widgets/android/run_app.hpp>
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
+#include <campello_widgets/widgets/window.hpp>
 #include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
@@ -10,19 +27,23 @@
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/key_event.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 #include <campello_widgets/ui/raster_thread.hpp>
+#include <campello_widgets/ui/platform_windowing.hpp>
 
 #include <campello_gpu/device.hpp>
-#include <campello_gpu/texture_view.hpp>
+#include <campello_gpu/surface.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
 
-#include <android_native_app_glue.h>
+#include <android/native_activity.h>
 #include <android/choreographer.h>
 #include <android/configuration.h>
 #include <android/log.h>
 #include <android/input.h>
+#include <android/looper.h>
+#include <jni.h>
 
 #include <dlfcn.h>
 
@@ -30,10 +51,14 @@
 #include "android_text_rasterizer.hpp"
 #include "android_clipboard.hpp"
 
-#include <memory>
+#include <algorithm>
 #include <atomic>
+#include <functional>
+#include <map>
+#include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 #include <unistd.h>
 
 #define LOG_TAG "campello_widgets"
@@ -45,123 +70,36 @@ namespace GPU     = ::systems::leal::campello_gpu;
 namespace Widgets = ::systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
-// WidgetSession — owns all per-window campello_widgets state
+// JNI helpers (all called on the Java main thread, which has an env)
 // ---------------------------------------------------------------------------
 
-struct WidgetSession
-{
-    std::shared_ptr<GPU::Device>               device;
-    std::shared_ptr<Widgets::Renderer>         renderer;
-    std::shared_ptr<Widgets::Element>          root_element;
-    std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
-    std::shared_ptr<Widgets::FocusManager>       focus_manager;
-    std::unique_ptr<Widgets::TickerScheduler>    ticker_scheduler;
-    std::unique_ptr<Widgets::TextInputManager>   text_input_manager;
-    android_app*                               app = nullptr;  // For accessing contentRect
-    Widgets::WidgetRef                         user_root_widget;
-    Widgets::MediaQueryData                    media_data;
-
-    // Declared last so its destructor (stop()+join) runs before renderer/
-    // device are torn down — mirrors macOS's CampelloMTKDelegate ivar
-    // ordering (see run_app.mm's doc comment on _rasterThread). Ensures no
-    // in-flight raster call can ever observe a half-destroyed Renderer/Device.
-    std::unique_ptr<Widgets::RasterThread>     raster_thread;
-};
-
-// Forward declaration — defined after createSession.
-static void rebuildMediaQuery(WidgetSession* session);
-
-// ---------------------------------------------------------------------------
-// Window metrics helper (logical size + view insets + MediaQuery rebuild)
-// ---------------------------------------------------------------------------
-
-/**
- * @brief Updates logical window size, view insets, and MediaQueryData.
- *
- * Reads the physical window size and content rect from ANativeWindow, converts
- * everything to logical pixels using the current DPR, updates the renderer's
- * view insets, and rebuilds the root MediaQuery widget if anything changed.
- */
-static void updateWindowMetrics(WidgetSession* session)
-{
-    if (!session || !session->app) return;
-    if (!session->app->window) return;
-
-    android_app* app = session->app;
-
-    int32_t window_width  = ANativeWindow_getWidth(app->window);
-    int32_t window_height = ANativeWindow_getHeight(app->window);
-
-    const ARect& content = app->contentRect;
-
-    // Calculate insets in physical pixels
-    Widgets::EdgeInsets physical_insets;
-    physical_insets.left   = static_cast<float>(content.left);
-    physical_insets.top    = static_cast<float>(content.top);
-    physical_insets.right  = static_cast<float>(window_width - content.right);
-    physical_insets.bottom = static_cast<float>(window_height - content.bottom);
-
-    if (physical_insets.left < 0.0f)   physical_insets.left = 0.0f;
-    if (physical_insets.top < 0.0f)    physical_insets.top = 0.0f;
-    if (physical_insets.right < 0.0f)  physical_insets.right = 0.0f;
-    if (physical_insets.bottom < 0.0f) physical_insets.bottom = 0.0f;
-
-    // Convert to logical pixels
-    float dpr = session->media_data.device_pixel_ratio;
-    if (dpr <= 0.0f) dpr = 1.0f;
-
-    Widgets::EdgeInsets logical_insets;
-    logical_insets.left   = physical_insets.left   / dpr;
-    logical_insets.top    = physical_insets.top    / dpr;
-    logical_insets.right  = physical_insets.right  / dpr;
-    logical_insets.bottom = physical_insets.bottom / dpr;
-
-    // Update renderer
-    if (session->renderer)
-    {
-        session->renderer->setViewInsets(logical_insets);
-    }
-
-    // Update MediaQueryData
-    Widgets::MediaQueryData newData = session->media_data;
-    newData.logical_size = Widgets::Size{
-        static_cast<float>(window_width) / dpr,
-        static_cast<float>(window_height) / dpr};
-    newData.view_insets  = logical_insets;
-
-    if (newData != session->media_data)
-    {
-        session->media_data = newData;
-        rebuildMediaQuery(session);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// JNI helpers for soft keyboard show / hide
-// ---------------------------------------------------------------------------
-
-static JNIEnv* getJniEnv(android_app* app, bool* out_attached)
+static JNIEnv* mainEnv(ANativeActivity* activity)
 {
     JNIEnv* env = nullptr;
-    *out_attached = false;
-    if (app->activity->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK)
-        return env;
-    if (app->activity->vm->AttachCurrentThread(&env, nullptr) == JNI_OK)
-        *out_attached = true;
+    if (activity->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK)
+        return nullptr;
     return env;
 }
 
-static void showSoftInput(android_app* app)
+// Clears (and logs) a pending Java exception; true if there was one.
+static bool clearJavaException(JNIEnv* env, const char* what)
 {
-    bool attached = false;
-    JNIEnv* env = getJniEnv(app, &attached);
-    if (!env) return;
+    if (!env->ExceptionCheck()) return false;
+    LOGE("Java exception in %s", what);
+    env->ExceptionDescribe();
+    env->ExceptionClear();
+    return true;
+}
 
-    jobject activity = app->activity->clazz;
+static void showSoftInput(ANativeActivity* activity)
+{
+    JNIEnv* env = mainEnv(activity);
+    if (!env) return;
+    jobject act = activity->clazz;
 
     jclass activityClass = env->FindClass("android/app/NativeActivity");
     jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
-    jobject window = env->CallObjectMethod(activity, getWindow);
+    jobject window = env->CallObjectMethod(act, getWindow);
 
     jclass windowClass = env->FindClass("android/view/Window");
     jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
@@ -170,33 +108,32 @@ static void showSoftInput(android_app* app)
     jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService",
                                                    "(Ljava/lang/String;)Ljava/lang/Object;");
     jstring serviceName = env->NewStringUTF("input_method");
-    jobject imm = env->CallObjectMethod(activity, getSystemService, serviceName);
+    jobject imm = env->CallObjectMethod(act, getSystemService, serviceName);
 
     jclass immClass = env->FindClass("android/view/inputmethod/InputMethodManager");
-    jmethodID showSoftInput = env->GetMethodID(immClass, "showSoftInput",
+    jmethodID showSoftInputId = env->GetMethodID(immClass, "showSoftInput",
                                                 "(Landroid/view/View;I)Z");
-    env->CallBooleanMethod(imm, showSoftInput, decorView, 0);
+    env->CallBooleanMethod(imm, showSoftInputId, decorView, 0);
+    clearJavaException(env, "showSoftInput");
 
     env->DeleteLocalRef(serviceName);
     env->DeleteLocalRef(imm);
     env->DeleteLocalRef(decorView);
     env->DeleteLocalRef(window);
-
-    if (attached)
-        app->activity->vm->DetachCurrentThread();
+    env->DeleteLocalRef(immClass);
+    env->DeleteLocalRef(windowClass);
+    env->DeleteLocalRef(activityClass);
 }
 
-static void hideSoftInput(android_app* app)
+static void hideSoftInput(ANativeActivity* activity)
 {
-    bool attached = false;
-    JNIEnv* env = getJniEnv(app, &attached);
+    JNIEnv* env = mainEnv(activity);
     if (!env) return;
-
-    jobject activity = app->activity->clazz;
+    jobject act = activity->clazz;
 
     jclass activityClass = env->FindClass("android/app/NativeActivity");
     jmethodID getWindow = env->GetMethodID(activityClass, "getWindow", "()Landroid/view/Window;");
-    jobject window = env->CallObjectMethod(activity, getWindow);
+    jobject window = env->CallObjectMethod(act, getWindow);
 
     jclass windowClass = env->FindClass("android/view/Window");
     jmethodID getDecorView = env->GetMethodID(windowClass, "getDecorView", "()Landroid/view/View;");
@@ -209,21 +146,143 @@ static void hideSoftInput(android_app* app)
     jmethodID getSystemService = env->GetMethodID(activityClass, "getSystemService",
                                                    "(Ljava/lang/String;)Ljava/lang/Object;");
     jstring serviceName = env->NewStringUTF("input_method");
-    jobject imm = env->CallObjectMethod(activity, getSystemService, serviceName);
+    jobject imm = env->CallObjectMethod(act, getSystemService, serviceName);
 
     jclass immClass = env->FindClass("android/view/inputmethod/InputMethodManager");
-    jmethodID hideSoftInput = env->GetMethodID(immClass, "hideSoftInputFromWindow",
+    jmethodID hideSoftInputId = env->GetMethodID(immClass, "hideSoftInputFromWindow",
                                                 "(Landroid/os/IBinder;I)Z");
-    env->CallBooleanMethod(imm, hideSoftInput, windowToken, 0);
+    env->CallBooleanMethod(imm, hideSoftInputId, windowToken, 0);
+    clearJavaException(env, "hideSoftInput");
 
     env->DeleteLocalRef(serviceName);
     env->DeleteLocalRef(imm);
     env->DeleteLocalRef(windowToken);
     env->DeleteLocalRef(decorView);
     env->DeleteLocalRef(window);
+    env->DeleteLocalRef(immClass);
+    env->DeleteLocalRef(viewClass);
+    env->DeleteLocalRef(windowClass);
+    env->DeleteLocalRef(activityClass);
+}
 
-    if (attached)
-        app->activity->vm->DetachCurrentThread();
+// The String extra `key` of the activity's launch intent, or "".
+static std::string intentStringExtra(ANativeActivity* activity, const char* key)
+{
+    JNIEnv* env = mainEnv(activity);
+    if (!env) return {};
+    std::string result;
+    jclass activityClass = env->GetObjectClass(activity->clazz);
+    jmethodID getIntent = env->GetMethodID(activityClass, "getIntent", "()Landroid/content/Intent;");
+    jobject intent = env->CallObjectMethod(activity->clazz, getIntent);
+    if (intent && !clearJavaException(env, "getIntent"))
+    {
+        jclass intentClass = env->GetObjectClass(intent);
+        jmethodID getStringExtra = env->GetMethodID(intentClass, "getStringExtra",
+                                                    "(Ljava/lang/String;)Ljava/lang/String;");
+        jstring jkey = env->NewStringUTF(key);
+        auto value = static_cast<jstring>(env->CallObjectMethod(intent, getStringExtra, jkey));
+        if (value && !clearJavaException(env, "getStringExtra"))
+        {
+            const char* chars = env->GetStringUTFChars(value, nullptr);
+            result = chars ? chars : "";
+            env->ReleaseStringUTFChars(value, chars);
+            env->DeleteLocalRef(value);
+        }
+        env->DeleteLocalRef(jkey);
+        env->DeleteLocalRef(intentClass);
+        env->DeleteLocalRef(intent);
+    }
+    env->DeleteLocalRef(activityClass);
+    return result;
+}
+
+// Starts another instance of `from`'s activity class as a separate window:
+// its own task (NEW_DOCUMENT | MULTIPLE_TASK), carrying `window_id`. When
+// the app is already in multi-window mode (split screen, freeform), it goes
+// next to it (LAUNCH_ADJACENT); from a full-screen app it opens full screen
+// on top (LAUNCH_ADJACENT there makes some launchers, e.g. MIUI, enter split
+// screen with the new window parked off screen). In a freeform (desktop
+// windowing) display, `bounds` (physical pixels, empty = system default)
+// places it.
+static bool startWindowActivity(ANativeActivity* from, const std::string& window_id,
+                                const ARect& bounds)
+{
+    JNIEnv* env = mainEnv(from);
+    if (!env) return false;
+
+    constexpr jint FLAG_ACTIVITY_LAUNCH_ADJACENT = 0x00001000;
+    constexpr jint FLAG_ACTIVITY_NEW_DOCUMENT    = 0x00080000;
+    constexpr jint FLAG_ACTIVITY_MULTIPLE_TASK   = 0x08000000;
+
+    jclass activityClass = env->GetObjectClass(from->clazz);  // e.g. android.app.NativeActivity
+    jclass intentClass   = env->FindClass("android/content/Intent");
+    jmethodID intentInit = env->GetMethodID(intentClass, "<init>",
+                                            "(Landroid/content/Context;Ljava/lang/Class;)V");
+    jobject intent = env->NewObject(intentClass, intentInit, from->clazz, activityClass);
+    jmethodID putExtra = env->GetMethodID(intentClass, "putExtra",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;");
+    jstring key = env->NewStringUTF("cw_window_id");
+    jstring value = env->NewStringUTF(window_id.c_str());
+    jobject self = env->CallObjectMethod(intent, putExtra, key, value);
+    if (self) env->DeleteLocalRef(self);
+    jmethodID isInMultiWindowMode = env->GetMethodID(activityClass, "isInMultiWindowMode", "()Z");
+    const bool multi_window = env->CallBooleanMethod(from->clazz, isInMultiWindowMode) == JNI_TRUE;
+    clearJavaException(env, "isInMultiWindowMode");
+    jmethodID addFlags = env->GetMethodID(intentClass, "addFlags", "(I)Landroid/content/Intent;");
+    self = env->CallObjectMethod(intent, addFlags,
+        FLAG_ACTIVITY_NEW_DOCUMENT | FLAG_ACTIVITY_MULTIPLE_TASK |
+        (multi_window ? FLAG_ACTIVITY_LAUNCH_ADJACENT : 0));
+    if (self) env->DeleteLocalRef(self);
+
+    jobject bundle = nullptr;
+    if (bounds.right > bounds.left && bounds.bottom > bounds.top)
+    {
+        jclass optionsClass = env->FindClass("android/app/ActivityOptions");
+        jmethodID makeBasic = env->GetStaticMethodID(optionsClass, "makeBasic",
+                                                     "()Landroid/app/ActivityOptions;");
+        jobject options = env->CallStaticObjectMethod(optionsClass, makeBasic);
+        jclass rectClass = env->FindClass("android/graphics/Rect");
+        jmethodID rectInit = env->GetMethodID(rectClass, "<init>", "(IIII)V");
+        jobject rect = env->NewObject(rectClass, rectInit, bounds.left, bounds.top,
+                                      bounds.right, bounds.bottom);
+        jmethodID setLaunchBounds = env->GetMethodID(optionsClass, "setLaunchBounds",
+            "(Landroid/graphics/Rect;)Landroid/app/ActivityOptions;");
+        self = env->CallObjectMethod(options, setLaunchBounds, rect);
+        if (self) env->DeleteLocalRef(self);
+        jmethodID toBundle = env->GetMethodID(optionsClass, "toBundle", "()Landroid/os/Bundle;");
+        bundle = env->CallObjectMethod(options, toBundle);
+        clearJavaException(env, "ActivityOptions");
+        env->DeleteLocalRef(rect);
+        env->DeleteLocalRef(rectClass);
+        env->DeleteLocalRef(options);
+        env->DeleteLocalRef(optionsClass);
+    }
+
+    jmethodID startActivity = env->GetMethodID(activityClass, "startActivity",
+                                               "(Landroid/content/Intent;Landroid/os/Bundle;)V");
+    env->CallVoidMethod(from->clazz, startActivity, intent, bundle);
+    const bool failed = clearJavaException(env, "startActivity");
+
+    if (bundle) env->DeleteLocalRef(bundle);
+    env->DeleteLocalRef(value);
+    env->DeleteLocalRef(key);
+    env->DeleteLocalRef(intent);
+    env->DeleteLocalRef(intentClass);
+    env->DeleteLocalRef(activityClass);
+    return !failed;
+}
+
+// Finishes the activity and removes its task from Recents (a window's
+// own NEW_DOCUMENT task).
+static void finishAndRemoveTask(ANativeActivity* activity)
+{
+    JNIEnv* env = mainEnv(activity);
+    if (!env) { ANativeActivity_finish(activity); return; }
+    jclass activityClass = env->GetObjectClass(activity->clazz);
+    jmethodID finish = env->GetMethodID(activityClass, "finishAndRemoveTask", "()V");
+    env->CallVoidMethod(activity->clazz, finish);
+    if (clearJavaException(env, "finishAndRemoveTask")) ANativeActivity_finish(activity);
+    env->DeleteLocalRef(activityClass);
 }
 
 // ---------------------------------------------------------------------------
@@ -413,17 +472,265 @@ static Widgets::PointerButton buttonForMotionEvent(const AInputEvent* event)
     return Widgets::PointerButton::primary;
 }
 
-static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
-{
-    auto* session_ptr = reinterpret_cast<std::unique_ptr<WidgetSession>*>(app->userData);
-    if (!session_ptr || !*session_ptr) return 0;
 
-    WidgetSession* session = session_ptr->get();
+// ---------------------------------------------------------------------------
+// App and activity state
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct ActivityHost;
+class AndroidPlatformWindow;
+
+// Process-wide: the widget tree, the main window's View that hosts it, the
+// GPU device. Created by the first runApp() call, kept for the process.
+struct AndroidApp
+{
+    std::unique_ptr<Widgets::View>              view;  // the main window's View
+    std::shared_ptr<GPU::Device>                device;
+    std::unique_ptr<Widgets::TickerScheduler>   ticker;
+    std::unique_ptr<Widgets::PlatformWindowing> windowing;
+    std::shared_ptr<Widgets::Element>           root_element;
+    std::shared_ptr<Widgets::RenderBox>         root_box;
+    Widgets::MediaQueryData                     media;
+    Widgets::WidgetRef                          root_widget;
+    ActivityHost*                               main_host = nullptr;
+    std::vector<ActivityHost*>                  hosts;
+    AChoreographer*                             choreographer = nullptr;
+    bool                                        frame_pending = false;
+
+    // postTask(): a pipe watched by the main looper.
+    int                                         task_pipe[2] = {-1, -1};
+    std::vector<std::function<void()>>          tasks;
+};
+AndroidApp* gApp = nullptr;
+
+bool isLiveHost(ActivityHost* host)
+{
+    return gApp && std::find(gApp->hosts.begin(), gApp->hosts.end(), host) != gApp->hosts.end();
+}
+
+void postFrame();
+
+void postMainTask(std::function<void()> task)
+{
+    if (!gApp || !task) return;
+    gApp->tasks.push_back(std::move(task));
+    const char byte = 1;
+    (void)!write(gApp->task_pipe[1], &byte, 1);
+}
+
+int onTaskPipe(int fd, int /*events*/, void* /*data*/)
+{
+    char buf[64];
+    while (read(fd, buf, sizeof buf) == static_cast<ssize_t>(sizeof buf)) {}
+    auto tasks = std::move(gApp->tasks);
+    gApp->tasks.clear();
+    for (auto& task : tasks) task();
+    return 1;  // keep watching
+}
+
+Widgets::Brightness brightnessOf(AConfiguration* config)
+{
+    return AConfiguration_getUiModeNight(config) == ACONFIGURATION_UI_MODE_NIGHT_YES
+        ? Widgets::Brightness::dark : Widgets::Brightness::light;
+}
+
+// One NativeActivity instance: its native window, input queue and
+// configuration, and (while it has a window) the Surface, Renderer and
+// RasterThread drawing the View it hosts.
+struct ActivityHost
+{
+    explicit ActivityHost(ANativeActivity* a) : activity(a), config(AConfiguration_new())
+    {
+        updateConfig();
+    }
+
+    ~ActivityHost()
+    {
+        unbindView();
+        AConfiguration_delete(config);
+    }
+
+    ANativeActivity*       activity;
+    AConfiguration*        config;
+    Widgets::View*         view    = nullptr;  // hosted View (not owned)
+    AndroidPlatformWindow* owner   = nullptr;  // for extra windows
+    bool                   is_main = false;
+
+    ANativeWindow* window = nullptr;
+    AInputQueue*   queue  = nullptr;
+    ARect          content{};
+    float          dpr = 1.0f;
+
+    std::shared_ptr<Widgets::RenderBox>     root;
+    std::shared_ptr<GPU::Surface>           surface;
+    std::shared_ptr<Widgets::Renderer>      renderer;
+    std::unique_ptr<Widgets::RasterThread>  raster;  // stopped before renderer/surface go
+    bool                                    needs_frame = true;
+
+    std::function<void()> on_metrics_changed;
+
+    void bindView(Widgets::View* v)
+    {
+        unbindView();
+        view = v;
+        if (!view) return;
+        ActivityHost* self = this;
+        view->setFrameRequestCallback([self] {
+            self->needs_frame = true;
+            postFrame();
+        });
+        ANativeActivity* act = activity;
+        view->textInputManager().setOnInputTargetChanged([act](bool has_target) {
+            if (has_target) showSoftInput(act);
+            else            hideSoftInput(act);
+        });
+    }
+
+    void unbindView()
+    {
+        stopRendering();
+        if (view && Widgets::View::isAlive(view))
+        {
+            view->setFrameRequestCallback(nullptr);
+            view->textInputManager().setOnInputTargetChanged(nullptr);
+        }
+        view = nullptr;
+        root.reset();
+    }
+
+    void setRoot(std::shared_ptr<Widgets::RenderBox> r)
+    {
+        stopRendering();
+        root = std::move(r);
+        if (view) view->pointerDispatcher().setRoot(root);
+        startRendering();
+    }
+
+    void startRendering()
+    {
+        if (renderer || !window || !view || !root || !gApp->device) return;
+        surface = gApp->device->createSurface(window);
+        if (!surface)
+        {
+            LOGE("no Vulkan surface for this window");
+            return;
+        }
+        // The draw backend's pipelines must match the surface's real format
+        // (not every Vulkan surface offers BGRA8).
+        const Widgets::Color background = Widgets::Color::black();
+        renderer = std::make_shared<Widgets::Renderer>(gApp->device, root, background);
+        renderer->setDrawBackend(std::make_unique<Widgets::VulkanDrawBackend>(
+            gApp->device, background, surface->getPixelFormat()));
+        renderer->setDevicePixelRatio(dpr);
+        renderer->setViewInsets(insets());
+        view->setRenderer(renderer.get());
+
+        // Rasterize (including the blocking GPU submit) on a dedicated
+        // thread, so a GPU or compositor stall never blocks the main thread,
+        // which handles input and vsync for every window.
+        raster = std::make_unique<Widgets::RasterThread>(
+            [renderer = renderer](const Widgets::FramePackage& pkg) { renderer->rasterFrame(pkg); });
+        raster->start();
+
+        needs_frame = true;
+        postFrame();
+    }
+
+    void stopRendering()
+    {
+        if (raster) raster.reset();  // stops and joins: nothing in flight below
+        if (view && Widgets::View::isAlive(view)) view->setRenderer(nullptr);
+        renderer.reset();
+        surface.reset();
+    }
+
+    void updateConfig()
+    {
+        AConfiguration_fromAssetManager(config, activity->assetManager);
+        int32_t density = AConfiguration_getDensity(config);
+        if (density <= 0) density = ACONFIGURATION_DENSITY_DEFAULT;
+        dpr = static_cast<float>(density) / 160.0f;  // mdpi baseline
+    }
+
+    // Safe area from the content rect, logical pixels.
+    Widgets::EdgeInsets insets() const
+    {
+        Widgets::EdgeInsets in;
+        if (!window) return in;
+        const int32_t w = ANativeWindow_getWidth(window);
+        const int32_t h = ANativeWindow_getHeight(window);
+        in.left   = std::max(0.0f, static_cast<float>(content.left)) / dpr;
+        in.top    = std::max(0.0f, static_cast<float>(content.top)) / dpr;
+        in.right  = std::max(0.0f, static_cast<float>(w - content.right)) / dpr;
+        in.bottom = std::max(0.0f, static_cast<float>(h - content.bottom)) / dpr;
+        // Before the first onContentRectChanged the rect is empty: no insets.
+        if (content.right <= content.left || content.bottom <= content.top) return {};
+        return in;
+    }
+
+    Widgets::WindowMetrics metrics() const
+    {
+        Widgets::WindowMetrics m;
+        m.device_pixel_ratio = dpr;
+        if (window)
+            m.logical_size = Widgets::Size{ ANativeWindow_getWidth(window) / dpr,
+                                            ANativeWindow_getHeight(window) / dpr };
+        m.padding = insets();
+        return m;
+    }
+
+    void metricsChanged()
+    {
+        if (renderer)
+        {
+            renderer->setDevicePixelRatio(dpr);
+            renderer->setViewInsets(insets());
+            // Repaint everything, even if no widget changed: after a resize
+            // or rotation the surface is (re)created at the new size, and a
+            // frame drawn just before that (at the new size, into the old
+            // swapchain) would otherwise stay on screen, cropped.
+            renderer->notePaintRequested();
+        }
+        needs_frame = true;
+        auto callback = on_metrics_changed;
+        if (callback) callback();
+        postFrame();
+    }
+
+    void frame()
+    {
+        if (!needs_frame || !renderer || !raster || !window) return;
+        needs_frame = false;
+        const float w = static_cast<float>(ANativeWindow_getWidth(window));
+        const float h = static_cast<float>(ANativeWindow_getHeight(window));
+        // Held for the whole frame: building it runs every window's pending
+        // rebuilds, which may replace or drop this window's renderer (e.g. a
+        // window closing itself), so the members may change under us.
+        const auto frame_renderer = renderer;
+        const auto frame_surface  = surface;
+        auto package = frame_renderer->buildFrame(w, h);
+        if (!package || frame_renderer != renderer || !raster) return;
+        // This window's surface: acquired and presented on its raster thread.
+        package->surface = frame_surface;
+        raster->submit(std::move(*package));
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Input: each activity's AInputQueue, on the main looper
+// ---------------------------------------------------------------------------
+
+int32_t handleInputEvent(ActivityHost* host, AInputEvent* event)
+{
+    if (!host->view) return 0;
+    Widgets::View::Scope scope(host->view);
+    Widgets::PointerDispatcher& dispatcher = host->view->pointerDispatcher();
 
     const int32_t event_type = AInputEvent_getType(event);
     if (event_type == AINPUT_EVENT_TYPE_MOTION)
     {
-        // Filter to pointer source only (matching old motion_event_filter)
         const int32_t source = AInputEvent_getSource(event);
         if ((source & AINPUT_SOURCE_CLASS_MASK) != AINPUT_SOURCE_CLASS_POINTER)
             return 0;
@@ -433,12 +740,14 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         const int32_t pointer_index = (action & AMOTION_EVENT_ACTION_POINTER_INDEX_MASK)
             >> AMOTION_EVENT_ACTION_POINTER_INDEX_SHIFT;
 
-        // AMotionEvent_getX/Y report raw physical pixels, but the render tree
-        // is laid out in logical points (unlike macOS/iOS, where the OS
-        // already hands touches to us in points). Convert here so hit-testing
-        // lines up with layout.
-        float dpr = session->media_data.device_pixel_ratio;
-        if (dpr <= 0.0f) dpr = 1.0f;
+        // Raw physical pixels → logical points, relative to the content
+        // (the renderer paints the tree inset by the safe area).
+        const float dpr = host->dpr > 0.0f ? host->dpr : 1.0f;
+        const Widgets::EdgeInsets in = host->insets();
+        auto pos = [&](size_t j) {
+            return Widgets::Offset{ AMotionEvent_getX(event, j) / dpr - in.left,
+                                    AMotionEvent_getY(event, j) / dpr - in.top };
+        };
 
         switch (action_code)
         {
@@ -446,13 +755,10 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         case AMOTION_EVENT_ACTION_POINTER_DOWN:
         {
             const size_t idx = static_cast<size_t>(pointer_index);
-            const int32_t id = AMotionEvent_getPointerId(event, idx);
-            const float x = AMotionEvent_getX(event, idx) / dpr;
-            const float y = AMotionEvent_getY(event, idx) / dpr;
-            session->dispatcher->handlePointerEvent({
+            dispatcher.handlePointerEvent({
                 .kind        = Widgets::PointerEventKind::down,
-                .pointer_id  = id,
-                .position    = { x, y },
+                .pointer_id  = AMotionEvent_getPointerId(event, idx),
+                .position    = pos(idx),
                 .pressure    = AMotionEvent_getPressure(event, idx),
                 .device_kind = deviceKindForMotionEvent(event, idx),
                 .button      = buttonForMotionEvent(event),
@@ -466,13 +772,10 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             const size_t pointer_count = AMotionEvent_getPointerCount(event);
             for (size_t j = 0; j < pointer_count; ++j)
             {
-                const int32_t id = AMotionEvent_getPointerId(event, j);
-                const float x = AMotionEvent_getX(event, j) / dpr;
-                const float y = AMotionEvent_getY(event, j) / dpr;
-                session->dispatcher->handlePointerEvent({
+                dispatcher.handlePointerEvent({
                     .kind        = Widgets::PointerEventKind::move,
-                    .pointer_id  = id,
-                    .position    = { x, y },
+                    .pointer_id  = AMotionEvent_getPointerId(event, j),
+                    .position    = pos(j),
                     .pressure    = AMotionEvent_getPressure(event, j),
                     .device_kind = deviceKindForMotionEvent(event, j),
                     .tilt        = tiltForMotionEvent(event, j),
@@ -481,28 +784,18 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             break;
         }
 
-        // A stylus with proximity sensing (e.g. S-Pen) reports these while
-        // hovering, not touching — distinct action codes from ACTION_MOVE,
-        // which requires actual contact. Previously unhandled here, so
-        // MouseRegion::on_enter/on_exit (which PointerDispatcher's "hover"
-        // path — active_pointers_ has no entry for an untouched pointer —
-        // drives off PointerEventKind::move) never fired for a hovering
-        // stylus, even though the exact same mechanism already works for a
-        // desktop mouse moved without a button held. pressure=0 matches
-        // PointerEvent::pressure's documented "0.0 for hover" convention.
+        // A hovering stylus (e.g. S-Pen) or mouse: moves without contact,
+        // which drive MouseRegion's enter/exit (pressure 0 = hover).
         case AMOTION_EVENT_ACTION_HOVER_ENTER:
         case AMOTION_EVENT_ACTION_HOVER_MOVE:
         {
             const size_t pointer_count = AMotionEvent_getPointerCount(event);
             for (size_t j = 0; j < pointer_count; ++j)
             {
-                const int32_t id = AMotionEvent_getPointerId(event, j);
-                const float x = AMotionEvent_getX(event, j) / dpr;
-                const float y = AMotionEvent_getY(event, j) / dpr;
-                session->dispatcher->handlePointerEvent({
+                dispatcher.handlePointerEvent({
                     .kind        = Widgets::PointerEventKind::move,
-                    .pointer_id  = id,
-                    .position    = { x, y },
+                    .pointer_id  = AMotionEvent_getPointerId(event, j),
+                    .position    = pos(j),
                     .pressure    = 0.0f,
                     .device_kind = deviceKindForMotionEvent(event, j),
                     .tilt        = tiltForMotionEvent(event, j),
@@ -511,18 +804,13 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             break;
         }
 
-        // The stylus left proximity range entirely (no further HOVER_MOVE
-        // will follow to naturally re-hit-test to "nothing hovered") —
-        // dispatch one final hover move far outside the surface so
-        // PointerDispatcher's hover-diff logic sends on_exit to whatever
-        // was last hovered, instead of leaving it stuck highlighted.
+        // Left proximity: one move far outside so the last hover exits.
         case AMOTION_EVENT_ACTION_HOVER_EXIT:
         {
             const size_t idx = static_cast<size_t>(pointer_index);
-            const int32_t id = AMotionEvent_getPointerId(event, idx);
-            session->dispatcher->handlePointerEvent({
+            dispatcher.handlePointerEvent({
                 .kind        = Widgets::PointerEventKind::move,
-                .pointer_id  = id,
+                .pointer_id  = AMotionEvent_getPointerId(event, idx),
                 .position    = { -1.0e6f, -1.0e6f },
                 .pressure    = 0.0f,
                 .device_kind = deviceKindForMotionEvent(event, idx)});
@@ -533,13 +821,10 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         case AMOTION_EVENT_ACTION_POINTER_UP:
         {
             const size_t idx = static_cast<size_t>(pointer_index);
-            const int32_t id = AMotionEvent_getPointerId(event, idx);
-            const float x = AMotionEvent_getX(event, idx) / dpr;
-            const float y = AMotionEvent_getY(event, idx) / dpr;
-            session->dispatcher->handlePointerEvent({
+            dispatcher.handlePointerEvent({
                 .kind        = Widgets::PointerEventKind::up,
-                .pointer_id  = id,
-                .position    = { x, y },
+                .pointer_id  = AMotionEvent_getPointerId(event, idx),
+                .position    = pos(idx),
                 .pressure    = 0.0f,
                 .device_kind = deviceKindForMotionEvent(event, idx),
                 .button      = buttonForMotionEvent(event)});
@@ -551,13 +836,10 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
             const size_t pointer_count = AMotionEvent_getPointerCount(event);
             for (size_t j = 0; j < pointer_count; ++j)
             {
-                const int32_t id = AMotionEvent_getPointerId(event, j);
-                const float x = AMotionEvent_getX(event, j) / dpr;
-                const float y = AMotionEvent_getY(event, j) / dpr;
-                session->dispatcher->handlePointerEvent({
+                dispatcher.handlePointerEvent({
                     .kind        = Widgets::PointerEventKind::cancel,
-                    .pointer_id  = id,
-                    .position    = { x, y },
+                    .pointer_id  = AMotionEvent_getPointerId(event, j),
+                    .position    = pos(j),
                     .pressure    = 0.0f,
                     .device_kind = deviceKindForMotionEvent(event, j)});
             }
@@ -567,342 +849,460 @@ static int32_t handleAndroidInputEvent(android_app* app, AInputEvent* event)
         default:
             break;
         }
-
         return 1;
     }
-    else if (event_type == AINPUT_EVENT_TYPE_KEY)
-    {
-        if (!session->focus_manager) return 0;
 
-        const int32_t action = AKeyEvent_getAction(event);
-        const int32_t keyCode = AKeyEvent_getKeyCode(event);
-        const int32_t metaState = AKeyEvent_getMetaState(event);
+    if (event_type == AINPUT_EVENT_TYPE_KEY)
+    {
+        const int32_t action      = AKeyEvent_getAction(event);
+        const int32_t keyCode     = AKeyEvent_getKeyCode(event);
+        const int32_t metaState   = AKeyEvent_getMetaState(event);
         const int32_t repeatCount = AKeyEvent_getRepeatCount(event);
+
+        // Back in an extra window: let the system close it (its activity
+        // finishes, which closes the window). The main window keeps
+        // consuming it, as before.
+        if (keyCode == AKEYCODE_BACK && !host->is_main) return 0;
 
         Widgets::KeyEventKind kind;
         if (action == AKEY_EVENT_ACTION_DOWN)
-        {
-            kind = (repeatCount > 0)
-                ? Widgets::KeyEventKind::repeat
-                : Widgets::KeyEventKind::down;
-        }
+            kind = repeatCount > 0 ? Widgets::KeyEventKind::repeat : Widgets::KeyEventKind::down;
         else if (action == AKEY_EVENT_ACTION_UP)
-        {
             kind = Widgets::KeyEventKind::up;
-        }
         else
-        {
             return 0;
-        }
 
-        if (kind == Widgets::KeyEventKind::up)
-        {
-            Widgets::KeyEvent ke;
-            ke.kind      = kind;
-            ke.key_code  = androidKeyCodeToKeyCode(keyCode);
-            ke.modifiers = androidMetaStateToKeyModifiers(metaState);
-            ke.character = 0;
-            session->focus_manager->handleKeyEvent(ke);
-        }
-        else
-        {
-            Widgets::KeyEvent ke;
-            ke.kind      = kind;
-            ke.key_code  = androidKeyCodeToKeyCode(keyCode);
-            ke.modifiers = androidMetaStateToKeyModifiers(metaState);
-            ke.character = androidKeyCodeToCharacter(keyCode, metaState);
-            session->focus_manager->handleKeyEvent(ke);
-        }
-
+        Widgets::KeyEvent ke;
+        ke.kind      = kind;
+        ke.key_code  = androidKeyCodeToKeyCode(keyCode);
+        ke.modifiers = androidMetaStateToKeyModifiers(metaState);
+        ke.character = kind == Widgets::KeyEventKind::up ? 0 : androidKeyCodeToCharacter(keyCode, metaState);
+        host->view->focusManager().handleKeyEvent(ke);
         return 1;
     }
-
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// Window lifecycle
-// ---------------------------------------------------------------------------
-
-static Widgets::Brightness getSystemBrightness(android_app* app)
+int onInputQueue(int /*fd*/, int /*events*/, void* data)
 {
-    int32_t nightMode = AConfiguration_getUiModeNight(app->config);
-    if (nightMode == ACONFIGURATION_UI_MODE_NIGHT_YES)
-        return Widgets::Brightness::dark;
-    return Widgets::Brightness::light;
-}
-
-static float getDevicePixelRatio(android_app* app)
-{
-    // Get the density from the configuration
-    // ACONFIGURATION_DENSITY_DEFAULT is 160 DPI (mdpi)
-    int32_t density = AConfiguration_getDensity(app->config);
-    if (density <= 0) density = ACONFIGURATION_DENSITY_DEFAULT;
-    
-    // DPR = density / 160 (mdpi baseline)
-    return static_cast<float>(density) / 160.0f;
-}
-
-static std::unique_ptr<WidgetSession> createSession(
-    android_app* app, const Widgets::WidgetRef& root_widget)
-{
-    auto session = std::make_unique<WidgetSession>();
-    session->app = app;  // Store for later access to contentRect
-
-    // Create dispatcher and focus manager before mounting.
-    session->dispatcher = std::make_shared<Widgets::PointerDispatcher>();
-    Widgets::PointerDispatcher::setActiveDispatcher(session->dispatcher.get());
-
-    session->focus_manager = std::make_shared<Widgets::FocusManager>();
-    Widgets::FocusManager::setActiveManager(session->focus_manager.get());
-
-    session->ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
-    Widgets::TickerScheduler::setActive(session->ticker_scheduler.get());
-
-    session->text_input_manager = std::make_unique<Widgets::TextInputManager>();
-    Widgets::TextInputManager::setActiveManager(session->text_input_manager.get());
-
-    // Show / hide the software keyboard when a TextField gains or loses focus.
-    session->text_input_manager->setOnInputTargetChanged([app](bool has_target) {
-        if (has_target)
-            showSoftInput(app);
-        else
-            hideSoftInput(app);
-    });
-
-    // Wrap root widget with MediaQuery
-    Widgets::MediaQueryData mediaData;
-    mediaData.device_pixel_ratio = getDevicePixelRatio(app);
-    mediaData.platform_brightness = getSystemBrightness(app);
-    session->media_data = mediaData;
-    session->user_root_widget = root_widget;
-    
-    auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
-        mediaData, root_widget);
-
-    // Bind the UI thread before any widget tree mutation.
-    Widgets::ThreadChecker::instance().bindToCurrentThread();
-
-    // Mount widget tree.
-    session->root_element = wrappedRoot->createElement();
-    session->root_element->mount(nullptr);
-
-    auto* roe = session->root_element->findDescendantRenderObjectElement();
-    if (!roe)
+    auto* host = static_cast<ActivityHost*>(data);
+    if (!isLiveHost(host) || !host->queue) return 1;
+    AInputEvent* event = nullptr;
+    while (host->queue && AInputQueue_getEvent(host->queue, &event) >= 0)
     {
-        LOGE("widget tree produced no RenderObjectElement");
-        return nullptr;
+        // The IME gets first go at key events (soft keyboard).
+        if (AInputQueue_preDispatchEvent(host->queue, event)) continue;
+        const int32_t handled = handleInputEvent(host, event);
+        AInputQueue_finishEvent(host->queue, event, handled);
     }
-
-    auto render_box = std::dynamic_pointer_cast<Widgets::RenderBox>(
-        roe->sharedRenderObject());
-    if (!render_box)
-    {
-        LOGE("root render object is not a RenderBox");
-        return nullptr;
-    }
-
-    session->dispatcher->setRoot(render_box);
-
-    // Create GPU device (ANativeWindow* as platform data).
-    session->device = GPU::Device::createDefaultDevice(app->window);
-    if (!session->device)
-    {
-        LOGE("failed to create campello_gpu device");
-        return nullptr;
-    }
-
-    // Create renderer (no draw backend yet — Android backend is platform-specific;
-    // subclass Renderer or supply an IDrawBackend to enable GPU drawing).
-    session->renderer = std::make_shared<Widgets::Renderer>(
-        session->device, render_box, Widgets::Color::black());
-
-    // Set initial device pixel ratio
-    float dpr = getDevicePixelRatio(app);
-    session->renderer->setDevicePixelRatio(dpr);
-
-    // Populate logical size, view insets, and push to MediaQuery
-    updateWindowMetrics(session.get());
-
-    // Create Vulkan draw backend and attach to renderer. Must match
-    // whatever pixel format the device's swapchain was actually created
-    // with — not every Vulkan surface offers BGRA8 (some report only
-    // RGBA8), and pipelines are always built render-pass-compatible with
-    // the swapchain's real format. An offscreen texture created with a
-    // different (hardcoded) format — used for shadow/clip-shape/shader-mask
-    // composites — would then be incompatible with those pipelines,
-    // corrupting exactly that content while direct-to-swapchain draws stay
-    // fine (VUID-vkCmdDraw-renderPass-02684, found via validation layers).
-    GPU::PixelFormat swapchain_format = session->device->getSwapchainPixelFormat();
-    if (swapchain_format == GPU::PixelFormat::invalid)
-        swapchain_format = GPU::PixelFormat::bgra8unorm;
-    auto backend = std::make_unique<Widgets::VulkanDrawBackend>(
-        session->device, Widgets::Color::black(), swapchain_format);
-    session->renderer->setDrawBackend(std::move(backend));
-
-    // Rasterize (including the blocking GPU submit — campello_gpu's Vulkan
-    // Device::submit() ends with vkQueueWaitIdle) on a dedicated thread,
-    // mirroring macOS/Linux's RasterThread usage. Without this, the same
-    // thread that pumps android_native_app_glue's input queue and services
-    // AChoreographer vsync callbacks would block on every frame's GPU
-    // submit — any transient GPU/driver/compositor stall (seen under
-    // sustained scroll-fling load on this device) freezes input handling
-    // itself, not just rendering, since there is no other thread left to
-    // service the ALooper. onVsyncCallback() below now only builds the
-    // frame (fast, pure CPU) and hands it off via submit().
-    session->raster_thread = std::make_unique<Widgets::RasterThread>(
-        [renderer = session->renderer](const Widgets::FramePackage& pkg) {
-            renderer->rasterFrame(pkg);
-        });
-    session->raster_thread->start();
-
-    LOGI("campello_widgets session created (DPR=%.2f, size=%.0fx%.0f)",
-         dpr, session->media_data.logical_size.width,
-         session->media_data.logical_size.height);
-
-    // Rendering here is purely on-demand (vsync-gated via AChoreographer,
-    // unlike macOS/iOS's continuously-driven MTKView) — nothing renders at
-    // all until something calls FrameScheduler::scheduleFrame(). The
-    // widget tree's initial mount above doesn't go through the normal
-    // markNeedsBuild()/setState() dirty-tracking path that would trigger
-    // that call on its own, so without this the very first frame — and
-    // every frame after it, since nothing else ever primes the loop —
-    // never gets scheduled: a permanently blank screen with no error.
-    Widgets::FrameScheduler::scheduleFrame();
-
-    return session;
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
-// AChoreographer vsync callback
+// Frames: AChoreographer vsync on the main thread, all windows
 // ---------------------------------------------------------------------------
-//
-// Fires on the main thread at the display vsync boundary (≈ 16 ms at 60 Hz).
-// AChoreographer_postFrameCallback() is called by FrameScheduler::scheduleFrame();
-// the callback itself re-arms only when animations are still running (via the
-// tick → scheduleFrame chain), so idle CPU drops to ~0%.
-//
-// The "frame pending" flag coalesces multiple scheduleFrame() calls that arrive
-// within the same vsync interval into exactly one callback registration.
 
-static void rebuildMediaQuery(WidgetSession* session)
-{
-    if (!session || !session->root_element) return;
-    auto newMediaQuery = Widgets::mw<Widgets::MediaQuery>(
-        session->media_data, session->user_root_widget);
-    session->root_element->update(newMediaQuery);
-    Widgets::FrameScheduler::scheduleFrame();
-}
-
-static std::atomic<bool> gFramePending{false};
-static std::atomic<WidgetSession*> gActiveSession{nullptr};
-
-static void onVsyncCallback(int64_t frameTimeNanos, void* data)
-{
-    // Allow the next scheduleFrame() call to post a new callback.
-    gFramePending.store(false, std::memory_order_relaxed);
-
-    // Tick schedulers at the vsync timestamp.
-    const uint64_t ms = static_cast<uint64_t>(frameTimeNanos) / 1'000'000ULL;
-    if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(ms);
-    if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(ms);
-
-    // Build (fast, pure CPU) here on the input/vsync thread; hand off to
-    // raster_thread for the actual GPU submit, which blocks on
-    // vkQueueWaitIdle — see raster_thread's construction in createSession()
-    // for why that must never run on this thread. Read gActiveSession
-    // atomically instead of trusting the stale |data| pointer, because
-    // APP_CMD_TERM_WINDOW may have destroyed the session after this
-    // callback was posted.
-    auto* session = gActiveSession.load(std::memory_order_acquire);
-    if (session && session->renderer && session->raster_thread &&
-        session->device && session->app && session->app->window)
-    {
-        int32_t w = ANativeWindow_getWidth(session->app->window);
-        int32_t h = ANativeWindow_getHeight(session->app->window);
-        // Deliberately not calling backend->setViewport() here: it clears
-        // the draw backend's frame-scoped GPU resources (frame_textures_ etc.
-        // in VulkanDrawBackend), which is only safe once the *previous*
-        // frame's GPU work has actually finished — true when everything ran
-        // synchronously on one thread, no longer true now that raster runs
-        // on raster_thread. Renderer::rasterFrame() (see renderer.cpp) calls
-        // setViewport() itself, at the point in the pipeline where that's
-        // actually safe: on the raster thread, right before it touches any
-        // of those resources. Doing it here too raced setViewport()'s clear
-        // against the raster thread still encoding the prior frame's command
-        // buffer — VUID-vkCmdWriteTimestamp-commandBuffer-recording /
-        // VUID-vkEndCommandBuffer-commandBuffer-00059 ("VkImageView was
-        // destroyed") the first time this was tried.
-        auto package = session->renderer->buildFrame(static_cast<float>(w), static_cast<float>(h));
-        if (package)
-        {
-            // Leave package->target null — on Vulkan that's the signal to
-            // render straight to the swapchain (campello_gpu's
-            // beginRenderPass() acquires the swapchain image internally
-            // when given a null target; see Renderer::rasterFrame()'s own
-            // comment on this).
-            session->raster_thread->submit(std::move(*package));
-        }
-    }
-}
-
-// AChoreographer_postFrameCallback64() requires API 29+ (see onVsyncCallback's
-// own doc comment on why the 64-bit variant matters at all), but this
-// project's CI compiles against ANDROID_PLATFORM=android-28 -- a deliberate
-// floor (ci.yml: "API 28 is the minimum for Vulkan 1.1 ... which
-// campello_gpu requires"), not an oversight, so raising it isn't the fix.
-// The NDK headers mark the symbol __INTRODUCED_IN(29), which Clang enforces
-// as a hard compile error on a direct call regardless of what actually runs
-// on a real device. Resolved via dlsym instead: works regardless of the
-// compile-time platform level, and correctly returns null on a real
-// API < 29 device, which is exactly when the fallback below is needed.
+// AChoreographer_postFrameCallback64() (API 29+) is resolved with dlsym so
+// this builds against older platform levels: the plain variant's `long`
+// timestamp overflows on 32-bit ABIs (armeabi-v7a), freezing every ticker.
 using AChoreographerFrameCallback64 = void (*)(int64_t, void*);
 using PostFrameCallback64Fn = void (*)(AChoreographer*, AChoreographerFrameCallback64, void*);
 
-static PostFrameCallback64Fn resolvePostFrameCallback64()
+PostFrameCallback64Fn resolvePostFrameCallback64()
 {
     static PostFrameCallback64Fn fn = reinterpret_cast<PostFrameCallback64Fn>(
         dlsym(RTLD_DEFAULT, "AChoreographer_postFrameCallback64"));
     return fn;
 }
 
-// Fallback for a real API < 29 device (AChoreographer_postFrameCallback()
-// itself has been available since API 24, so this is always safe to call).
-// AChoreographer_frameCallback's frameTimeNanos is `long`, 32 bits on a
-// 32-bit ABI -- see onVsyncCallback's own doc comment for the resulting
-// truncation/freeze bug. Nothing better is available below API 29; this
-// just restores the pre-fix behavior there instead of failing to build at
-// all for every ABI (the bug itself is specific to 32-bit ABIs on top of
-// that, per the same comment -- `long` is already 64-bit on arm64-v8a/
-// x86_64, so this fallback path is harmless there too, just unreachable in
-// practice since any real arm64-v8a/x86_64 device ships well above API 29).
-static void onVsyncCallbackLegacy(long frameTimeNanos, void* data)
+void onVsync(int64_t /*frameTimeNanos*/, void* /*data*/)
 {
-    onVsyncCallback(static_cast<int64_t>(frameTimeNanos), data);
+    if (!gApp) return;
+    gApp->frame_pending = false;
+    // A frame may open or close windows: iterate over a snapshot.
+    const std::vector<ActivityHost*> hosts = gApp->hosts;
+    for (ActivityHost* host : hosts)
+        if (isLiveHost(host)) host->frame();
+}
+
+void onVsyncLegacy(long frameTimeNanos, void* data)
+{
+    onVsync(static_cast<int64_t>(frameTimeNanos), data);
+}
+
+void postFrame()
+{
+    if (!gApp || !gApp->choreographer || gApp->frame_pending) return;
+    gApp->frame_pending = true;
+    if (auto* post64 = resolvePostFrameCallback64())
+        post64(gApp->choreographer, onVsync, nullptr);
+    else
+        AChoreographer_postFrameCallback(gApp->choreographer, onVsyncLegacy, nullptr);
 }
 
 // ---------------------------------------------------------------------------
-// runApp
+// The main window: hosts the tree's root View
 // ---------------------------------------------------------------------------
 
-namespace systems::leal::campello_widgets
+void updateMainMediaQuery()
 {
-    // Namespace aliases for use inside this namespace block
-    namespace GPU     = ::systems::leal::campello_gpu;
-    namespace Widgets = ::systems::leal::campello_widgets;
+    ActivityHost* host = gApp->main_host;
+    if (!host || !gApp->root_element || !host->window) return;
+    const Widgets::WindowMetrics m = host->metrics();
+    Widgets::MediaQueryData data = gApp->media;
+    data.device_pixel_ratio  = m.device_pixel_ratio;
+    data.logical_size        = m.logical_size;
+    data.view_insets         = m.padding;
+    data.platform_brightness = brightnessOf(host->config);
+    if (!(data != gApp->media)) return;
+    gApp->media = data;
+    Widgets::View::Scope scope(gApp->view.get());
+    gApp->root_element->update(Widgets::mw<Widgets::MediaQuery>(gApp->media, gApp->root_widget));
+    Widgets::FrameScheduler::scheduleFrame();
+}
 
-// NativeActivity does not route stdout/stderr to logcat, unlike Java's
-// System.out/System.err. Anything written via std::cout/std::cerr/printf
-// (e.g. ImageLoader/ImageWidget's error diagnostics) is otherwise silently
-// dropped on Android. Pipe both through a reader thread into __android_log_write.
-static void redirectStdioToLogcat()
+// Mounts the tree the first time the main window has a size.
+void mountTreeIfNeeded(ActivityHost* host)
+{
+    if (gApp->root_element || !host->window) return;
+    const Widgets::WindowMetrics m = host->metrics();
+    Widgets::MediaQueryData media;
+    media.device_pixel_ratio  = m.device_pixel_ratio;
+    media.platform_brightness = brightnessOf(host->config);
+    media.logical_size        = m.logical_size;
+    media.view_insets         = m.padding;
+    gApp->media = media;
+
+    gApp->root_element = Widgets::mw<Widgets::MediaQuery>(media, gApp->root_widget)->createElement();
+    {
+        Widgets::View::Scope scope(gApp->view.get());
+        gApp->root_element->mount(nullptr);
+    }
+    auto* roe = gApp->root_element->findDescendantRenderObjectElement();
+    if (!roe) { LOGE("widget tree produced no RenderObjectElement"); return; }
+    gApp->root_box = std::dynamic_pointer_cast<Widgets::RenderBox>(roe->sharedRenderObject());
+    if (!gApp->root_box) LOGE("root render object is not a RenderBox");
+    LOGI("campello_widgets tree mounted (DPR=%.2f, size=%.0fx%.0f)",
+         media.device_pixel_ratio, media.logical_size.width, media.logical_size.height);
+}
+
+void becomeMain(ActivityHost* host)
+{
+    host->is_main    = true;
+    gApp->main_host  = host;
+    host->bindView(gApp->view.get());
+    host->on_metrics_changed = [] { updateMainMediaQuery(); };
+}
+
+// ---------------------------------------------------------------------------
+// Extra windows: activities of their own (PlatformWindowing)
+// ---------------------------------------------------------------------------
+
+std::map<std::string, AndroidPlatformWindow*>& pendingWindows()
+{
+    static std::map<std::string, AndroidPlatformWindow*> windows;
+    return windows;
+}
+
+std::vector<AndroidPlatformWindow*>& liveWindows()
+{
+    static std::vector<AndroidPlatformWindow*> windows;
+    return windows;
+}
+
+class AndroidPlatformWindow final : public Widgets::PlatformWindow
+{
+public:
+    AndroidPlatformWindow(std::string title, Widgets::Size requested_size)
+        : view_(std::make_unique<Widgets::View>())
+        , title_(std::move(title))
+        , requested_size_(requested_size)
+    {
+        static int next_id = 1;
+        id_ = std::to_string(getpid()) + "-" + std::to_string(next_id++);
+        liveWindows().push_back(this);
+    }
+
+    ~AndroidPlatformWindow() override
+    {
+        auto& live = liveWindows();
+        live.erase(std::remove(live.begin(), live.end(), this), live.end());
+        pendingWindows().erase(id_);
+        if (ActivityHost* host = host_)
+        {
+            detach();
+            // Closing the window closes its activity (and its Recents task).
+            if (!host_destroyed_) finishAndRemoveTask(host->activity);
+        }
+    }
+
+    const std::string& windowId() const noexcept { return id_; }
+    void setPending() { pendingWindows()[id_] = this; }
+
+    void attach(ActivityHost* host)
+    {
+        pendingWindows().erase(id_);
+        host_ = host;
+        host->owner = this;
+        host->bindView(view_.get());
+        std::weak_ptr<int> alive = alive_;
+        AndroidPlatformWindow* self = this;
+        host->on_metrics_changed = [self, alive] {
+            if (alive.expired()) return;
+            auto callback = self->on_metrics_changed;
+            if (callback) callback();
+        };
+        applyTitle();
+        if (root_) host->setRoot(root_);
+    }
+
+    // Its activity is being destroyed (the user closed the window, pressed
+    // back, or swiped its task away): tell the app; by default it destroys us.
+    void activityDestroyed()
+    {
+        host_destroyed_ = true;
+        detach();
+        fireCloseRequested();
+    }
+
+    // --- PlatformWindow
+    Widgets::View& view() override { return *view_; }
+
+    void setRootRenderBox(std::shared_ptr<Widgets::RenderBox> root) override
+    {
+        root_ = std::move(root);
+        if (host_) host_->setRoot(root_);
+    }
+
+    void setTitle(const std::string& title) override
+    {
+        title_ = title;
+        applyTitle();
+    }
+
+    // Android decides window sizes (only freeform windows take launch bounds).
+    void setSize(Widgets::Size logical_size) override { requested_size_ = logical_size; }
+
+    Widgets::WindowMetrics metrics() const override
+    {
+        if (host_ && host_->window) return host_->metrics();
+        Widgets::WindowMetrics m;  // not started yet
+        m.logical_size       = requested_size_;
+        m.device_pixel_ratio = gApp && gApp->main_host ? gApp->main_host->dpr : 1.0f;
+        return m;
+    }
+
+    void show() override {}  // started (and shown) by createWindow()
+
+    void requestClose() override
+    {
+        std::weak_ptr<int> alive = alive_;
+        AndroidPlatformWindow* self = this;
+        postMainTask([self, alive] { if (!alive.expired()) self->fireCloseRequested(); });
+    }
+
+private:
+    void fireCloseRequested()
+    {
+        auto callback = on_close_requested;  // may destroy `this`
+        if (callback) callback();
+    }
+
+    void detach()
+    {
+        if (!host_) return;
+        host_->on_metrics_changed = nullptr;
+        host_->unbindView();
+        host_->owner = nullptr;
+        host_ = nullptr;
+    }
+
+    void applyTitle()
+    {
+        if (!host_) return;
+        JNIEnv* env = mainEnv(host_->activity);
+        if (!env) return;
+        jclass activityClass = env->GetObjectClass(host_->activity->clazz);
+        jmethodID setTitleId = env->GetMethodID(activityClass, "setTitle", "(Ljava/lang/CharSequence;)V");
+        jstring title = env->NewStringUTF(title_.c_str());
+        env->CallVoidMethod(host_->activity->clazz, setTitleId, title);
+        clearJavaException(env, "setTitle");
+        env->DeleteLocalRef(title);
+        env->DeleteLocalRef(activityClass);
+    }
+
+    std::unique_ptr<Widgets::View>      view_;  // first: outlives everything bound to it
+    std::string                         id_;
+    std::string                         title_;
+    Widgets::Size                       requested_size_;
+    ActivityHost*                       host_ = nullptr;
+    bool                                host_destroyed_ = false;
+    std::shared_ptr<Widgets::RenderBox> root_;
+    std::shared_ptr<int>                alive_ = std::make_shared<int>(0);  // for posted tasks
+};
+
+bool isLiveWindow(AndroidPlatformWindow* window)
+{
+    auto& live = liveWindows();
+    return std::find(live.begin(), live.end(), window) != live.end();
+}
+
+class AndroidPlatformWindowing final : public Widgets::PlatformWindowing
+{
+public:
+    std::unique_ptr<Widgets::PlatformWindow> createWindow(const Widgets::WindowOptions& options) override
+    {
+        // No borderless popup windows (an activity is a whole window):
+        // PopupWindowAnchor falls back to the window's Overlay.
+        if (options.kind == Widgets::WindowKind::popup) return nullptr;
+        // Started from any live activity (the main one if possible).
+        ActivityHost* from = gApp->main_host ? gApp->main_host
+                           : (gApp->hosts.empty() ? nullptr : gApp->hosts.front());
+        if (!from) return nullptr;
+
+        auto window = std::make_unique<AndroidPlatformWindow>(options.title, options.size);
+        ARect bounds{};
+        if (options.position)
+        {
+            const float dpr = from->dpr;
+            bounds.left   = static_cast<int32_t>(options.position->x * dpr);
+            bounds.top    = static_cast<int32_t>(options.position->y * dpr);
+            bounds.right  = bounds.left + static_cast<int32_t>(options.size.width * dpr);
+            bounds.bottom = bounds.top + static_cast<int32_t>(options.size.height * dpr);
+        }
+        window->setPending();
+        if (!startWindowActivity(from->activity, window->windowId(), bounds)) return nullptr;
+        return window;
+    }
+
+    void postTask(std::function<void()> task) override { postMainTask(std::move(task)); }
+};
+
+// ---------------------------------------------------------------------------
+// NativeActivity callbacks (Java main thread)
+// ---------------------------------------------------------------------------
+
+ActivityHost* hostOf(ANativeActivity* activity)
+{
+    auto* host = static_cast<ActivityHost*>(activity->instance);
+    return isLiveHost(host) ? host : nullptr;
+}
+
+void onDestroy(ANativeActivity* activity)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host) return;
+    if (host->is_main)
+    {
+        // The tree stays mounted; the next main activity shows it again.
+        host->on_metrics_changed = nullptr;
+        host->unbindView();
+        gApp->main_host = nullptr;
+    }
+    else if (host->owner)
+    {
+        host->owner->activityDestroyed();
+    }
+    auto& hosts = gApp->hosts;
+    hosts.erase(std::remove(hosts.begin(), hosts.end(), host), hosts.end());
+    activity->instance = nullptr;
+    delete host;
+}
+
+void onNativeWindowCreated(ANativeActivity* activity, ANativeWindow* window)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host) return;
+    host->window = window;
+    host->updateConfig();
+    if (host->is_main)
+    {
+        mountTreeIfNeeded(host);
+        host->setRoot(gApp->root_box);
+    }
+    else
+    {
+        host->startRendering();
+    }
+    host->metricsChanged();
+}
+
+void onNativeWindowResized(ANativeActivity* activity, ANativeWindow* window)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host) return;
+    LOGI("window %p resized to %dx%d", static_cast<void*>(window),
+         ANativeWindow_getWidth(window), ANativeWindow_getHeight(window));
+    if (host->surface)
+        host->surface->resize(static_cast<uint32_t>(ANativeWindow_getWidth(window)),
+                              static_cast<uint32_t>(ANativeWindow_getHeight(window)));
+    host->metricsChanged();
+}
+
+void onNativeWindowRedrawNeeded(ANativeActivity* activity, ANativeWindow* /*window*/)
+{
+    if (ActivityHost* host = hostOf(activity))
+    {
+        host->needs_frame = true;
+        postFrame();
+    }
+}
+
+void onNativeWindowDestroyed(ANativeActivity* activity, ANativeWindow* /*window*/)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host) return;
+    // Must not return while the raster thread may still present to it.
+    host->stopRendering();
+    host->window = nullptr;
+}
+
+void onInputQueueCreated(ANativeActivity* activity, AInputQueue* queue)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host) return;
+    host->queue = queue;
+    AInputQueue_attachLooper(queue, ALooper_forThread(), 1, onInputQueue, host);
+}
+
+void onInputQueueDestroyed(ANativeActivity* activity, AInputQueue* queue)
+{
+    AInputQueue_detachLooper(queue);
+    if (ActivityHost* host = hostOf(activity)) host->queue = nullptr;
+}
+
+void onContentRectChanged(ANativeActivity* activity, const ARect* rect)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host || !rect) return;
+    host->content = *rect;
+    host->metricsChanged();
+}
+
+void onConfigurationChanged(ANativeActivity* activity)
+{
+    ActivityHost* host = hostOf(activity);
+    if (!host) return;
+    host->updateConfig();
+    host->metricsChanged();
+}
+
+void* onSaveInstanceState(ANativeActivity* /*activity*/, size_t* out_size)
+{
+    *out_size = 0;
+    return nullptr;
+}
+
+// NativeActivity doesn't route stdout/stderr to logcat: pipe both through
+// a reader thread into __android_log_write.
+void redirectStdioToLogcat()
 {
     static int pipe_fds[2];
     if (pipe(pipe_fds) != 0) return;
-
     dup2(pipe_fds[1], STDOUT_FILENO);
     dup2(pipe_fds[1], STDERR_FILENO);
-
+    // A pipe makes stdout fully buffered: flush per line, as on a terminal.
+    setvbuf(stdout, nullptr, _IOLBF, 0);
     std::thread([]() {
         char buf[1024];
         ssize_t n;
@@ -913,184 +1313,111 @@ static void redirectStdioToLogcat()
     }).detach();
 }
 
-void runApp(android_app* app, WidgetRef root_widget)
+// Process-wide setup, on the first activity.
+void initApp(ANativeActivity* activity, const std::function<Widgets::WidgetRef()>& make_root)
 {
     redirectStdioToLogcat();
+    gApp = new AndroidApp();
 
-    // Supply the JVM pointer to AndroidTextRasterizer (JNI_GetCreatedJavaVMs
-    // is not linkable on API < 31, so we pass the VM from android_app directly).
-    if (app && app->activity && app->activity->vm)
-        setAndroidJavaVM(app->activity->vm);
+    // JavaVM for the text rasterizer, the Activity (as a Context) for the clipboard.
+    Widgets::setAndroidJavaVM(activity->vm);
+    Widgets::setAndroidClipboardContext(activity->vm, activity->clazz);
 
-    // Same reasoning for Clipboard -- it also needs the Activity itself
-    // (for getSystemService(CLIPBOARD_SERVICE)), which isn't cached
-    // anywhere else in this codebase either.
-    if (app && app->activity && app->activity->vm && app->activity->clazz)
-        setAndroidClipboardContext(app->activity->vm, app->activity->clazz);
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
 
-    // Vsync-gated on-demand rendering via AChoreographer (API 24+).
-    // AChoreographer_getInstance() must be called on the main thread (the one
-    // that owns the ALooper).  Choreographer callbacks are delivered through
-    // the same ALooper so ALooper_pollOnce(-1) unblocks at vsync — no busy
-    // waiting, zero idle CPU.
-    AChoreographer* choreographer = AChoreographer_getInstance();
-    FrameScheduler::setCallback([choreographer] {
-        // Post at most one pending callback per vsync interval.
-        const bool was_pending = gFramePending.exchange(true, std::memory_order_relaxed);
-        if (was_pending) return;
+    // No window of its own: every activity's window gets a Surface on it.
+    gApp->device = GPU::Device::createDefaultDevice(nullptr);
+    if (!gApp->device) LOGE("failed to create campello_gpu device");
 
-        // The 64 variant is preferred, not required on every ABI: the plain
-        // AChoreographer_postFrameCallback()'s callback type takes the
-        // vsync timestamp as `long`, which is 32 bits on a 32-bit ABI
-        // (armeabi-v7a) — truncating the real 64-bit monotonic
-        // nanosecond timestamp to a *signed* 32-bit value overflows
-        // roughly every 2.1s of device uptime, making frameTimeNanos
-        // jump backward right when that happens. Every ticker/
-        // AnimationController computes elapsed/delta time from this
-        // value, sees non-advancing (or negative) time on that tick,
-        // and skips its update — no crash, no exception, just a
-        // widget tree that silently stops getting marked dirty:
-        // vsync keeps firing forever (confirmed: thousands of
-        // onVsyncCallback calls/sec) but buildFrame() returns nullopt
-        // forever after, so nothing is ever built or submitted again.
-        // Confirmed via logging on a real armeabi-v7a device
-        // (Chromecast with Google TV / Mali GPU) — looked exactly
-        // like a GPU driver hang (frozen frame, idle CPU, no crash)
-        // until the vsync counter gave it away. int64_t is unaffected
-        // on 64-bit ABIs (arm64-v8a, x86_64), which is why this never
-        // reproduced on a 64-bit device. Only actually available on a
-        // real API 29+ device though (see resolvePostFrameCallback64's
-        // own doc comment) -- falls back to the plain, always-available
-        // callback (and the pre-fix truncation behavior) below API 29.
-        void* data = gActiveSession.load(std::memory_order_acquire);
-        if (auto* postFrameCallback64 = resolvePostFrameCallback64())
-            postFrameCallback64(choreographer, onVsyncCallback, data);
+    // The main window's View; makePrimary() also installs its managers as
+    // the process-wide fallbacks, for code without a window context.
+    gApp->view = std::make_unique<Widgets::View>();
+    gApp->view->makePrimary();
+    gApp->ticker = std::make_unique<Widgets::TickerScheduler>();
+    Widgets::TickerScheduler::setActive(gApp->ticker.get());
+
+    // postTask() and vsync, both on the main looper.
+    if (pipe(gApp->task_pipe) == 0)
+        ALooper_addFd(ALooper_forThread(), gApp->task_pipe[0], ALOOPER_POLL_CALLBACK,
+                      ALOOPER_EVENT_INPUT, onTaskPipe, nullptr);
+    gApp->choreographer = AChoreographer_getInstance();
+    Widgets::FrameScheduler::setCallback([] { postFrame(); });
+
+    if (gApp->device)
+    {
+        gApp->windowing = std::make_unique<AndroidPlatformWindowing>();
+        Widgets::PlatformWindowing::setInstance(gApp->windowing.get());
+    }
+
+    gApp->root_widget = make_root ? make_root() : nullptr;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// runApp
+// ---------------------------------------------------------------------------
+
+namespace systems::leal::campello_widgets
+{
+
+void runApp(ANativeActivity* activity, void* /*saved_state*/, size_t /*saved_state_size*/,
+            std::function<WidgetRef()> make_root)
+{
+    if (!activity) return;
+    if (!gApp) initApp(activity, make_root);
+
+    auto* host = new ActivityHost(activity);
+    activity->instance = host;
+    gApp->hosts.push_back(host);
+
+    ANativeActivityCallbacks* cb = activity->callbacks;
+    cb->onDestroy                  = onDestroy;
+    cb->onNativeWindowCreated      = onNativeWindowCreated;
+    cb->onNativeWindowResized      = onNativeWindowResized;
+    cb->onNativeWindowRedrawNeeded = onNativeWindowRedrawNeeded;
+    cb->onNativeWindowDestroyed    = onNativeWindowDestroyed;
+    cb->onInputQueueCreated        = onInputQueueCreated;
+    cb->onInputQueueDestroyed      = onInputQueueDestroyed;
+    cb->onContentRectChanged       = onContentRectChanged;
+    cb->onConfigurationChanged     = onConfigurationChanged;
+    cb->onSaveInstanceState        = onSaveInstanceState;
+
+    // Which window is this activity?
+    const std::string window_id = intentStringExtra(activity, "cw_window_id");
+    if (!window_id.empty())
+    {
+        // One WindowController::create() started.
+        auto it = pendingWindows().find(window_id);
+        if (it != pendingWindows().end())
+        {
+            it->second->attach(host);
+        }
         else
-            AChoreographer_postFrameCallback(choreographer, onVsyncCallbackLegacy, data);
-    });
-
-    std::unique_ptr<WidgetSession> session;
-
-    app->onInputEvent = handleAndroidInputEvent;
-
-    app->onAppCmd = [](android_app* a, int32_t cmd)
-    {
-        auto* session_ptr = reinterpret_cast<std::unique_ptr<WidgetSession>*>(a->userData);
-
-        switch (cmd)
         {
-        case APP_CMD_INIT_WINDOW:
-            // Window is ready — session is created by the main loop below.
-            break;
-
-        case APP_CMD_TERM_WINDOW:
-            if (session_ptr && *session_ptr)
-            {
-                PointerDispatcher::setActiveDispatcher(nullptr);
-                FocusManager::setActiveManager(nullptr);
-                TextInputManager::setActiveManager(nullptr);
-                TickerScheduler::setActive(nullptr);
-                gActiveSession.store(nullptr, std::memory_order_release);
-                session_ptr->reset();
-            }
-            break;
-
-        case APP_CMD_CONTENT_RECT_CHANGED:
-            // Safe area / content rect changed (e.g., keyboard showed/hid, rotation)
-            if (session_ptr && *session_ptr)
-            {
-                updateWindowMetrics(session_ptr->get());
-            }
-            break;
-
-        case APP_CMD_CONFIG_CHANGED:
-            // Configuration changed (e.g., density/DPR changed, dark mode toggled,
-            // orientation changed)
-            if (session_ptr && *session_ptr)
-            {
-                float dpr = getDevicePixelRatio(a);
-                if ((*session_ptr)->renderer)
-                {
-                    (*session_ptr)->renderer->setDevicePixelRatio(dpr);
-                }
-                if ((*session_ptr)->media_data.device_pixel_ratio != dpr)
-                {
-                    (*session_ptr)->media_data.device_pixel_ratio = dpr;
-                    LOGI("DPR updated to %.2f", dpr);
-                }
-
-                Widgets::Brightness newBrightness = getSystemBrightness(a);
-                if ((*session_ptr)->media_data.platform_brightness != newBrightness)
-                {
-                    (*session_ptr)->media_data.platform_brightness = newBrightness;
-                    LOGI("platform brightness changed to %s",
-                         newBrightness == Widgets::Brightness::dark ? "dark" : "light");
-                }
-
-                // DPR or orientation change affects logical size and insets
-                updateWindowMetrics(session_ptr->get());
-            }
-            break;
-
-        default:
-            break;
+            // Gone meanwhile, or brought back from Recents after the process
+            // died: that window no longer exists.
+            LOGI("closing a stale window activity (%s)", window_id.c_str());
+            finishAndRemoveTask(activity);
         }
-    };
-
-    app->userData = &session;
-
-    bool running = true;
-    while (running)
-    {
-        // Block until a native event or an ALooper_wake() arrives.
-        // FrameScheduler::scheduleFrame() calls ALooper_wake(), so the loop
-        // unblocks as soon as setState/markNeedsPaint/ticker fires — then
-        // immediately drains remaining events before rendering.  This brings
-        // idle CPU to ~0%, matching Flutter's on-demand render loop.
-        int          events;
-        android_poll_source* source;
-        ALooper_pollOnce(-1, nullptr, &events, reinterpret_cast<void**>(&source));
-        if (source) source->process(app, source);
-
-        // Drain any additional events that arrived while processing.
-        while (ALooper_pollOnce(0, nullptr, &events,
-                                reinterpret_cast<void**>(&source)) >= 0)
-        {
-            if (source) source->process(app, source);
-        }
-
-        if (app->destroyRequested)
-        {
-            running = false;
-            break;
-        }
-
-        // Create session once the window is available.
-        if (app->window && !session)
-        {
-            session = createSession(app, root_widget);
-            if (session)
-            {
-                gActiveSession.store(session.get(), std::memory_order_release);
-            }
-        }
-
-        if (!session || !session->renderer) continue;
-
-        // Ticking and rendering are now done in onVsyncCallback, which fires
-        // at the hardware vsync via AChoreographer.  FrameScheduler::scheduleFrame()
-        // posts the callback; the TickerScheduler re-arms it each frame while
-        // animations are active, then goes quiet when idle.
+        return;
     }
 
-    // Cleanup.
-    if (session)
+    if (!gApp->main_host)
     {
-        PointerDispatcher::setActiveDispatcher(nullptr);
-        FocusManager::setActiveManager(nullptr);
-        TextInputManager::setActiveManager(nullptr);
-        TickerScheduler::setActive(nullptr);
+        becomeMain(host);
+        return;
     }
+
+    // Another launcher instance while the main window exists: offered to
+    // the app like iPadOS's user-opened windows; otherwise closed.
+    auto window = std::make_unique<AndroidPlatformWindow>("", Widgets::Size{0.0f, 0.0f});
+    AndroidPlatformWindow* raw = window.get();
+    std::unique_ptr<PlatformWindow> base = std::move(window);
+    if (WindowController::offerPlatformWindow(base) && isLiveWindow(raw))
+        raw->attach(host);
+    else
+        finishAndRemoveTask(activity);
 }
 
 } // namespace systems::leal::campello_widgets

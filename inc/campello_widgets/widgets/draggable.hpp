@@ -47,13 +47,18 @@ namespace systems::leal::campello_widgets
 
         RenderDraggable()
         {
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            // Registered at construction (not attach()), so remember the
+            // dispatcher: with several windows the owner view can change at
+            // setParent() and must not redirect the unregistration.
+            handler_dispatcher_ = pointerDispatcher();
+            if (auto* d = handler_dispatcher_)
                 d->addHandler(this, [this](const PointerEvent& e) { onPointerEvent(e); });
         }
 
         ~RenderDraggable() override
         {
-            if (auto* d = PointerDispatcher::activeDispatcher())
+            // May outlive its dispatcher (window/test teardown order).
+            if (auto* d = handler_dispatcher_; PointerDispatcher::isAlive(d))
             {
                 d->arena().removeMember(this);
                 d->removeHandler(this);
@@ -108,6 +113,8 @@ namespace systems::leal::campello_widgets
         }
 
     private:
+        PointerDispatcher* handler_dispatcher_ = nullptr;  ///< Where the constructor registered.
+
         // Mirrors Flutter's MultiDragGestureRecognizer (which backs
         // Draggable), resolving on hit slop rather than pan slop. Since hit
         // slop is smaller than the pan slop used by scrollables

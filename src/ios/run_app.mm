@@ -1,4 +1,5 @@
 #import <campello_widgets/ios/run_app.hpp>
+#import <campello_widgets/ui/view.hpp>
 #import <campello_widgets/campello_widgets.hpp>
 #import <campello_widgets/widgets/element.hpp>
 #import <campello_widgets/widgets/render_object_element.hpp>
@@ -26,6 +27,9 @@
 #import <UIKit/UIKit.h>
 #import <MetalKit/MetalKit.h>
 
+#import <campello_widgets/ui/platform_windowing.hpp>
+#import "ios_window_internal.h"
+
 #include <map>
 #include <algorithm>
 
@@ -38,7 +42,24 @@ namespace Widgets = ::systems::leal::campello_widgets;
 // ---------------------------------------------------------------------------
 namespace {
     Widgets::WidgetRef gRootWidget;
-    Widgets::MediaQueryData gMediaData;
+
+    // Process-wide (Phase 17 M5): the widget tree, the main View that hosts
+    // it and the GPU device outlive any one UIWindowScene. iPadOS can
+    // disconnect the main window's scene (and connect it again later) while
+    // other windows of the app stay open.
+    struct IOSApp
+    {
+        std::unique_ptr<Widgets::View>              view;  // the main window's View
+        std::shared_ptr<GPU::Device>                device;
+        std::unique_ptr<Widgets::TickerScheduler>   ticker;
+        std::unique_ptr<Widgets::PlatformWindowing> windowing;
+        std::shared_ptr<Widgets::Element>           root_element;
+        std::shared_ptr<Widgets::RenderBox>         root_box;
+        Widgets::MediaQueryData                     media;
+        CampelloViewController*                     main_controller = nil;  // while attached
+        CampelloUIWindow*                           legacy_window   = nil;  // no-scene fallback
+    };
+    IOSApp* gApp = nullptr;
 
     // Maps a physical (hardware) keyboard press to the framework's
     // platform-agnostic KeyCode — the iOS/Simulator equivalent of
@@ -193,22 +214,32 @@ namespace {
 // CampelloMTKView — MTKView subclass with touch, draw delegate, and UITextInput
 // ---------------------------------------------------------------------------
 
+// Draws one View's render tree and feeds it this view's touches, keys and
+// text input. The View (and the widget tree) belong to someone else: the
+// app for the main window, an IOSPlatformWindow for the others.
 @interface CampelloMTKView : MTKView <MTKViewDelegate, UITextInput>
-- (instancetype)initWithFrame:(CGRect)frame device:(id<MTLDevice>)device;
-- (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
-                rootWidget:(Widgets::WidgetRef)rootWidget;
+- (instancetype)initWithFrame:(CGRect)frame
+                       device:(id<MTLDevice>)device
+                  widgetsView:(Widgets::View*)widgetsView
+                    gpuDevice:(std::shared_ptr<GPU::Device>)gpuDevice;
+- (void)setRootRenderBox:(std::shared_ptr<Widgets::RenderBox>)root;
+- (Widgets::Renderer*)renderer;
+- (Widgets::WindowMetrics)windowMetrics;
+- (void)detach;
+@property (nonatomic, copy) void (^onTraitsChanged)(void);
 @end
 
+// The ambient View while handling this view's input (Phase 17).
+#define CW_VIEW_SCOPE Widgets::View::Scope cw_view_scope_(_widgetsView)
+
 @implementation CampelloMTKView {
+    Widgets::View*                              _widgetsView;  // not owned
     std::shared_ptr<GPU::Device>              _device;
     std::shared_ptr<Widgets::Renderer>        _renderer;
-    std::shared_ptr<Widgets::Element>         _rootElement;
     std::shared_ptr<Widgets::PointerDispatcher> _dispatcher;
     std::shared_ptr<Widgets::FocusManager>      _focusManager;
-    std::unique_ptr<Widgets::TickerScheduler>   _tickerScheduler;
-    std::unique_ptr<Widgets::TextInputManager>  _textInputManager;
+    std::shared_ptr<Widgets::TextInputManager>  _textInputManager;
     Widgets::MetalDrawBackend*                  _backendPtr;
-    Widgets::MediaQueryData                     _mediaData;
 
     // Touch → pointer_id mapping (UITouch* identity is stable per gesture)
     std::map<void*, int32_t>  _touchIds;
@@ -222,11 +253,18 @@ namespace {
 
 @synthesize inputDelegate = _inputDelegate;
 
-- (instancetype)initWithFrame:(CGRect)frame device:(id<MTLDevice>)device
+- (instancetype)initWithFrame:(CGRect)frame
+                       device:(id<MTLDevice>)device
+                  widgetsView:(Widgets::View*)widgetsView
+                    gpuDevice:(std::shared_ptr<GPU::Device>)gpuDevice
 {
     if (!(self = [super initWithFrame:frame device:device])) return nil;
     _nextPointerId  = 0;
+    _backendPtr     = nullptr;
     self.delegate   = self;
+    _widgetsView    = widgetsView;
+    _device         = std::move(gpuDevice);
+    [self hookUpView];
     return self;
 }
 
@@ -293,24 +331,12 @@ namespace {
     return [super conformsToProtocol:aProtocol];
 }
 
-- (std::shared_ptr<Widgets::Renderer>)setupWithGPUDevice:(std::shared_ptr<GPU::Device>)gpuDevice
-                rootWidget:(Widgets::WidgetRef)rootWidget
+// The View's input managers, frame hook and keyboard hook.
+- (void)hookUpView
 {
-    _device = gpuDevice;
-
-    // Create dispatcher and focus manager before mounting so render
-    // objects register during construction.
-    _dispatcher = std::make_shared<Widgets::PointerDispatcher>();
-    Widgets::PointerDispatcher::setActiveDispatcher(_dispatcher.get());
-
-    _focusManager = std::make_shared<Widgets::FocusManager>();
-    Widgets::FocusManager::setActiveManager(_focusManager.get());
-
-    _tickerScheduler = std::make_unique<Widgets::TickerScheduler>();
-    Widgets::TickerScheduler::setActive(_tickerScheduler.get());
-
-    _textInputManager = std::make_unique<Widgets::TextInputManager>();
-    Widgets::TextInputManager::setActiveManager(_textInputManager.get());
+    _dispatcher       = _widgetsView->sharedPointerDispatcher();
+    _focusManager     = _widgetsView->sharedFocusManager();
+    _textInputManager = _widgetsView->sharedTextInputManager();
 
     // Show/hide the software keyboard when a TextField gains or loses focus.
     __weak CampelloMTKView* weakSelf = self;
@@ -352,111 +378,88 @@ namespace {
     // get the same run-loop-friendly scheduling as MTKView's own
     // CADisplayLink-paced path.
     self.enableSetNeedsDisplay = NO;
-    Widgets::FrameScheduler::setCallback([weakSelf] {
+    _widgetsView->setFrameRequestCallback([weakSelf] {
         if (weakSelf) [weakSelf setNeedsDisplay];
     });
+}
 
-    // Wrap root widget with MediaQuery
-    Widgets::MediaQueryData mediaData;
-    mediaData.device_pixel_ratio = static_cast<float>(self.contentScaleFactor);
-    mediaData.platform_brightness = getSystemBrightness();
-    mediaData.logical_size = Widgets::Size{
-        static_cast<float>(self.bounds.size.width),
-        static_cast<float>(self.bounds.size.height) };
-    if (@available(iOS 11.0, *)) {
-        UIEdgeInsets safeInsets = self.safeAreaInsets;
-        mediaData.padding.left   = static_cast<float>(safeInsets.left);
-        mediaData.padding.top    = static_cast<float>(safeInsets.top);
-        mediaData.padding.right  = static_cast<float>(safeInsets.right);
-        mediaData.padding.bottom = static_cast<float>(safeInsets.bottom);
-    }
-    _mediaData = mediaData;
-    gMediaData = mediaData;
-    
-    auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(
-        mediaData, rootWidget);
+- (void)setRootRenderBox:(std::shared_ptr<Widgets::RenderBox>)root
+{
+    if (!_widgetsView) return;
+    if (_renderer) _widgetsView->setRenderer(nullptr);
+    _renderer.reset();
+    _backendPtr = nullptr;
+    _dispatcher->setRoot(root);
+    if (!root || !_device) return;
 
-    // Bind the UI thread before any widget tree mutation.
-    Widgets::ThreadChecker::instance().bindToCurrentThread();
-
-    // Mount widget tree.
-    _rootElement = wrappedRoot->createElement();
-    _rootElement->mount(nullptr);
-
-    auto* roe = _rootElement->findDescendantRenderObjectElement();
-    if (!roe) return nullptr;
-
-    auto renderBox = std::dynamic_pointer_cast<Widgets::RenderBox>(
-        roe->sharedRenderObject());
-    if (!renderBox) return nullptr;
-
-    _dispatcher->setRoot(renderBox);
-
-    // Create renderer.
-    const Widgets::Color     bgColor   = Widgets::Color::white();
-    const GPU::PixelFormat   pixelFmt  = GPU::PixelFormat::bgra8unorm;
-
-    auto backendOwned = std::make_unique<Widgets::MetalDrawBackend>(
-        _device, bgColor, pixelFmt);
+    const Widgets::Color   bgColor  = Widgets::Color::white();
+    const GPU::PixelFormat pixelFmt = GPU::PixelFormat::bgra8unorm;
+    auto backendOwned = std::make_unique<Widgets::MetalDrawBackend>(_device, bgColor, pixelFmt);
     _backendPtr = backendOwned.get();
 
-    _renderer = std::make_shared<Widgets::Renderer>(_device, renderBox, bgColor);
+    _renderer = std::make_shared<Widgets::Renderer>(_device, root, bgColor);
     _renderer->setDrawBackend(std::move(backendOwned));
-    
-    return _renderer;
+    _renderer->setDevicePixelRatio(static_cast<float>(self.contentScaleFactor));
+    _widgetsView->setRenderer(_renderer.get());
+    _widgetsView->requestFrame();
 }
 
-// ------------------------------------------------------------------
-// MTKViewDelegate
-// ------------------------------------------------------------------
-
-- (void)rebuildMediaQuery
+- (Widgets::Renderer*)renderer
 {
-    if (!_rootElement) return;
-    auto newMediaQuery = Widgets::mw<Widgets::MediaQuery>(
-        _mediaData, gRootWidget);
-    _rootElement->update(newMediaQuery);
-    Widgets::FrameScheduler::scheduleFrame();
+    return _renderer.get();
 }
 
-- (void)updateMediaQueryBrightness
+- (Widgets::WindowMetrics)windowMetrics
 {
-    Widgets::Brightness newBrightness = getSystemBrightness();
-    if (_mediaData.platform_brightness == newBrightness) return;
-    _mediaData.platform_brightness = newBrightness;
-    gMediaData.platform_brightness = newBrightness;
-    [self rebuildMediaQuery];
-}
-
-- (void)updateWindowMetrics
-{
-    Widgets::MediaQueryData newData = _mediaData;
-    newData.logical_size = Widgets::Size{
+    Widgets::WindowMetrics m;
+    m.logical_size = Widgets::Size{
         static_cast<float>(self.bounds.size.width),
         static_cast<float>(self.bounds.size.height) };
-    if (@available(iOS 11.0, *)) {
-        UIEdgeInsets safeInsets = self.safeAreaInsets;
-        newData.padding.left   = static_cast<float>(safeInsets.left);
-        newData.padding.top    = static_cast<float>(safeInsets.top);
-        newData.padding.right  = static_cast<float>(safeInsets.right);
-        newData.padding.bottom = static_cast<float>(safeInsets.bottom);
+    m.device_pixel_ratio = static_cast<float>(self.contentScaleFactor);
+    const UIEdgeInsets safeInsets = self.safeAreaInsets;
+    m.padding.left   = static_cast<float>(safeInsets.left);
+    m.padding.top    = static_cast<float>(safeInsets.top);
+    m.padding.right  = static_cast<float>(safeInsets.right);
+    m.padding.bottom = static_cast<float>(safeInsets.bottom);
+    return m;
+}
+
+- (void)detach
+{
+    self.delegate = nil;
+    self.paused   = YES;
+    if (_widgetsView && Widgets::View::isAlive(_widgetsView))
+    {
+        _widgetsView->setFrameRequestCallback(nullptr);
+        _widgetsView->setRenderer(nullptr);
+        if (_textInputManager) _textInputManager->setOnInputTargetChanged(nullptr);
     }
-    if (newData != _mediaData) {
-        _mediaData = newData;
-        gMediaData = newData;
-        [self rebuildMediaQuery];
-    }
+    _renderer.reset();
+    _backendPtr = nullptr;
+    // No more touches or keys. The text input manager stays referenced (it
+    // outlives the View): UIKit may still query UITextInput briefly.
+    _dispatcher.reset();
+    _focusManager.reset();
+    _widgetsView = nullptr;
+}
+
+- (void)dealloc
+{
+    [self detach];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection
 {
     [super traitCollectionDidChange:previousTraitCollection];
-    [self updateMediaQueryBrightness];
+    if (self.onTraitsChanged) self.onTraitsChanged();
 }
 
 - (void)drawInMTKView:(MTKView*)view
 {
-    if (!_renderer) return;
+    // Held for the whole frame: building it runs every window's pending
+    // rebuilds, which may replace or drop this view's renderer.
+    const std::shared_ptr<Widgets::Renderer> renderer = _renderer;
+    if (!renderer) return;
 
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!drawable) return;
@@ -477,7 +480,7 @@ namespace {
     float physical_width = (float)drawableSize.width;
     float physical_height= (float)drawableSize.height;
 
-    _renderer->setDevicePixelRatio(static_cast<float>(scale));
+    renderer->setDevicePixelRatio(static_cast<float>(scale));
     if (_backendPtr) _backendPtr->setViewport(physical_width, physical_height);
 
     // Tie presentation to GPU completion + vsync via presentDrawable: on the
@@ -487,8 +490,8 @@ namespace {
     // Note: PointerDispatcher/TickerScheduler are ticked inside
     // Renderer::renderFrame() itself — don't duplicate that here.
     auto colorView = GPU::TextureView::fromNative((__bridge void*)drawable.texture);
-    _renderer->setPendingDrawable((__bridge void*)drawable);
-    bool rendered = colorView && _renderer->renderFrame(colorView, physical_width, physical_height);
+    renderer->setPendingDrawable((__bridge void*)drawable);
+    bool rendered = colorView && renderer->renderFrame(colorView, physical_width, physical_height);
     if (!rendered)
         _device->scheduleNextPresent(nullptr);
 }
@@ -583,6 +586,7 @@ namespace {
 
 - (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event
 {
+    CW_VIEW_SCOPE;
     (void)event;
     if (!_dispatcher) return;
     // `button` intentionally stays at its default (primary) here -- touch
@@ -604,6 +608,7 @@ namespace {
 
 - (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event
 {
+    CW_VIEW_SCOPE;
     (void)event;
     if (!_dispatcher) return;
     for (UITouch* touch in touches)
@@ -621,6 +626,7 @@ namespace {
 
 - (void)touchesEnded:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event
 {
+    CW_VIEW_SCOPE;
     (void)event;
     if (!_dispatcher) return;
     for (UITouch* touch in touches)
@@ -637,6 +643,7 @@ namespace {
 
 - (void)touchesCancelled:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event
 {
+    CW_VIEW_SCOPE;
     (void)event;
     if (!_dispatcher) return;
     for (UITouch* touch in touches)
@@ -664,6 +671,7 @@ namespace {
 
 - (void)pressesBegan:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event
 {
+    CW_VIEW_SCOPE;
     // Presses that carry a UIKey are always fully handled below (either
     // routed into text insertion or into FocusManager), so they're removed
     // here before forwarding to super. Any press WITHOUT a UIKey (e.g. from
@@ -744,6 +752,7 @@ namespace {
 
 - (void)pressesEnded:(NSSet<UIPress*>*)presses withEvent:(UIPressesEvent*)event
 {
+    CW_VIEW_SCOPE;
     if (_focusManager)
     {
         for (UIPress* press in presses)
@@ -780,6 +789,7 @@ namespace {
 
 - (void)insertText:(NSString*)text
 {
+    CW_VIEW_SCOPE;
     if (!_textInputManager) return;
 
     // Filter standalone dead keys (e.g. Bluetooth keyboard accents)
@@ -799,6 +809,7 @@ namespace {
 
 - (void)deleteBackward
 {
+    CW_VIEW_SCOPE;
     auto* controller = _textInputManager->activeController();
     if (controller) controller->deleteBackward();
 }
@@ -818,6 +829,7 @@ namespace {
 
 - (void)setSelectedTextRange:(UITextRange*)selectedTextRange
 {
+    CW_VIEW_SCOPE;
     auto* controller = _textInputManager->activeController();
     if (!controller) return;
     CampelloTextRange* r = (CampelloTextRange*)selectedTextRange;
@@ -837,6 +849,7 @@ namespace {
 
 - (void)setMarkedText:(NSString*)markedText selectedRange:(NSRange)selectedRange
 {
+    CW_VIEW_SCOPE;
     if (!_textInputManager) return;
 
     // Skip standalone dead-key accents
@@ -860,6 +873,7 @@ namespace {
 
 - (void)unmarkText
 {
+    CW_VIEW_SCOPE;
     if (_textInputManager)
         _textInputManager->commitComposing();
 }
@@ -1025,6 +1039,7 @@ namespace {
 
 - (void)replaceRange:(UITextRange*)range withText:(NSString*)text
 {
+    CW_VIEW_SCOPE;
     auto* controller = _textInputManager->activeController();
     if (!controller) return;
     CampelloTextRange* r = (CampelloTextRange*)range;
@@ -1051,16 +1066,35 @@ namespace {
 @end
 
 // ---------------------------------------------------------------------------
-// CampelloViewController
+// CampelloUIWindow / CampelloViewController
 // ---------------------------------------------------------------------------
 
-@interface CampelloViewController : UIViewController
+@implementation CampelloUIWindow
+
+- (void)sendEvent:(UIEvent*)event
+{
+    // Touches and presses belong to this window's View (Phase 17).
+    Widgets::View::Scope scope(_widgetsView);
+    [super sendEvent:event];
+}
+
 @end
 
 @implementation CampelloViewController
 {
-    std::shared_ptr<Widgets::Renderer> _renderer;
-    CampelloMTKView* _metalView;
+    Widgets::View*                       _widgetsView;  // not owned
+    std::shared_ptr<GPU::Device>         _device;
+    std::shared_ptr<Widgets::RenderBox>  _root;
+    CampelloMTKView*                     _metalView;
+}
+
+- (instancetype)initWithWidgetsView:(Widgets::View*)view
+                             device:(std::shared_ptr<GPU::Device>)device
+{
+    if (!(self = [super initWithNibName:nil bundle:nil])) return nil;
+    _widgetsView = view;
+    _device      = std::move(device);
+    return self;
 }
 
 - (void)viewDidLoad
@@ -1068,34 +1102,54 @@ namespace {
     [super viewDidLoad];
 
     id<MTLDevice> mtlDevice = MTLCreateSystemDefaultDevice();
-    if (!mtlDevice)
+    if (!mtlDevice || !_device || !_widgetsView)
     {
         NSLog(@"campello_widgets: Metal is not supported on this device");
         return;
     }
 
-    _metalView =
-        [[CampelloMTKView alloc] initWithFrame:self.view.bounds device:mtlDevice];
+    _metalView = [[CampelloMTKView alloc] initWithFrame:self.view.bounds
+                                                 device:mtlDevice
+                                            widgetsView:_widgetsView
+                                              gpuDevice:_device];
     _metalView.colorPixelFormat         = MTLPixelFormatBGRA8Unorm;
     _metalView.depthStencilPixelFormat  = MTLPixelFormatInvalid;
     _metalView.clearColor               = MTLClearColorMake(1.0, 1.0, 1.0, 1.0);
     _metalView.autoresizingMask         =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    // paused/enableSetNeedsDisplay are set inside setupWithGPUDevice.
-
+    __weak CampelloViewController* weakSelf = self;
+    _metalView.onTraitsChanged = ^{
+        CampelloViewController* strongSelf = weakSelf;
+        if (strongSelf && strongSelf.onMetricsChanged) strongSelf.onMetricsChanged();
+    };
     [self.view addSubview:_metalView];
 
-    auto gpuDevice = GPU::Device::createDefaultDevice(nullptr);
-    if (!gpuDevice)
-    {
-        NSLog(@"campello_widgets: failed to create campello_gpu device");
-        return;
-    }
-
-    _renderer = [_metalView setupWithGPUDevice:gpuDevice rootWidget:gRootWidget];
-    
-    // Initial safe area update
+    if (self.onLoaded) self.onLoaded(self);
+    if (_root) [_metalView setRootRenderBox:_root];
     [self updateSafeAreaInsets];
+}
+
+- (void)setRootRenderBox:(std::shared_ptr<Widgets::RenderBox>)root
+{
+    _root = std::move(root);
+    if (!_metalView) return;  // applied in viewDidLoad
+    [_metalView setRootRenderBox:_root];
+    [self updateSafeAreaInsets];
+}
+
+- (Widgets::WindowMetrics)windowMetrics
+{
+    if (!_metalView) return Widgets::WindowMetrics{};
+    return [_metalView windowMetrics];
+}
+
+- (void)detach
+{
+    _root.reset();
+    [_metalView detach];
+    _widgetsView = nullptr;
+    self.onLoaded = nil;
+    self.onMetricsChanged = nil;
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -1115,38 +1169,128 @@ namespace {
 {
     [super viewSafeAreaInsetsDidChange];
     [self updateSafeAreaInsets];
-    [_metalView updateWindowMetrics];
+    if (self.onMetricsChanged) self.onMetricsChanged();
 }
 
 - (void)viewDidLayoutSubviews
 {
     [super viewDidLayoutSubviews];
     [self updateSafeAreaInsets];
-    [_metalView updateWindowMetrics];
+    if (self.onMetricsChanged) self.onMetricsChanged();
     // View bounds may have changed (rotation, split-screen resize) — request a
     // frame so the widget tree lays out at the new size.
-    Widgets::FrameScheduler::scheduleFrame();
+    if (_widgetsView) _widgetsView->requestFrame();
 }
 
 - (void)updateSafeAreaInsets
 {
-    if (!_renderer) return;
-    
-    // Get safe area insets from the view.
-    // On iOS 11+, this accounts for notches, home indicators, etc.
-    // safeAreaInsets are already in logical points; no need to multiply by scale
+    Widgets::Renderer* renderer = [_metalView renderer];
+    if (!renderer) return;
+
+    // safeAreaInsets are already in logical points; no need to multiply by scale.
     UIEdgeInsets safeInsets = self.view.safeAreaInsets;
-    
     Widgets::EdgeInsets insets;
     insets.left   = static_cast<float>(safeInsets.left);
     insets.top    = static_cast<float>(safeInsets.top);
     insets.right  = static_cast<float>(safeInsets.right);
     insets.bottom = static_cast<float>(safeInsets.bottom);
-    
-    _renderer->setViewInsets(insets);
+    renderer->setViewInsets(insets);
 }
 
 @end
+
+// ---------------------------------------------------------------------------
+// The main window: hosts the widget tree's root View
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void mountTreeIfNeeded(CampelloViewController* controller)
+{
+    if (gApp->root_element) return;
+
+    const Widgets::WindowMetrics m = [controller windowMetrics];
+    Widgets::MediaQueryData media;
+    media.device_pixel_ratio  = m.device_pixel_ratio;
+    media.platform_brightness = getSystemBrightness();
+    media.logical_size        = m.logical_size;
+    media.padding             = m.padding;
+    gApp->media = media;
+
+    auto wrappedRoot = Widgets::mw<Widgets::MediaQuery>(media, gRootWidget);
+    gApp->root_element = wrappedRoot->createElement();
+    {
+        Widgets::View::Scope view_scope(gApp->view.get());
+        gApp->root_element->mount(nullptr);
+    }
+
+    auto* roe = gApp->root_element->findDescendantRenderObjectElement();
+    if (!roe) return;
+    gApp->root_box = std::dynamic_pointer_cast<Widgets::RenderBox>(roe->sharedRenderObject());
+}
+
+// Size, safe area or brightness of the main window changed: a new MediaQuery.
+void updateMainMediaQuery(CampelloViewController* controller)
+{
+    if (!gApp->root_element) return;
+    const Widgets::WindowMetrics m = [controller windowMetrics];
+    Widgets::MediaQueryData data = gApp->media;
+    data.device_pixel_ratio  = m.device_pixel_ratio;
+    data.logical_size        = m.logical_size;
+    data.padding             = m.padding;
+    data.platform_brightness = getSystemBrightness();
+    if (!(data != gApp->media)) return;
+    gApp->media = data;
+    Widgets::View::Scope view_scope(gApp->view.get());
+    gApp->root_element->update(Widgets::mw<Widgets::MediaQuery>(gApp->media, gRootWidget));
+    Widgets::FrameScheduler::scheduleFrame();
+}
+
+} // namespace
+
+void cwIOSAttachMain(CampelloUIWindow* window)
+{
+    if (!gApp) return;
+    cwIOSDetachMain();
+    if (gApp->legacy_window && gApp->legacy_window != window) {
+        // A scene took over from the fallback window.
+        gApp->legacy_window.hidden = YES;
+        gApp->legacy_window.rootViewController = nil;
+        gApp->legacy_window = nil;
+    }
+    auto* controller = [[CampelloViewController alloc] initWithWidgetsView:gApp->view.get()
+                                                                    device:gApp->device];
+    __weak CampelloViewController* weakController = controller;
+    controller.onLoaded = ^(CampelloViewController* c) {
+        mountTreeIfNeeded(c);
+        [c setRootRenderBox:gApp->root_box];
+    };
+    controller.onMetricsChanged = ^{
+        if (CampelloViewController* c = weakController) updateMainMediaQuery(c);
+    };
+    gApp->main_controller = controller;
+    window.widgetsView = gApp->view.get();
+    window.rootViewController = controller;
+    [window makeKeyAndVisible];
+}
+
+void cwIOSDetachMain()
+{
+    if (!gApp || !gApp->main_controller) return;
+    [gApp->main_controller detach];
+    gApp->main_controller = nil;
+}
+
+bool cwIOSMainAttached()
+{
+    // Hosted by the no-scene fallback window doesn't count: a scene replaces it.
+    return gApp && gApp->main_controller != nil && gApp->legacy_window == nil;
+}
+
+std::shared_ptr<GPU::Device> cwIOSDevice()
+{
+    return gApp ? gApp->device : nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // CampelloAppDelegate
@@ -1161,13 +1305,63 @@ namespace {
 - (BOOL)application:(UIApplication*)application
     didFinishLaunchingWithOptions:(NSDictionary*)launchOptions
 {
-    (void)application;
     (void)launchOptions;
 
-    self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
-    self.window.rootViewController = [[CampelloViewController alloc] init];
-    [self.window makeKeyAndVisible];
+    // Process-wide state, before any window (scene) connects.
+    gApp = new IOSApp();
+    gApp->device = GPU::Device::createDefaultDevice(nullptr);
+    if (!gApp->device) NSLog(@"campello_widgets: failed to create campello_gpu device");
+
+    // The main window's View owns its dispatcher, focus and text input
+    // managers and frame hook; makePrimary() also installs them as the
+    // process-wide fallbacks, so code without a window context behaves as
+    // before. Created before mounting so render objects register with it.
+    gApp->view = std::make_unique<Widgets::View>();
+    gApp->view->makePrimary();
+    gApp->ticker = std::make_unique<Widgets::TickerScheduler>();
+    Widgets::TickerScheduler::setActive(gApp->ticker.get());
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
+
+    // More windows (iPadOS scenes, external displays), when the app runs
+    // with the UIScene lifecycle (UIApplicationSceneManifest in Info.plist).
+    if (gApp->device)
+    {
+        gApp->windowing = makeIOSPlatformWindowing(gApp->device);
+        Widgets::PlatformWindowing::setInstance(gApp->windowing.get());
+    }
+
+    // Windows come from scenes (CampelloSceneDelegate). Because this
+    // delegate implements configurationForConnectingSceneSession:, UIKit
+    // uses scenes even without UIApplicationSceneManifest; should no scene
+    // connect anyway (the legacy, window-only lifecycle), fall back to one
+    // UIWindow of our own once launching is done.
+    __weak CampelloAppDelegate* weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        CampelloAppDelegate* strongSelf = weakSelf;
+        if (!strongSelf || !gApp || gApp->main_controller) return;
+        auto* window = [[CampelloUIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
+        strongSelf.window   = window;
+        gApp->legacy_window = window;
+        cwIOSAttachMain(window);
+    });
+    (void)application;
     return YES;
+}
+
+// Every scene, whatever its role, is handled by CampelloSceneDelegate:
+// configured here so Info.plist doesn't have to name classes.
+- (UISceneConfiguration*)application:(UIApplication*)application
+    configurationForConnectingSceneSession:(UISceneSession*)connectingSceneSession
+                                   options:(UISceneConnectionOptions*)options
+{
+    (void)application;
+    (void)options;
+    UISceneConfiguration* config =
+        // No name: nothing to look up in Info.plist's UISceneConfigurations.
+        [[UISceneConfiguration alloc] initWithName:nil
+                                       sessionRole:connectingSceneSession.role];
+    config.delegateClass = [CampelloSceneDelegate class];
+    return config;
 }
 
 @end

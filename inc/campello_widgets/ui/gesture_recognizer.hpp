@@ -7,6 +7,7 @@
 
 namespace systems::leal::campello_widgets
 {
+    class PointerDispatcher;
 
     /**
      * @brief Abstract base for all gesture recognizers.
@@ -71,8 +72,13 @@ namespace systems::leal::campello_widgets
          * arena it may still be a member of (safe even if it never joined
          * one, or already resolved). Subclasses with extra state to clear
          * should call the base implementation too.
+         *
+         * @param dispatcher The dispatcher whose arena to leave: pass the
+         *        owner's (RenderObject::pointerDispatcher()). dispose() runs
+         *        outside event dispatch, where activeDispatcher() (the default
+         *        when nullptr) may belong to another window.
          */
-        virtual void dispose();
+        virtual void dispose(PointerDispatcher* dispatcher = nullptr);
 
     protected:
         GestureRecognizer() = default;
