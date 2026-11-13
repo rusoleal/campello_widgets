@@ -21,6 +21,7 @@
 
 #include <windows.h>
 #include <windowsx.h>
+#include <appnotify.h>  // RegisterAppStateChangeNotification (PLM)
 #include <XGameRuntime.h>
 
 #include <chrono>
