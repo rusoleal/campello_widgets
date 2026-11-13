@@ -14,15 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   open a native window whose content is a subtree of the app's tree, so windows share state with no
   messaging; `PlatformWindowing` is the per-platform backend, and
   `WindowController::setPlatformWindowHandler()` receives windows the platform opens by itself.
-  Implemented on macOS (NSWindows), the web (extra canvases, experimental `window.open()` popups),
-  iPadOS (UIWindowScenes, external displays) and Android (one activity per window). See
-  `examples/macos_multi_window`, `examples/web_multi_window`, `examples/ios_multi_window` and the
+  Implemented on macOS (NSWindows), Windows (HWNDs, each presenting through its own DXGI swapchain),
+  the web (extra canvases, experimental `window.open()` popups), iPadOS (UIWindowScenes, external
+  displays) and Android (one activity per window). See `examples/macos_multi_window`,
+  `examples/windows_multi_window`, `examples/web_multi_window`, `examples/ios_multi_window` and the
   Android gallery's `debug.cw_multiwindow` demo.
 - **Modal and owned windows.** `WindowOptions::modal` blocks the parent window's input while open
   (`View::addInputBlocker()`; core-level, so every platform); a window with a `parent` closes with
   it. `WindowController::setMainWindowClosePolicy()` decides what closing the main window does
-  (default: quit, closing every window; macOS).
-- **Popup windows.** `WindowKind::popup` (macOS borderless child window, web floating canvas) and the
+  (default: quit, closing every window; macOS and Windows). On Windows a modal window also disables
+  its owner (`EnableWindow`), the native modal behaviour.
+- **Popup windows.** `WindowKind::popup` (macOS borderless child window, Windows owned `WS_POPUP`
+  tool window with a drop shadow, web floating canvas) and the
   `PopupWindowAnchor` widget: a menu or dropdown anchored to a widget, in its own window so it can
   extend past the parent's edge, falling back to the window's Overlay elsewhere (iOS, Android);
   dismissed by a press elsewhere, Escape, or losing focus.
@@ -31,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Windows runner rewritten around per-window hosts** (`src/windows/win32_host.*`). The main window
+  now presents through a campello_gpu `Surface` like secondary windows (the device is created
+  without a window). `runApp()`'s `width`/`height` are now **logical** pixels (DIPs), so a 1024x720
+  window is 2048x1440 physical pixels at 200% scaling, as on macOS; it used to be 1024x720 physical.
+  Windows are Unicode (`CreateWindowExW`; `WM_CHAR` surrogate pairs are combined), mouse events
+  report `PointerDeviceKind::mouse` (they used the touch default, i.e. touch slop), horizontal wheel
+  scrolling is delivered, the cursor follows `MouseRegion`/`SystemMouseCursor` (no cursor handler was
+  registered on Windows), the performance overlay's budget uses the monitor's refresh rate, and
+  per-monitor DPI changes (`WM_DPICHANGED`) resize the window and update the device pixel ratio.
 - **Android entry point (breaking).** The runner no longer uses `android_native_app_glue`: call
   `runApp(activity, saved_state, saved_state_size, make_root)` from your library's
   `ANativeActivity_onCreate` instead of `runApp(android_app*, root)` from `android_main`, and drop
@@ -41,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows: `MediaQuery.logical_size` was in physical pixels** (the client size, not divided by the
+  device pixel ratio), so at any scaling other than 100% it disagreed with the size layout actually
+  uses.
+- **Rebuilding an element in the middle of its own unmount.** A `State::dispose()` that touches an
+  ancestor being torn down in the same unmount (e.g. `PopupWindowAnchor` removing its `OverlayEntry`
+  from the Overlay being unmounted) could rebuild that ancestor synchronously and rewrite the child
+  list `MultiChildRenderObjectElement::unmount()` was iterating: a use-after-free. It crashed
+  `PopupWindowAnchor.FallsBackToTheWindowsOverlayWithoutNativePopups` (and, through corrupted state,
+  28 later tests) under the Windows debug heap and passed silently on macOS. Elements now ignore
+  `markNeedsBuild()` once their unmount has started. Test: `ElementUnmount.*`.
+- **Windows unit tests could run a stale `campello_widgets.dll`**: the DLLs were copied next to the
+  test executables in a `POST_BUILD` step, which only reruns when an executable relinks.
 - **Android text colours**: red and blue were swapped in all rasterized text (blue drawn orange).
 - **`InheritedElement::unmount()`** now unmounts its child: `State`s under a removed `MediaQuery` /
   `Theme` subtree were never disposed.

@@ -990,8 +990,44 @@ device->submit(cmd);
         pools and a per-thread (or locked) frame ring before one raster
         thread per window works on Vulkan. Check DX12 for the same
         before M3.
-- [ ] **M0.3** DX12: one `IDXGISwapChain` (plus RTV heap and back buffers)
-      per `HWND` on the shared queue; `Present()` after `ExecuteCommandLists`.
+- [x] **M0.3** DX12 (2026-11-13), on `campello_gpu`'s `feature/multi-surface`
+      branch (uncommitted). One flip-model `IDXGISwapChain3` per `HWND`, with
+      its own back buffers and RTV heap, on the device's single queue
+      (`SurfaceData` in `src/directx/common.hpp`).
+      - **Barriers:** a back buffer is a `TextureHandle` flagged
+        `isSurfaceImage`. `beginRenderPass()` moves it PRESENT->RENDER_TARGET
+        like any attachment; `RenderPassEncoder::end()` leaves it there;
+        `CommandEncoder::finish()` returns it to PRESENT. An encoder dropped
+        without `finish()` resets the tracked state (its barriers never ran).
+      - **Present:** `schedulePresent()` moves the acquisition into the
+        command buffer; `submit()` calls `Present(1, 0)` for each scheduled
+        surface after `ExecuteCommandLists`. The command buffer keeps the
+        swapchain alive until the frame ring retires it, and
+        `Device::~Device` retires the ring before releasing its fence.
+      - **Sizing:** follows the client rect unless an explicit size was
+        given; `ResizeBuffers` after a full GPU idle wait. A minimised or 0x0
+        window acquires nothing. An abandoned acquisition returns the same
+        image (the index only advances on `Present()`).
+      - **One swapchain per HWND** (a DXGI rule): a second `createSurface()`
+        on the same window returns nullptr.
+      - **Verified** on an Intel Iris 550 (Windows 10), Debug with the D3D12
+        debug layer: 17 Surface tests on real borderless HWNDs, reading back
+        what DWM shows with `PrintWindow(PW_RENDERFULLCONTENT)` (two windows
+        interleaved, one command buffer presenting two windows, resize,
+        explicit size, minimise, surface destroyed with a pending present,
+        device destroyed with retained frames). Zero debug-layer messages.
+        Mutation-checked: skipping `Present()` fails 10 tests; removing the
+        dropped-encoder state reset is caught only by the debug layer (two
+        `ResourceBarrier` / `ClearRenderTargetView` state errors), not by an
+        assertion. Full DX12 suite: 221 passed, 43 skipped, 1 failed
+        (`Texture.DroppingTextureImmediatelyAfterSubmitTriggersNoValidationError`,
+        which fails the same way without these changes).
+      - **M1.9 question for DX12 answered: not thread-safe.** The frame ring,
+        command allocators and descriptor-slot recycling assume one recording
+        thread, and there is no per-device recording lock like Vulkan's. The
+        Windows runner encodes every window on the UI thread, so this isn't
+        hit; a raster thread per window on Windows would need the Vulkan lock
+        ported first.
 - [x] **M0.4** WebGPU (2026-11-11), on `campello_gpu`'s
       `feature/multi-surface` branch. Each `Surface` is its own
       `WGPUSurface` (a `GPUCanvasContext` on one `<canvas>` CSS selector),
@@ -1021,7 +1057,7 @@ device->submit(cmd);
 
 ### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
 
-**Status (2026-11-12): done for macOS, iOS, Android and web; the Windows,
+**Status (2026-11-13): done for macOS, iOS, Android, web and Windows; the
 Linux (X11/Wayland/embedded) and GDK runners still use the legacy path,**
 which keeps working unchanged because nothing was removed. Branch
 `feature/multi-window`.
@@ -1090,6 +1126,8 @@ window, in priority order:
 - [ ] **M1.8b** Windows, Linux X11, Wayland, Linux embedded and GDK
       runners: same mechanical migration, but they can't be built on this
       Mac. Do it on the machine used for M0.3/M3.
+      - [x] **Windows** (2026-11-13), as part of M3.1 below.
+      - [ ] Linux X11, Wayland, Linux embedded, GDK.
 - [x] **M1.9** Vulkan with several raster threads (2026-11-12, `campello_gpu`
       `feature/multi-surface`). **Design choice:** recording is serialized
       per device with a frame lock (from `createCommandEncoder()` until
@@ -1209,8 +1247,90 @@ renders in the Simulator (taps not automatable).
 
 ### M3 — Windows and Linux
 
-- [ ] **M3.1** Windows: multiple `HWND`s on one message loop, per-monitor
-      DPI v2, one `Surface` per `HWND`.
+- [x] **M3.1** Windows (2026-11-13). The runner was rewritten around a
+      per-window host (`src/windows/win32_host.{hpp,cpp}`): each
+      `Win32Window` is an `HWND` with its own `View`, campello_gpu `Surface`
+      and `Renderer` + `D3DDrawBackend`, on one headless shared device. The
+      **main window also presents through a `Surface`** (the device is
+      created without a window), so both take one path.
+      - **Frames:** one vsync thread (`DwmFlush()`) posts a frame message to
+        a message-only host window; the UI thread then draws every window
+        that asked for one (`View::requestFrame()`). Drawing stays on the UI
+        thread (no raster threads on Windows, as before). `WM_SIZE` draws
+        immediately so live resizing doesn't show stretched frames. A frame
+        holds its renderer and surface, so a window removed by its own
+        rebuild (a popup closing itself) is safe.
+      - **Tasks:** `postTask()` queues on the host window, so tasks also run
+        inside modal loops (window drags). `WM_CLOSE` and popup deactivation
+        are delivered through it.
+      - **Input:** every message is handled inside `View::Scope(view)`.
+        Pointer coordinates are divided by that window's DPI, mouse events
+        are `PointerDeviceKind::mouse` (they used the touch default), the
+        pointer leaving a window sends an out-of-bounds move so its hovers
+        end, IME and keys go to the window's own managers, and windows are
+        Unicode (`WM_CHAR` surrogate pairs combined).
+      - **Per-monitor DPI v2:** sizes are logical (`runApp()`'s width and
+        height too, as on macOS); `WM_DPICHANGED` applies the suggested rect
+        and updates the pixel ratio. Fixed a pre-existing bug on the way:
+        `MediaQuery.logical_size` was the physical client size.
+      - **Kinds** (`src/windows/platform_windowing.cpp`): regular
+        (`WS_OVERLAPPEDWINDOW`); dialog (captioned and owned: above its
+        owner, no taskbar button, centred on it); modal (also disables its
+        owner with `EnableWindow`, the Win32 idiom: a click on the owner
+        rings and flashes the modal); popup (owned `WS_POPUP` tool window
+        with `CS_DROPSHADOW`, placed relative to the owner's client area,
+        closes when it loses activation).
+      - **Close policy:** `quit_app` posts `WM_QUIT`; `keep_running` hides
+        the main window and quits when the last window is destroyed.
+        Teardown destroys every secondary window *before* unmounting the
+        tree (their `on_destroyed` callbacks usually point into States).
+      - Also: `SystemMouseCursor` now works on Windows (no cursor handler
+        was registered), and the performance overlay's budget uses the
+        monitor's refresh rate.
+
+      `examples/windows_multi_window` (Debug, `build/windows-debug`) has the
+      macOS example's windows and three self-tests. They post real Win32
+      input messages to the HWNDs (through each window's real window
+      procedure) and save `PrintWindow` captures:
+      - `CW_MULTIWINDOW_DEMO=2`: a click in the Inspector updates the counter
+        in all windows; clicking its TextField and typing "hi" lands there,
+        while typing into the main window doesn't; About's Close destroys it.
+      - `CW_MULTIWINDOW_DEMO=3`: Preferences (modal) disables the main window
+        and a click on it doesn't count; +10 and Done work; the main window
+        works again afterwards. The Options popup is a separate window that
+        extends below the main window; an item runs and closes it; a click
+        elsewhere, Escape, and losing activation each close it. Closing the
+        main window with two other windows open quits cleanly (exit 0).
+      - `CW_MULTIWINDOW_DEMO=4`: with `keep_running`, closing the main window
+        leaves the Inspector working; closing it quits.
+      5 runs of each gave identical results, every run exited 0, and the
+      D3D12 debug layer reported nothing. Captures (200% scaling) show the
+      right content in every window.
+
+      Regressions: the single-window gallery renders through the new path
+      at 200% and re-lays out on a live resize (its only debug-layer output
+      is `ClearRenderTargetView` clear-value performance hints from
+      offscreen textures). Unit tests: 900 passed, 69 skipped on Windows.
+      - Found and fixed along the way: **an element could rebuild in the
+        middle of its own unmount** (`Element::unmounting_`, test
+        `ElementUnmount.*`). `PopupWindowAnchor.FallsBackToTheWindowsOverlay...`
+        was a use-after-free that crashed under the Windows debug heap (and
+        cascaded into 28 more failures) but was silent on macOS. Also, the
+        Windows unit tests could run a stale `campello_widgets.dll` (a
+        POST_BUILD copy; now an OUTPUT command that depends on the DLLs).
+
+      **Not done / not verified on Windows:**
+      - Input was posted as window messages, not hardware input (`SendInput`
+        would move the user's real mouse), so the system's routing to a
+        disabled owner (the modal ring/flash) wasn't exercised; the owner's
+        `EnableWindow` state was checked instead. A manual pass is worth it.
+      - One vsync thread for all windows (DWM's clock), not each window's
+        own display.
+      - Per-monitor DPI changes (dragging between monitors) and IME were not
+        exercised (one monitor here).
+      - The Release build of the example wasn't run (Debug only).
+      - Popups open below the anchor without flipping at the screen edge
+        (same as macOS).
 - [ ] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each.
 - [ ] **M3.3** Linux Wayland: `g_wayland_state` becomes one state per
       window, with multiple `xdg_toplevel`s. Client-side positioning isn't
@@ -1511,9 +1631,9 @@ and Android.**
         pixel-identical with its overlay dropdown working.
 
 **Known gaps / follow-ups (M2 + M7)**
-- [ ] Windows/Linux: modal, popups and the close policy aren't implemented
-      (M3). The web and iPad have no main-window close policy (no such
-      concept).
+- [x] Windows: modal, popups and the close policy (M3.1, 2026-11-13).
+- [ ] Linux: modal, popups and the close policy aren't implemented (M3).
+      The web and iPad have no main-window close policy (no such concept).
 - [ ] An app's main window needs an `Overlay` in its tree for the fallback
       (secondary windows always have one); without it,
       `PopupWindowAnchor` logs a warning.
@@ -1538,10 +1658,11 @@ and Android.**
       (`examples/gallery/gallery_app.cpp` `stack_bg`).
 - [x] iOS gallery didn't build either (same missing `campello_fluent` link).
       Fixed 2026-11-12.
-- [ ] **Likely the same on Windows and Linux (unverified, can't build here):**
-      the Windows gallery doesn't link `campello_fluent`, and the Linux
-      gallery links only `campello_widgets` while `gallery_app.cpp`
-      includes all four design systems.
+- [x] Windows gallery: links `campello_fluent` (1a24972); builds and runs
+      (verified 2026-11-13).
+- [ ] **Likely the same on Linux (unverified):** the Linux gallery links only
+      `campello_widgets` while `gallery_app.cpp` includes all four design
+      systems.
 - [x] Android gallery didn't build: `gallery_app.cpp` includes
       `campello_fluent` but `android/app/src/main/cpp/CMakeLists.txt` didn't
       link it. Fixed 2026-11-11.
