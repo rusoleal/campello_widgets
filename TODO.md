@@ -1050,10 +1050,11 @@ device->submit(cmd);
         task as the submit, which is exactly the texture about to be
         presented. Remember this for M4 web fidelity screenshots: capture
         before yielding, or use a CDP `Page.captureScreenshot`.
-- [ ] **M0.5** Deprecate `scheduleNextPresent()` and
+- [x] **M0.5** Deprecate `scheduleNextPresent()` and
       `getSwapchainTextureView()` in the docs (keep them working), write the
       CHANGELOG entry, tag a `campello_gpu` release and bump
-      `dependencies/campello_gpu.cmake`.
+      `dependencies/campello_gpu.cmake`. Done 2026-11-13: campello_gpu
+      v0.29.0, pinned with `GIT_REPOSITORY`/`GIT_TAG`.
 
 ### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
 
@@ -1673,10 +1674,9 @@ and Android.**
 - [ ] Android Studio's bundled JBR is now JDK 25, which Gradle 8.13 rejects
       (the error is just "25.0.3"). Build with Gradle's JDK 17 instead:
       `JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-17-*/jdk-17*/Contents/Home`.
-- [ ] `dependencies/campello_gpu.cmake` has a committed "temporary
+- [x] `dependencies/campello_gpu.cmake` had a committed "temporary
       local-testing override" (sibling `../campello_gpu` `SOURCE_DIR`,
-      since #7). Restore `GIT_REPOSITORY`/`GIT_TAG`-only before the next
-      release (M0.5 bumps the pin anyway).
+      since #7). Removed 2026-11-13: `GIT_REPOSITORY`/`GIT_TAG v0.29.0` only.
 
 ---
 
