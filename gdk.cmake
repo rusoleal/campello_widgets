@@ -58,27 +58,17 @@ list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/testing/.*")
 list(FILTER CAMPELLO_WIDGETS_SOURCES EXCLUDE REGEX ".*/src/gpu/(vulkan|metal)/.*")
 
 # src/gdk/run_app.cpp is the only GDK-specific source today (see TODO.md
-# 4.5.3) -- everything else GDK needs is the same Win32-API-surface code
-# windows.cmake builds, just compiled once more here under
-# WINAPI_FAMILY_GAMES (see cmake/platforms/GDK.cmake in campello_editor,
-# which sets that compile definition for this whole configure). These four
-# specifically were checked before including them:
-#   - d3d_draw_backend.cpp/.hpp: confirmed no HWND coupling -- its only
-#     HFONT-related Win32 call, CreateCompatibleDC, is already passed
-#     nullptr, not a window DC.
-#   - platform_menu_delegate.cpp: a real no-op stub today (setMenus()/
-#     clearMenus() are empty, no Win32 menu API calls at all) -- zero risk.
-#   - clipboard.cpp / http_client.cpp: plain Win32 clipboard/WinHTTP calls,
-#     same category as everything already confirmed for run_app.cpp itself.
-# video_player_controller.cpp is included too -- src/ui/render_video_player.cpp
-# (cross-platform, always compiled) calls into VideoPlayerController, so
-# omitting the Windows implementation here would be a guaranteed undefined-
-# symbol link error, not a safe scope cut. Its Media Foundation API surface
-# (mfapi.h/mfreadwrite.h) is NOT verified against the WINAPI_FAMILY_GAMES
-# partition, unlike the other three above -- this is exactly the kind of
-# "surfaces an incompatible call" discovery TODO.md 4.5.1's last item
-# (needs a real GDK toolchain build) is for, not something guessable from
-# here.
+# 4.5.3). Everything else GDK needs is the same Win32 code windows.cmake
+# builds, compiled once more here: Gaming.Desktop.x64 is an ordinary Windows
+# desktop process (WINAPI_FAMILY_DESKTOP_APP, the default), so user32/gdi32,
+# the clipboard, GDI text measurement and Media Foundation are all available.
+#   - d3d_draw_backend.cpp/.hpp: no HWND coupling (CreateCompatibleDC is
+#     passed nullptr, not a window DC).
+#   - platform_menu_delegate.cpp: a no-op stub today.
+#   - clipboard.cpp / http_client.cpp: plain Win32 clipboard/WinHTTP calls.
+#   - video_player_controller.cpp: src/ui/render_video_player.cpp (always
+#     compiled) calls into VideoPlayerController, so omitting it would be an
+#     undefined-symbol link error.
 list(APPEND CAMPELLO_WIDGETS_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/src/windows/d3d_draw_backend.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/windows/clipboard.cpp"
@@ -93,12 +83,11 @@ set_target_properties(campello_widgets PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 # See windows.cmake's identical comment for why this define is needed.
 target_compile_definitions(campello_widgets PRIVATE CAMPELLO_WIDGETS_BUILDING_DLL)
 
-# Restricts this target's own view of <windows.h> et al to the GAMES
-# partition. Set directly here (not left to a superproject) so a standalone
-# build of this repo is self-sufficient -- see the GDK root discovery block
-# above for the same reasoning. Harmless to set twice if campello_editor's
-# GDK.cmake also sets it at the directory level (identical macro/value).
-target_compile_definitions(campello_widgets PRIVATE WINAPI_FAMILY=WINAPI_FAMILY_GAMES)
+# No WINAPI_FAMILY override. This target used to set
+# WINAPI_FAMILY=WINAPI_FAMILY_GAMES, which is the Xbox console partition: it
+# hides desktop APIs this code needs (GDI text, the clipboard, GetKeyState,
+# GetDpiForWindow, TrackMouseEvent, ...) and the GDK job never compiled.
+# An Xbox (Gaming.Xbox.*) target would need its own sources, not this file.
 
 target_include_directories(campello_widgets
     PUBLIC
@@ -110,24 +99,11 @@ target_include_directories(campello_widgets
         ${CMAKE_CURRENT_SOURCE_DIR}/src/windows
 )
 
-# Deliberately drops dwmapi/imm32 from windows.cmake's list: no DWM
-# composition or IME model applies under WINAPI_FAMILY_GAMES (see
-# src/gdk/run_app.cpp's header doc comment). Also deliberately drops
-# user32/gdi32: xgameplatform.lib is Microsoft's own umbrella replacement
-# for exactly those desktop-shell libs (confirmed against
-# learn.microsoft.com -- "you are linking against xgameplatform.lib rather
-# than against the standard Win32 desktop libs (kernel32, user32, gdi32,
-# ...)"), so CreateWindowEx/GetDpiForWindow/GDI calls in
-# src/gdk/run_app.cpp and d3d_draw_backend.cpp resolve from there instead;
-# linking user32/gdi32 directly here as well would defeat the point of the
-# GDK.cmake-level bare /NODEFAULTLIB (see campello_editor's
-# cmake/platforms/GDK.cmake). dxgi/d3d11/d3d12/winhttp/ole32/propsys/
-# mfplat/mfreadwrite/mfuuid are NOT part of that desktop-shell family --
-# lower-level system libs GDK samples link directly alongside
-# xgameplatform.lib -- kept as-is. xgameplatform/xgameruntime themselves
-# come from the GDK's own lib dir, already added via link_directories() in
-# campello_editor's cmake/platforms/GDK.cmake (link_directories() scope
-# extends to this add_subdirectory()'d target).
+# The same system libraries as windows.cmake (a Gaming.Desktop.x64 title is
+# a desktop process), plus the GDK's xgameruntime (XGameRuntimeInitialize)
+# and appnotify (RegisterAppStateChangeNotification, used for PLM in
+# src/gdk/run_app.cpp). xgameplatform.lib is the console replacement for
+# user32/gdi32 and isn't linked here.
 target_link_libraries(campello_widgets
     PUBLIC
         campello_gpu
@@ -136,8 +112,12 @@ target_link_libraries(campello_widgets
         campello_image
         Clipper2
     PRIVATE
-        xgameplatform
         xgameruntime
+        appnotify
+        user32
+        gdi32
+        dwrite
+        d2d1
         d3d11
         d3d12
         dxgi
@@ -152,8 +132,8 @@ target_link_libraries(campello_widgets
 target_compile_options(campello_widgets PRIVATE /W4)
 
 # Reuses the same CAMPELLO_PLATFORM_WINDOWS macro as windows.cmake -- this
-# target is still fundamentally the Win32-API-surface backend, just under a
-# restricted partition, so code gated on "is this Windows" (e.g.
+# target is still fundamentally the Win32-API-surface backend (Gaming.Desktop.x64 is a
+# desktop process), so code gated on "is this Windows" (e.g.
 # d3d_draw_backend.cpp) should still see itself as Windows. PLATFORM_GDK
 # (from campello_editor's cmake/platforms/GDK.cmake) is the finer-grained
 # flag for GDK-specific behavior differences (this file's own
