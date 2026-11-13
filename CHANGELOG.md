@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Linux: apps using `VideoPlayer` didn't link** (no `VideoPlayerController` on Linux); a stub now
+  leaves video sources unready, so `VideoPlayer` shows its placeholder, as on the web. The Linux
+  gallery also links all four design systems.
+
 - **Windows: `MediaQuery.logical_size` was in physical pixels** (the client size, not divided by the
   device pixel ratio), so at any scaling other than 100% it disagreed with the size layout actually
   uses.

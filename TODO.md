@@ -1660,9 +1660,13 @@ and Android.**
       Fixed 2026-11-12.
 - [x] Windows gallery: links `campello_fluent` (1a24972); builds and runs
       (verified 2026-11-13).
-- [ ] **Likely the same on Linux (unverified):** the Linux gallery links only
-      `campello_widgets` while `gallery_app.cpp` includes all four design
-      systems.
+- [x] Linux gallery: it linked only `campello_widgets` (all four design
+      systems needed), and Linux had no `VideoPlayerController` at all, so
+      it didn't link. Fixed 2026-11-13: design systems linked, plus a stub
+      `src/linux/video_player_controller.cpp` (like the web's: sources never
+      become ready). Verified in Docker (Ubuntu 24.04, lavapipe, Xvfb): the
+      full Linux build (library, tests, both examples) succeeds, 1119/1119
+      tests pass, and the gallery renders through the X11 runner.
 - [x] Android gallery didn't build: `gallery_app.cpp` includes
       `campello_fluent` but `android/app/src/main/cpp/CMakeLists.txt` didn't
       link it. Fixed 2026-11-11.
