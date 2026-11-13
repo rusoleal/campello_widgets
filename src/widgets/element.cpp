@@ -44,6 +44,7 @@ namespace systems::leal::campello_widgets
         parent_ = parent;
         view_    = parent_ ? parent_->childView() : View::current();
         mounted_ = true;
+        unmounting_ = false;
         if (parent_)
             inherited_widgets_ = parent_->inherited_widgets_;
         onMountInheritance();
@@ -75,6 +76,7 @@ namespace systems::leal::campello_widgets
         if (auto* gk = dynamic_cast<GlobalKey*>(widget_->key.get()))
             GlobalKey::_unregister(gk);
 
+        unmounting_ = true;
         mounted_ = false;
         parent_  = nullptr;
     }
@@ -88,7 +90,7 @@ namespace systems::leal::campello_widgets
     void Element::markNeedsBuild()
     {
         ThreadChecker::instance().assertOnBoundThread("Element::markNeedsBuild");
-        if (dirty_) return;
+        if (dirty_ || unmounting_) return;
         dirty_ = true;
         dirty_elements_.push_back(this);
 
@@ -119,7 +121,7 @@ namespace systems::leal::campello_widgets
             if (dirty.empty()) break;
             for (Element* e : dirty)
             {
-                if (isAlive(e) && e->mounted_)
+                if (isAlive(e) && e->mounted_ && !e->unmounting_)
                     e->rebuild();
             }
         }

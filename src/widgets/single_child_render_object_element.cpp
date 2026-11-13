@@ -17,6 +17,7 @@ namespace systems::leal::campello_widgets
 
     void SingleChildRenderObjectElement::unmount()
     {
+        unmounting_ = true;
         if (child_element_)
         {
             child_element_->unmount();

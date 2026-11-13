@@ -32,6 +32,7 @@ namespace systems::leal::campello_widgets
         // State::dispose() (e.g. a TextField releasing the IME) runs in this
         // element's window.
         View::Scope view_scope(scopeView());
+        unmounting_ = true;
         if (child_)
             child_->unmount();
         state_->dispose();

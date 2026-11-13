@@ -41,6 +41,7 @@ namespace systems::leal::campello_widgets
         // (MediaQuery, Theme, ...) never disposed the States below it nor
         // unregistered their render objects (found via Phase 17's Window
         // widget, whose hosted content is wrapped in a MediaQuery).
+        unmounting_ = true;
         if (child_)
         {
             child_->unmount();

@@ -20,6 +20,7 @@ namespace systems::leal::campello_widgets
 
     void MultiChildRenderObjectElement::unmount()
     {
+        unmounting_ = true;
         for (auto& child : child_elements_)
             if (child) child->unmount();
         child_elements_.clear();

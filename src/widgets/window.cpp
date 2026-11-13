@@ -284,6 +284,7 @@ namespace systems::leal::campello_widgets
 
     void WindowElement::unmount()
     {
+        unmounting_ = true;
         dropChild();
         unsubscribe();
         RenderObjectElement::unmount();

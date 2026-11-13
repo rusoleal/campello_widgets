@@ -10,6 +10,7 @@ namespace systems::leal::campello_widgets
 
     void StatelessElement::unmount()
     {
+        unmounting_ = true;
         if (child_)
             child_->unmount();
         Element::unmount();

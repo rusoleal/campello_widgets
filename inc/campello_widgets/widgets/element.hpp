@@ -249,6 +249,12 @@ namespace systems::leal::campello_widgets
         bool      dirty_    = true;
         bool      mounted_  = false;
         bool      building_ = false;
+        /// Set when unmount() starts, before the subtree goes. A State's
+        /// dispose() below may touch an ancestor that is itself being torn
+        /// down (e.g. removing an OverlayEntry from an Overlay that is being
+        /// unmounted); rebuilding that ancestor then would rewrite the child
+        /// list its unmount() is iterating. markNeedsBuild() ignores it.
+        bool      unmounting_ = false;
 
         static std::vector<Element*> dirty_elements_;
         static std::unordered_set<const Element*> s_alive_;
