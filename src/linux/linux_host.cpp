@@ -175,7 +175,10 @@ namespace systems::leal::campello_widgets::linux_host
         if (!needs_frame_ || !renderer_ || !raster_ || !isShown()) return false;
         const uint32_t w = physicalWidth(), h = physicalHeight();
         if (w == 0 || h == 0) return false;
+        const auto now = std::chrono::steady_clock::now();
+        if (min_interval_.count() > 0 && now - last_frame_ < min_interval_) return false;  // not due yet
         needs_frame_ = false;
+        last_frame_  = now;
 
         // Held for the whole frame: building it runs every window's pending
         // rebuilds (the shared buildScope()), which may replace this window's
@@ -232,6 +235,21 @@ namespace systems::leal::campello_widgets::linux_host
         for (LinuxWindow* w : g_windows)
             if (&w->view_ == view) return w;
         return nullptr;
+    }
+
+    int LinuxWindow::msUntilNextFrame()
+    {
+        int  soonest = -1;
+        const auto now = std::chrono::steady_clock::now();
+        for (LinuxWindow* w : g_windows)
+        {
+            if (!w->needs_frame_ || !w->renderer_ || !w->isShown()) continue;
+            const auto due  = w->last_frame_ + w->min_interval_;
+            const int  wait = due <= now ? 0 : static_cast<int>(
+                std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count()) + 1;
+            if (soonest < 0 || wait < soonest) soonest = wait;
+        }
+        return soonest;
     }
 
     bool LinuxWindow::anyFramePending()

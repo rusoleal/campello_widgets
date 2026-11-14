@@ -12,6 +12,7 @@
 
 #include <campello_gpu/platform/linux_surface.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -86,9 +87,15 @@ namespace systems::leal::campello_widgets
             /// Asks for a frame on the next loop turn.
             void requestFrame();
             bool needsFrame() const noexcept { return needs_frame_; }
-            /// Builds this window's frame (if one was requested and the window
-            /// is shown) and hands it to its raster thread. True if submitted.
+            /// Builds this window's frame (if one was requested, the window is
+            /// shown and its frame interval has passed) and hands it to its
+            /// raster thread. True if submitted.
             bool drawFrame();
+
+            /// Paces frames: at most one per `interval` (e.g. the display's
+            /// refresh period). Zero (the default): no pacing, for windows the
+            /// compositor paces (Wayland frame callbacks).
+            void setMinFrameInterval(std::chrono::nanoseconds interval) noexcept { min_interval_ = interval; }
 
             /// The backing size changed (physical pixels): resizes the
             /// swapchain. Call notifyMetricsChanged() afterwards.
@@ -124,6 +131,9 @@ namespace systems::leal::campello_widgets
             static bool         anyFramePending();
             /// drawFrame() on every live window (a frame may destroy windows).
             static void         drawPendingFrames();
+            /// Milliseconds until some shown window's requested frame is due
+            /// (0: now), or -1 if none is pending. For the loop's poll().
+            static int          msUntilNextFrame();
 
         private:
             void stopRendering();
@@ -134,6 +144,8 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<Renderer>              renderer_;
             std::unique_ptr<RasterThread>          raster_;  // stopped before renderer_/surface_ go
             bool                                   needs_frame_ = true;
+            std::chrono::nanoseconds               min_interval_{0};
+            std::chrono::steady_clock::time_point  last_frame_{};
         };
 
     } // namespace linux_host

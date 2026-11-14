@@ -6,6 +6,8 @@
 #include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/ui/render_box.hpp>
 #include <campello_widgets/ui/view.hpp>
+#include <campello_widgets/ui/platform_windowing.hpp>
+#include <campello_widgets/widgets/window.hpp>
 #include <campello_widgets/ui/ticker.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
@@ -30,7 +32,9 @@
 extern "C" void campello_widgets_initialize_linux_menu_delegate();
 
 #include <poll.h>
+#include <signal.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
@@ -345,7 +349,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     if (x11_scale != 1.0f) {
         std::cerr << "[Linux] Display scale: " << x11_scale << "x\n";
     }
-    x11::init(display, x11_scale);
+    x11::init(display, x11_scale, app_id);
 
     // Bind the UI thread before any widget tree mutation.
     ThreadChecker::instance().bindToCurrentThread();
@@ -371,17 +375,22 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     auto view = std::make_unique<View>();
     view->makePrimary();
 
+    // Secondary windows (WindowController / Window widget). Installed before
+    // the tree mounts, since a State's initState() may open one.
+    auto windowing = x11::makePlatformWindowing();
+    PlatformWindowing::setInstance(windowing.get());
+
     auto ticker = std::make_unique<TickerScheduler>();
     TickerScheduler::setActive(ticker.get());
 
     x11::WindowConfig config;
     config.title  = title;
     config.size   = Size{ static_cast<float>(width), static_cast<float>(height) };
-    config.app_id = app_id;
     auto main_window = std::make_unique<x11::X11Window>(*view, config);
     if (!main_window->xid() || !main_window->hasSurface()) {
         std::cerr << "[Linux] Failed to create the main window (no X window or Vulkan surface)\n";
         main_window.reset();
+        PlatformWindowing::setInstance(nullptr);
         TickerScheduler::setActive(nullptr);
         linux_host::shutdown();
         x11::shutdown();
@@ -430,16 +439,8 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         std::cerr << "[Linux] IBus not available; IME composition disabled.\n";
         // Non-fatal — app works without IME
     }
+    // Each window wires its own text input to it (see X11Window).
     x11::setIme(ibus_ime.get());
-    view->textInputManager().setOnInputTargetChanged([&](bool has_target) {
-        if (!ibus_ime->isActive()) return;
-        if (has_target) {
-            ibus_ime->focusIn();
-            main_window->updateImeCursorPosition();
-        } else {
-            ibus_ime->focusOut();
-        }
-    });
 
     campello_widgets_initialize_linux_menu_delegate();
 
@@ -466,9 +467,30 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         if (next != media) { media = next; rebuildMediaQuery(); }
     };
 
-    bool running = true;
-    main_window->on_close = [&] { running = false; };
+    // Closing the main window: by default the app quits, closing every
+    // window; with MainWindowClose::keep_running it hides, and the app quits
+    // once no other window is left on screen.
+    bool running     = true;
+    bool main_hidden = false;
+    main_window->on_close = [&] {
+        if (WindowController::mainWindowClosePolicy() == WindowController::MainWindowClose::quit_app) {
+            running = false;
+            return;
+        }
+        main_window->hide();
+        main_hidden = true;
+    };
     main_window->show();
+
+    // Ctrl+C / kill: leave the loop and tear down normally.
+    static volatile sig_atomic_t s_interrupted = 0;
+    s_interrupted = 0;
+    struct sigaction sa = {};
+    sa.sa_handler = [](int) { s_interrupted = 1; linux_host::wake(); };
+    sigemptyset(&sa.sa_mask);
+    struct sigaction old_int = {}, old_term = {};
+    sigaction(SIGINT,  &sa, &old_int);
+    sigaction(SIGTERM, &sa, &old_term);
 
     // -----------------------------------------------------------------------
     // Event loop. poll() blocks on the X connection and the host's wake-up
@@ -477,7 +499,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // and is mapped.
     // -----------------------------------------------------------------------
     const int x_fd = ConnectionNumber(display);
-    while (running) {
+    while (running && !s_interrupted) {
         while (running && XPending(display)) {
             XEvent ev;
             XNextEvent(display, &ev);
@@ -490,6 +512,7 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         if (ibus_ime->isActive()) ibus_ime->dispatchEvents();
 
         linux_host::runTasks();
+        if (main_hidden && !x11::X11Window::anyOtherShown(main_window.get())) break;
         linux_host::LinuxWindow::drawPendingFrames();
 
         if (XPending(display)) continue;
@@ -497,7 +520,10 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
             { x_fd, POLLIN, 0 },
             { linux_host::wakeFd(), POLLIN, 0 },
         };
-        const int timeout_ms = linux_host::LinuxWindow::anyFramePending() ? 0 : 16;
+        // Until the next paced frame is due; at most 16 ms, which keeps
+        // D-Bus (dark mode, IBus) serviced while idle.
+        const int next_frame = linux_host::LinuxWindow::msUntilNextFrame();
+        const int timeout_ms = next_frame < 0 ? 16 : std::min(next_frame, 16);
         if (poll(fds, 2, timeout_ms) > 0 && (fds[1].revents & POLLIN))
             linux_host::clearWake();
     }
@@ -505,8 +531,17 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // -----------------------------------------------------------------------
     // Teardown, in dependency order
     // -----------------------------------------------------------------------
+    sigaction(SIGINT,  &old_int, nullptr);
+    sigaction(SIGTERM, &old_term, nullptr);
     shutdownDarkModeMonitor();
-    view->textInputManager().setOnInputTargetChanged(nullptr);
+
+    // Close every other window first, while the tree is intact: their
+    // on_destroyed callbacks usually point into States (setState to drop the
+    // controller), which must still exist when those run.
+    for (View* v : View::all())
+        if (WindowController* controller = WindowController::forView(v)) controller->destroy();
+    linux_host::runTasks();
+
     x11::setIme(nullptr);
     ibus_ime.reset();
     {
@@ -522,6 +557,8 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
     // Drop the handler before the windows and cursors it reaches.
     registerCursorHandler(nullptr);
     main_window.reset();  // raster thread, renderer, surface, X window (before its View)
+    PlatformWindowing::setInstance(nullptr);
+    windowing.reset();
     TickerScheduler::setActive(nullptr);
     ticker.reset();
 

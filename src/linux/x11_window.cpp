@@ -15,6 +15,10 @@
 #include <X11/XKBlib.h>
 #include <X11/keysym.h>
 #include <X11/cursorfont.h>
+#include <X11/Xatom.h>
+
+#include <dlfcn.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
@@ -150,17 +154,54 @@ static bool isNavigationOrSpecialKeyX11(Widgets::KeyCode key_code)
 
 namespace
 {
-    Display*                     g_display = nullptr;
-    float                        g_scale   = 1.0f;
-    Widgets::IbusIme*            g_ime     = nullptr;
-    Atom                         g_wm_delete = 0;
+    Display*                              g_display = nullptr;
+    float                                 g_scale   = 1.0f;
+    float                                 g_refresh = 60.0f;
+    std::string                           g_app_id;
+    Widgets::IbusIme*                     g_ime     = nullptr;
     std::vector<Widgets::x11::X11Window*> g_x11_windows;
+
+    struct Atoms
+    {
+        Atom wm_protocols = 0, wm_delete = 0, net_wm_name = 0, utf8_string = 0, net_wm_pid = 0;
+        Atom net_wm_window_type = 0, type_normal = 0, type_dialog = 0, type_popup_menu = 0;
+        Atom net_wm_state = 0, state_modal = 0, state_skip_taskbar = 0, net_active_window = 0;
+    } g_atoms;
 
     // Cursor shapes, created once per connection.
     struct Cursors
     {
         Cursor arrow = 0, pointer = 0, text = 0, forbidden = 0, resize_ns = 0, resize_ew = 0;
     } g_cursors;
+
+    // The refresh rate through XRandR's RandR 1.1 calls, loaded at run time
+    // so libXrandr's headers aren't a build dependency. The library stays
+    // loaded for the process (see the end of the function).
+    float queryRefreshRate(Display* display)
+    {
+        void* lib = dlopen("libXrandr.so.2", RTLD_LAZY | RTLD_LOCAL);
+        if (!lib) return 60.0f;
+        using GetInfo  = void* (*)(Display*, ::Window);
+        using Rate     = short (*)(void*);
+        using FreeInfo = void (*)(void*);
+        auto get_info  = reinterpret_cast<GetInfo>(dlsym(lib, "XRRGetScreenInfo"));
+        auto rate_of   = reinterpret_cast<Rate>(dlsym(lib, "XRRConfigCurrentRate"));
+        auto free_info = reinterpret_cast<FreeInfo>(dlsym(lib, "XRRFreeScreenConfigInfo"));
+        float hz = 60.0f;
+        if (get_info && rate_of && free_info)
+        {
+            if (void* info = get_info(display, DefaultRootWindow(display)))
+            {
+                const short rate = rate_of(info);
+                if (rate >= 20 && rate <= 500) hz = static_cast<float>(rate);
+                free_info(info);
+            }
+        }
+        // Never dlclose(): XRandR registers event hooks on the Display
+        // (XESetWireToEvent), and Xlib would call into the unloaded library
+        // on the next RandR event (a crash in _XEnq).
+        return hz;
+    }
 
     // X11 button numbering: Button1 = left (primary), Button2 = middle
     // (tertiary), Button3 = right (secondary). Button4/5 are the scroll
@@ -192,15 +233,46 @@ namespace
             return ((c & 0x07) << 18) | ((b(1) & 0x3F) << 12) | ((b(2) & 0x3F) << 6) | (b(3) & 0x3F);
         return 0;
     }
+
+    void setAtomProperty(::Window w, Atom property, const std::vector<Atom>& values)
+    {
+        XChangeProperty(g_display, w, property, XA_ATOM, 32, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(values.data()),
+                        static_cast<int>(values.size()));
+    }
+
+    // Top-left of `w`'s content in root (screen) coordinates.
+    bool rootOrigin(::Window w, int& x, int& y)
+    {
+        ::Window child;
+        return XTranslateCoordinates(g_display, w, DefaultRootWindow(g_display), 0, 0, &x, &y, &child);
+    }
 }
 
 namespace systems::leal::campello_widgets::x11
 {
-    void init(Display* display, float display_scale)
+    void init(Display* display, float display_scale, std::string app_id)
     {
-        g_display   = display;
-        g_scale     = display_scale > 0.0f ? display_scale : 1.0f;
-        g_wm_delete = XInternAtom(display, "WM_DELETE_WINDOW", False);
+        g_display = display;
+        g_scale   = display_scale > 0.0f ? display_scale : 1.0f;
+        g_app_id  = std::move(app_id);
+        g_refresh = queryRefreshRate(display);
+
+        auto atom = [display](const char* name) { return XInternAtom(display, name, False); };
+        g_atoms.wm_protocols       = atom("WM_PROTOCOLS");
+        g_atoms.wm_delete          = atom("WM_DELETE_WINDOW");
+        g_atoms.net_wm_name        = atom("_NET_WM_NAME");
+        g_atoms.utf8_string        = atom("UTF8_STRING");
+        g_atoms.net_wm_pid         = atom("_NET_WM_PID");
+        g_atoms.net_wm_window_type = atom("_NET_WM_WINDOW_TYPE");
+        g_atoms.type_normal        = atom("_NET_WM_WINDOW_TYPE_NORMAL");
+        g_atoms.type_dialog        = atom("_NET_WM_WINDOW_TYPE_DIALOG");
+        g_atoms.type_popup_menu    = atom("_NET_WM_WINDOW_TYPE_POPUP_MENU");
+        g_atoms.net_wm_state       = atom("_NET_WM_STATE");
+        g_atoms.state_modal        = atom("_NET_WM_STATE_MODAL");
+        g_atoms.state_skip_taskbar = atom("_NET_WM_STATE_SKIP_TASKBAR");
+        g_atoms.net_active_window  = atom("_NET_ACTIVE_WINDOW");
+
         g_cursors.arrow     = XCreateFontCursor(display, XC_left_ptr);
         g_cursors.pointer   = XCreateFontCursor(display, XC_hand2);
         g_cursors.text      = XCreateFontCursor(display, XC_xterm);
@@ -222,6 +294,7 @@ namespace systems::leal::campello_widgets::x11
 
     Display* display()      { return g_display; }
     float    displayScale() { return g_scale; }
+    float    refreshRate()  { return g_refresh; }
     void     setIme(IbusIme* ime) { g_ime = ime; }
     IbusIme* ime()          { return g_ime; }
 
@@ -231,39 +304,69 @@ namespace systems::leal::campello_widgets::x11
 
     X11Window::X11Window(View& view, const WindowConfig& config)
         : LinuxWindow(view)
+        , kind_(config.kind)
+        , owner_(config.owner)
+        , resizable_(config.resizable && config.kind != WindowKind::popup)
+        , position_(config.position)
     {
         // X11 doesn't scale a client's buffer for HiDPI: the window is sized
         // in physical pixels, and the scale reported through MediaQuery.
         width_  = static_cast<uint32_t>(std::max(1L, std::lround(config.size.width  * g_scale)));
         height_ = static_cast<uint32_t>(std::max(1L, std::lround(config.size.height * g_scale)));
 
+        const bool popup = kind_ == WindowKind::popup;
         XSetWindowAttributes swa = {};
-        swa.event_mask = ExposureMask | StructureNotifyMask |
+        swa.event_mask = ExposureMask | StructureNotifyMask | FocusChangeMask |
                          KeyPressMask | KeyReleaseMask |
                          ButtonPressMask | ButtonReleaseMask |
-                         PointerMotionMask;
+                         PointerMotionMask | LeaveWindowMask;
+        // A popup (menu) is placed by us and isn't managed or decorated by
+        // the window manager.
+        swa.override_redirect = popup ? True : False;
         window_ = XCreateWindow(
             g_display, DefaultRootWindow(g_display),
             0, 0, width_, height_, 0,
             CopyFromParent, InputOutput, CopyFromParent,
-            CWEventMask, &swa);
+            CWEventMask | CWOverrideRedirect, &swa);
         if (!window_) return;
         g_x11_windows.push_back(this);
 
-        XStoreName(g_display, window_, config.title.c_str());
+        setTitle(config.title);
 
         // WM_CLASS: lets window managers and desktop shells match this window
         // to an installed .desktop file (taskbar / alt-tab icon and name).
-        if (!config.app_id.empty())
+        if (!g_app_id.empty())
         {
             XClassHint* class_hint = XAllocClassHint();
-            class_hint->res_name  = const_cast<char*>(config.app_id.c_str());
-            class_hint->res_class = const_cast<char*>(config.app_id.c_str());
+            class_hint->res_name  = const_cast<char*>(g_app_id.c_str());
+            class_hint->res_class = const_cast<char*>(g_app_id.c_str());
             XSetClassHint(g_display, window_, class_hint);
             XFree(class_hint);
         }
+        const long pid = static_cast<long>(getpid());
+        XChangeProperty(g_display, window_, g_atoms.net_wm_pid, XA_CARDINAL, 32, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(&pid), 1);
 
-        XSetWMProtocols(g_display, window_, &g_wm_delete, 1);
+        XSetWMProtocols(g_display, window_, &g_atoms.wm_delete, 1);
+
+        // Window type and state hints (EWMH), and the owner (ICCCM).
+        if (popup)
+        {
+            setAtomProperty(window_, g_atoms.net_wm_window_type, {g_atoms.type_popup_menu});
+        }
+        else if (kind_ == WindowKind::dialog || config.modal)
+        {
+            setAtomProperty(window_, g_atoms.net_wm_window_type, {g_atoms.type_dialog});
+            std::vector<Atom> state{g_atoms.state_skip_taskbar};
+            if (config.modal) state.push_back(g_atoms.state_modal);
+            setAtomProperty(window_, g_atoms.net_wm_state, state);
+        }
+        else
+        {
+            setAtomProperty(window_, g_atoms.net_wm_window_type, {g_atoms.type_normal});
+        }
+        if (owner_ && !popup) XSetTransientForHint(g_display, window_, owner_);
+        applySizeHints();
 
         GPU::LinuxSurfaceInfo info{};
         info.display = g_display;
@@ -272,27 +375,173 @@ namespace systems::leal::campello_widgets::x11
         info.width   = width_;
         info.height  = height_;
         attachSurface(info);
+
+        // Paced to the display's refresh rate (X11 has no frame callbacks).
+        setMinFrameInterval(std::chrono::nanoseconds(
+            static_cast<long long>(1e9 / static_cast<double>(g_refresh))));
+
+        // This window feeds the shared IBus context while one of its text
+        // fields has the input target and the window has keyboard focus.
+        view.textInputManager().setOnInputTargetChanged([this](bool has_target) {
+            if (!g_ime || !g_ime->isActive() || !focused_) return;
+            if (has_target) { g_ime->focusIn(); updateImeCursorPosition(); }
+            else            g_ime->focusOut();
+        });
     }
 
     X11Window::~X11Window()
     {
         g_x11_windows.erase(std::remove(g_x11_windows.begin(), g_x11_windows.end(), this),
                             g_x11_windows.end());
-        // The renderer, raster thread and surface (in ~LinuxWindow) go after
-        // the X window would: tear them down first, while the window that
-        // the Vulkan swapchain presents to still exists.
+        if (View::isAlive(&view())) view().textInputManager().setOnInputTargetChanged(nullptr);
+        if (focused_ && g_ime && g_ime->isActive()) g_ime->focusOut();
+        // The renderer, raster thread and surface (in ~LinuxWindow) would go
+        // after the X window: tear them down first, while the window the
+        // Vulkan swapchain presents to still exists.
         setRoot(nullptr);
         if (window_ && g_display)
         {
+            // A popup or dialog with focus: give it back to its owner, or X
+            // reverts it to the root window (no window would get keys).
+            if (focused_ && owner_ && forXid(owner_) && forXid(owner_)->isShown())
+                XSetInputFocus(g_display, owner_, RevertToParent, CurrentTime);
             XDestroyWindow(g_display, window_);
             XFlush(g_display);
         }
     }
 
-    void X11Window::show()
+    void X11Window::setTitle(const std::string& title)
     {
         if (!window_) return;
-        XMapWindow(g_display, window_);
+        // _NET_WM_NAME is UTF-8 (EWMH); WM_NAME is Latin-1 for old window managers.
+        XChangeProperty(g_display, window_, g_atoms.net_wm_name, g_atoms.utf8_string, 8, PropModeReplace,
+                        reinterpret_cast<const unsigned char*>(title.data()), static_cast<int>(title.size()));
+        XStoreName(g_display, window_, title.c_str());
+    }
+
+    void X11Window::applySizeHints()
+    {
+        XSizeHints* hints = XAllocSizeHints();
+        if (!resizable_)
+        {
+            hints->flags     |= PMinSize | PMaxSize;
+            hints->min_width  = hints->max_width  = static_cast<int>(width_);
+            hints->min_height = hints->max_height = static_cast<int>(height_);
+        }
+        if (placed_)
+        {
+            // Asked-for position: honoured instead of the window manager's placement.
+            hints->flags |= USPosition | PPosition;
+        }
+        XSetWMNormalHints(g_display, window_, hints);
+        XFree(hints);
+    }
+
+    void X11Window::setLogicalSize(Size size)
+    {
+        if (!window_) return;
+        const auto w = static_cast<uint32_t>(std::max(1L, std::lround(size.width  * g_scale)));
+        const auto h = static_cast<uint32_t>(std::max(1L, std::lround(size.height * g_scale)));
+        if (!resizable_) { width_ = w; height_ = h; applySizeHints(); }
+        XResizeWindow(g_display, window_, w, h);
+        XFlush(g_display);
+        // width_/height_ follow ConfigureNotify (the window manager may adjust).
+    }
+
+    void X11Window::place()
+    {
+        placed_ = true;
+        const X11Window* owner = owner_ ? forXid(owner_) : nullptr;
+        int ox = 0, oy = 0;
+        const bool have_owner = owner && rootOrigin(owner_, ox, oy);
+
+        int x = 0, y = 0;
+        if (kind_ == WindowKind::popup && have_owner)
+        {
+            // `position` is relative to the owner's content.
+            const Offset at = position_.value_or(Offset{0.0f, 0.0f});
+            x = ox + static_cast<int>(std::lround(at.x * g_scale));
+            y = oy + static_cast<int>(std::lround(at.y * g_scale));
+        }
+        else if (position_)
+        {
+            x = static_cast<int>(std::lround(position_->x * g_scale));
+            y = static_cast<int>(std::lround(position_->y * g_scale));
+        }
+        else if (have_owner)
+        {
+            // Centred on the owner.
+            x = ox + (static_cast<int>(owner->width_) - static_cast<int>(width_)) / 2;
+            y = oy + (static_cast<int>(owner->height_) - static_cast<int>(height_)) / 2;
+        }
+        else
+        {
+            placed_ = false;  // the window manager decides
+            return;
+        }
+        XMoveWindow(g_display, window_, x, y);
+        applySizeHints();
+    }
+
+    void X11Window::show(bool activate_it)
+    {
+        if (!window_) return;
+        // An owned window (dialog, popup) is placed relative to its owner:
+        // while the owner isn't on screen yet (a window opened as the app
+        // starts, before the window manager has placed the main window),
+        // wait for the owner's MapNotify.
+        if (X11Window* owner = owner_ ? forXid(owner_) : nullptr; owner && !owner->mapped_)
+        {
+            pending_show_     = true;
+            pending_activate_ = activate_it;
+            return;
+        }
+        pending_show_ = false;
+        if (!placed_) place();
+        XMapRaised(g_display, window_);
+        show_called_ = true;
+        raiseOwnedWindows();
+        // Focus can only be set on a viewable window: after MapNotify.
+        focus_on_map_ = activate_it;
+        if (activate_it && mapped_) activate();
+        XFlush(g_display);
+    }
+
+    void X11Window::hide()
+    {
+        if (!window_) return;
+        XUnmapWindow(g_display, window_);
+        XFlush(g_display);
+    }
+
+    void X11Window::raiseOwnedWindows()
+    {
+        // Keep the windows this one owns (dialogs, popups) above it, as a
+        // window manager stacks transient windows; without one (Xvfb, bare
+        // X) raising the owner would cover them.
+        for (X11Window* w : g_x11_windows)
+            if (w != this && w->owner_ == window_ && w->show_called_) XRaiseWindow(g_display, w->window_);
+    }
+
+    void X11Window::activate()
+    {
+        if (!window_) return;
+        XRaiseWindow(g_display, window_);
+        raiseOwnedWindows();
+        if (kind_ != WindowKind::popup)
+        {
+            // Ask the window manager (EWMH), which owns focus for managed windows.
+            XEvent ev = {};
+            ev.xclient.type         = ClientMessage;
+            ev.xclient.window       = window_;
+            ev.xclient.message_type = g_atoms.net_active_window;
+            ev.xclient.format       = 32;
+            ev.xclient.data.l[0]    = 1;  // source: application
+            ev.xclient.data.l[1]    = CurrentTime;
+            XSendEvent(g_display, DefaultRootWindow(g_display), False,
+                       SubstructureRedirectMask | SubstructureNotifyMask, &ev);
+        }
+        if (mapped_) XSetInputFocus(g_display, window_, RevertToParent, CurrentTime);
         XFlush(g_display);
     }
 
@@ -301,6 +550,20 @@ namespace systems::leal::campello_widgets::x11
         for (X11Window* w : g_x11_windows)
             if (w->window_ == window) return w;
         return nullptr;
+    }
+
+    X11Window* X11Window::forView(const View* view)
+    {
+        for (X11Window* w : g_x11_windows)
+            if (&w->view() == view) return w;
+        return nullptr;
+    }
+
+    bool X11Window::anyOtherShown(const X11Window* except)
+    {
+        for (X11Window* w : g_x11_windows)
+            if (w != except && w->kind_ != WindowKind::popup && w->mapped_) return true;
+        return false;
     }
 
     void X11Window::setCursor(SystemMouseCursor c)
@@ -342,6 +605,17 @@ namespace systems::leal::campello_widgets::x11
             static_cast<int>(rect[3] * g_scale));
     }
 
+    void X11Window::redirectToBlocker()
+    {
+        View* blocker = view().inputBlocker();
+        if (X11Window* modal = blocker ? forView(blocker) : nullptr)
+        {
+            modal->activate();
+            XBell(g_display, 0);
+            XFlush(g_display);
+        }
+    }
+
     void X11Window::handleEvent(const XEvent& ev)
     {
         View::Scope scope(&view());
@@ -363,10 +637,21 @@ namespace systems::leal::campello_widgets::x11
             }
 
             case MapNotify:
+            {
                 mapped_ = true;
                 if (renderer()) renderer()->notePaintRequested();
                 requestFrame();
+                if (focus_on_map_)
+                {
+                    focus_on_map_ = false;
+                    activate();
+                }
+                // Windows of ours that waited for this one (see show()).
+                const std::vector<X11Window*> windows = g_x11_windows;
+                for (X11Window* w : windows)
+                    if (isLive(w) && w->owner_ == window_ && w->pending_show_) w->show(w->pending_activate_);
                 break;
+            }
 
             case UnmapNotify:
                 mapped_ = false;
@@ -383,11 +668,51 @@ namespace systems::leal::campello_widgets::x11
                 }
                 break;
 
-            case ClientMessage:
-                if (static_cast<Atom>(ev.xclient.data.l[0]) == g_wm_delete)
+            case FocusIn:
+                // Focus moving between our own subwindows doesn't count.
+                if (ev.xfocus.detail == NotifyPointer || ev.xfocus.detail == NotifyInferior) break;
+                focused_   = true;
+                had_focus_ = true;
+                if (g_ime && g_ime->isActive() && view().textInputManager().hasInputTarget())
                 {
-                    auto callback = on_close;  // may destroy `this`
-                    if (callback) callback();
+                    g_ime->focusIn();
+                    updateImeCursorPosition();
+                }
+                break;
+
+            case FocusOut:
+            {
+                if (ev.xfocus.detail == NotifyPointer || ev.xfocus.detail == NotifyInferior) break;
+                // Grabs (a window manager's move/resize, a menu) briefly take
+                // focus and give it back: not a loss.
+                if (ev.xfocus.mode == NotifyGrab || ev.xfocus.mode == NotifyUngrab) break;
+                focused_ = false;
+                if (g_ime && g_ime->isActive() && view().textInputManager().hasInputTarget())
+                    g_ime->focusOut();
+                if (had_focus_ && on_focus_lost)
+                {
+                    // Delivered on a later turn: the handler usually closes
+                    // (destroys) this window.
+                    X11Window* self = this;
+                    linux_host::postTask([self] {
+                        if (isLive(self) && !self->focused_ && self->on_focus_lost) self->on_focus_lost();
+                    });
+                }
+                break;
+            }
+
+            case ClientMessage:
+                if (static_cast<Atom>(ev.xclient.message_type) == g_atoms.wm_protocols &&
+                    static_cast<Atom>(ev.xclient.data.l[0]) == g_atoms.wm_delete)
+                {
+                    // Delivered on a later turn, like every platform's close
+                    // request: the handler may destroy this window.
+                    X11Window* self = this;
+                    linux_host::postTask([self] {
+                        if (!isLive(self)) return;
+                        auto callback = self->on_close;
+                        if (callback) callback();
+                    });
                 }
                 break;
 
@@ -395,6 +720,7 @@ namespace systems::leal::campello_widgets::x11
             case ButtonRelease:
             {
                 const bool down = ev.type == ButtonPress;
+                if (down && view().isInputBlocked()) redirectToBlocker();
                 PointerEvent e;
                 e.kind       = down ? PointerEventKind::down : PointerEventKind::up;
                 e.pointer_id = 0;
@@ -402,6 +728,7 @@ namespace systems::leal::campello_widgets::x11
                                  static_cast<float>(ev.xbutton.y) / scale };
                 e.pressure   = down ? 1.0f : 0.0f;
                 e.button     = buttonOf(ev.xbutton.button);
+                e.device_kind = PointerDeviceKind::mouse;
                 mouse_pressed_ = down;
                 dispatcher.handlePointerEvent(e);
                 if (down && isLive(this)) updateImeCursorPosition();
@@ -416,12 +743,30 @@ namespace systems::leal::campello_widgets::x11
                 e.position   = { static_cast<float>(ev.xmotion.x) / scale,
                                  static_cast<float>(ev.xmotion.y) / scale };
                 e.pressure   = mouse_pressed_ ? 1.0f : 0.0f;
+                e.device_kind = PointerDeviceKind::mouse;
+                dispatcher.handlePointerEvent(e);
+                break;
+            }
+
+            case LeaveNotify:
+            {
+                // The pointer left this window (to another one, ours or not):
+                // a move far outside ends its hovers. Not while a button is
+                // held: X keeps delivering a drag to the window it began in.
+                if (mouse_pressed_ || ev.xcrossing.mode != NotifyNormal) break;
+                PointerEvent e;
+                e.kind        = PointerEventKind::move;
+                e.pointer_id  = 0;
+                e.position    = { -100000.0f, -100000.0f };
+                e.pressure    = 0.0f;
+                e.device_kind = PointerDeviceKind::mouse;
                 dispatcher.handlePointerEvent(e);
                 break;
             }
 
             case KeyPress:
             case KeyRelease:
+                if (ev.type == KeyPress && view().isInputBlocked()) redirectToBlocker();
                 handleKey(ev.xkey, ev.type == KeyPress);
                 break;
 

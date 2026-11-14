@@ -1332,7 +1332,8 @@ renders in the Simulator (taps not automatable).
       - The Release build of the example wasn't run (Debug only).
       - Popups open below the anchor without flipping at the screen edge
         (same as macOS).
-- [ ] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each.
+- [x] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each
+      (2026-11-15, see L2 below).
 - [ ] **M3.3** Linux Wayland: `g_wayland_state` becomes one state per
       window, with multiple `xdg_toplevel`s. Client-side positioning isn't
       possible on Wayland, so position requests are no-ops there.
@@ -1424,9 +1425,64 @@ Milestones:
       - Note for L2 self-tests: GNOME doesn't deliver XTest input to XWayland
         clients, so automated input runs on Xvfb (Docker, Ubuntu 26.04 runtime
         image with the host build mounted).
-- [ ] **L2** X11 multi-window (M3.2): all kinds, close policies,
-      `examples/linux_multi_window` with `CW_MULTIWINDOW_DEMO=2/3/4`
-      self-tests driven through XTest (works on Xvfb), per-window captures.
+- [x] **L2** X11 multi-window (M3.2), 2026-11-15.
+      - `src/linux/x11_platform_windowing.cpp`: the `PlatformWindowing`
+        (installed by `runApp()` before the tree mounts); each window is an
+        `X11Window` with its own View, Surface, Renderer and raster thread.
+        `postTask()` is the host's queue (thread-safe).
+      - **Kinds:** regular; dialog (`WM_TRANSIENT_FOR`,
+        `_NET_WM_WINDOW_TYPE_DIALOG`, skip-taskbar, centred on its owner);
+        modal (adds `_NET_WM_STATE_MODAL`; a press or key in the blocked
+        window raises and focuses the modal one and rings the bell, while the
+        core drops the input); popup (override-redirect
+        `_NET_WM_WINDOW_TYPE_POPUP_MENU` placed relative to the owner's
+        content, takes keyboard focus once mapped, closes when it loses it).
+        Owned windows stay above their owner when it is raised (what a window
+        manager does for transients; needed without one), and an owned window
+        shown before its owner is mapped waits for it, so it is placed
+        relative to where the window manager put the owner.
+      - **Close policy:** `quit_app` leaves the loop; `keep_running` unmaps
+        the main window and quits once no other (non-popup) window is shown.
+        Teardown destroys secondary windows before unmounting the tree.
+        Close requests (`WM_DELETE_WINDOW`, `requestClose()`) are delivered
+        on a later loop turn.
+      - **Also:** frames paced to the screen refresh rate (XRandR RandR 1.1,
+        `dlopen`ed: no build dependency; idle ~1% CPU); UTF-8 titles
+        (`_NET_WM_NAME`); `_NET_WM_PID`; `resizable = false` honoured (min =
+        max size hints); mouse events are `PointerDeviceKind::mouse` (were
+        the touch default); leaving a window ends its hovers; each window feeds
+        IBus while it has keyboard focus; SIGINT/SIGTERM tear down cleanly.
+      - **Bug found:** `dlclose()` of libXrandr after querying the rate left
+        RandR's event hooks on the Display pointing into the unloaded
+        library: a crash in `_XEnq` on the next RandR event. It stays loaded.
+      - `examples/linux_multi_window` (the Windows example's windows), with
+        self-tests that drive the windows through XTest (real X input,
+        `dlopen`ed libXtst) and save `XGetImage` captures:
+        - `CW_MULTIWINDOW_DEMO=2`: a click in the Inspector updates the
+          counter everywhere; "hi" typed into its field lands there, "x" typed
+          into the main window doesn't; About's Close destroys it.
+        - `CW_MULTIWINDOW_DEMO=3`: Preferences (modal) blocks the main window
+          and a click there doesn't count; +10 and Done work; the main window
+          works again. The Options popup is a separate window extending below
+          the main window, with keyboard focus; an item runs and closes it; a
+          click elsewhere, Escape, and focus moving to another window each
+          close it. Closing the main window quits (exit 0).
+        - `CW_MULTIWINDOW_DEMO=4`: with `keep_running`, closing the main
+          window leaves the Inspector working; closing it quits.
+        - On Xvfb + lavapipe (Docker, Ubuntu 26.04): 5 runs of each gave
+          identical output, all exit 0. Without a window manager nothing moves
+          keyboard focus on a click, so the tests focus a window before typing
+          (as a window manager would).
+      - Under GNOME (Mutter, XWayland, 2x): windows decorated and stacked, the
+        About dialog centred on the main window, idle ~1% CPU, SIGINT exits 0.
+        Input there was not automated (GNOME doesn't deliver XTest to
+        XWayland clients): a manual pass is worth doing.
+      - Regressions: 1152/1152 unit tests; the gallery on Xvfb (navigation,
+        resize, remap, typing, close) and on Wayland unchanged.
+      - **Not done / not verified:** popups don't flip at the screen edge and
+        don't follow a moved owner (a move normally takes focus, which closes
+        them); per-monitor refresh rates and scales (one per screen); IME
+        composition (no IBus here); the Release build.
 - [ ] **L3** Wayland multi-window (M3.3): split the Wayland state into
       process-level (seat, xkb, clipboard, outputs, libdecor) and per-window
       parts (surface, frame, scale, size), then the kinds. Self-tests inject
@@ -1731,7 +1787,8 @@ and Android.**
 
 **Known gaps / follow-ups (M2 + M7)**
 - [x] Windows: modal, popups and the close policy (M3.1, 2026-11-13).
-- [ ] Linux: modal, popups and the close policy aren't implemented (M3).
+- [x] Linux X11: modal, popups and the close policy (L2, 2026-11-15).
+      Wayland: L3.
       The web and iPad have no main-window close policy (no such concept).
 - [ ] An app's main window needs an `Overlay` in its tree for the fallback
       (secondary windows always have one); without it,
