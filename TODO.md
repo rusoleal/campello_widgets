@@ -1387,11 +1387,43 @@ Milestones:
       - Test-harness lessons for L2/L3 self-tests: a window manager may resize
         new windows (pin sizes, wait for the matching `ConfigureNotify`), and
         on Xvfb (no WM) windows open at 0,0 and cover each other.
-- [ ] **L1** Refactor with no behaviour change (M1.8b for Linux): host +
-      window classes, shared device + `Surface` per window, no device
-      rebuild on Wayland resize (`Surface::resize()`), keep the fallback to
-      X11 when Wayland GPU setup fails. Gallery regression on X11 and
-      Wayland, unit tests.
+- [x] **L1** Refactor (M1.8b for Linux), 2026-11-14.
+      - `src/linux/linux_host.{hpp,cpp}`: the shared windowless device, a
+        task queue + wake-up `eventfd`, and `LinuxWindow` (View, campello_gpu
+        `Surface`, Renderer, raster thread, frame requests; hidden windows
+        aren't drawn). `src/linux/x11_window.{hpp,cpp}`: `X11Window` (window
+        creation, events routed by `xany.window` inside `View::Scope`,
+        cursors, IBus feed). `run_app.cpp` is now just the X11 `runApp()`
+        and loop; the old global `WindowState` is gone.
+      - The X11 loop `poll()`s the X fd and the wake-up fd (16 ms timeout for
+        D-Bus) instead of a 1 ms `usleep` busy-wait.
+      - Wayland runner: still one window and one state struct (split in L3),
+        but now a View, a headless device and a `Surface` through a
+        `LinuxWindow` subclass. `campello_gpu_wayland_resize()` (the legacy
+        device-wide swapchain) is replaced by `Surface::resize()`. A failed
+        device *or* surface still falls back to X11.
+      - Fixed on the way: **X11 resize left a stale, cropped frame** (seen with
+        the old build on XWayland; the new one re-lays out); **Wayland never
+        updated `MediaQuery` on resize** (logical size stayed the startup
+        size); X11 `Expose` now repaints (no compositor: an uncovered area
+        stayed blank, since a frame request with nothing dirty draws nothing).
+      - Verified: 1152/1152 unit tests. X11 on XWayland (Intel, 2x): first
+        frame and an unchanged page pixel-identical to the pre-L1 build. X11 on
+        Xvfb + lavapipe (real XTest input): click navigates, resize re-lays
+        out, unmap/map repaints, typing / Ctrl+A / Backspace in a TextField,
+        `WM_DELETE_WINDOW` exits 0. Wayland (GNOME, Intel 2x): renders the full
+        tree (frame capture) and exits 0 on SIGINT.
+      - **Not verified:** Wayland on-screen presentation, input and resize by
+        hand (no input synthesis or screen grab from a Wayland client here);
+        the new Wayland `MediaQuery` update is untested.
+      - Still as before (later milestones): no frame pacing (draws as fast as
+        frames are requested; X11 refresh-rate timer in L2), X11 has no SIGINT
+        handler (exit 130), `resizable` is ignored on X11, the X11 title is set
+        with `XStoreName` (an em dash shows as mojibake; needs `_NET_WM_NAME`),
+        IBus's cursor location follows the main window only.
+      - Note for L2 self-tests: GNOME doesn't deliver XTest input to XWayland
+        clients, so automated input runs on Xvfb (Docker, Ubuntu 26.04 runtime
+        image with the host build mounted).
 - [ ] **L2** X11 multi-window (M3.2): all kinds, close policies,
       `examples/linux_multi_window` with `CW_MULTIWINDOW_DEMO=2/3/4`
       self-tests driven through XTest (works on Xvfb), per-window captures.

@@ -24,7 +24,7 @@
 #include <campello_widgets/ui/frame_scheduler.hpp>
 #include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
-#include <campello_widgets/ui/raster_thread.hpp>
+#include <campello_widgets/ui/view.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture_view.hpp>
@@ -32,7 +32,7 @@
 
 #include "ibus_ime.hpp"
 #include "wayland_clipboard.hpp"
-#include "../gpu/vulkan/vulkan_draw_backend.hpp"
+#include "linux_host.hpp"
 
 #include <wayland-client.h>
 #include <wayland-cursor.h>
@@ -86,10 +86,6 @@ namespace Widgets = ::systems::leal::campello_widgets;
 
 // ---------------------------------------------------------------------------
 
-// campello_gpu internal helper (not in device.hpp) — resizes the Wayland
-// swapchain in-place without destroying the VkDevice.  Defined in
-// campello_gpu/src/vulkan/device.cpp; resolved at link time.
-extern "C" void campello_gpu_wayland_resize(uint32_t w, uint32_t h);
 
 // ============================================================================
 // Shared helpers (duplicated from run_app.cpp to avoid cross-file coupling)
@@ -275,25 +271,26 @@ struct WaylandWindowState
     struct wl_data_offer* pending_offer = nullptr;
     std::string            pending_offer_mime;
 
+    // One shared, windowless GPU device; the window presents through its
+    // own campello_gpu Surface (Phase 17), see WaylandWindow below.
     std::shared_ptr<GPU::Device>                device;
-    std::shared_ptr<Widgets::Renderer>          renderer;
     std::shared_ptr<Widgets::Element>           root_element;
+    // The window's View owns these; kept here as shortcuts for the listeners.
     std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
     std::shared_ptr<Widgets::FocusManager>      focus_manager;
+    std::shared_ptr<Widgets::TextInputManager>  text_input_manager;
     std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
-    std::unique_ptr<Widgets::TextInputManager>  text_input_manager;
     std::unique_ptr<Widgets::IbusIme>           ibus_ime;
-    std::unique_ptr<Widgets::RasterThread>      raster_thread;
+    std::unique_ptr<Widgets::View>              view;
+    std::unique_ptr<Widgets::linux_host::LinuxWindow> window;
+    Widgets::MediaQueryData                     media;
+    Widgets::WidgetRef                          root_widget;
 
     bool running             = true;
-    bool needs_redraw        = true;
-    bool needs_device_resize = false;
     bool configured          = false;
     bool closed              = false;
     int  width               = 800;
     int  height              = 600;
-    int  device_width        = 0;    // size (physical px) at which the current GPU device was created
-    int  device_height       = 0;
     bool mouse_pressed       = false;
     float last_pointer_x     = 0.0f;
     float last_pointer_y     = 0.0f;
@@ -312,6 +309,29 @@ struct WaylandWindowState
 // clipboard.cpp, a separate TU with no other access to it) have something
 // to reach. Only ever one instance for this process's lifetime.
 static WaylandWindowState* g_wayland_state = nullptr;
+
+// The window-system-independent half of the window (View, Surface, Renderer,
+// raster thread: see linux_host.hpp). Its size and scale live in the state.
+class WaylandWindow final : public Widgets::linux_host::LinuxWindow
+{
+public:
+    WaylandWindow(Widgets::View& view, WaylandWindowState& state)
+        : LinuxWindow(view), state_(state) {}
+
+    uint32_t physicalWidth() const override
+    {
+        return static_cast<uint32_t>(std::max(0, state_.width * state_.output_scale));
+    }
+    uint32_t physicalHeight() const override
+    {
+        return static_cast<uint32_t>(std::max(0, state_.height * state_.output_scale));
+    }
+    float devicePixelRatio() const override { return static_cast<float>(state_.output_scale); }
+    bool  isShown() const override { return state_.configured && !state_.closed; }
+
+private:
+    WaylandWindowState& state_;
+};
 
 // ============================================================================
 // Wayland listeners
@@ -411,6 +431,8 @@ static void frame_configure(struct libdecor_frame* frame,
     struct libdecor_configuration* config, void* user_data)
 {
     auto* state = static_cast<WaylandWindowState*>(user_data);
+    const uint32_t window_w = state->window ? state->window->physicalWidth()  : 0;
+    const uint32_t window_h = state->window ? state->window->physicalHeight() : 0;
 
     int w = state->width, h = state->height;
     libdecor_configuration_get_content_size(config, frame, &w, &h);
@@ -421,20 +443,19 @@ static void frame_configure(struct libdecor_frame* frame,
     libdecor_frame_commit(frame, ls, config);
     libdecor_state_free(ls);
 
-    // If the device already exists and the window size changed, the Vulkan
-    // swapchain must be recreated at the new dimensions. On Wayland,
-    // vkGetPhysicalDeviceSurfaceCapabilitiesKHR always returns currentExtent
-    // = UINT32_MAX, so the swapchain cannot self-detect the resize. We
-    // recreate the device (analogous to Metal's automatic drawableSize update
-    // on macOS) before the next frame.
-    if (state->device &&
-        (state->width  * state->output_scale != state->device_width ||
-         state->height * state->output_scale != state->device_height)) {
-        state->needs_device_resize = true;
-    }
+    state->configured = true;
 
-    state->configured   = true;
-    state->needs_redraw = true;
+    // Wayland reports currentExtent = UINT32_MAX, so the swapchain can't see
+    // the new size by itself: give it to the window's Surface (rebuilt at
+    // its next acquire, on the raster thread).
+    if (auto* window = state->window.get()) {
+        if (window->physicalWidth() != window_w || window->physicalHeight() != window_h) {
+            window->resizeSurface(window->physicalWidth(), window->physicalHeight());
+            window->notifyMetricsChanged();  // MediaQuery, full repaint
+        } else {
+            window->requestFrame();
+        }
+    }
 }
 
 static void frame_close(struct libdecor_frame*, void* user_data)
@@ -450,8 +471,8 @@ static void frame_commit(struct libdecor_frame*, void* user_data)
     // Commit the surface so libdecor can complete its configure sequence.
     // Also force a repaint so the raster thread submits a fresh buffer —
     // some compositors blank the surface when a commit arrives without one.
-    if (state->renderer)
-        state->renderer->notePaintRequested();
+    if (state->window && state->window->renderer())
+        state->window->renderer()->notePaintRequested();
     wl_surface_commit(state->surface);
 }
 
@@ -774,7 +795,7 @@ static const struct wl_keyboard_listener keyboard_listener = {
 static void frame_done(void* data, struct wl_callback* callback, uint32_t time)
 {
     auto* state = static_cast<WaylandWindowState*>(data);
-    state->needs_redraw = true;
+    if (state->window) state->window->requestFrame();
     wl_callback_destroy(callback);
 }
 
@@ -903,28 +924,6 @@ static const struct wl_data_device_listener data_device_listener = {
     .drop       = data_device_drop,
     .selection  = data_device_selection,
 };
-
-// ============================================================================
-// Render frame helper
-// ============================================================================
-
-static bool renderFrame(WaylandWindowState* state)
-{
-    if (!state || !state->renderer || !state->device) return false;
-
-    auto package = state->renderer->buildFrame(
-        static_cast<float>(state->width  * state->output_scale),
-        static_cast<float>(state->height * state->output_scale));
-
-    if (!package) return false;
-
-    // On Vulkan, getSwapchainTextureView() returns nullptr — campello_gpu's
-    // beginRenderPass acquires the swapchain image automatically when target is null.
-    package->target = state->device->getSwapchainTextureView();
-
-    state->raster_thread->submit(std::move(*package));
-    return true;
-}
 
 // ============================================================================
 // IME cursor position helper
@@ -1123,46 +1122,57 @@ int runAppWayland(const std::string& title, int width, int height,
     }
 
     // -------------------------------------------------------------------------
-    // Create GPU device (Wayland surface)
+    // GPU: one windowless device; the window presents through its own Surface
     // -------------------------------------------------------------------------
+    // Bind the UI thread before any widget tree mutation.
+    Widgets::ThreadChecker::instance().bindToCurrentThread();
+
+    auto device = GPU::Device::createDefaultDevice(nullptr);
+    if (device) Widgets::linux_host::init(device);
+
+    // The window's View: its pointer dispatcher, focus and text input.
+    // makePrimary() also installs them as the process-wide fallbacks.
+    state.view = std::make_unique<Widgets::View>();
+    state.view->makePrimary();
+    state.dispatcher         = state.view->sharedPointerDispatcher();
+    state.focus_manager      = state.view->sharedFocusManager();
+    state.text_input_manager = state.view->sharedTextInputManager();
+    state.window = std::make_unique<WaylandWindow>(*state.view, state);
+
     GPU::LinuxSurfaceInfo surfaceInfo{};
     surfaceInfo.display = display;
     surfaceInfo.window  = state.surface;
     surfaceInfo.api     = GPU::LinuxWindowApi::wayland;
-    surfaceInfo.width   = static_cast<uint32_t>(state.width  * state.output_scale);
-    surfaceInfo.height  = static_cast<uint32_t>(state.height * state.output_scale);
+    surfaceInfo.width   = state.window->physicalWidth();
+    surfaceInfo.height  = state.window->physicalHeight();
 
-    auto device = GPU::Device::createDefaultDevice(&surfaceInfo);
-    if (!device) {
-        std::cerr << "[Linux/Wayland] Failed to create campello_gpu device; will fall back to X11.\n";
+    if (!device || !state.window->attachSurface(surfaceInfo)) {
+        std::cerr << "[Linux/Wayland] Failed to create a campello_gpu device or Vulkan surface; "
+                     "will fall back to X11.\n";
         // The registered handler (if any) captured &state by reference —
         // clear it before state goes out of scope, or X11's fallback path
         // could observe a dangling handler for the brief window before it
         // installs its own.
         Widgets::registerCursorHandler(nullptr);
+        state.window.reset();
+        state.dispatcher.reset();
+        state.focus_manager.reset();
+        state.text_input_manager.reset();
+        state.view.reset();
+        Widgets::linux_host::shutdown();
+        device.reset();
+        g_wayland_state = nullptr;
         wl_display_disconnect(display);
         return 2; // sentinel: GPU init failed, caller should retry with X11
     }
 
     std::cerr << "[Linux/Wayland] Device: " << device->getName()
               << "  Engine: " << GPU::Device::getEngineVersion() << "\n";
-
-    state.device        = device;
-    state.device_width  = state.width  * state.output_scale;
-    state.device_height = state.height * state.output_scale;
+    state.device = device;
 
     // -------------------------------------------------------------------------
-    // Create dispatcher, focus manager, ticker, text input
+    // Ticker
     // -------------------------------------------------------------------------
-    state.dispatcher = std::make_shared<Widgets::PointerDispatcher>();
-    Widgets::PointerDispatcher::setActiveDispatcher(state.dispatcher.get());
-
-    state.focus_manager = std::make_shared<Widgets::FocusManager>();
-    Widgets::FocusManager::setActiveManager(state.focus_manager.get());
-
-    state.text_input_manager = std::make_unique<Widgets::TextInputManager>();
-    Widgets::TextInputManager::setActiveManager(state.text_input_manager.get());
-
     state.ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
     Widgets::TickerScheduler::setActive(state.ticker_scheduler.get());
 
@@ -1186,79 +1196,44 @@ int runAppWayland(const std::string& title, int width, int height,
         });
 
     // -------------------------------------------------------------------------
-    // FrameScheduler callback
+    // Wrap root widget with MediaQuery and mount (in the window's View)
     // -------------------------------------------------------------------------
-    Widgets::FrameScheduler::setCallback([&state]() {
-        state.needs_redraw = true;
-    });
-
-    // -------------------------------------------------------------------------
-    // Wrap root widget with MediaQuery and mount
-    // -------------------------------------------------------------------------
-    Widgets::MediaQueryData mediaData;
-    mediaData.device_pixel_ratio = static_cast<float>(state.output_scale);
-    mediaData.logical_size = Widgets::Size{
+    state.media.device_pixel_ratio = static_cast<float>(state.output_scale);
+    state.media.logical_size = Widgets::Size{
         static_cast<float>(state.width),
         static_cast<float>(state.height) };
-
-    auto wrappedRoot = std::make_shared<Widgets::MediaQuery>(mediaData, root_widget);
-
-    // Bind the UI thread before any widget tree mutation.
-    Widgets::ThreadChecker::instance().bindToCurrentThread();
+    state.root_widget = root_widget;
 
     campello_widgets_initialize_linux_menu_delegate();
 
-    std::cerr << "[Linux/Wayland] Mounting widget tree\n";
-    state.root_element = wrappedRoot->createElement();
-    state.root_element->mount(nullptr);
-    std::cerr << "[Linux/Wayland] Widget tree mounted\n";
+    state.root_element = std::make_shared<Widgets::MediaQuery>(state.media, root_widget)->createElement();
+    {
+        Widgets::View::Scope scope(state.view.get());
+        state.root_element->mount(nullptr);
+    }
 
     auto* roe = state.root_element->findDescendantRenderObjectElement();
-    if (!roe) {
-        std::cerr << "[Linux/Wayland] Widget tree produced no RenderObjectElement\n";
-        return 1;
-    }
-
-    auto render_box = std::dynamic_pointer_cast<Widgets::RenderBox>(
-        roe->sharedRenderObject());
+    auto render_box = roe ? std::dynamic_pointer_cast<Widgets::RenderBox>(roe->sharedRenderObject())
+                          : nullptr;
     if (!render_box) {
-        std::cerr << "[Linux/Wayland] Root render object is not a RenderBox\n";
+        std::cerr << "[Linux/Wayland] Widget tree produced no root RenderBox\n";
         return 1;
     }
-    std::cerr << "[Linux/Wayland] RenderBox found\n";
 
-    state.dispatcher->setRoot(render_box);
+    // Renderer, draw backend (in the surface's pixel format) and raster thread.
+    state.window->setRoot(render_box, Widgets::Color::white());
 
-    // -------------------------------------------------------------------------
-    // Create Vulkan draw backend and renderer
-    // -------------------------------------------------------------------------
-    const Widgets::Color bgColor = Widgets::Color::white();
-    const GPU::PixelFormat pixelFmt = GPU::PixelFormat::bgra8unorm;
-
-    std::cerr << "[Linux/Wayland] Creating VulkanDrawBackend\n";
-    auto backendOwned = std::make_unique<Widgets::VulkanDrawBackend>(
-        device, bgColor, pixelFmt);
-    std::cerr << "[Linux/Wayland] VulkanDrawBackend created\n";
-
-    state.renderer = std::make_shared<Widgets::Renderer>(
-        device, render_box, bgColor);
-    state.renderer->setDrawBackend(std::move(backendOwned));
-    // Renderer::device_pixel_ratio_ is distinct from MediaQueryData's copy —
-    // it's what buildFrame() actually divides the physical viewport by to
-    // get logical layout constraints. Without this, layout sizes everything
-    // against the full physical viewport as if DPR were 1, shrinking every
-    // fixed-size widget to roughly 1/scale of its intended on-screen size.
-    state.renderer->setDevicePixelRatio(static_cast<float>(state.output_scale));
-    std::cerr << "[Linux/Wayland] Renderer ready\n";
-
-    state.raster_thread = std::make_unique<Widgets::RasterThread>(
-        [renderer = state.renderer](const Widgets::FramePackage& pkg) {
-            renderer->rasterFrame(pkg);
-        });
-    state.raster_thread->start();
-    std::cerr << "[Linux/Wayland] Raster thread started, entering event loop\n";
-
-    state.needs_redraw = true;
+    // A resize (or scale change) updates the MediaQuery the tree sees.
+    state.window->on_metrics_changed = [&state] {
+        Widgets::MediaQueryData next = state.media;
+        next.device_pixel_ratio = state.window->devicePixelRatio();
+        next.logical_size       = state.window->logicalSize();
+        if (next == state.media) return;
+        state.media = next;
+        Widgets::View::Scope scope(state.view.get());
+        state.root_element->update(std::make_shared<Widgets::MediaQuery>(state.media, state.root_widget));
+    };
+    std::cerr << "[Linux/Wayland] Renderer ready, entering event loop\n";
 
     // -------------------------------------------------------------------------
     // Main event loop
@@ -1277,56 +1252,33 @@ int runAppWayland(const std::string& title, int width, int height,
             state.ibus_ime->dispatchEvents();
         }
 
-        // Resize the Vulkan swapchain when the window size changed. On Wayland,
-        // vkGetPhysicalDeviceSurfaceCapabilitiesKHR always returns currentExtent
-        // = UINT32_MAX, so the swapchain cannot self-detect the new dimensions.
-        // campello_gpu_wayland_resize() patches imageExtent and calls
-        // recreateSwapchain() internally, keeping the VkDevice alive —
-        // analogous to Metal's transparent drawableSize update on macOS.
-        if (state.needs_device_resize && state.device) {
-            state.needs_device_resize = false;
-            // Wait for the raster thread to finish its current frame before
-            // recreating the swapchain — destroying swapchain images while
-            // the raster thread still holds a command buffer recording against
-            // them causes a Vulkan validation error and crash.
-            if (state.raster_thread)
-                state.raster_thread->drain();
-            campello_gpu_wayland_resize(
-                static_cast<uint32_t>(state.width  * state.output_scale),
-                static_cast<uint32_t>(state.height * state.output_scale));
-            state.device_width  = state.width  * state.output_scale;
-            state.device_height = state.height * state.output_scale;
+        Widgets::linux_host::runTasks();
+
+        // Render if a frame was requested. A frame callback is requested only
+        // when a frame was actually submitted: on Vulkan, vkQueuePresentKHR
+        // (on the raster thread) attaches and commits the buffer, and a
+        // commit without a new buffer just confuses the compositor.
+        if (state.window->drawFrame()) {
+            struct wl_callback* callback = wl_surface_frame(state.surface);
+            wl_callback_add_listener(callback, &frame_listener, &state);
+            wl_display_flush(display);
         }
 
-        // Render if needed
-        if (state.needs_redraw && state.renderer) {
-            state.needs_redraw = false;
-            bool submitted = renderFrame(&state);
-
-            // Only register the vsync frame callback and commit the surface when
-            // we actually submitted a frame to the GPU. On Vulkan, vkQueuePresentKHR
-            // (called from the raster thread) manages wl_surface_attach + commit
-            // internally. Committing the surface here without a new buffer when no
-            // frame was submitted just confuses the compositor.
-            if (submitted) {
-                struct wl_callback* callback = wl_surface_frame(state.surface);
-                wl_callback_add_listener(callback, &frame_listener, &state);
-                wl_display_flush(display);
-            }
-        }
-
-        // Prepare to read/display events
+        // Wait for Wayland events or a wake-up (posted task, frame request).
         if (wl_display_prepare_read(display) == 0) {
-            struct pollfd pfd = {};
-            pfd.fd = wl_display_get_fd(display);
-            pfd.events = POLLIN;
-
-            int ret = poll(&pfd, 1, 16); // 16ms timeout (~60fps ticker)
-            if (ret > 0) {
+            pollfd fds[2] = {
+                { wl_display_get_fd(display), POLLIN, 0 },
+                { Widgets::linux_host::wakeFd(), POLLIN, 0 },
+            };
+            // 16 ms keeps IBus serviced and animations ticking while idle.
+            const int timeout_ms = Widgets::linux_host::LinuxWindow::anyFramePending() ? 0 : 16;
+            const int ret = poll(fds, 2, timeout_ms);
+            if (ret > 0 && (fds[0].revents & POLLIN)) {
                 wl_display_read_events(display);
             } else {
                 wl_display_cancel_read(display);
             }
+            if (ret > 0 && (fds[1].revents & POLLIN)) Widgets::linux_host::clearWake();
         } else {
             // Events already pending; next loop iteration will dispatch them
         }
@@ -1363,47 +1315,44 @@ int runAppWayland(const std::string& title, int width, int height,
     //      wl_surface (libdecor owns xdg_surface / xdg_toplevel on top of it).
     // -------------------------------------------------------------------------
 
-    // Stop frame scheduling immediately — the lambda captures &state and must
-    // not fire after runAppWayland returns.
-    Widgets::FrameScheduler::setCallback({});
-
+    state.text_input_manager->setOnInputTargetChanged(nullptr);
     state.ibus_ime.reset();
-
-    Widgets::PointerDispatcher::setActiveDispatcher(nullptr);
-    Widgets::FocusManager::setActiveManager(nullptr);
-    Widgets::TextInputManager::setActiveManager(nullptr);
-    Widgets::TickerScheduler::setActive(nullptr);
 
     // Captured &state by reference — must be cleared before state's
     // Wayland objects below start getting torn down.
     Widgets::registerCursorHandler(nullptr);
 
-    // Unmount the element / render-object tree while managers are still reachable
-    // (RenderTextField::detach() checks activeDispatcher(), etc.).
+    // Unmount the element / render-object tree while the View's managers
+    // are still reachable (RenderTextField::detach() checks the dispatcher).
+    if (state.window) state.window->on_metrics_changed = nullptr;
+    {
+        Widgets::View::Scope scope(state.view.get());
+        state.root_element->unmount();
+    }
+    Widgets::linux_host::runTasks();
     state.root_element.reset();
-
-    // Stop the raster thread before releasing the renderer — stop() blocks
-    // until any in-flight rasterFrame() call completes and joins the thread,
-    // so no raster work can ever observe a half-destroyed Renderer/Device.
-    state.raster_thread.reset();
-
-    state.renderer.reset();
-
-    // Release everything else that can hold GPU-backed textures before the
-    // device is destroyed. render_box is a local variable that would otherwise
-    // outlive state.device; state.dispatcher holds a ref to it via setRoot().
-    // OffsetLayer caches DrawLists that contain DrawImageCmd/DrawTextCmd with
-    // shared_ptr<Texture> — those textures call vkFreeMemory in their dtor.
     render_box.reset();
-    state.dispatcher.reset();
-    state.focus_manager.reset();
+    Widgets::linux_host::runTasks();
+
+    // The window's raster thread, renderer and Surface, before the
+    // wl_surface they present to (destroyed below) and before the View.
+    state.window.reset();
+    Widgets::TickerScheduler::setActive(nullptr);
+    state.ticker_scheduler.reset();
+
+    // Textures cached by images hold the device: release them while it lives.
     Widgets::ImageCache::instance().clear();
 
+    state.dispatcher.reset();
+    state.focus_manager.reset();
+    state.text_input_manager.reset();
+    state.view.reset();
+
+    // The device last of the GPU objects, while the Wayland display is still
+    // open: on hasvk/Wayland, vkDestroySurfaceKHR sends a null-commit to the
+    // compositor, which crashes the WSI if the display is already gone.
+    Widgets::linux_host::shutdown();
     state.device.reset();
-    // The local `device` variable also holds a ref to the GPU::Device; reset it
-    // here so vkDestroySurfaceKHR fires while the Wayland display is still open.
-    // On hasvk/Wayland, vkDestroySurfaceKHR sends a null-commit to the compositor
-    // — if the display is already disconnected that commit crashes the WSI.
     device.reset();
 
     if (state.xkb_state)  xkb_state_unref(state.xkb_state);
