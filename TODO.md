@@ -1337,6 +1337,72 @@ renders in the Simulator (taps not automatable).
       window, with multiple `xdg_toplevel`s. Client-side positioning isn't
       possible on Wayland, so position requests are no-ops there.
 
+#### Linux plan (agreed 2026-11-14), branch `feature/linux-multi-window`
+
+Same shape as Windows: one host per process, one object per native window.
+- `src/linux/linux_host.{hpp,cpp}`: the windowless shared Vulkan device,
+  one `poll()` loop (X11 or Wayland fd, D-Bus dark mode, IBus, an `eventfd`
+  for `postTask()`; replaces the 1 ms `usleep` busy-wait), the ticker,
+  dark-mode fan-out to every window, and the `PlatformWindowing`.
+- `LinuxWindow` base with `X11Window` / `WaylandWindow`: each owns its
+  `View`, campello_gpu `Surface`, `Renderer` and **raster thread** (kept,
+  unlike Windows' UI-thread drawing). The `runApp()` window is one too.
+  Key translation, MediaQuery helpers and IBus wiring are shared (one IBus
+  context that follows keyboard focus).
+- Input routed by the event's window (`xany.window`; Wayland pointer and
+  keyboard `enter` surface) inside `View::Scope`; leaving a window sends an
+  out-of-bounds move so its hovers end. Cursor set on the ambient window.
+- Kinds. **X11:** dialog = `WM_TRANSIENT_FOR` +
+  `_NET_WM_WINDOW_TYPE_DIALOG`, centred; modal adds `_NET_WM_STATE_MODAL`
+  (blocking itself is the core's input blocker; a click on the parent raises
+  the modal and beeps); popup = override-redirect window with a pointer and
+  keyboard grab. **Wayland:** dialog = `libdecor_frame_set_parent`; modal
+  adds `xdg_dialog_v1.set_modal` when offered; popup = native `xdg_popup` +
+  `xdg_positioner` on the parent's xdg_surface with a grab (`popup_done`
+  closes it; the compositor flips/slides it at screen edges); position
+  requests are no-ops.
+- Frame pacing: X11 a timer at the monitor refresh (XRandR); Wayland each
+  window's own `wl_surface.frame`. Windows that aren't shown are not drawn
+  (see the L0 finding).
+- Close policy: `quit_app` leaves the loop; `keep_running` hides the main
+  window (X11 unmap; Wayland destroys its surface and frame).
+
+Milestones:
+- [x] **L0** campello_gpu Linux `Surface` verification (2026-11-14, campello_gpu
+      v0.29.1, pinned here).
+      - **Bug:** `createSurface()` returned nullptr for every Linux window in
+        v0.29.0: `surface.cpp` tested `CAMPELLO_GPU_X11`/`_WAYLAND`, defined only
+        in `device.cpp`. Fixed in v0.29.1 (`src/vulkan/linux_wsi.hpp`).
+      - 18 new Linux Surface tests in campello_gpu: 11 X11 (pixels read back
+        with `XGetImage`) and 7 Wayland (sizes, frame callbacks). They pass on
+        Intel ANV under GNOME Wayland + XWayland, on lavapipe, and on Xvfb +
+        lavapipe; they now run in campello_gpu's Linux CI, which turned out to
+        have run no tests at all before (fixed).
+      - `Surface::resize()` works on Wayland, so the runner's device rebuild on
+        every resize can go.
+      - **Finding:** with FIFO, an unmapped X11 window's presents stalled a
+        visible window on another raster thread for ~2 minutes. Surfaces prefer
+        MAILBOX, which avoids it, but the host must not draw hidden windows
+        (X11 unmapped / Wayland without frame callbacks).
+      - Test-harness lessons for L2/L3 self-tests: a window manager may resize
+        new windows (pin sizes, wait for the matching `ConfigureNotify`), and
+        on Xvfb (no WM) windows open at 0,0 and cover each other.
+- [ ] **L1** Refactor with no behaviour change (M1.8b for Linux): host +
+      window classes, shared device + `Surface` per window, no device
+      rebuild on Wayland resize (`Surface::resize()`), keep the fallback to
+      X11 when Wayland GPU setup fails. Gallery regression on X11 and
+      Wayland, unit tests.
+- [ ] **L2** X11 multi-window (M3.2): all kinds, close policies,
+      `examples/linux_multi_window` with `CW_MULTIWINDOW_DEMO=2/3/4`
+      self-tests driven through XTest (works on Xvfb), per-window captures.
+- [ ] **L3** Wayland multi-window (M3.3): split the Wayland state into
+      process-level (seat, xkb, clipboard, outputs, libdecor) and per-window
+      parts (surface, frame, scale, size), then the kinds. Self-tests inject
+      into each window's View (no client-side input synthesis on Wayland);
+      headless Weston in Docker for CI; manual pass on GNOME.
+- [ ] **L4** Embedded runner onto a `View` (that change only), docs,
+      CLAUDE.md, Linux CI for the example.
+
 ### M4 — Web: several canvases
 
 **Status (2026-11-12): done (M4.2 experimental).** Branch `feature/multi-window`.
