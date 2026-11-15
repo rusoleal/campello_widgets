@@ -1058,8 +1058,8 @@ device->submit(cmd);
 
 ### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
 
-**Status (2026-11-13): done for macOS, iOS, Android, web and Windows; the
-Linux (X11/Wayland/embedded) and GDK runners still use the legacy path,**
+**Status (2026-11-15): done for macOS, iOS, Android, web, Windows and Linux
+(X11, Wayland, embedded); the GDK runner still uses the legacy path,**
 which keeps working unchanged because nothing was removed. Branch
 `feature/multi-window`.
 
@@ -1128,7 +1128,9 @@ window, in priority order:
       runners: same mechanical migration, but they can't be built on this
       Mac. Do it on the machine used for M0.3/M3.
       - [x] **Windows** (2026-11-13), as part of M3.1 below.
-      - [ ] Linux X11, Wayland, Linux embedded, GDK.
+      - [x] Linux X11 and Wayland (L1/L3, 2026-11-14/15), Linux embedded
+            (L4, 2026-11-15).
+      - [ ] GDK.
 - [x] **M1.9** Vulkan with several raster threads (2026-11-12, `campello_gpu`
       `feature/multi-surface`). **Design choice:** recording is serialized
       per device with a frame lock (from `createCommandEncoder()` until
@@ -1332,10 +1334,253 @@ renders in the Simulator (taps not automatable).
       - The Release build of the example wasn't run (Debug only).
       - Popups open below the anchor without flipping at the screen edge
         (same as macOS).
-- [ ] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each.
+- [x] **M3.2** Linux X11: multiple `Window`s, one Vulkan `Surface` each
+      (2026-11-15, see L2 below).
 - [ ] **M3.3** Linux Wayland: `g_wayland_state` becomes one state per
       window, with multiple `xdg_toplevel`s. Client-side positioning isn't
       possible on Wayland, so position requests are no-ops there.
+
+#### Linux plan (agreed 2026-11-14), branch `feature/linux-multi-window`
+
+Same shape as Windows: one host per process, one object per native window.
+- `src/linux/linux_host.{hpp,cpp}`: the windowless shared Vulkan device,
+  one `poll()` loop (X11 or Wayland fd, D-Bus dark mode, IBus, an `eventfd`
+  for `postTask()`; replaces the 1 ms `usleep` busy-wait), the ticker,
+  dark-mode fan-out to every window, and the `PlatformWindowing`.
+- `LinuxWindow` base with `X11Window` / `WaylandWindow`: each owns its
+  `View`, campello_gpu `Surface`, `Renderer` and **raster thread** (kept,
+  unlike Windows' UI-thread drawing). The `runApp()` window is one too.
+  Key translation, MediaQuery helpers and IBus wiring are shared (one IBus
+  context that follows keyboard focus).
+- Input routed by the event's window (`xany.window`; Wayland pointer and
+  keyboard `enter` surface) inside `View::Scope`; leaving a window sends an
+  out-of-bounds move so its hovers end. Cursor set on the ambient window.
+- Kinds. **X11:** dialog = `WM_TRANSIENT_FOR` +
+  `_NET_WM_WINDOW_TYPE_DIALOG`, centred; modal adds `_NET_WM_STATE_MODAL`
+  (blocking itself is the core's input blocker; a click on the parent raises
+  the modal and beeps); popup = override-redirect window with a pointer and
+  keyboard grab. **Wayland:** dialog = `libdecor_frame_set_parent`; modal
+  adds `xdg_dialog_v1.set_modal` when offered; popup = native `xdg_popup` +
+  `xdg_positioner` on the parent's xdg_surface with a grab (`popup_done`
+  closes it; the compositor flips/slides it at screen edges); position
+  requests are no-ops.
+- Frame pacing: X11 a timer at the monitor refresh (XRandR); Wayland each
+  window's own `wl_surface.frame`. Windows that aren't shown are not drawn
+  (see the L0 finding).
+- Close policy: `quit_app` leaves the loop; `keep_running` hides the main
+  window (X11 unmap; Wayland destroys its surface and frame).
+
+Milestones:
+- [x] **L0** campello_gpu Linux `Surface` verification (2026-11-14, campello_gpu
+      v0.29.1, pinned here).
+      - **Bug:** `createSurface()` returned nullptr for every Linux window in
+        v0.29.0: `surface.cpp` tested `CAMPELLO_GPU_X11`/`_WAYLAND`, defined only
+        in `device.cpp`. Fixed in v0.29.1 (`src/vulkan/linux_wsi.hpp`).
+      - 18 new Linux Surface tests in campello_gpu: 11 X11 (pixels read back
+        with `XGetImage`) and 7 Wayland (sizes, frame callbacks). They pass on
+        Intel ANV under GNOME Wayland + XWayland, on lavapipe, and on Xvfb +
+        lavapipe; they now run in campello_gpu's Linux CI, which turned out to
+        have run no tests at all before (fixed).
+      - `Surface::resize()` works on Wayland, so the runner's device rebuild on
+        every resize can go.
+      - **Finding:** with FIFO, an unmapped X11 window's presents stalled a
+        visible window on another raster thread for ~2 minutes. Surfaces prefer
+        MAILBOX, which avoids it, but the host must not draw hidden windows
+        (X11 unmapped / Wayland without frame callbacks).
+      - Test-harness lessons for L2/L3 self-tests: a window manager may resize
+        new windows (pin sizes, wait for the matching `ConfigureNotify`), and
+        on Xvfb (no WM) windows open at 0,0 and cover each other.
+- [x] **L1** Refactor (M1.8b for Linux), 2026-11-14.
+      - `src/linux/linux_host.{hpp,cpp}`: the shared windowless device, a
+        task queue + wake-up `eventfd`, and `LinuxWindow` (View, campello_gpu
+        `Surface`, Renderer, raster thread, frame requests; hidden windows
+        aren't drawn). `src/linux/x11_window.{hpp,cpp}`: `X11Window` (window
+        creation, events routed by `xany.window` inside `View::Scope`,
+        cursors, IBus feed). `run_app.cpp` is now just the X11 `runApp()`
+        and loop; the old global `WindowState` is gone.
+      - The X11 loop `poll()`s the X fd and the wake-up fd (16 ms timeout for
+        D-Bus) instead of a 1 ms `usleep` busy-wait.
+      - Wayland runner: still one window and one state struct (split in L3),
+        but now a View, a headless device and a `Surface` through a
+        `LinuxWindow` subclass. `campello_gpu_wayland_resize()` (the legacy
+        device-wide swapchain) is replaced by `Surface::resize()`. A failed
+        device *or* surface still falls back to X11.
+      - Fixed on the way: **X11 resize left a stale, cropped frame** (seen with
+        the old build on XWayland; the new one re-lays out); **Wayland never
+        updated `MediaQuery` on resize** (logical size stayed the startup
+        size); X11 `Expose` now repaints (no compositor: an uncovered area
+        stayed blank, since a frame request with nothing dirty draws nothing).
+      - Verified: 1152/1152 unit tests. X11 on XWayland (Intel, 2x): first
+        frame and an unchanged page pixel-identical to the pre-L1 build. X11 on
+        Xvfb + lavapipe (real XTest input): click navigates, resize re-lays
+        out, unmap/map repaints, typing / Ctrl+A / Backspace in a TextField,
+        `WM_DELETE_WINDOW` exits 0. Wayland (GNOME, Intel 2x): renders the full
+        tree (frame capture) and exits 0 on SIGINT.
+      - **Not verified:** Wayland on-screen presentation, input and resize by
+        hand (no input synthesis or screen grab from a Wayland client here);
+        the new Wayland `MediaQuery` update is untested.
+      - Still as before (later milestones): no frame pacing (draws as fast as
+        frames are requested; X11 refresh-rate timer in L2), X11 has no SIGINT
+        handler (exit 130), `resizable` is ignored on X11, the X11 title is set
+        with `XStoreName` (an em dash shows as mojibake; needs `_NET_WM_NAME`),
+        IBus's cursor location follows the main window only.
+      - Note for L2 self-tests: GNOME doesn't deliver XTest input to XWayland
+        clients, so automated input runs on Xvfb (Docker, Ubuntu 26.04 runtime
+        image with the host build mounted).
+- [x] **L2** X11 multi-window (M3.2), 2026-11-15.
+      - `src/linux/x11_platform_windowing.cpp`: the `PlatformWindowing`
+        (installed by `runApp()` before the tree mounts); each window is an
+        `X11Window` with its own View, Surface, Renderer and raster thread.
+        `postTask()` is the host's queue (thread-safe).
+      - **Kinds:** regular; dialog (`WM_TRANSIENT_FOR`,
+        `_NET_WM_WINDOW_TYPE_DIALOG`, skip-taskbar, centred on its owner);
+        modal (adds `_NET_WM_STATE_MODAL`; a press or key in the blocked
+        window raises and focuses the modal one and rings the bell, while the
+        core drops the input); popup (override-redirect
+        `_NET_WM_WINDOW_TYPE_POPUP_MENU` placed relative to the owner's
+        content, takes keyboard focus once mapped, closes when it loses it).
+        Owned windows stay above their owner when it is raised (what a window
+        manager does for transients; needed without one), and an owned window
+        shown before its owner is mapped waits for it, so it is placed
+        relative to where the window manager put the owner.
+      - **Close policy:** `quit_app` leaves the loop; `keep_running` unmaps
+        the main window and quits once no other (non-popup) window is shown.
+        Teardown destroys secondary windows before unmounting the tree.
+        Close requests (`WM_DELETE_WINDOW`, `requestClose()`) are delivered
+        on a later loop turn.
+      - **Also:** frames paced to the screen refresh rate (XRandR RandR 1.1,
+        `dlopen`ed: no build dependency; idle ~1% CPU); UTF-8 titles
+        (`_NET_WM_NAME`); `_NET_WM_PID`; `resizable = false` honoured (min =
+        max size hints); mouse events are `PointerDeviceKind::mouse` (were
+        the touch default); leaving a window ends its hovers; each window feeds
+        IBus while it has keyboard focus; SIGINT/SIGTERM tear down cleanly.
+      - **Bug found:** `dlclose()` of libXrandr after querying the rate left
+        RandR's event hooks on the Display pointing into the unloaded
+        library: a crash in `_XEnq` on the next RandR event. It stays loaded.
+      - `examples/linux_multi_window` (the Windows example's windows), with
+        self-tests that drive the windows through XTest (real X input,
+        `dlopen`ed libXtst) and save `XGetImage` captures:
+        - `CW_MULTIWINDOW_DEMO=2`: a click in the Inspector updates the
+          counter everywhere; "hi" typed into its field lands there, "x" typed
+          into the main window doesn't; About's Close destroys it.
+        - `CW_MULTIWINDOW_DEMO=3`: Preferences (modal) blocks the main window
+          and a click there doesn't count; +10 and Done work; the main window
+          works again. The Options popup is a separate window extending below
+          the main window, with keyboard focus; an item runs and closes it; a
+          click elsewhere, Escape, and focus moving to another window each
+          close it. Closing the main window quits (exit 0).
+        - `CW_MULTIWINDOW_DEMO=4`: with `keep_running`, closing the main
+          window leaves the Inspector working; closing it quits.
+        - On Xvfb + lavapipe (Docker, Ubuntu 26.04): 5 runs of each gave
+          identical output, all exit 0. Without a window manager nothing moves
+          keyboard focus on a click, so the tests focus a window before typing
+          (as a window manager would).
+      - Under GNOME (Mutter, XWayland, 2x): windows decorated and stacked, the
+        About dialog centred on the main window, idle ~1% CPU, SIGINT exits 0.
+        Input there was not automated (GNOME doesn't deliver XTest to
+        XWayland clients): a manual pass is worth doing.
+      - Regressions: 1152/1152 unit tests; the gallery on Xvfb (navigation,
+        resize, remap, typing, close) and on Wayland unchanged.
+      - **Not done / not verified:** popups don't flip at the screen edge and
+        don't follow a moved owner (a move normally takes focus, which closes
+        them); per-monitor refresh rates and scales (one per screen); IME
+        composition (no IBus here); the Release build.
+- [x] **L3** Wayland multi-window (M3.3), 2026-11-15.
+      - The 1,477-line single-window `wayland_runner.cpp` is split:
+        `src/linux/wayland_window.{hpp,cpp}` hold the process-level state
+        (registry globals, seat, xkb keymap, cursor theme, clipboard, outputs,
+        libdecor, our own `xdg_wm_base`) and `WaylandWindow` (a `LinuxWindow`:
+        `wl_surface`, libdecor frame or `xdg_popup`, size, scale, frame
+        callback); `wayland_platform_windowing.cpp` is the `PlatformWindowing`;
+        `wayland_runner.cpp` is now just `runAppWayland()` and the loop.
+        xdg-shell and xdg-dialog-v1 client code is generated by
+        wayland-scanner into `src/linux/protocols/` (private code: hidden
+        symbols, no clash with libdecor's own copy).
+      - Pointer and keyboard events go to the window whose surface they
+        `enter`ed (libdecor's decoration surfaces are ignored: they used to
+        reach the tree in decoration coordinates), inside its `View::Scope`.
+        Leaving a window ends its hovers.
+      - **Kinds:** regular (libdecor frame); dialog (`libdecor_frame_set_parent`
+        on the owner's frame, no minimise/fullscreen; the compositor places
+        it: GNOME centres it on the parent, Weston doesn't); modal (adds
+        `xdg_dialog_v1.set_modal` when the compositor has `xdg_wm_dialog_v1`;
+        the core drops the blocked window's input); popup (`xdg_popup` on the
+        owner's xdg_surface, positioned relative to the owner's content via
+        `libdecor_frame_translate_coordinate` (the title bar), with
+        flip/slide constraint adjustment so the compositor keeps it on screen,
+        and a grab with the last press serial; `popup_done` closes it).
+        `resizable = false`: min = max content size, no resize action.
+        An owned window shown before its owner is configured waits for it.
+      - **Close policy:** as X11; `keep_running` unmaps the main window
+        (rendering paused, role destroyed, null buffer committed; `show()`
+        maps it again). A window's popups are unmapped before its own role.
+      - **Frames:** each window requests a `wl_surface.frame` callback just
+        before its frame goes to the raster thread (so the request applies
+        to that present's commit) and waits for it before drawing again; a
+        callback that doesn't come within 100 ms stops counting (dropped
+        frame, hidden window). Idle with three windows: ~1% CPU. (The old
+        loop ticked the dispatcher and tickers itself; `buildFrame()` does.)
+      - **Scale:** each window's buffer scale is fixed before its first
+        frame: the main window follows the output it entered (as before),
+        secondary windows take their owner's (or the first output's).
+      - `LinuxWindow` gained `pauseRendering()`/`resumeRendering()`,
+        `releaseSurface()` (the swapchain before the `wl_surface`) and two
+        hooks (`frameThrottled()`, `willSubmitFrame()`).
+      - IBus commits now go to the window with keyboard focus (they reached
+        the main window only), on X11 too.
+      - Self-tests (`examples/linux_multi_window`, same modes as L2): under
+        Wayland the example injects pointer and key events into each window's
+        View, closes the main window through a runner test hook
+        (`CAMPELLO_WIDGETS_SIGUSR1_CLOSE=1`: SIGUSR1 acts as its close
+        button), saves each window's next frame with
+        `Renderer::requestFrameCapture`, and with `CW_MULTIWINDOW_SCREENSHOT`
+        runs a screenshot command (e.g. `weston-screenshooter`) per step.
+        - GNOME Wayland (Intel, 2x): DEMO 2, 3 and 4 give the same results
+          as on X11, exit 0, except that "popup lost focus" leaves the menu
+          open (injected input moves no compositor focus).
+        - Headless Weston 14 + lavapipe (Docker, Ubuntu 26.04 runtime +
+          `weston`, `libdecor-0-plugin-1-gtk`): the same; 3 runs of each
+          identical, exit 0, no protocol errors. Compositor screenshots show
+          the popup under "Options v", past the main window's bottom edge.
+      - Regressions: 1152/1152 unit tests; the gallery's Wayland frame
+        capture is pixel-identical to L2's; the X11 self-tests on Xvfb are
+        unchanged.
+      - **Not verified:** real input on Wayland (pointer and keyboard routing
+        between windows, the popup grab and `popup_done`, the clipboard
+        serial) needs a manual pass on GNOME; `xdg_dialog_v1` modality under
+        GNOME (Weston lacks it); IME; the Release build.
+      - **Not done:** Wayland clients can't place, raise or focus their own
+        windows (`position` is ignored except for popups; `activate` would
+        need `xdg_activation_v1`); a window's scale doesn't follow it to
+        another output after its first frame (changing the buffer scale races
+        the raster thread's presents), and fractional scaling isn't used; a
+        popup keeps its size (`setSize` would need `xdg_popup.reposition`);
+        key repeat isn't implemented (as before).
+- [x] **L4** Embedded runner, docs, CI (2026-11-15).
+      - `EmbeddedApp` (`src/linux/embedded_app.cpp`) owns a `View` (made
+        primary, tree mounted and unmounted in its scope, renderer attached),
+        instead of installing its own process-wide managers; `on_redraw_needed`
+        is the View's frame-request callback (so `markNeedsPaint` reaches it,
+        not only `FrameScheduler`); new `EmbeddedApp::view()`. Public API
+        otherwise unchanged. 2 new integration tests (its View is primary and
+        cleared afterwards; a forwarded tap's `setState` requests a redraw and
+        repaints); 6/6 EmbeddedApp tests pass on Intel and on lavapipe.
+      - The example's self-tests check what they observe (`[demo] CHECK
+        FAILED`, exit 1; `SELF-TEST PASSED`), and
+        `examples/linux_multi_window/run_self_tests.sh <bin> x11|wayland`
+        runs modes 2-4 on Xvfb or a headless Weston. All pass on Xvfb, Weston
+        14 and GNOME Wayland; the script reports failure correctly.
+      - CI: new `linux-multi-window` job (ubuntu-latest): builds the example
+        and the integration tests, runs the integration tests under
+        `xvfb-run` and the self-tests on both backends (lavapipe). The package
+        names and Weston flags were checked on Ubuntu 24.04 (Weston 13); the
+        job itself has **not run yet** (nothing pushed).
+      - Docs: CHANGELOG `[Unreleased]`, CLAUDE.md, the protocol XMLs in
+        `protocols/` with regeneration commands in `linux.cmake`.
+      - **Found:** a root render object is never `attach()`ed (attach runs in
+        `setParent()`), so a `GestureDetector` that is the tree's root render
+        object never registers for input, on every runner. Not fixed (core,
+        outside L4); see Known gaps.
 
 ### M4 — Web: several canvases
 
@@ -1633,8 +1878,13 @@ and Android.**
 
 **Known gaps / follow-ups (M2 + M7)**
 - [x] Windows: modal, popups and the close policy (M3.1, 2026-11-13).
-- [ ] Linux: modal, popups and the close policy aren't implemented (M3).
+- [x] Linux: modal, popups and the close policy (X11: L2, Wayland: L3,
+      2026-11-15).
       The web and iPad have no main-window close policy (no such concept).
+- [ ] A root render object is never `attach()`ed (only `setParent()` calls
+      it), so a `GestureDetector` (or anything registering in `attach()`)
+      that is a tree's root render object gets no input. Found in L4; every
+      runner. Workaround: any parent (e.g. `Padding`).
 - [ ] An app's main window needs an `Overlay` in its tree for the fallback
       (secondary windows always have one); without it,
       `PopupWindowAnchor` logs a warning.

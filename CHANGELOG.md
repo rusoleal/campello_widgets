@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Linux multiple windows (Phase 17).** `WindowController` and the `Window` widget now open native
+  windows on Linux, on both X11 and Wayland, each with its own `View`, campello_gpu `Surface`,
+  renderer and raster thread on one shared Vulkan device.
+  - X11: dialogs (`WM_TRANSIENT_FOR`, centred on their owner), modal windows (`_NET_WM_STATE_MODAL`;
+    a click on the blocked window brings the modal one forward), popups (override-redirect windows
+    that close when they lose focus).
+  - Wayland: dialogs are libdecor frames with a parent, modal windows add `xdg_dialog_v1` when the
+    compositor has it, popups are native `xdg_popup`s that the compositor keeps on screen.
+  - Both: the main-window close policy, `resizable = false`, per-window IBus focus.
+  See `examples/linux_multi_window` and its `run_self_tests.sh`.
+- CI: a Linux job runs that example's self-tests on Xvfb (X11) and a headless Weston (Wayland),
+  plus the platform integration tests.
+
+### Changed
+
+- Linux: X11 frames are paced to the screen's refresh rate and the event loop blocks in `poll()`
+  (it used to poll every millisecond); Wayland frames are paced by each window's frame callbacks.
+  Window titles are UTF-8 on X11; Ctrl+C / SIGTERM quit cleanly.
+- `EmbeddedApp` gives its tree a `View` (made primary; new `EmbeddedApp::view()`); frame requests
+  reach `on_redraw_needed` through it.
+- campello_gpu v0.29.1 (Linux `Surface` fix).
+
+### Fixed
+
+- Wayland: pointer events over libdecor's title bar reached the widget tree in title-bar coordinates;
+  `MediaQuery` never updated on resize.
+- X11: a resize left a stale, cropped frame until the next change; uncovered areas stayed blank
+  without a compositor.
+- Linux: IME commits went to the main window whatever window had focus.
+
 ## [0.11.0] - 2026-11-13
 
 ### Added

@@ -18,6 +18,7 @@ namespace systems::leal::campello_widgets
     class FocusManager;
     class TickerScheduler;
     class TextInputManager;
+    class View;
 
     /**
      * @brief Runs a campello_widgets tree without owning a window, surface,
@@ -46,12 +47,12 @@ namespace systems::leal::campello_widgets
      * window/surface attached at all, exactly what a headless host needs.
      *
      * Like every other platform entry point in this library, EmbeddedApp
-     * registers itself as the process's active PointerDispatcher/
-     * FocusManager/TickerScheduler/TextInputManager/FrameScheduler callback
-     * on construction and clears them on destruction — only one
+     * gives its tree a View (see view.hpp) and makes it the primary one, so
+     * the legacy process-wide accessors (PointerDispatcher/FocusManager/
+     * TextInputManager::active*()) reach it, and registers the active
+     * TickerScheduler; both are cleared on destruction. Only one
      * campello_widgets tree (of any kind: desktop window or embedded) may be
-     * active in a process at a time. This matches every other platform's
-     * runApp(); nothing about embedding relaxes it further.
+     * active in a process at a time.
      */
     class EmbeddedApp
     {
@@ -120,22 +121,24 @@ namespace systems::leal::campello_widgets
         void tick(uint64_t now_ms);
 
         /** @brief Forward the host's own pointer events here. */
-        PointerDispatcher& pointerDispatcher() noexcept { return *dispatcher_; }
+        PointerDispatcher& pointerDispatcher() noexcept;
 
         /** @brief Forward the host's own key events here. */
-        FocusManager& focusManager() noexcept { return *focus_manager_; }
+        FocusManager& focusManager() noexcept;
 
+        /** @brief The View the tree belongs to (its window, in Phase 17 terms). */
+        View& view() noexcept { return *view_; }
         /** @brief The underlying Renderer, for advanced configuration (DPR, view insets, etc.). */
         std::shared_ptr<Renderer> renderer() const noexcept { return renderer_; }
 
     private:
+        // The tree's window (Phase 17): its pointer dispatcher, focus and
+        // text input, made primary. Declared first: destroyed last.
+        std::unique_ptr<View>                 view_;
         std::shared_ptr<campello_gpu::Device> device_;
         std::shared_ptr<Element>              root_element_;
         std::shared_ptr<Renderer>             renderer_;
-        std::shared_ptr<PointerDispatcher>    dispatcher_;
-        std::shared_ptr<FocusManager>         focus_manager_;
         std::unique_ptr<TickerScheduler>      ticker_scheduler_;
-        std::unique_ptr<TextInputManager>     text_input_manager_;
     };
 
 } // namespace systems::leal::campello_widgets
