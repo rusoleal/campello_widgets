@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-15
+
+### Added
+
+- **Toolbar overflow** (`ToolbarConfig::overflow`, on by default). Items that don't fit the space given move, from
+  the end, into a "More" (⋮) button's popup menu, named by their labels or tooltips. The button shows as selected
+  when the selected item is in its menu. Icon items are measured exactly; label items are estimated from their text.
+- `Toolbar` widget: `elevated` and `overflow` fields (v0.13.0's widget didn't pass `elevated` on).
+
+### Fixed
+
+- **Toolbar label items** no longer stretch across all the width offered (a `Center` round them did): they're
+  centred vertically by padding.
+- **Toolbar arrow keys** find every item however rebuilds interleave: the items' focus group now lives in the
+  line's state, not in each build.
+
 ## [0.13.0] - 2026-11-15
 
 ### Added

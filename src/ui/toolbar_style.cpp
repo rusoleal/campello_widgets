@@ -12,6 +12,8 @@
 #include <campello_widgets/widgets/decorated_box.hpp>
 #include <campello_widgets/widgets/focus.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
+#include <campello_widgets/widgets/layout_builder.hpp>
+#include <campello_widgets/widgets/popup_menu_button.hpp>
 #include <campello_widgets/widgets/icon.hpp>
 #include <campello_widgets/widgets/mouse_region.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
@@ -23,6 +25,7 @@
 #include <campello_widgets/widgets/tooltip.hpp>
 
 #include <algorithm>
+#include <cmath>
 
 namespace systems::leal::campello_widgets
 {
@@ -179,11 +182,19 @@ namespace systems::leal::campello_widgets
                     indicator = Stack::create({pill, std::make_shared<Positioned>(-out, -out, -out, -out, std::nullopt, std::nullopt, outline)});
                 }
 
-                // The touch target round it.
-                auto target    = std::make_shared<SizedBox>();
-                target->height = s.item_extent;
-                if (it.label.empty()) target->width = s.item_extent;
-                target->child  = std::make_shared<Center>(indicator);
+                // The touch target round it. A label item is centred
+                // vertically by padding, not a Center (that would take all
+                // the width offered: a whole Row's).
+                WidgetRef target;
+                if (it.label.empty()) {
+                    target = std::make_shared<SizedBox>(s.item_extent, s.item_extent, std::make_shared<Center>(indicator));
+                } else {
+                    const float inset = std::max(0.0f, (s.item_extent - s.indicator_extent) / 2.0f);
+                    auto padded     = std::make_shared<Padding>();
+                    padded->padding = EdgeInsets::symmetric(inset, 0.0f);
+                    padded->child   = indicator;
+                    target = padded;
+                }
 
                 auto gesture    = std::make_shared<GestureDetector>();
                 gesture->on_tap = active ? it.on_pressed : nullptr;
@@ -234,90 +245,240 @@ namespace systems::leal::campello_widgets
         }
     }
 
-    WidgetRef buildToolbarWithStyle(const ToolbarConfig& config, const ToolbarStyle& style, bool pointer_cursor)
+    namespace
     {
-        const bool horizontal = config.direction == Axis::horizontal;
-        // Fixed both ways (from_width() would stretch across the toolbar's
-        // loose constraints, a viewer's whole height when floating).
-        const auto gap = [&](float extent) -> WidgetRef {
-            return horizontal ? std::make_shared<SizedBox>(extent, 0.0f) : std::make_shared<SizedBox>(0.0f, extent);
-        };
-        // Keyboard: the items' focus nodes in order; Tab enters at the
-        // selected item, else the first enabled one.
-        auto focus = std::make_shared<ToolbarFocusGroup>();
-        focus->direction = config.direction;
-        int tabStop = -1;
-        for (const auto& group : config.groups) {
-            for (const auto& it : group) {
-                const bool active = it.enabled && static_cast<bool>(it.on_pressed);
-                if (active && it.selected && tabStop < 0) tabStop = static_cast<int>(focus->focusable.size());
-                focus->focusable.push_back(active);
+        // The overflow ("more") button: an item's look, a vertical
+        // ellipsis, selected when the selected item is in its menu; a
+        // popup menu of the hidden items.
+        WidgetRef overflowButton(const std::vector<ToolbarConfig::Item>& hidden, const ToolbarStyle& s)
+        {
+            bool selected = false;
+            std::vector<PopupMenuItem> items;
+            for (const auto& it : hidden) {
+                selected = selected || it.selected;
+                PopupMenuItem entry;
+                entry.label   = !it.label.empty() ? it.label : it.tooltip;
+                entry.enabled = it.enabled && static_cast<bool>(it.on_pressed);
+                entry.on_tap  = it.on_pressed;
+                items.push_back(std::move(entry));
             }
+            const Color fg = selected ? s.selected_foreground : s.foreground;
+            TextStyle glyph = s.label_style;
+            glyph.font_size = s.icon_size;
+            glyph.withColor(fg);
+            BoxDecoration fill;
+            fill.color         = selected ? s.selected_container : Color::transparent();
+            fill.border_radius = s.item_radius;
+            auto pill        = std::make_shared<DecoratedBox>();
+            pill->decoration = fill;
+            pill->child      = std::make_shared<SizedBox>(s.indicator_extent, s.indicator_extent,
+                                                          std::make_shared<Center>(std::make_shared<Text>("\u22EE", glyph)));
+            auto menu   = std::make_shared<PopupMenuButton>();
+            menu->items = std::move(items);
+            menu->child = std::make_shared<SizedBox>(s.item_extent, s.item_extent, std::make_shared<Center>(pill));
+            auto tip = std::make_shared<Tooltip>("More", menu);
+            return tip;
         }
-        if (tabStop < 0) {
-            for (std::size_t i = 0; i < focus->focusable.size(); ++i) {
-                if (focus->focusable[i]) { tabStop = static_cast<int>(i); break; }
-            }
-        }
-        focus->nodes.resize(focus->focusable.size());
-        int index = 0;
 
-        std::vector<WidgetRef> children;
-        for (const auto& group : config.groups) {
-            if (group.empty()) continue;
-            if (!children.empty()) {
-                // Between groups: a gap, and a short divider where drawn.
-                children.push_back(gap(style.group_gap));
-                if (style.divider.a > 0.0f) {
-                    auto line = std::make_shared<SizedBox>();
-                    line->width  = horizontal ? 1.0f : style.item_extent * 0.5f;
-                    line->height = horizontal ? style.item_extent * 0.5f : 1.0f;
-                    line->child  = std::make_shared<ColoredBox>(style.divider);
-                    children.push_back(line);
-                    children.push_back(gap(style.group_gap));
+        // An item's extent along the toolbar: icon items exactly (their
+        // touch target); label items estimated from their text.
+        float itemExtent(const ToolbarConfig::Item& it, const ToolbarStyle& s, bool horizontal)
+        {
+            if (it.label.empty() || !horizontal) return s.item_extent;
+            const float text = static_cast<float>(it.label.size()) * s.label_style.font_size * 0.55f;
+            const float icon = (it.icon || it.icon_builder) ? s.icon_size + 8.0f : 0.0f;
+            return 2.0f * s.item_padding + icon + text;
+        }
+
+        WidgetRef buildToolbarLine(const ToolbarConfig& config, const ToolbarStyle& style, bool pointer_cursor,
+                                   const std::vector<ToolbarConfig::Item>& hidden, const std::shared_ptr<ToolbarFocusGroup>& focus)
+        {
+            const bool horizontal = config.direction == Axis::horizontal;
+            // Fixed both ways (from_width() would stretch across the toolbar's
+            // loose constraints, a viewer's whole height when floating).
+            const auto gap = [&](float extent) -> WidgetRef {
+                return horizontal ? std::make_shared<SizedBox>(extent, 0.0f) : std::make_shared<SizedBox>(0.0f, extent);
+            };
+            // Keyboard: the items' focus nodes in order; Tab enters at the
+            // selected item, else the first enabled one.
+            focus->direction = config.direction;
+            focus->focusable.clear();
+            int tabStop = -1;
+            for (const auto& group : config.groups) {
+                for (const auto& it : group) {
+                    const bool active = it.enabled && static_cast<bool>(it.on_pressed);
+                    if (active && it.selected && tabStop < 0) tabStop = static_cast<int>(focus->focusable.size());
+                    focus->focusable.push_back(active);
                 }
             }
-            for (std::size_t i = 0; i < group.size(); ++i) {
-                if (i > 0) children.push_back(gap(style.gap));
-                auto item            = std::make_shared<ToolbarItemWidget>();
-                item->item           = group[i];
-                item->style          = style;
-                item->pointer_cursor = pointer_cursor;
-                item->group          = focus;
-                item->index          = index;
-                item->tab_stop       = index == tabStop;
-                ++index;
-                children.push_back(item);
+            if (tabStop < 0) {
+                for (std::size_t i = 0; i < focus->focusable.size(); ++i) {
+                    if (focus->focusable[i]) { tabStop = static_cast<int>(i); break; }
+                }
             }
+            focus->nodes.resize(focus->focusable.size());
+            int index = 0;
+
+            std::vector<WidgetRef> children;
+            for (const auto& group : config.groups) {
+                if (group.empty()) continue;
+                if (!children.empty()) {
+                    // Between groups: a gap, and a short divider where drawn.
+                    children.push_back(gap(style.group_gap));
+                    if (style.divider.a > 0.0f) {
+                        auto line = std::make_shared<SizedBox>();
+                        line->width  = horizontal ? 1.0f : style.item_extent * 0.5f;
+                        line->height = horizontal ? style.item_extent * 0.5f : 1.0f;
+                        line->child  = std::make_shared<ColoredBox>(style.divider);
+                        children.push_back(line);
+                        children.push_back(gap(style.group_gap));
+                    }
+                }
+                for (std::size_t i = 0; i < group.size(); ++i) {
+                    if (i > 0) children.push_back(gap(style.gap));
+                    auto item            = std::make_shared<ToolbarItemWidget>();
+                    item->item           = group[i];
+                    item->style          = style;
+                    item->pointer_cursor = pointer_cursor;
+                    item->group          = focus;
+                    item->index          = index;
+                    item->tab_stop       = index == tabStop;
+                    ++index;
+                    children.push_back(item);
+                }
+            }
+
+            if (!hidden.empty()) {
+                children.push_back(gap(style.gap));
+                children.push_back(overflowButton(hidden, style));
+            }
+
+            WidgetRef line;
+            if (horizontal) {
+                auto row = std::make_shared<Row>();
+                row->main_axis_size       = MainAxisSize::min;
+                row->cross_axis_alignment = CrossAxisAlignment::center;
+                row->children             = std::move(children);
+                line = row;
+            } else {
+                auto column = std::make_shared<Column>();
+                column->main_axis_size       = MainAxisSize::min;
+                column->cross_axis_alignment = CrossAxisAlignment::center;
+                column->children             = std::move(children);
+                line = column;
+            }
+
+            auto padded     = std::make_shared<Padding>();
+            padded->padding = style.padding;
+            padded->child   = line;
+
+            BoxDecoration deco;
+            deco.color         = config.floating ? style.container : style.docked_container;
+            deco.border_radius = config.floating ? style.radius : 0.0f;
+            if (config.floating && config.elevated) deco.box_shadow = style.shadow;
+            auto container        = std::make_shared<DecoratedBox>();
+            container->decoration = deco;
+            container->child      = padded;
+            return container;
         }
+    }
 
-        WidgetRef line;
-        if (horizontal) {
-            auto row = std::make_shared<Row>();
-            row->main_axis_size       = MainAxisSize::min;
-            row->cross_axis_alignment = CrossAxisAlignment::center;
-            row->children             = std::move(children);
-            line = row;
-        } else {
-            auto column = std::make_shared<Column>();
-            column->main_axis_size       = MainAxisSize::min;
-            column->cross_axis_alignment = CrossAxisAlignment::center;
-            column->children             = std::move(children);
-            line = column;
+    namespace
+    {
+        // The line of items, keeping one focus group across rebuilds (its
+        // items register their nodes in it whenever they build, so arrow
+        // keys find every one of them however rebuilds interleave).
+        class ToolbarLine : public StatefulWidget
+        {
+        public:
+            ToolbarConfig config;
+            ToolbarStyle style;
+            bool pointer_cursor = true;
+
+            std::unique_ptr<StateBase> createState() const override;
+        };
+
+        std::pair<ToolbarConfig, std::vector<ToolbarConfig::Item>> splitForOverflow(const ToolbarConfig& config, const ToolbarStyle& style,
+                                                                                    float available);
+
+        class ToolbarLineState : public State<ToolbarLine>
+        {
+        public:
+            WidgetRef build(BuildContext&) override
+            {
+                const auto& w = widget();
+                if (!w.config.overflow) return buildToolbarLine(w.config, w.style, w.pointer_cursor, {}, focus_);
+                // What fits the space given; the rest in the overflow menu.
+                return std::make_shared<LayoutBuilder>(
+                    [config = w.config, style = w.style, pointer = w.pointer_cursor, focus = focus_](BuildContext&, BoxConstraints c) -> WidgetRef {
+                        const float available = config.direction == Axis::horizontal ? c.max_width : c.max_height;
+                        auto [kept, hidden] = splitForOverflow(config, style, available);
+                        return buildToolbarLine(kept, style, pointer, hidden, focus);
+                    });
+            }
+
+        private:
+            std::shared_ptr<ToolbarFocusGroup> focus_ = std::make_shared<ToolbarFocusGroup>();
+        };
+
+        std::unique_ptr<StateBase> ToolbarLine::createState() const
+        {
+            return std::make_unique<ToolbarLineState>();
         }
+    }
 
-        auto padded     = std::make_shared<Padding>();
-        padded->padding = style.padding;
-        padded->child   = line;
+    namespace
+    {
+        // What fits `available` along the toolbar: the items kept, in their
+        // groups, and those that go to the overflow menu (from the end).
+        std::pair<ToolbarConfig, std::vector<ToolbarConfig::Item>> splitForOverflow(const ToolbarConfig& config, const ToolbarStyle& style,
+                                                                                    float available)
+        {
+            const bool horizontal = config.direction == Axis::horizontal;
+            const float ends = horizontal ? style.padding.left + style.padding.right : style.padding.top + style.padding.bottom;
+            const float between = style.group_gap + (style.divider.a > 0.0f ? 1.0f + style.group_gap : 0.0f);
+            // The whole toolbar's extent.
+            float whole = ends;
+            bool firstGroup = true;
+            for (const auto& group : config.groups) {
+                if (group.empty()) continue;
+                if (!firstGroup) whole += between;
+                firstGroup = false;
+                for (std::size_t i = 0; i < group.size(); ++i) whole += (i > 0 ? style.gap : 0.0f) + itemExtent(group[i], style, horizontal);
+            }
+            if (!(whole > available) || !std::isfinite(available)) return {config, {}};
+            // Keep items in order while they and the overflow button fit.
+            float used = ends + style.gap + style.item_extent;
+            ToolbarConfig kept = config;
+            kept.groups.clear();
+            std::vector<ToolbarConfig::Item> hidden;
+            bool full = false;
+            for (const auto& group : config.groups) {
+                if (group.empty()) continue;
+                std::vector<ToolbarConfig::Item> part;
+                for (const auto& it : group) {
+                    const float extra = (part.empty() ? (kept.groups.empty() ? 0.0f : between) : style.gap) + itemExtent(it, style, horizontal);
+                    if (!full && used + extra <= available) {
+                        used += extra;
+                        part.push_back(it);
+                    } else {
+                        full = true;
+                        hidden.push_back(it);
+                    }
+                }
+                if (!part.empty()) kept.groups.push_back(std::move(part));
+            }
+            return {kept, hidden};
+        }
+    }
 
-        BoxDecoration deco;
-        deco.color         = config.floating ? style.container : style.docked_container;
-        deco.border_radius = config.floating ? style.radius : 0.0f;
-        if (config.floating && config.elevated) deco.box_shadow = style.shadow;
-        auto container        = std::make_shared<DecoratedBox>();
-        container->decoration = deco;
-        container->child      = padded;
-        return container;
+    WidgetRef buildToolbarWithStyle(const ToolbarConfig& config, const ToolbarStyle& style, bool pointer_cursor)
+    {
+        auto line            = std::make_shared<ToolbarLine>();
+        line->config         = config;
+        line->style          = style;
+        line->pointer_cursor = pointer_cursor;
+        return line;
     }
 
 } // namespace systems::leal::campello_widgets

@@ -430,6 +430,10 @@ namespace systems::leal::campello_widgets
         Axis direction = Axis::horizontal;
         bool floating = true;
         bool elevated = false;
+        /// Items that don't fit the space given move, from the end, into an
+        /// overflow menu (a "more" button, MD3 toolbars' overflow), named
+        /// by their labels or tooltips; false: laid out whole.
+        bool overflow = true;
     };
 
     struct BannerConfig

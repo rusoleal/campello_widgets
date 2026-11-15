@@ -14,6 +14,8 @@ namespace systems::leal::campello_widgets
         cfg.color     = color;
         cfg.direction = direction;
         cfg.floating  = floating;
+        cfg.elevated  = elevated;
+        cfg.overflow  = overflow;
         return ds->buildToolbar(cfg);
     }
 
