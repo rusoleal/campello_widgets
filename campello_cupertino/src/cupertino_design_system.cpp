@@ -1,4 +1,5 @@
 #include <campello_cupertino/cupertino_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 #include "cupertino_focus_ring.hpp"
 
@@ -126,6 +127,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromARGB(0xFF1C1C1E);
             t.colors.inverse_on_surface = Color::fromARGB(0xFFFFFFFF);
             t.colors.inverse_primary    = Color::fromARGB(0xFF0A84FF);
+            // Surface containers: this design system's surface, then its variant.
+            t.colors.surface_container_lowest  = t.colors.surface;
+            t.colors.surface_container_low     = t.colors.surface;
+            t.colors.surface_container         = t.colors.surface;
+            t.colors.surface_container_high    = t.colors.surface_variant;
+            t.colors.surface_container_highest = t.colors.surface_variant;
 
             // iOS shape scale — deliberately not MD3's stadium-heavy scale.
             t.shape.radius_xs = 6.0f;  // popovers/tooltips
@@ -180,6 +187,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromARGB(0xFFF2F2F7);
             t.colors.inverse_on_surface = Color::fromARGB(0xFF000000);
             t.colors.inverse_primary    = Color::fromARGB(0xFF007AFF);
+            // Surface containers: this design system's surface, then its variant.
+            t.colors.surface_container_lowest  = t.colors.surface;
+            t.colors.surface_container_low     = t.colors.surface;
+            t.colors.surface_container         = t.colors.surface;
+            t.colors.surface_container_high    = t.colors.surface_variant;
+            t.colors.surface_container_highest = t.colors.surface_variant;
 
             t.shape.radius_xs = 6.0f;
             t.shape.radius_sm = 8.0f;
@@ -2580,6 +2593,45 @@ namespace systems::leal::campello_widgets
         // convention as buildAppBar()/buildBottomSheet(), unlike
         // buildListTile()'s own bounded-card presentation).
         return col;
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — a capsule toolbar (iPadOS / macOS 26): 36pt items on the
+    // surface, a thin outline and a soft shadow; the selected item tinted
+    // with the accent; hairline dividers between groups.
+    // -----------------------------------------------------------------------
+
+    WidgetRef CupertinoDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary : c.surface;
+        s.docked_container    = c.surface;
+        s.foreground          = vibrant ? c.on_primary : c.primary;
+        s.selected_container  = vibrant ? c.on_primary : Color::fromRGBA(c.primary.r, c.primary.g, c.primary.b, 0.15f);
+        s.selected_foreground = vibrant ? c.primary : c.primary;
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 30.0f;
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_full;
+        s.item_radius         = t.shape.radius_full;
+        s.padding             = EdgeInsets::all(6.0f);
+        s.item_extent         = 36.0f;
+        s.item_padding        = 12.0f;
+        s.gap                 = 2.0f;
+        s.group_gap           = 6.0f;
+        s.icon_size           = 20.0f;
+        s.label_style         = t.typography.label_large;
+        s.shadow = {BoxShadow{Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.12f), {0.0f, 4.0f}, 16.0f, 0.0f}};
+        // Keyboard focus: the macOS accent ring, flush with the control.
+        s.focus_ring          = Color::fromRGBA(c.primary.r, c.primary.g, c.primary.b, 0.5f);
+        s.focus_ring_width    = 3.0f;
+        s.focus_ring_offset   = 0.0f;
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
 } // namespace systems::leal::campello_widgets

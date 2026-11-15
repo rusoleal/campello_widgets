@@ -448,6 +448,27 @@ public:
         tb_cfg.on_pressed = [this](int i) { setState([this, i] { toggle_selected_[i] = !toggle_selected_[i]; }); };
         auto tb = ds->buildToggleButtons(tb_cfg);
 
+        // Toolbar (floating, a tool palette: the active tool selected;
+        // groups set apart; tooltips on hover)
+        cw::ToolbarConfig tool_cfg;
+        const char* tools[] = {"Select", "Pen", "Rectangle", "Circle", "Text", "Eraser"};
+        const char* glyphs[] = {"\u2196", "\u270E", "\u25AD", "\u25CB", "T", "\u232B"};
+        const auto tool = [&](int i) {
+            cw::ToolbarConfig::Item item;
+            item.tooltip      = tools[i];
+            item.on_pressed   = [this, i] { setState([this, i] { tool_selected_ = i; }); };
+            item.selected     = tool_selected_ == i;
+            // A glyph as the icon, drawn in the colour the toolbar gives it.
+            item.icon_builder = [glyph = std::string(glyphs[i])](cw::Color color) -> cw::WidgetRef {
+                return std::make_shared<cw::Text>(glyph, cw::TextStyle{}.withFontSize(20.0f).withColor(color));
+            };
+            return item;
+        };
+        tool_cfg.groups = {{tool(0)}, {tool(1), tool(2), tool(3)}, {tool(4), tool(5)}};
+        auto toolbar = ds->buildToolbar(tool_cfg);
+        tool_cfg.color = cw::ToolbarColor::vibrant;
+        auto vibrant_toolbar = ds->buildToolbar(tool_cfg);
+
         // Banner
         cw::WidgetRef banner_widget;
         if (banner_visible_) {
@@ -572,7 +593,7 @@ public:
                     subheading("ACTION SHEET (Liquid Glass on \"Glass\", uses Overlay)", colors.on_surface_variant),
                     sheet_btn,
                     vspace(20.0f),
-                    subheading("TOOLTIP (Liquid Glass on \"Glass\", long-press, uses Overlay)", colors.on_surface_variant),
+                    subheading("TOOLTIP (Liquid Glass on \"Glass\", hover or long-press, uses Overlay)", colors.on_surface_variant),
                     tooltip_target,
                     vspace(20.0f),
                     subheading("EXPANSION TILE", colors.on_surface_variant),
@@ -580,6 +601,11 @@ public:
                     vspace(20.0f),
                     subheading("TOGGLE BUTTONS", colors.on_surface_variant),
                     tb,
+                    vspace(20.0f),
+                    subheading("TOOLBAR (floating icon buttons: standard, vibrant; hover for tooltips)", colors.on_surface_variant),
+                    toolbar,
+                    vspace(12.0f),
+                    vibrant_toolbar,
                     vspace(20.0f),
                     subheading("BANNER", colors.on_surface_variant),
                     banner_visible_ ? banner_widget
@@ -611,6 +637,7 @@ private:
     std::string pmb_choice_ = "(none)";
     bool  exp_tile_expanded_ = false;
     std::vector<bool> toggle_selected_ = {true, false, false};
+    int tool_selected_ = 0;
     int   nav_rail_selected_ = 0;
     bool  banner_visible_ = true;
 };

@@ -1,4 +1,5 @@
 #include <campello_fluent/fluent_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 #include "fluent_reveal_response.hpp"
 
@@ -127,6 +128,12 @@ DesignTokens makeLightTokens(Color accent)
     t.colors.inverse_surface    = Color::fromARGB(0xFF2B2B2B);
     t.colors.inverse_on_surface = Color::fromARGB(0xFFFFFFFF);
     t.colors.inverse_primary    = Color::fromARGB(0xFFCCE3F1);
+    // Surface containers: this design system's surface, then its variant.
+    t.colors.surface_container_lowest  = t.colors.surface;
+    t.colors.surface_container_low     = t.colors.surface;
+    t.colors.surface_container         = t.colors.surface;
+    t.colors.surface_container_high    = t.colors.surface_variant;
+    t.colors.surface_container_highest = t.colors.surface_variant;
 
     // Fluent elevation is subtle: mostly 0/1/2/4/8/16 px shadow depths.
     t.elevation = ElevationTokens{0.0f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
@@ -188,6 +195,12 @@ DesignTokens makeDarkTokens(Color accent)
     t.colors.inverse_surface    = Color::fromARGB(0xFFF3F3F3);
     t.colors.inverse_on_surface = Color::fromARGB(0xFF1A1A1A);
     t.colors.inverse_primary    = accent;
+    // Surface containers: this design system's surface, then its variant.
+    t.colors.surface_container_lowest  = t.colors.surface;
+    t.colors.surface_container_low     = t.colors.surface;
+    t.colors.surface_container         = t.colors.surface;
+    t.colors.surface_container_high    = t.colors.surface_variant;
+    t.colors.surface_container_highest = t.colors.surface_variant;
 
     t.typography = makeFluentTypography(t.colors.on_surface);
     return t;
@@ -232,6 +245,12 @@ DesignTokens makeHighContrastTokens(Color accent)
     t.colors.inverse_surface    = Color::fromARGB(0xFFFFFFFF);
     t.colors.inverse_on_surface = Color::fromARGB(0xFF000000);
     t.colors.inverse_primary    = accent;
+    // Surface containers: this design system's surface, then its variant.
+    t.colors.surface_container_lowest  = t.colors.surface;
+    t.colors.surface_container_low     = t.colors.surface;
+    t.colors.surface_container         = t.colors.surface;
+    t.colors.surface_container_high    = t.colors.surface_variant;
+    t.colors.surface_container_highest = t.colors.surface_variant;
 
     t.elevation = ElevationTokens{0.0f, 1.0f, 2.0f, 4.0f, 8.0f, 16.0f};
     t.shape.radius_none = 0.0f;
@@ -1712,5 +1731,44 @@ WidgetRef FluentDesignSystem::buildDataTable(const DataTableConfig& cfg) const
     decorated->child      = col;
     return decorated;
 }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — a CommandBar: 40px items in a layer with 8px corners and a
+    // flyout-level shadow; the selected item a subtle fill; dividers
+    // between groups.
+    // -----------------------------------------------------------------------
+
+    WidgetRef FluentDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary : c.surface;
+        s.docked_container    = c.surface;
+        s.foreground          = vibrant ? c.on_primary : c.on_surface;
+        s.selected_container  = vibrant ? c.on_primary : c.secondary_container;
+        s.selected_foreground = vibrant ? c.primary : c.on_secondary_container;
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 32.0f;
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_md;
+        s.item_radius         = t.shape.radius_sm;
+        s.padding             = EdgeInsets::all(4.0f);
+        s.item_extent         = 40.0f;
+        s.item_padding        = 12.0f;
+        s.gap                 = 2.0f;
+        s.group_gap           = 4.0f;
+        s.icon_size           = 16.0f;
+        s.label_style         = t.typography.body_medium;
+        s.shadow = {BoxShadow{Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.14f), {0.0f, 8.0f}, 16.0f, 0.0f}};
+        // Keyboard focus: Fluent's focus visual, a 2px stroke just outside.
+        s.focus_ring          = c.on_surface;
+        s.focus_ring_width    = 2.0f;
+        s.focus_ring_offset   = 1.0f;
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
+    }
 
 } // namespace systems::leal::campello_widgets

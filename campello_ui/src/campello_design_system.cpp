@@ -1,4 +1,5 @@
 #include <campello_ui/campello_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 // Widgets
 #include <campello_widgets/widgets/align.hpp>
@@ -148,6 +149,12 @@ namespace systems::leal::campello_widgets
         t.colors.inverse_surface = Color::fromRGB(0.118f, 0.129f, 0.149f);
         t.colors.inverse_on_surface = Color::fromRGB(0.980f, 0.973f, 0.961f);
         t.colors.inverse_primary = Color::fromRGB(0.494f, 0.835f, 0.839f);
+        // Surface containers: this design system's surface, then its variant.
+        t.colors.surface_container_lowest  = t.colors.surface;
+        t.colors.surface_container_low     = t.colors.surface;
+        t.colors.surface_container         = t.colors.surface;
+        t.colors.surface_container_high    = t.colors.surface_variant;
+        t.colors.surface_container_highest = t.colors.surface_variant;
 
         t.elevation = ElevationTokens{};
         t.shape = ShapeTokens{};
@@ -195,6 +202,12 @@ namespace systems::leal::campello_widgets
         t.colors.inverse_surface = Color::fromRGB(0.980f, 0.973f, 0.961f);
         t.colors.inverse_on_surface = Color::fromRGB(0.118f, 0.129f, 0.149f);
         t.colors.inverse_primary = Color::fromRGB(0.051f, 0.545f, 0.553f);
+        // Surface containers: this design system's surface, then its variant.
+        t.colors.surface_container_lowest  = t.colors.surface;
+        t.colors.surface_container_low     = t.colors.surface;
+        t.colors.surface_container         = t.colors.surface;
+        t.colors.surface_container_high    = t.colors.surface_variant;
+        t.colors.surface_container_highest = t.colors.surface_variant;
 
         t.elevation = ElevationTokens{};
         t.shape = ShapeTokens{};
@@ -1809,6 +1822,44 @@ namespace systems::leal::campello_widgets
         decorated->decoration = outer;
         decorated->child      = col;
         return decorated;
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — campello_ui's own: a rounded bar (radius lg) of 44px items on the
+    // surface, the selected item on the primary container, dividers between
+    // groups, a level-2 shadow.
+    // -----------------------------------------------------------------------
+
+    WidgetRef CampelloDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary_container : c.surface;
+        s.docked_container    = c.surface_variant;
+        s.foreground          = vibrant ? c.on_primary_container : c.on_surface;
+        s.selected_container  = vibrant ? c.primary : c.primary_container;
+        s.selected_foreground = vibrant ? c.on_primary : c.on_primary_container;
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 36.0f;
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_lg;
+        s.item_radius         = t.shape.radius_md;
+        s.padding             = EdgeInsets::all(6.0f);
+        s.item_extent         = 44.0f;
+        s.item_padding        = 12.0f;
+        s.gap                 = 4.0f;
+        s.group_gap           = 6.0f;
+        s.icon_size           = 22.0f;
+        s.label_style         = t.typography.label_large;
+        s.shadow = {BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.18f), {0.0f, 2.0f}, 6.0f, 0.0f}};
+        s.focus_ring          = c.primary;
+        s.focus_ring_width    = 2.0f;
+        s.focus_ring_offset   = 2.0f;
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
 } // namespace systems::leal::campello_widgets

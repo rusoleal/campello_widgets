@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/null_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 // Widgets
 #include <campello_widgets/widgets/align.hpp>
@@ -87,6 +88,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromRGB(0.10f, 0.10f, 0.10f);
             t.colors.inverse_on_surface = Color::white();
             t.colors.inverse_primary    = Color::fromRGB(0.75f, 0.75f, 0.75f);
+            // Surface containers: this design system's surface, then its variant.
+            t.colors.surface_container_lowest  = t.colors.surface;
+            t.colors.surface_container_low     = t.colors.surface;
+            t.colors.surface_container         = t.colors.surface;
+            t.colors.surface_container_high    = t.colors.surface_variant;
+            t.colors.surface_container_highest = t.colors.surface_variant;
 
             // No shadows, no rounding — radius_full stays default (9999) so
             // inherently-circular shapes (FAB, switch thumb) still work.
@@ -1402,6 +1409,35 @@ namespace systems::leal::campello_widgets
         decorated->decoration = outer;
         decorated->child      = col;
         return decorated;
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — plain: the shared layout on the surface, no shadow.
+    // -----------------------------------------------------------------------
+
+    WidgetRef NullDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary_container : c.surface;
+        s.docked_container    = c.surface;
+        s.foreground          = vibrant ? c.on_primary_container : c.on_surface;
+        s.selected_container  = c.secondary_container;
+        s.selected_foreground = c.on_secondary_container;
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 40.0f;
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_md;
+        s.item_radius         = t.shape.radius_sm;
+        s.label_style         = t.typography.label_large;
+        s.focus_ring          = c.on_surface;
+        s.focus_ring_width    = 2.0f;
+        s.focus_ring_offset   = 2.0f;
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
 } // namespace systems::leal::campello_widgets

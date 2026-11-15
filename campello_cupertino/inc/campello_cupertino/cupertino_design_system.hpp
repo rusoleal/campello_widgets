@@ -110,6 +110,7 @@ namespace systems::leal::campello_widgets
         WidgetRef buildBanner(const BannerConfig&) const override;
         WidgetRef buildNavigationRail(const NavigationRailConfig&) const override;
         WidgetRef buildDataTable(const DataTableConfig&) const override;
+        WidgetRef buildToolbar(const ToolbarConfig&) const override;
 
         /**
          * @brief iOS 26's "remove app"-style confirmation dialog: one glass
