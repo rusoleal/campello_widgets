@@ -1,12 +1,15 @@
 #ifdef CAMPELLO_WIDGETS_HAS_WAYLAND
 
 // -----------------------------------------------------------------------------
-// Wayland platform runner
+// Wayland runApp (Phase 17, multi-window)
 // -----------------------------------------------------------------------------
-// Creates a Wayland window backed by campello_gpu's Vulkan backend.
-// Supports pointer, keyboard (via xkbcommon), and IBus IME.
+// The main window and the event loop. The process-level Wayland state and
+// the windows themselves live in wayland_window.{hpp,cpp}; windows opened
+// through WindowController come from wayland_platform_windowing.cpp. Every
+// window presents through its own campello_gpu Surface on one shared,
+// windowless device.
 //
-// Requires: wayland-client >= 1.20, xkbcommon
+// Requires: wayland-client >= 1.20, xkbcommon, libdecor
 // -----------------------------------------------------------------------------
 
 #include <campello_widgets/linux/run_app.hpp>
@@ -14,29 +17,21 @@
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
 #include <campello_widgets/widgets/media_query.hpp>
-#include <campello_widgets/ui/renderer.hpp>
+#include <campello_widgets/widgets/window.hpp>
 #include <campello_widgets/ui/render_box.hpp>
-#include <campello_widgets/ui/pointer_event.hpp>
-#include <campello_widgets/ui/pointer_dispatcher.hpp>
-#include <campello_widgets/ui/key_event.hpp>
-#include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/ticker.hpp>
-#include <campello_widgets/ui/frame_scheduler.hpp>
-#include <campello_widgets/ui/text_input_manager.hpp>
 #include <campello_widgets/ui/thread_checker.hpp>
 #include <campello_widgets/ui/view.hpp>
+#include <campello_widgets/ui/platform_windowing.hpp>
+#include <campello_widgets/ui/system_mouse_cursor.hpp>
 
 #include <campello_gpu/device.hpp>
-#include <campello_gpu/texture_view.hpp>
-#include <campello_gpu/platform/linux_surface.hpp>
 
 #include "ibus_ime.hpp"
-#include "wayland_clipboard.hpp"
 #include "linux_host.hpp"
+#include "wayland_window.hpp"
 
 #include <wayland-client.h>
-#include <wayland-cursor.h>
-#include <xkbcommon/xkbcommon.h>
 
 // C interface installed by src/linux/platform_menu_delegate.cpp — must run
 // before the widget tree mounts so PlatformMenuBar::build()'s setMenus()
@@ -44,913 +39,31 @@
 // LinuxPlatformMenuDelegate instead of the default no-op.
 extern "C" void campello_widgets_initialize_linux_menu_delegate();
 
-#include <sys/mman.h>
 #include <poll.h>
 #include <unistd.h>
 #include <signal.h>
 #include <execinfo.h>
 
-#include <chrono>
+#include <cstdlib>
+#include <iostream>
 #include <memory>
 #include <string>
-#include <cstring>
-#include <iostream>
-#include <climits>
-#include <cstdlib>
-#include <utility>
-#include <vector>
-#include <libdecor.h>
 
-// ---------------------------------------------------------------------------
-// Crash handler: prints a backtrace to stderr on SIGSEGV/SIGABRT
-// ---------------------------------------------------------------------------
+// Crash handler: prints a backtrace to stderr on SIGSEGV/SIGABRT.
 static void crashHandler(int sig)
 {
     void* frames[64];
     int   n = backtrace(frames, 64);
     const char* signame = (sig == SIGSEGV) ? "SIGSEGV" : "SIGABRT";
-    // write() is async-signal-safe; fprintf is not, but backtrace_symbols_fd is.
+    // backtrace_symbols_fd and dprintf to a raw fd are safe enough here.
     dprintf(STDERR_FILENO, "\n[CRASH] %s — backtrace (%d frames):\n", signame, n);
     backtrace_symbols_fd(frames, n, STDERR_FILENO);
-    dprintf(STDERR_FILENO, "[CRASH] Tip: addr2line -e ./build/linux-debug/campello_widgets_gallery <addr>\n");
+    dprintf(STDERR_FILENO, "[CRASH] Tip: addr2line -e <executable> <addr>\n");
     signal(sig, SIG_DFL);
     raise(sig);
 }
 
-// SIGINT / SIGTERM: request a clean shutdown via the event loop.
-static volatile sig_atomic_t gInterruptRequested = 0;
-static void interruptHandler(int) { gInterruptRequested = 1; }
-
-namespace GPU     = ::systems::leal::campello_gpu;
-namespace Widgets = ::systems::leal::campello_widgets;
-
-// ---------------------------------------------------------------------------
-
-
-// ============================================================================
-// Shared helpers (duplicated from run_app.cpp to avoid cross-file coupling)
-// ============================================================================
-
-static Widgets::KeyCode keysymToKeyCode(xkb_keysym_t keysym)
-{
-    switch (keysym) {
-        case XKB_KEY_a: case XKB_KEY_A: return Widgets::KeyCode::a;
-        case XKB_KEY_b: case XKB_KEY_B: return Widgets::KeyCode::b;
-        case XKB_KEY_c: case XKB_KEY_C: return Widgets::KeyCode::c;
-        case XKB_KEY_d: case XKB_KEY_D: return Widgets::KeyCode::d;
-        case XKB_KEY_e: case XKB_KEY_E: return Widgets::KeyCode::e;
-        case XKB_KEY_f: case XKB_KEY_F: return Widgets::KeyCode::f;
-        case XKB_KEY_g: case XKB_KEY_G: return Widgets::KeyCode::g;
-        case XKB_KEY_h: case XKB_KEY_H: return Widgets::KeyCode::h;
-        case XKB_KEY_i: case XKB_KEY_I: return Widgets::KeyCode::i;
-        case XKB_KEY_j: case XKB_KEY_J: return Widgets::KeyCode::j;
-        case XKB_KEY_k: case XKB_KEY_K: return Widgets::KeyCode::k;
-        case XKB_KEY_l: case XKB_KEY_L: return Widgets::KeyCode::l;
-        case XKB_KEY_m: case XKB_KEY_M: return Widgets::KeyCode::m;
-        case XKB_KEY_n: case XKB_KEY_N: return Widgets::KeyCode::n;
-        case XKB_KEY_o: case XKB_KEY_O: return Widgets::KeyCode::o;
-        case XKB_KEY_p: case XKB_KEY_P: return Widgets::KeyCode::p;
-        case XKB_KEY_q: case XKB_KEY_Q: return Widgets::KeyCode::q;
-        case XKB_KEY_r: case XKB_KEY_R: return Widgets::KeyCode::r;
-        case XKB_KEY_s: case XKB_KEY_S: return Widgets::KeyCode::s;
-        case XKB_KEY_t: case XKB_KEY_T: return Widgets::KeyCode::t;
-        case XKB_KEY_u: case XKB_KEY_U: return Widgets::KeyCode::u;
-        case XKB_KEY_v: case XKB_KEY_V: return Widgets::KeyCode::v;
-        case XKB_KEY_w: case XKB_KEY_W: return Widgets::KeyCode::w;
-        case XKB_KEY_x: case XKB_KEY_X: return Widgets::KeyCode::x;
-        case XKB_KEY_y: case XKB_KEY_Y: return Widgets::KeyCode::y;
-        case XKB_KEY_z: case XKB_KEY_Z: return Widgets::KeyCode::z;
-        case XKB_KEY_0: return Widgets::KeyCode::digit_0;
-        case XKB_KEY_1: return Widgets::KeyCode::digit_1;
-        case XKB_KEY_2: return Widgets::KeyCode::digit_2;
-        case XKB_KEY_3: return Widgets::KeyCode::digit_3;
-        case XKB_KEY_4: return Widgets::KeyCode::digit_4;
-        case XKB_KEY_5: return Widgets::KeyCode::digit_5;
-        case XKB_KEY_6: return Widgets::KeyCode::digit_6;
-        case XKB_KEY_7: return Widgets::KeyCode::digit_7;
-        case XKB_KEY_8: return Widgets::KeyCode::digit_8;
-        case XKB_KEY_9: return Widgets::KeyCode::digit_9;
-        case XKB_KEY_space:      return Widgets::KeyCode::space;
-        case XKB_KEY_Return:     return Widgets::KeyCode::enter;
-        case XKB_KEY_Tab:        return Widgets::KeyCode::tab;
-        case XKB_KEY_BackSpace:  return Widgets::KeyCode::backspace;
-        case XKB_KEY_Escape:     return Widgets::KeyCode::escape;
-        case XKB_KEY_Delete:     return Widgets::KeyCode::delete_forward;
-        case XKB_KEY_Left:       return Widgets::KeyCode::left;
-        case XKB_KEY_Right:      return Widgets::KeyCode::right;
-        case XKB_KEY_Up:         return Widgets::KeyCode::up;
-        case XKB_KEY_Down:       return Widgets::KeyCode::down;
-        case XKB_KEY_Home:       return Widgets::KeyCode::home;
-        case XKB_KEY_End:        return Widgets::KeyCode::end;
-        case XKB_KEY_Page_Up:    return Widgets::KeyCode::page_up;
-        case XKB_KEY_Page_Down:  return Widgets::KeyCode::page_down;
-        case XKB_KEY_Shift_L:    return Widgets::KeyCode::left_shift;
-        case XKB_KEY_Shift_R:    return Widgets::KeyCode::right_shift;
-        case XKB_KEY_Control_L:  return Widgets::KeyCode::left_ctrl;
-        case XKB_KEY_Control_R:  return Widgets::KeyCode::right_ctrl;
-        case XKB_KEY_Alt_L:      return Widgets::KeyCode::left_alt;
-        case XKB_KEY_Alt_R:      return Widgets::KeyCode::right_alt;
-        case XKB_KEY_Super_L:    return Widgets::KeyCode::left_meta;
-        case XKB_KEY_Super_R:    return Widgets::KeyCode::right_meta;
-        case XKB_KEY_Caps_Lock:  return Widgets::KeyCode::caps_lock;
-        case XKB_KEY_F1:  return Widgets::KeyCode::f1;
-        case XKB_KEY_F2:  return Widgets::KeyCode::f2;
-        case XKB_KEY_F3:  return Widgets::KeyCode::f3;
-        case XKB_KEY_F4:  return Widgets::KeyCode::f4;
-        case XKB_KEY_F5:  return Widgets::KeyCode::f5;
-        case XKB_KEY_F6:  return Widgets::KeyCode::f6;
-        case XKB_KEY_F7:  return Widgets::KeyCode::f7;
-        case XKB_KEY_F8:  return Widgets::KeyCode::f8;
-        case XKB_KEY_F9:  return Widgets::KeyCode::f9;
-        case XKB_KEY_F10: return Widgets::KeyCode::f10;
-        case XKB_KEY_F11: return Widgets::KeyCode::f11;
-        case XKB_KEY_F12: return Widgets::KeyCode::f12;
-        default:            return Widgets::KeyCode::unknown;
-    }
-}
-
-static uint32_t xkbStateToKeyModifiers(struct xkb_state* state, xkb_keycode_t keycode)
-{
-    uint32_t mods = Widgets::KeyModifiers::none;
-    if (xkb_state_mod_name_is_active(state, XKB_MOD_NAME_SHIFT,  XKB_STATE_MODS_EFFECTIVE) > 0)
-        mods |= Widgets::KeyModifiers::shift;
-    if (xkb_state_mod_name_is_active(state, XKB_MOD_NAME_CTRL,   XKB_STATE_MODS_EFFECTIVE) > 0)
-        mods |= Widgets::KeyModifiers::ctrl;
-    if (xkb_state_mod_name_is_active(state, XKB_MOD_NAME_ALT,    XKB_STATE_MODS_EFFECTIVE) > 0)
-        mods |= Widgets::KeyModifiers::alt;
-    if (xkb_state_mod_name_is_active(state, XKB_MOD_NAME_LOGO,   XKB_STATE_MODS_EFFECTIVE) > 0)
-        mods |= Widgets::KeyModifiers::meta;
-    return mods;
-}
-
-static bool isNavigationOrSpecialKeyWayland(Widgets::KeyCode key_code)
-{
-    return key_code == Widgets::KeyCode::left
-        || key_code == Widgets::KeyCode::right
-        || key_code == Widgets::KeyCode::up
-        || key_code == Widgets::KeyCode::down
-        || key_code == Widgets::KeyCode::home
-        || key_code == Widgets::KeyCode::end
-        || key_code == Widgets::KeyCode::page_up
-        || key_code == Widgets::KeyCode::page_down
-        || key_code == Widgets::KeyCode::escape
-        || key_code == Widgets::KeyCode::tab
-        || key_code == Widgets::KeyCode::enter
-        || key_code == Widgets::KeyCode::backspace
-        || key_code == Widgets::KeyCode::delete_forward
-        || key_code == Widgets::KeyCode::f1
-        || key_code == Widgets::KeyCode::f2
-        || key_code == Widgets::KeyCode::f3
-        || key_code == Widgets::KeyCode::f4
-        || key_code == Widgets::KeyCode::f5
-        || key_code == Widgets::KeyCode::f6
-        || key_code == Widgets::KeyCode::f7
-        || key_code == Widgets::KeyCode::f8
-        || key_code == Widgets::KeyCode::f9
-        || key_code == Widgets::KeyCode::f10
-        || key_code == Widgets::KeyCode::f11
-        || key_code == Widgets::KeyCode::f12;
-}
-
-// ============================================================================
-// Wayland window state
-// ============================================================================
-
-struct WaylandWindowState
-{
-    struct wl_display*    display      = nullptr;
-    struct wl_registry*   registry     = nullptr;
-    struct wl_compositor* compositor   = nullptr;
-    struct wl_surface*    surface      = nullptr;
-    struct wl_seat*       seat         = nullptr;
-    struct wl_pointer*    pointer      = nullptr;
-    struct wl_keyboard*   keyboard     = nullptr;
-    struct wl_shm*        shm          = nullptr;
-    struct libdecor*                        libdecor_ctx         = nullptr;
-    struct libdecor_frame*                  decor_frame          = nullptr;
-
-    // Cursor shape support — see the "Cursor theme + surface" block in
-    // runAppWayland() for why this exists at all (short version: without
-    // it, libdecor's own resize/drag cursor from the window border gets
-    // stuck forever once the pointer moves into the content surface).
-    struct wl_cursor_theme* cursor_theme      = nullptr;
-    struct wl_surface*      cursor_surface    = nullptr;
-    uint32_t                pointer_enter_serial = 0;
-
-    struct xkb_context*   xkb_ctx      = nullptr;
-    struct xkb_keymap*    xkb_keymap   = nullptr;
-    struct xkb_state*     xkb_state    = nullptr;
-
-    // --- Clipboard (wl_data_device_manager) -- see the "clipboard" section
-    // below frame_listener for the listeners that populate these. ---
-    struct wl_data_device_manager* data_device_manager = nullptr;
-    struct wl_data_device*         data_device          = nullptr;
-    // Serial of the last real key-press event -- wl_data_device_set_selection()
-    // requires one (the protocol ties selection changes to genuine input, to
-    // stop background clients spoofing the clipboard).
-    uint32_t last_key_serial = 0;
-
-    // Outgoing: we're the source. clipboard_text is what we currently offer;
-    // clipboard_source is the wl_data_source object representing that offer
-    // while it's live (until another client takes ownership, or we replace
-    // it with a newer setText() call).
-    std::string             clipboard_text;
-    struct wl_data_source*  clipboard_source = nullptr;
-
-    // Incoming: something else is the source. clipboard_offer is the
-    // wl_data_offer currently active as the system clipboard selection, and
-    // clipboard_offer_mime is which of its advertised MIME types we can
-    // actually use (empty if none are plain text).
-    struct wl_data_offer* clipboard_offer = nullptr;
-    std::string            clipboard_offer_mime;
-
-    // Transient: an offer just introduced via wl_data_device.data_offer,
-    // whose MIME types are still being enumerated via wl_data_offer.offer
-    // events, before wl_data_device.selection confirms whether it's the new
-    // active clipboard offer at all (see data_device_selection()).
-    struct wl_data_offer* pending_offer = nullptr;
-    std::string            pending_offer_mime;
-
-    // One shared, windowless GPU device; the window presents through its
-    // own campello_gpu Surface (Phase 17), see WaylandWindow below.
-    std::shared_ptr<GPU::Device>                device;
-    std::shared_ptr<Widgets::Element>           root_element;
-    // The window's View owns these; kept here as shortcuts for the listeners.
-    std::shared_ptr<Widgets::PointerDispatcher> dispatcher;
-    std::shared_ptr<Widgets::FocusManager>      focus_manager;
-    std::shared_ptr<Widgets::TextInputManager>  text_input_manager;
-    std::unique_ptr<Widgets::TickerScheduler>   ticker_scheduler;
-    std::unique_ptr<Widgets::IbusIme>           ibus_ime;
-    std::unique_ptr<Widgets::View>              view;
-    std::unique_ptr<Widgets::linux_host::LinuxWindow> window;
-    Widgets::MediaQueryData                     media;
-    Widgets::WidgetRef                          root_widget;
-
-    bool running             = true;
-    bool configured          = false;
-    bool closed              = false;
-    int  width               = 800;
-    int  height              = 600;
-    bool mouse_pressed       = false;
-    float last_pointer_x     = 0.0f;
-    float last_pointer_y     = 0.0f;
-
-    // HiDPI: outputs seen so far (wl_output*, scale factor from wl_output.scale),
-    // the scale of whichever output wl_surface.enter last reported (0 = unknown
-    // yet), and the scale actually applied via wl_surface_set_buffer_scale().
-    std::vector<std::pair<struct wl_output*, int>> outputs;
-    int  entered_scale       = 0;
-    int  output_scale        = 1;
-};
-
-// WaylandWindowState normally lives only as a local in runAppWayland() --
-// this is the one exception, set right after it's constructed there, so
-// setWaylandClipboardText()/getWaylandClipboardText() (called from
-// clipboard.cpp, a separate TU with no other access to it) have something
-// to reach. Only ever one instance for this process's lifetime.
-static WaylandWindowState* g_wayland_state = nullptr;
-
-// The window-system-independent half of the window (View, Surface, Renderer,
-// raster thread: see linux_host.hpp). Its size and scale live in the state.
-class WaylandWindow final : public Widgets::linux_host::LinuxWindow
-{
-public:
-    WaylandWindow(Widgets::View& view, WaylandWindowState& state)
-        : LinuxWindow(view), state_(state) {}
-
-    uint32_t physicalWidth() const override
-    {
-        return static_cast<uint32_t>(std::max(0, state_.width * state_.output_scale));
-    }
-    uint32_t physicalHeight() const override
-    {
-        return static_cast<uint32_t>(std::max(0, state_.height * state_.output_scale));
-    }
-    float devicePixelRatio() const override { return static_cast<float>(state_.output_scale); }
-    bool  isShown() const override { return state_.configured && !state_.closed; }
-
-private:
-    WaylandWindowState& state_;
-};
-
-// ============================================================================
-// Wayland listeners
-// ============================================================================
-
-// --- wl_output (HiDPI scale discovery) ---
-static void output_geometry(void*, struct wl_output*, int32_t, int32_t, int32_t, int32_t,
-                            int32_t, const char*, const char*, int32_t) {}
-static void output_mode(void*, struct wl_output*, uint32_t, int32_t, int32_t, int32_t) {}
-static void output_done(void*, struct wl_output*) {}
-
-static void output_scale_cb(void* data, struct wl_output* wl_output, int32_t factor)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    for (auto& entry : state->outputs) {
-        if (entry.first == wl_output) { entry.second = factor; return; }
-    }
-    state->outputs.emplace_back(wl_output, factor);
-}
-
-// Trailing members (name/description, added in wl_output v4) are left
-// zero-initialized — we bind at version <= 2, so the server never sends them.
-static const struct wl_output_listener output_listener = {
-    .geometry = output_geometry,
-    .mode     = output_mode,
-    .done     = output_done,
-    .scale    = output_scale_cb,
-};
-
-// --- wl_surface (which output are we actually on right now?) ---
-static void surface_enter(void* data, struct wl_surface*, struct wl_output* output)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    for (const auto& entry : state->outputs) {
-        if (entry.first == output) { state->entered_scale = entry.second; return; }
-    }
-}
-static void surface_leave(void*, struct wl_surface*, struct wl_output*) {}
-
-static const struct wl_surface_listener surface_listener = {
-    .enter = surface_enter,
-    .leave = surface_leave,
-};
-
-// --- Registry ---
-static void registry_global(void* data, struct wl_registry* registry,
-                            uint32_t name, const char* interface, uint32_t version)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (std::strcmp(interface, wl_compositor_interface.name) == 0) {
-        state->compositor = static_cast<struct wl_compositor*>(
-            wl_registry_bind(registry, name, &wl_compositor_interface, 4));
-    } else if (std::strcmp(interface, wl_seat_interface.name) == 0) {
-        state->seat = static_cast<struct wl_seat*>(
-            wl_registry_bind(registry, name, &wl_seat_interface, 7));
-    } else if (std::strcmp(interface, wl_shm_interface.name) == 0) {
-        state->shm = static_cast<struct wl_shm*>(
-            wl_registry_bind(registry, name, &wl_shm_interface, 1));
-    } else if (std::strcmp(interface, wl_output_interface.name) == 0) {
-        // wl_output.scale was added in version 2; clamp to whatever the
-        // compositor actually advertises so we don't request an unsupported
-        // version on an old server.
-        uint32_t bind_version = version < 2 ? version : 2;
-        auto* output = static_cast<struct wl_output*>(
-            wl_registry_bind(registry, name, &wl_output_interface, bind_version));
-        state->outputs.emplace_back(output, 1);
-        wl_output_add_listener(output, &output_listener, state);
-    } else if (std::strcmp(interface, wl_data_device_manager_interface.name) == 0) {
-        // Version 1 covers everything Clipboard needs (create_data_source,
-        // get_data_device, offer/receive/selection) -- versions 2+ only add
-        // drag-and-drop actions, which we don't implement.
-        state->data_device_manager = static_cast<struct wl_data_device_manager*>(
-            wl_registry_bind(registry, name, &wl_data_device_manager_interface, 1));
-    }
-}
-
-static void registry_global_remove(void* data, struct wl_registry* registry, uint32_t name) {}
-
-static const struct wl_registry_listener registry_listener = {
-    registry_global,
-    registry_global_remove
-};
-
-// --- libdecor context interface ---
-static void libdecor_error_cb(struct libdecor*, enum libdecor_error, const char* msg)
-{
-    std::cerr << "[Linux/Wayland] libdecor error: " << msg << "\n";
-}
-
-static const struct libdecor_interface libdecor_iface = {
-    libdecor_error_cb,
-    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
-};
-
-// --- libdecor frame interface ---
-static void frame_configure(struct libdecor_frame* frame,
-    struct libdecor_configuration* config, void* user_data)
-{
-    auto* state = static_cast<WaylandWindowState*>(user_data);
-    const uint32_t window_w = state->window ? state->window->physicalWidth()  : 0;
-    const uint32_t window_h = state->window ? state->window->physicalHeight() : 0;
-
-    int w = state->width, h = state->height;
-    libdecor_configuration_get_content_size(config, frame, &w, &h);
-    if (w > 0) state->width  = w;
-    if (h > 0) state->height = h;
-
-    struct libdecor_state* ls = libdecor_state_new(state->width, state->height);
-    libdecor_frame_commit(frame, ls, config);
-    libdecor_state_free(ls);
-
-    state->configured = true;
-
-    // Wayland reports currentExtent = UINT32_MAX, so the swapchain can't see
-    // the new size by itself: give it to the window's Surface (rebuilt at
-    // its next acquire, on the raster thread).
-    if (auto* window = state->window.get()) {
-        if (window->physicalWidth() != window_w || window->physicalHeight() != window_h) {
-            window->resizeSurface(window->physicalWidth(), window->physicalHeight());
-            window->notifyMetricsChanged();  // MediaQuery, full repaint
-        } else {
-            window->requestFrame();
-        }
-    }
-}
-
-static void frame_close(struct libdecor_frame*, void* user_data)
-{
-    auto* state = static_cast<WaylandWindowState*>(user_data);
-    state->closed  = true;
-    state->running = false;
-}
-
-static void frame_commit(struct libdecor_frame*, void* user_data)
-{
-    auto* state = static_cast<WaylandWindowState*>(user_data);
-    // Commit the surface so libdecor can complete its configure sequence.
-    // Also force a repaint so the raster thread submits a fresh buffer —
-    // some compositors blank the surface when a commit arrives without one.
-    if (state->window && state->window->renderer())
-        state->window->renderer()->notePaintRequested();
-    wl_surface_commit(state->surface);
-}
-
-static void frame_dismiss_popup(struct libdecor_frame*, const char*, void*) {}
-
-static const struct libdecor_frame_interface libdecor_frame_iface = {
-    frame_configure,
-    frame_close,
-    frame_commit,
-    frame_dismiss_popup,
-    nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr
-};
-
-// --- Cursor shape helpers ---
-
-// Tries the CSS cursor-shape name first (what modern cursor themes index
-// by), falling back to the legacy Xcursor name older/minimal themes may
-// only define.
-static struct wl_cursor* loadThemeCursor(
-    struct wl_cursor_theme* theme, const char* css_name, const char* legacy_name)
-{
-    struct wl_cursor* c = wl_cursor_theme_get_cursor(theme, css_name);
-    if (!c && legacy_name) c = wl_cursor_theme_get_cursor(theme, legacy_name);
-    return c;
-}
-
-static void waylandSetCursor(WaylandWindowState* state, Widgets::SystemMouseCursor cursor)
-{
-    if (!state->pointer || !state->cursor_theme || !state->cursor_surface) return;
-
-    const char* css_name    = "default";
-    const char* legacy_name = "left_ptr";
-    switch (cursor) {
-        case Widgets::SystemMouseCursor::pointer:
-            css_name = "pointer"; legacy_name = "hand2"; break;
-        case Widgets::SystemMouseCursor::text:
-            css_name = "text"; legacy_name = "xterm"; break;
-        case Widgets::SystemMouseCursor::forbidden:
-            css_name = "not-allowed"; legacy_name = "crossed_circle"; break;
-        case Widgets::SystemMouseCursor::resize_ns:
-            css_name = "ns-resize"; legacy_name = "sb_v_double_arrow"; break;
-        case Widgets::SystemMouseCursor::resize_ew:
-            css_name = "ew-resize"; legacy_name = "sb_h_double_arrow"; break;
-        default:
-            break;
-    }
-
-    struct wl_cursor* wl_cur = loadThemeCursor(state->cursor_theme, css_name, legacy_name);
-    if (!wl_cur || wl_cur->image_count == 0) return;
-
-    struct wl_cursor_image* image  = wl_cur->images[0];
-    struct wl_buffer*       buffer = wl_cursor_image_get_buffer(image);
-    if (!buffer) return;
-
-    wl_surface_attach(state->cursor_surface, buffer, 0, 0);
-    // Damaging the whole surface (rather than computing the exact
-    // scaled/logical rect) is the standard simplification for cursor
-    // surfaces — they're tiny, so there's no real cost to it.
-    wl_surface_damage(state->cursor_surface, 0, 0, INT32_MAX, INT32_MAX);
-    wl_surface_commit(state->cursor_surface);
-
-    // Hotspot must be in surface-local (logical) coordinates; the theme
-    // was loaded at a physical-pixel size (see runAppWayland()), so divide
-    // back out by the same scale set via wl_surface_set_buffer_scale().
-    const int32_t hotspot_x = static_cast<int32_t>(image->hotspot_x) / state->output_scale;
-    const int32_t hotspot_y = static_cast<int32_t>(image->hotspot_y) / state->output_scale;
-    wl_pointer_set_cursor(state->pointer, state->pointer_enter_serial,
-        state->cursor_surface, hotspot_x, hotspot_y);
-}
-
-// --- wl_pointer ---
-static void pointer_enter(void* data, struct wl_pointer* pointer,
-                          uint32_t serial, struct wl_surface* surface,
-                          wl_fixed_t sx, wl_fixed_t sy)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    state->pointer_enter_serial = serial;
-    state->last_pointer_x = static_cast<float>(wl_fixed_to_double(sx));
-    state->last_pointer_y = static_cast<float>(wl_fixed_to_double(sy));
-
-    // Reclaim the cursor immediately rather than waiting for the pointer
-    // to move — otherwise whatever libdecor left set on its own resize/
-    // drag border stays visible until the pointer first crosses a
-    // MouseRegion boundary inside the content (see waylandSetCursor()'s
-    // registration in runAppWayland() for the full story). Also drives
-    // hit-testing right away so hover-dependent state is correct on entry.
-    waylandSetCursor(state, Widgets::SystemMouseCursor::arrow);
-
-    if (state->dispatcher) {
-        Widgets::PointerEvent e;
-        e.kind       = Widgets::PointerEventKind::move;
-        e.pointer_id = 0;
-        e.position   = { state->last_pointer_x, state->last_pointer_y };
-        e.pressure   = state->mouse_pressed ? 1.0f : 0.0f;
-        state->dispatcher->handlePointerEvent(e);
-    }
-}
-
-static void pointer_leave(void* data, struct wl_pointer* pointer,
-                          uint32_t serial, struct wl_surface* surface) {}
-
-static void pointer_motion(void* data, struct wl_pointer* pointer,
-                           uint32_t time, wl_fixed_t sx, wl_fixed_t sy)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (!state->dispatcher) return;
-    state->last_pointer_x = static_cast<float>(wl_fixed_to_double(sx));
-    state->last_pointer_y = static_cast<float>(wl_fixed_to_double(sy));
-
-    Widgets::PointerEvent e;
-    e.kind       = Widgets::PointerEventKind::move;
-    e.pointer_id = 0;
-    e.position   = { state->last_pointer_x, state->last_pointer_y };
-    e.pressure   = state->mouse_pressed ? 1.0f : 0.0f;
-    state->dispatcher->handlePointerEvent(e);
-}
-
-static void pointer_button(void* data, struct wl_pointer* pointer,
-                           uint32_t serial, uint32_t time,
-                           uint32_t button, uint32_t state_val)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (!state->dispatcher) return;
-
-    Widgets::PointerEvent e;
-    e.pointer_id = 0;
-    e.position   = { state->last_pointer_x, state->last_pointer_y };
-
-    // `button` is a Linux evdev code (from <linux/input-event-codes.h>,
-    // not included here to avoid a new header dependency for three known
-    // constants): BTN_LEFT=0x110, BTN_RIGHT=0x111, BTN_MIDDLE=0x112.
-    switch (button) {
-        case 0x110: e.button = Widgets::PointerButton::primary;   break;
-        case 0x111: e.button = Widgets::PointerButton::secondary; break;
-        case 0x112: e.button = Widgets::PointerButton::tertiary;  break;
-        default:    e.button = Widgets::PointerButton::unknown;   break;
-    }
-
-    if (state_val == WL_POINTER_BUTTON_STATE_PRESSED) {
-        e.kind = Widgets::PointerEventKind::down;
-        e.pressure = 1.0f;
-        state->mouse_pressed = true;
-    } else {
-        e.kind = Widgets::PointerEventKind::up;
-        e.pressure = 0.0f;
-        state->mouse_pressed = false;
-    }
-    state->dispatcher->handlePointerEvent(e);
-}
-
-static void pointer_axis(void* data, struct wl_pointer* /*pointer*/,
-                         uint32_t /*time*/, uint32_t axis, wl_fixed_t value)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (!state->dispatcher) return;
-
-    const float delta = static_cast<float>(wl_fixed_to_double(value));
-
-    Widgets::PointerEvent e;
-    e.kind       = Widgets::PointerEventKind::scroll;
-    e.pointer_id = 0;
-    e.position   = { state->last_pointer_x, state->last_pointer_y };
-    e.pressure   = 0.0f;
-
-    if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
-        e.scroll_delta_y = delta;
-    else
-        e.scroll_delta_x = delta;
-
-    state->dispatcher->handlePointerEvent(e);
-}
-
-// wl_pointer version 5+ events — not used, required for listener completeness.
-static void pointer_frame(void*, struct wl_pointer*) {}
-static void pointer_axis_source(void*, struct wl_pointer*, uint32_t) {}
-static void pointer_axis_stop(void*, struct wl_pointer*, uint32_t, uint32_t) {}
-static void pointer_axis_discrete(void*, struct wl_pointer*, uint32_t, int32_t) {}
-static void pointer_axis_value120(void*, struct wl_pointer*, uint32_t, int32_t) {}
-static void pointer_axis_relative_direction(void*, struct wl_pointer*, uint32_t, uint32_t) {}
-
-static const struct wl_pointer_listener pointer_listener = {
-    pointer_enter,
-    pointer_leave,
-    pointer_motion,
-    pointer_button,
-    pointer_axis,
-    pointer_frame,
-    pointer_axis_source,
-    pointer_axis_stop,
-    pointer_axis_discrete,
-    pointer_axis_value120,
-    pointer_axis_relative_direction,
-};
-
-// --- wl_keyboard ---
-static void keyboard_keymap(void* data, struct wl_keyboard* keyboard,
-                            uint32_t format, int32_t fd, uint32_t size)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
-        close(fd);
-        return;
-    }
-    char* map_str = static_cast<char*>(mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0));
-    if (map_str == MAP_FAILED) {
-        close(fd);
-        return;
-    }
-    state->xkb_keymap = xkb_keymap_new_from_string(
-        state->xkb_ctx, map_str,
-        XKB_KEYMAP_FORMAT_TEXT_V1,
-        XKB_KEYMAP_COMPILE_NO_FLAGS);
-    munmap(map_str, size);
-    close(fd);
-    if (state->xkb_keymap) {
-        state->xkb_state = xkb_state_new(state->xkb_keymap);
-    }
-}
-
-static void keyboard_enter(void* data, struct wl_keyboard* keyboard,
-                           uint32_t serial, struct wl_surface* surface,
-                           struct wl_array* keys) {}
-
-static void keyboard_leave(void* data, struct wl_keyboard* keyboard,
-                           uint32_t serial, struct wl_surface* surface) {}
-
-static void keyboard_key(void* data, struct wl_keyboard* keyboard,
-                         uint32_t serial, uint32_t time,
-                         uint32_t key, uint32_t state_val)
-{
-    auto* ws = static_cast<WaylandWindowState*>(data);
-    if (!ws->focus_manager) return;
-
-    ws->last_key_serial = serial;
-
-    xkb_keycode_t keycode = key + 8; // Wayland keycodes are offset by 8
-    xkb_keysym_t keysym = xkb_state_key_get_one_sym(ws->xkb_state, keycode);
-    Widgets::KeyCode key_code = keysymToKeyCode(keysym);
-    uint32_t mods = xkbStateToKeyModifiers(ws->xkb_state, keycode);
-
-    if (state_val == WL_KEYBOARD_KEY_STATE_PRESSED)
-    {
-        // Navigation / special keys bypass IME
-        if (isNavigationOrSpecialKeyWayland(key_code)) {
-            Widgets::KeyEvent ke;
-            ke.kind      = Widgets::KeyEventKind::down;
-            ke.key_code  = key_code;
-            ke.modifiers = mods;
-            ke.character = 0;
-            ws->focus_manager->handleKeyEvent(ke);
-            return;
-        }
-
-        // A Ctrl-held keystroke is never text composition input — it's
-        // always an app/system command by convention — so it must still
-        // reach FocusManager::handleKeyEvent() below even while a text
-        // field has IBus's input target, or app-wide Ctrl+<key> shortcuts
-        // (see FocusManager::setGlobalKeyHandler()) would silently stop
-        // firing the moment any TextField gains focus.
-        bool consumed_by_ime = false;
-        if (ws->ibus_ime && ws->ibus_ime->isActive() &&
-            ws->text_input_manager && ws->text_input_manager->hasInputTarget() &&
-            !(mods & Widgets::KeyModifiers::ctrl))
-        {
-            consumed_by_ime = ws->ibus_ime->processKeyEvent(
-                static_cast<uint32_t>(keysym),
-                static_cast<uint32_t>(keycode),
-                mods);
-        }
-
-        if (!consumed_by_ime) {
-            uint32_t character = xkb_state_key_get_utf32(ws->xkb_state, keycode);
-
-            Widgets::KeyEvent ke;
-            ke.kind      = Widgets::KeyEventKind::down;
-            ke.key_code  = key_code;
-            ke.modifiers = mods;
-            ke.character = character;
-            ws->focus_manager->handleKeyEvent(ke);
-        }
-    }
-    else // released
-    {
-        Widgets::KeyEvent ke;
-        ke.kind      = Widgets::KeyEventKind::up;
-        ke.key_code  = key_code;
-        ke.modifiers = mods;
-        ke.character = 0;
-        ws->focus_manager->handleKeyEvent(ke);
-    }
-}
-
-static void keyboard_modifiers(void* data, struct wl_keyboard* keyboard,
-                               uint32_t serial, uint32_t mods_depressed,
-                               uint32_t mods_latched, uint32_t mods_locked,
-                               uint32_t group)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (state->xkb_state) {
-        xkb_state_update_mask(state->xkb_state,
-            mods_depressed, mods_latched, mods_locked,
-            0, 0, group);
-    }
-}
-
-// wl_keyboard version 3+: key repeat rate/delay; we don't implement key repeat.
-static void keyboard_repeat_info(void* data, struct wl_keyboard* keyboard,
-                                 int32_t rate, int32_t delay) {}
-
-static const struct wl_keyboard_listener keyboard_listener = {
-    keyboard_keymap,
-    keyboard_enter,
-    keyboard_leave,
-    keyboard_key,
-    keyboard_modifiers,
-    keyboard_repeat_info
-};
-
-// --- Frame callback ---
-static void frame_done(void* data, struct wl_callback* callback, uint32_t time)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (state->window) state->window->requestFrame();
-    wl_callback_destroy(callback);
-}
-
-static const struct wl_callback_listener frame_listener = {
-    frame_done
-};
-
-// --- wl_data_source (we're the clipboard content's source) ---
-
-// Wayland offers content by MIME type; any of the three we advertise in
-// setWaylandClipboardText() below get the same UTF-8 bytes -- we don't
-// distinguish charset/legacy STRING encoding.
-static void data_source_target(void*, struct wl_data_source*, const char*) {}
-
-static void data_source_send(void* data, struct wl_data_source*, const char* /*mime_type*/, int32_t fd)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    const std::string& text = state->clipboard_text;
-
-    // Plain blocking write() -- fine for clipboard-sized text; a fully
-    // event-loop-integrated version would use non-blocking I/O, but that's
-    // not warranted for what's realistically a UI text field's contents,
-    // not a large file transfer.
-    size_t written = 0;
-    while (written < text.size()) {
-        ssize_t n = write(fd, text.data() + written, text.size() - written);
-        if (n <= 0) break; // reader closed early / pipe error -- nothing more we can do
-        written += static_cast<size_t>(n);
-    }
-    close(fd);
-}
-
-static void data_source_cancelled(void* data, struct wl_data_source* source)
-{
-    // We've lost selection ownership (another client copied something, or
-    // we replaced this source with a newer setText() call).
-    auto* state = static_cast<WaylandWindowState*>(data);
-    wl_data_source_destroy(source);
-    if (state->clipboard_source == source)
-        state->clipboard_source = nullptr;
-}
-
-static const struct wl_data_source_listener data_source_listener = {
-    .target    = data_source_target,
-    .send      = data_source_send,
-    .cancelled = data_source_cancelled,
-    // dnd_drop_performed / dnd_finished / action (v3, drag-and-drop only)
-    // left zero-initialized -- same pattern as output_listener's trailing
-    // v4 fields; we only bind wl_data_device_manager at version 1.
-};
-
-// --- wl_data_offer (something else is the clipboard content's source) ---
-
-static void data_offer_offer(void* data, struct wl_data_offer* offer, const char* mime_type)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-    if (state->pending_offer != offer) return; // stale -- shouldn't normally happen
-
-    if (state->pending_offer_mime.empty() &&
-        (std::strcmp(mime_type, "text/plain;charset=utf-8") == 0 ||
-         std::strcmp(mime_type, "UTF8_STRING") == 0 ||
-         std::strcmp(mime_type, "text/plain") == 0))
-    {
-        state->pending_offer_mime = mime_type;
-    }
-}
-
-static const struct wl_data_offer_listener data_offer_listener = {
-    .offer = data_offer_offer,
-    // source_actions / action (v3, DND only) left zero-initialized.
-};
-
-// --- wl_data_device (the seat's clipboard/DND channel) ---
-
-static void data_device_data_offer(void* data, struct wl_data_device*, struct wl_data_offer* id)
-{
-    // Introduces a new wl_data_offer object -- its offer() events (which
-    // mime types it has) arrive right after this, so the listener must be
-    // attached before returning.
-    auto* state = static_cast<WaylandWindowState*>(data);
-    state->pending_offer = id;
-    state->pending_offer_mime.clear();
-    wl_data_offer_add_listener(id, &data_offer_listener, state);
-}
-
-static void data_device_selection(void* data, struct wl_data_device*, struct wl_data_offer* id)
-{
-    auto* state = static_cast<WaylandWindowState*>(data);
-
-    if (state->clipboard_offer && state->clipboard_offer != id)
-        wl_data_offer_destroy(state->clipboard_offer);
-
-    if (id && id == state->pending_offer)
-    {
-        // Normal case: this is the offer data_device_data_offer() just
-        // introduced, with its MIME types now fully enumerated.
-        state->clipboard_offer      = id;
-        state->clipboard_offer_mime = state->pending_offer_mime;
-        state->pending_offer        = nullptr;
-        state->pending_offer_mime.clear();
-    }
-    else
-    {
-        // id == nullptr: selection was cleared. id != pending_offer: an
-        // offer we weren't tracking became the selection, which the
-        // protocol's data_offer-then-selection ordering makes very unlikely
-        // in practice -- treat it as "nothing usable" either way rather
-        // than guessing at a MIME type we never actually confirmed.
-        state->clipboard_offer = id;
-        state->clipboard_offer_mime.clear();
-    }
-}
-
-// DND-only events on wl_data_device -- we don't implement drag-and-drop.
-static void data_device_enter(void*, struct wl_data_device*, uint32_t, struct wl_surface*,
-                              wl_fixed_t, wl_fixed_t, struct wl_data_offer*) {}
-static void data_device_leave(void*, struct wl_data_device*) {}
-static void data_device_motion(void*, struct wl_data_device*, uint32_t, wl_fixed_t, wl_fixed_t) {}
-static void data_device_drop(void*, struct wl_data_device*) {}
-
-static const struct wl_data_device_listener data_device_listener = {
-    .data_offer = data_device_data_offer,
-    .enter      = data_device_enter,
-    .leave      = data_device_leave,
-    .motion     = data_device_motion,
-    .drop       = data_device_drop,
-    .selection  = data_device_selection,
-};
-
-// ============================================================================
-// IME cursor position helper
-// ============================================================================
-
-static void updateImeCursorPosition(WaylandWindowState* state)
-{
-    if (!state || !state->ibus_ime || !state->ibus_ime->isActive()) return;
-    if (!state->text_input_manager || !state->text_input_manager->hasInputTarget()) return;
-
-    auto rect = state->text_input_manager->getCharacterRect(
-        state->text_input_manager->activeController()->selectionEnd());
-
-    if (rect[2] <= 0.0f || rect[3] <= 0.0f) return;
-
-    // Wayland doesn't have a global coordinate system like X11;
-    // use surface-local coordinates for the cursor rect.
-    state->ibus_ime->setCursorLocation(
-        static_cast<int>(rect[0]),
-        static_cast<int>(rect[1] + rect[3]),
-        static_cast<int>(rect[2]),
-        static_cast<int>(rect[3]));
-}
-
-// ============================================================================
-// Main Wayland runApp implementation
-// ============================================================================
+namespace GPU = ::systems::leal::campello_gpu;
 
 namespace systems::leal::campello_widgets
 {
@@ -958,518 +71,255 @@ namespace systems::leal::campello_widgets
 int runAppWayland(const std::string& title, int width, int height,
                   WidgetRef root_widget, bool resizable, const std::string& app_id)
 {
-    (void)resizable; // Wayland compositor handles resizing
-
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
-    signal(SIGINT,  interruptHandler);
-    signal(SIGTERM, interruptHandler);
 
-    // -------------------------------------------------------------------------
-    // Connect to Wayland display
-    // -------------------------------------------------------------------------
-    struct wl_display* display = wl_display_connect(nullptr);
+    wl_display* display = wl_display_connect(nullptr);
     if (!display) {
         std::cerr << "[Linux/Wayland] Failed to connect to Wayland display\n";
         return 1;
     }
-
-    // -------------------------------------------------------------------------
-    // Get registry and roundtrip to discover globals
-    // -------------------------------------------------------------------------
-    WaylandWindowState state;
-    g_wayland_state = &state;
-    state.display = display;
-    state.width   = width;
-    state.height  = height;
-
-    state.registry = wl_display_get_registry(display);
-    wl_registry_add_listener(state.registry, &registry_listener, &state);
-    wl_display_roundtrip(display);
-
-    if (!state.compositor) {
-        std::cerr << "[Linux/Wayland] wl_compositor not available\n";
+    if (!wayland::init(display, app_id)) {
         wl_display_disconnect(display);
         return 1;
     }
 
-    // -------------------------------------------------------------------------
-    // Create wl_surface and decorate it with libdecor
-    // libdecor creates the xdg_surface + xdg_toplevel internally, negotiates
-    // server-side decorations when available, and draws GNOME-style client-side
-    // decorations as a fallback.
-    // -------------------------------------------------------------------------
-    state.surface = wl_compositor_create_surface(state.compositor);
-    if (!state.surface) {
-        std::cerr << "[Linux/Wayland] Failed to create wl_surface\n";
-        wl_display_disconnect(display);
-        return 1;
-    }
-    wl_surface_add_listener(state.surface, &surface_listener, &state);
-
-    state.libdecor_ctx = libdecor_new(display,
-        const_cast<struct libdecor_interface*>(&libdecor_iface));
-    if (!state.libdecor_ctx) {
-        std::cerr << "[Linux/Wayland] Failed to create libdecor context\n";
-        wl_surface_destroy(state.surface);
-        wl_display_disconnect(display);
-        return 1;
-    }
-
-    state.decor_frame = libdecor_decorate(state.libdecor_ctx, state.surface,
-        const_cast<struct libdecor_frame_interface*>(&libdecor_frame_iface), &state);
-    if (!state.decor_frame) {
-        std::cerr << "[Linux/Wayland] Failed to decorate surface\n";
-        libdecor_unref(state.libdecor_ctx);
-        wl_surface_destroy(state.surface);
-        wl_display_disconnect(display);
-        return 1;
-    }
-
-    libdecor_frame_set_title(state.decor_frame, title.c_str());
-    libdecor_frame_set_app_id(state.decor_frame, app_id.c_str());
-    libdecor_frame_set_capabilities(state.decor_frame,
-        static_cast<enum libdecor_capabilities>(
-            LIBDECOR_ACTION_MOVE     |
-            LIBDECOR_ACTION_RESIZE   |
-            LIBDECOR_ACTION_MINIMIZE |
-            LIBDECOR_ACTION_CLOSE));
-    libdecor_frame_map(state.decor_frame);
-
-    // Wait for the first configure event (libdecor dispatches from its own
-    // internal queue — this replaces the raw wl_display_dispatch wait).
-    while (!state.configured && state.running) {
-        if (libdecor_dispatch(state.libdecor_ctx, 16) < 0) break;
-    }
-    if (!state.running) {
-        libdecor_frame_unref(state.decor_frame);
-        libdecor_unref(state.libdecor_ctx);
-        wl_display_disconnect(display);
-        return 0;
-    }
-
-    // -------------------------------------------------------------------------
-    // Set up input devices
-    // -------------------------------------------------------------------------
-    if (state.seat) {
-        state.pointer = wl_seat_get_pointer(state.seat);
-        if (state.pointer) {
-            wl_pointer_add_listener(state.pointer, &pointer_listener, &state);
-        }
-        state.keyboard = wl_seat_get_keyboard(state.seat);
-        if (state.keyboard) {
-            state.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-            wl_keyboard_add_listener(state.keyboard, &keyboard_listener, &state);
-        }
-    }
-    if (state.data_device_manager && state.seat) {
-        state.data_device = wl_data_device_manager_get_data_device(
-            state.data_device_manager, state.seat);
-        if (state.data_device) {
-            wl_data_device_add_listener(state.data_device, &data_device_listener, &state);
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // Determine the compositor output scale (HiDPI support)
-    // -------------------------------------------------------------------------
-    // wl_surface.enter (which output we actually ended up on) typically
-    // arrives shortly after the first commit that the configure-wait loop
-    // above already performed — one more roundtrip flushes it, along with
-    // any wl_output.scale events still in flight, before we size the GPU
-    // surface. Falls back to the first known output, then to 1x, if the
-    // compositor never sends an enter event (e.g. single-output setups on
-    // some compositors).
-    wl_display_roundtrip(display);
-
-    state.output_scale = state.entered_scale > 0 ? state.entered_scale
-                        : (!state.outputs.empty() ? state.outputs.front().second : 1);
-    if (state.output_scale < 1) state.output_scale = 1;
-    wl_surface_set_buffer_scale(state.surface, state.output_scale);
-
-    if (state.output_scale != 1) {
-        std::cerr << "[Linux/Wayland] Output scale: " << state.output_scale << "x\n";
-    }
-
-    // -------------------------------------------------------------------------
-    // Cursor theme + surface, and register the cursor-change handler
-    // -------------------------------------------------------------------------
-    // Without this, MouseRegion/TextField/etc. cursor changes are silent
-    // no-ops on Wayland (setSystemCursor() just calls into a null handler —
-    // see system_mouse_cursor.cpp), and — because libdecor manages its own
-    // cursor for the window's title bar/resize border, and the Wayland
-    // protocol has no automatic reset when the pointer crosses from a
-    // decoration into the content surface — whatever resize/drag cursor
-    // libdecor last set while the pointer crossed the border simply
-    // persists forever once inside, with nothing to ever change it.
-    if (state.shm && state.pointer) {
-        state.cursor_theme = wl_cursor_theme_load(nullptr, 24 * state.output_scale, state.shm);
-        if (state.cursor_theme) {
-            state.cursor_surface = wl_compositor_create_surface(state.compositor);
-            if (state.cursor_surface) {
-                wl_surface_set_buffer_scale(state.cursor_surface, state.output_scale);
-                Widgets::registerCursorHandler([&state](Widgets::SystemMouseCursor c) {
-                    waylandSetCursor(&state, c);
-                });
-            } else {
-                std::cerr << "[Linux/Wayland] Failed to create cursor surface; cursor shape changes disabled.\n";
-            }
-        } else {
-            std::cerr << "[Linux/Wayland] Failed to load cursor theme; cursor shape changes disabled.\n";
-        }
-    } else {
-        std::cerr << "[Linux/Wayland] wl_shm or wl_pointer unavailable; cursor shape changes disabled.\n";
-    }
-
-    // -------------------------------------------------------------------------
-    // GPU: one windowless device; the window presents through its own Surface
-    // -------------------------------------------------------------------------
     // Bind the UI thread before any widget tree mutation.
-    Widgets::ThreadChecker::instance().bindToCurrentThread();
+    ThreadChecker::instance().bindToCurrentThread();
 
+    // One GPU device for every window, created without a window.
     auto device = GPU::Device::createDefaultDevice(nullptr);
-    if (device) Widgets::linux_host::init(device);
-
-    // The window's View: its pointer dispatcher, focus and text input.
-    // makePrimary() also installs them as the process-wide fallbacks.
-    state.view = std::make_unique<Widgets::View>();
-    state.view->makePrimary();
-    state.dispatcher         = state.view->sharedPointerDispatcher();
-    state.focus_manager      = state.view->sharedFocusManager();
-    state.text_input_manager = state.view->sharedTextInputManager();
-    state.window = std::make_unique<WaylandWindow>(*state.view, state);
-
-    GPU::LinuxSurfaceInfo surfaceInfo{};
-    surfaceInfo.display = display;
-    surfaceInfo.window  = state.surface;
-    surfaceInfo.api     = GPU::LinuxWindowApi::wayland;
-    surfaceInfo.width   = state.window->physicalWidth();
-    surfaceInfo.height  = state.window->physicalHeight();
-
-    if (!device || !state.window->attachSurface(surfaceInfo)) {
-        std::cerr << "[Linux/Wayland] Failed to create a campello_gpu device or Vulkan surface; "
-                     "will fall back to X11.\n";
-        // The registered handler (if any) captured &state by reference —
-        // clear it before state goes out of scope, or X11's fallback path
-        // could observe a dangling handler for the brief window before it
-        // installs its own.
-        Widgets::registerCursorHandler(nullptr);
-        state.window.reset();
-        state.dispatcher.reset();
-        state.focus_manager.reset();
-        state.text_input_manager.reset();
-        state.view.reset();
-        Widgets::linux_host::shutdown();
+    if (!device || !linux_host::init(device)) {
+        std::cerr << "[Linux/Wayland] Failed to create a campello_gpu device; will fall back to X11.\n";
         device.reset();
-        g_wayland_state = nullptr;
+        wayland::shutdown();
         wl_display_disconnect(display);
-        return 2; // sentinel: GPU init failed, caller should retry with X11
+        return 2;  // the caller retries with X11
     }
 
+    // The main window's View; makePrimary() also installs its managers as
+    // the process-wide fallbacks. Declared before the window (outlives it).
+    auto view = std::make_unique<View>();
+    view->makePrimary();
+
+    wayland::WindowConfig config;
+    config.title     = title;
+    config.size      = Size{ static_cast<float>(width), static_cast<float>(height) };
+    config.resizable = resizable;
+    auto main_window = std::make_unique<wayland::WaylandWindow>(*view, config);
+
+    auto failToX11 = [&] {
+        main_window.reset();
+        view.reset();
+        linux_host::shutdown();
+        device.reset();
+        wayland::shutdown();
+        wl_display_disconnect(display);
+        return 2;
+    };
+    if (!main_window->valid()) {
+        std::cerr << "[Linux/Wayland] Failed to create a Vulkan surface; will fall back to X11.\n";
+        return failToX11();
+    }
+
+    // Map it and wait for the first configure. One more roundtrip brings
+    // wl_surface.enter (the output it appeared on), which sets its scale
+    // before anything is drawn.
+    main_window->show();
+    while (!main_window->everConfigured()) {
+        if (!wayland::dispatchWait(16)) {
+            std::cerr << "[Linux/Wayland] Connection lost before the window was configured\n";
+            return failToX11();
+        }
+    }
+    wl_display_roundtrip(display);
+    wayland::dispatch();
+    const int scale = static_cast<int>(main_window->devicePixelRatio());
+    if (scale != 1) std::cerr << "[Linux/Wayland] Output scale: " << scale << "x\n";
     std::cerr << "[Linux/Wayland] Device: " << device->getName()
               << "  Engine: " << GPU::Device::getEngineVersion() << "\n";
-    state.device = device;
 
-    // -------------------------------------------------------------------------
-    // Ticker
-    // -------------------------------------------------------------------------
-    state.ticker_scheduler = std::make_unique<Widgets::TickerScheduler>();
-    Widgets::TickerScheduler::setActive(state.ticker_scheduler.get());
+    // Cursor shapes (MouseRegion, TextField, ...) go to the window under
+    // the pointer.
+    wayland::initCursor(scale);
+    registerCursorHandler([](SystemMouseCursor c) {
+        for (linux_host::LinuxWindow* w : linux_host::LinuxWindow::all())
+            static_cast<wayland::WaylandWindow*>(w)->setCursor(c);  // only the one under the pointer acts
+    });
 
-    // -------------------------------------------------------------------------
-    // Set up IBus IME
-    // -------------------------------------------------------------------------
-    state.ibus_ime = std::make_unique<Widgets::IbusIme>();
-    if (!state.ibus_ime->create()) {
+    // Secondary windows (WindowController / Window widget). Installed before
+    // the tree mounts, since a State's initState() may open one.
+    auto windowing = wayland::makePlatformWindowing();
+    PlatformWindowing::setInstance(windowing.get());
+
+    auto ticker = std::make_unique<TickerScheduler>();
+    TickerScheduler::setActive(ticker.get());
+
+    // IBus: one input context, fed by the window with keyboard focus.
+    auto ibus_ime = std::make_unique<IbusIme>();
+    if (!ibus_ime->create())
         std::cerr << "[Linux/Wayland] IBus not available; IME composition disabled.\n";
-    }
-
-    state.text_input_manager->setOnInputTargetChanged(
-        [&state](bool has_target) {
-            if (!state.ibus_ime || !state.ibus_ime->isActive()) return;
-            if (has_target) {
-                state.ibus_ime->focusIn();
-                updateImeCursorPosition(&state);
-            } else {
-                state.ibus_ime->focusOut();
-            }
-        });
-
-    // -------------------------------------------------------------------------
-    // Wrap root widget with MediaQuery and mount (in the window's View)
-    // -------------------------------------------------------------------------
-    state.media.device_pixel_ratio = static_cast<float>(state.output_scale);
-    state.media.logical_size = Widgets::Size{
-        static_cast<float>(state.width),
-        static_cast<float>(state.height) };
-    state.root_widget = root_widget;
+    wayland::setIme(ibus_ime.get());
 
     campello_widgets_initialize_linux_menu_delegate();
 
-    state.root_element = std::make_shared<Widgets::MediaQuery>(state.media, root_widget)->createElement();
-    {
-        Widgets::View::Scope scope(state.view.get());
-        state.root_element->mount(nullptr);
-    }
+    // -------------------------------------------------------------------------
+    // Mount the tree (it belongs to the main window)
+    // -------------------------------------------------------------------------
+    MediaQueryData media;
+    media.device_pixel_ratio = main_window->devicePixelRatio();
+    media.logical_size       = main_window->logicalSize();
 
-    auto* roe = state.root_element->findDescendantRenderObjectElement();
-    auto render_box = roe ? std::dynamic_pointer_cast<Widgets::RenderBox>(roe->sharedRenderObject())
-                          : nullptr;
+    std::shared_ptr<Element> root_element = std::make_shared<MediaQuery>(media, root_widget)->createElement();
+    {
+        View::Scope view_scope(view.get());
+        root_element->mount(nullptr);
+    }
+    auto* roe = root_element->findDescendantRenderObjectElement();
+    auto render_box = roe ? std::dynamic_pointer_cast<RenderBox>(roe->sharedRenderObject()) : nullptr;
     if (!render_box) {
         std::cerr << "[Linux/Wayland] Widget tree produced no root RenderBox\n";
         return 1;
     }
-
-    // Renderer, draw backend (in the surface's pixel format) and raster thread.
-    state.window->setRoot(render_box, Widgets::Color::white());
+    main_window->setRoot(render_box, Color::white());
 
     // A resize (or scale change) updates the MediaQuery the tree sees.
-    state.window->on_metrics_changed = [&state] {
-        Widgets::MediaQueryData next = state.media;
-        next.device_pixel_ratio = state.window->devicePixelRatio();
-        next.logical_size       = state.window->logicalSize();
-        if (next == state.media) return;
-        state.media = next;
-        Widgets::View::Scope scope(state.view.get());
-        state.root_element->update(std::make_shared<Widgets::MediaQuery>(state.media, state.root_widget));
+    main_window->on_metrics_changed = [&] {
+        MediaQueryData next = media;
+        next.device_pixel_ratio = main_window->devicePixelRatio();
+        next.logical_size       = main_window->logicalSize();
+        if (next == media) return;
+        media = next;
+        View::Scope view_scope(view.get());
+        root_element->update(std::make_shared<MediaQuery>(media, root_widget));
     };
+
+    // Closing the main window: by default the app quits, closing every
+    // window; with MainWindowClose::keep_running it hides, and the app quits
+    // once no other window is left on screen.
+    bool running     = true;
+    bool main_hidden = false;
+    main_window->on_close = [&] {
+        if (WindowController::mainWindowClosePolicy() == WindowController::MainWindowClose::quit_app) {
+            running = false;
+            return;
+        }
+        main_window->hide();
+        main_hidden = true;
+    };
+
+    // Ctrl+C / kill: leave the loop and tear down normally.
+    static volatile sig_atomic_t s_interrupted = 0;
+    s_interrupted = 0;
+    struct sigaction sa = {};
+    sa.sa_handler = [](int) { s_interrupted = 1; linux_host::wake(); };
+    sigemptyset(&sa.sa_mask);
+    struct sigaction old_int = {}, old_term = {};
+    sigaction(SIGINT,  &sa, &old_int);
+    sigaction(SIGTERM, &sa, &old_term);
+
+    // Test hook: only the compositor can close a Wayland window, so with
+    // CAMPELLO_WIDGETS_SIGUSR1_CLOSE=1, SIGUSR1 acts as the main window's
+    // close button (the multi-window example's self-tests use it).
+    static volatile sig_atomic_t s_close_requested = 0;
+    s_close_requested = 0;
+    struct sigaction old_usr1 = {};
+    const char* close_hook = std::getenv("CAMPELLO_WIDGETS_SIGUSR1_CLOSE");
+    const bool  use_close_hook = close_hook && close_hook[0] == '1';
+    if (use_close_hook) {
+        struct sigaction usr1 = {};
+        usr1.sa_handler = [](int) { s_close_requested = 1; linux_host::wake(); };
+        sigemptyset(&usr1.sa_mask);
+        sigaction(SIGUSR1, &usr1, &old_usr1);
+    }
+
     std::cerr << "[Linux/Wayland] Renderer ready, entering event loop\n";
 
     // -------------------------------------------------------------------------
-    // Main event loop
+    // Event loop. poll() blocks on the Wayland connection and the host's
+    // wake-up fd (tasks, frame requests); frames are paced by each window's
+    // frame callbacks. The timeout keeps IBus serviced while idle.
     // -------------------------------------------------------------------------
-    while (state.running) {
-        // Process all pending Wayland events
-        if (gInterruptRequested) { state.running = false; continue; }
+    while (running && !s_interrupted) {
+        wayland::dispatch();
 
-        wl_display_dispatch_pending(display);
-        // Dispatch libdecor events (decoration redraws, resize negotiations, etc.)
-        libdecor_dispatch(state.libdecor_ctx, 0);
+        if (ibus_ime->isActive()) {
+            // Committed text goes to the window with keyboard focus.
+            linux_host::LinuxWindow* focused = nullptr;
+            for (linux_host::LinuxWindow* w : linux_host::LinuxWindow::all())
+                if (static_cast<wayland::WaylandWindow*>(w)->hasKeyboardFocus()) focused = w;
+            View::Scope ime_scope(focused ? &focused->view() : view.get());
+            ibus_ime->dispatchEvents();
+        }
+
+        if (s_close_requested) {
+            s_close_requested = 0;
+            if (!main_hidden) main_window->requestCloseAsync();
+        }
+        linux_host::runTasks();
+        if (!running) break;
+        if (main_hidden && !wayland::WaylandWindow::anyOtherShown(main_window.get())) break;
+        linux_host::LinuxWindow::drawPendingFrames();
         wl_display_flush(display);
 
-        // Pump IBus D-Bus signals
-        if (state.ibus_ime && state.ibus_ime->isActive()) {
-            state.ibus_ime->dispatchEvents();
-        }
-
-        Widgets::linux_host::runTasks();
-
-        // Render if a frame was requested. A frame callback is requested only
-        // when a frame was actually submitted: on Vulkan, vkQueuePresentKHR
-        // (on the raster thread) attaches and commits the buffer, and a
-        // commit without a new buffer just confuses the compositor.
-        if (state.window->drawFrame()) {
-            struct wl_callback* callback = wl_surface_frame(state.surface);
-            wl_callback_add_listener(callback, &frame_listener, &state);
-            wl_display_flush(display);
-        }
-
-        // Wait for Wayland events or a wake-up (posted task, frame request).
-        if (wl_display_prepare_read(display) == 0) {
-            pollfd fds[2] = {
-                { wl_display_get_fd(display), POLLIN, 0 },
-                { Widgets::linux_host::wakeFd(), POLLIN, 0 },
-            };
-            // 16 ms keeps IBus serviced and animations ticking while idle.
-            const int timeout_ms = Widgets::linux_host::LinuxWindow::anyFramePending() ? 0 : 16;
-            const int ret = poll(fds, 2, timeout_ms);
-            if (ret > 0 && (fds[0].revents & POLLIN)) {
-                wl_display_read_events(display);
-            } else {
-                wl_display_cancel_read(display);
-            }
-            if (ret > 0 && (fds[1].revents & POLLIN)) Widgets::linux_host::clearWake();
-        } else {
-            // Events already pending; next loop iteration will dispatch them
-        }
-
-        // Tick animations/physics every loop iteration, not only when
-        // poll() times out with no Wayland events pending. frame_done()
-        // (this window's vsync-pacing callback, above) unconditionally
-        // requests another redraw on every compositor frame callback once
-        // any animation has rendered even one frame — and that callback
-        // arrives as a Wayland event, which almost always wins the race
-        // against poll()'s 16ms timeout. Ticking only in the timeout
-        // branch meant a fling or spring-back animation got exactly one
-        // tick (whichever one happened to slip through when timing lined
-        // up), then never ticked again even though frames kept being
-        // redrawn — the animation looked like it froze instead of
-        // continuing, because nothing was left to advance its state.
-        auto now = std::chrono::steady_clock::now();
-        uint64_t now_ms = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                now.time_since_epoch()).count());
-        if (auto* d  = Widgets::PointerDispatcher::activeDispatcher()) d->tick(now_ms);
-        if (auto* ts = Widgets::TickerScheduler::active())            ts->tick(now_ms);
+        if (wl_display_prepare_read(display) != 0) continue;  // events already queued
+        pollfd fds[2] = {
+            { wl_display_get_fd(display), POLLIN, 0 },
+            { linux_host::wakeFd(), POLLIN, 0 },
+        };
+        const int timeout_ms = linux_host::LinuxWindow::anyFramePending() ? 0 : 16;
+        const int ret = poll(fds, 2, timeout_ms);
+        if (ret > 0 && (fds[0].revents & POLLIN)) wl_display_read_events(display);
+        else                                       wl_display_cancel_read(display);
+        if (ret > 0 && (fds[1].revents & POLLIN)) linux_host::clearWake();
     }
 
     // -------------------------------------------------------------------------
-    // Cleanup — order matters:
-    //   1. Stop scheduling / dispatch first to prevent stale callbacks.
-    //   2. Tear down the widget / element tree while managers are still live
-    //      (elements may call activeDispatcher() or activeManager() on detach).
-    //   3. Release GPU objects before the Wayland surface is destroyed, so
-    //      the Vulkan WSI can clean up its Wayland resources while the surface
-    //      is still valid.
-    //   4. Wayland object destruction: children before parents, libdecor before
-    //      wl_surface (libdecor owns xdg_surface / xdg_toplevel on top of it).
+    // Teardown, in dependency order
     // -------------------------------------------------------------------------
+    sigaction(SIGINT,  &old_int, nullptr);
+    sigaction(SIGTERM, &old_term, nullptr);
+    if (use_close_hook) sigaction(SIGUSR1, &old_usr1, nullptr);
 
-    state.text_input_manager->setOnInputTargetChanged(nullptr);
-    state.ibus_ime.reset();
+    // Close every other window first, while the tree is intact: their
+    // on_destroyed callbacks usually point into States.
+    for (View* v : View::all())
+        if (WindowController* controller = WindowController::forView(v)) controller->destroy();
+    linux_host::runTasks();
 
-    // Captured &state by reference — must be cleared before state's
-    // Wayland objects below start getting torn down.
-    Widgets::registerCursorHandler(nullptr);
-
-    // Unmount the element / render-object tree while the View's managers
-    // are still reachable (RenderTextField::detach() checks the dispatcher).
-    if (state.window) state.window->on_metrics_changed = nullptr;
+    wayland::setIme(nullptr);
+    ibus_ime.reset();
+    main_window->on_metrics_changed = nullptr;
     {
-        Widgets::View::Scope scope(state.view.get());
-        state.root_element->unmount();
+        // The tree first, while the managers it unregisters from still exist.
+        View::Scope view_scope(view.get());
+        root_element->unmount();
     }
-    Widgets::linux_host::runTasks();
-    state.root_element.reset();
+    linux_host::runTasks();
+    root_element.reset();
     render_box.reset();
-    Widgets::linux_host::runTasks();
+    linux_host::runTasks();
 
-    // The window's raster thread, renderer and Surface, before the
-    // wl_surface they present to (destroyed below) and before the View.
-    state.window.reset();
-    Widgets::TickerScheduler::setActive(nullptr);
-    state.ticker_scheduler.reset();
+    registerCursorHandler(nullptr);
+    // Raster thread, renderer and Surface, then the wl_surface (before the View).
+    main_window.reset();
+    PlatformWindowing::setInstance(nullptr);
+    windowing.reset();
+    TickerScheduler::setActive(nullptr);
+    ticker.reset();
 
     // Textures cached by images hold the device: release them while it lives.
-    Widgets::ImageCache::instance().clear();
+    ImageCache::instance().clear();
 
-    state.dispatcher.reset();
-    state.focus_manager.reset();
-    state.text_input_manager.reset();
-    state.view.reset();
-
-    // The device last of the GPU objects, while the Wayland display is still
-    // open: on hasvk/Wayland, vkDestroySurfaceKHR sends a null-commit to the
-    // compositor, which crashes the WSI if the display is already gone.
-    Widgets::linux_host::shutdown();
-    state.device.reset();
+    // The device while the display is still open: on hasvk/Wayland,
+    // vkDestroySurfaceKHR talks to the compositor.
+    linux_host::shutdown();
+    view.reset();
     device.reset();
 
-    if (state.xkb_state)  xkb_state_unref(state.xkb_state);
-    if (state.xkb_keymap) xkb_keymap_unref(state.xkb_keymap);
-    if (state.xkb_ctx)    xkb_context_unref(state.xkb_ctx);
-
-    if (state.cursor_surface) wl_surface_destroy(state.cursor_surface);
-    if (state.cursor_theme)   wl_cursor_theme_destroy(state.cursor_theme);
-    if (state.keyboard)     wl_keyboard_release(state.keyboard);
-    if (state.pointer)      wl_pointer_release(state.pointer);
-    // wl_seat version ≥5 requires the release request (not just proxy destroy).
-    // We bind version 7, so wl_seat_release is mandatory.
-    if (state.seat)         wl_seat_release(state.seat);
-    if (state.clipboard_offer)         wl_data_offer_destroy(state.clipboard_offer);
-    if (state.clipboard_source)        wl_data_source_destroy(state.clipboard_source);
-    if (state.data_device)             wl_data_device_release(state.data_device);
-    if (state.data_device_manager)     wl_data_device_manager_destroy(state.data_device_manager);
-    if (state.decor_frame)  libdecor_frame_unref(state.decor_frame);
-    if (state.libdecor_ctx) libdecor_unref(state.libdecor_ctx);
-    if (state.surface)      wl_surface_destroy(state.surface);
-    for (auto& entry : state.outputs) wl_output_destroy(entry.first);
-    if (state.compositor)   wl_compositor_destroy(state.compositor);
-    if (state.registry)     wl_registry_destroy(state.registry);
-
-    g_wayland_state = nullptr;
+    wayland::shutdown();
     wl_display_disconnect(display);
     return 0;
-}
-
-// ============================================================================
-// Clipboard bridge -- called from clipboard.cpp when isRunningUnderWayland()
-// ============================================================================
-
-void setWaylandClipboardText(const std::string& text)
-{
-    WaylandWindowState* state = g_wayland_state;
-    if (!state || !state->data_device_manager || !state->data_device) return;
-
-    state->clipboard_text = text;
-
-    // A new wl_data_source per call, rather than trying to reuse one --
-    // matches how most minimal Wayland clipboard implementations handle
-    // repeated copies, and keeps this free of "is the old one still valid"
-    // bookkeeping.
-    if (state->clipboard_source)
-    {
-        wl_data_source_destroy(state->clipboard_source);
-        state->clipboard_source = nullptr;
-    }
-
-    struct wl_data_source* source =
-        wl_data_device_manager_create_data_source(state->data_device_manager);
-    if (!source) return;
-
-    wl_data_source_offer(source, "text/plain;charset=utf-8");
-    wl_data_source_offer(source, "UTF8_STRING");
-    wl_data_source_offer(source, "text/plain");
-    wl_data_source_add_listener(source, &data_source_listener, state);
-
-    // Requires a serial from a real input event per the protocol spec (see
-    // last_key_serial's doc comment on WaylandWindowState) -- an app that's
-    // never had a keypress yet (last_key_serial == 0) will have this
-    // request ignored by a strict compositor, same as any other Wayland
-    // client attempting to claim the selection with no prior input.
-    wl_data_device_set_selection(state->data_device, source, state->last_key_serial);
-
-    state->clipboard_source = source;
-    wl_display_flush(state->display);
-}
-
-std::string getWaylandClipboardText()
-{
-    WaylandWindowState* state = g_wayland_state;
-    if (!state) return {};
-
-    // We're currently the source ourselves -- return what we set directly
-    // rather than round-tripping through the compositor. Compositors don't
-    // consistently deliver a client's own selection back to it via
-    // data_offer/selection events, so this isn't just an optimization, it
-    // sidesteps a real ambiguity.
-    if (state->clipboard_source)
-        return state->clipboard_text;
-
-    if (!state->clipboard_offer || state->clipboard_offer_mime.empty())
-        return {};
-
-    int fds[2];
-    if (pipe(fds) != 0) return {};
-
-    wl_data_offer_receive(state->clipboard_offer, state->clipboard_offer_mime.c_str(), fds[1]);
-    close(fds[1]); // our copy of the write end -- the source client writes via its own fd from this same pipe
-    wl_display_flush(state->display);
-
-    // No native "wait up to N ms" on this handoff -- poll() with a
-    // deadline guards against a source client that never writes/closes.
-    std::string result;
-    char buf[4096];
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-
-    for (;;)
-    {
-        auto now = std::chrono::steady_clock::now();
-        if (now >= deadline) break;
-        int timeout_ms = static_cast<int>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now).count());
-
-        struct pollfd pfd{fds[0], POLLIN, 0};
-        int pr = poll(&pfd, 1, timeout_ms);
-        if (pr <= 0) break; // timeout or error
-
-        ssize_t n = read(fds[0], buf, sizeof(buf));
-        if (n <= 0) break; // EOF or error
-        result.append(buf, static_cast<size_t>(n));
-    }
-
-    close(fds[0]);
-    return result;
 }
 
 } // namespace systems::leal::campello_widgets

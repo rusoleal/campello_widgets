@@ -509,7 +509,14 @@ int runApp(const std::string& title, int width, int height, WidgetRef root_widge
         if (!running) break;
 
         pumpDarkModeEvents();
-        if (ibus_ime->isActive()) ibus_ime->dispatchEvents();
+        if (ibus_ime->isActive()) {
+            // Committed text goes to the window with keyboard focus.
+            View* target = view.get();
+            for (linux_host::LinuxWindow* w : linux_host::LinuxWindow::all())
+                if (static_cast<x11::X11Window*>(w)->hasFocus()) target = &w->view();
+            View::Scope ime_scope(target);
+            ibus_ime->dispatchEvents();
+        }
 
         linux_host::runTasks();
         if (main_hidden && !x11::X11Window::anyOtherShown(main_window.get())) break;

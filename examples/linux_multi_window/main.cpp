@@ -24,7 +24,12 @@
 // window is clicked; the tests then focus windows themselves (focusWindow()),
 // as a window manager would on a click.
 //
-// X11 only: under Wayland, run it with WAYLAND_DISPLAY unset (XWayland).
+// Under Wayland (WAYLAND_DISPLAY set) a client can't synthesise input or read
+// other surfaces, so the self-tests inject pointer and key events straight
+// into each window's View, close the main window through the runner's
+// SIGUSR1 test hook (CAMPELLO_WIDGETS_SIGUSR1_CLOSE, set by main()), and save
+// each window's next frame (Renderer::requestFrameCapture) as a PNG. The
+// windows themselves (toplevels, dialogs, the xdg_popup menu) are real.
 
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/linux/run_app.hpp>
@@ -35,6 +40,10 @@
 #include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/renderer.hpp>
 #include <campello_widgets/ui/platform_windowing.hpp>
+#include <campello_widgets/ui/pointer_event.hpp>
+#include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/key_event.hpp>
+#include <campello_widgets/ui/focus_manager.hpp>
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
@@ -42,6 +51,7 @@
 #include <X11/keysym.h>
 
 #include <dlfcn.h>
+#include <signal.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -114,6 +124,55 @@ namespace
     // Self-test helpers: real X input (XTest) to this process's windows,
     // through a connection of our own.
     // ------------------------------------------------------------------
+
+    // ------------------------------------------------------------------
+    // Wayland: events injected into each window's View (see the top).
+    // ------------------------------------------------------------------
+
+    bool g_wayland = false;
+    // Set by the app's State: the View of the window titled `title` ("" is
+    // the popup), nullptr if it isn't open; and the window controller (to
+    // close a secondary window as its close button would).
+    std::function<cw::View*(const char*)>             g_view_titled;
+    std::function<cw::WindowController*(const char*)> g_controller_titled;
+    std::function<std::string(cw::View*)>             g_title_of_view;
+
+    void injectPointer(cw::View* view, cw::PointerEventKind kind, float x, float y)
+    {
+        cw::View::Scope scope(view);
+        cw::PointerEvent e;
+        e.kind        = kind;
+        e.pointer_id  = 0;
+        e.position    = {x, y};
+        e.pressure    = kind == cw::PointerEventKind::down ? 1.0f : 0.0f;
+        e.button      = cw::PointerButton::primary;
+        e.device_kind = cw::PointerDeviceKind::mouse;
+        view->pointerDispatcher().handlePointerEvent(e);
+    }
+
+    void injectKey(cw::View* view, cw::KeyCode code, uint32_t character)
+    {
+        cw::View::Scope scope(view);
+        cw::KeyEvent ke;
+        ke.kind      = cw::KeyEventKind::down;
+        ke.key_code  = code;
+        ke.modifiers = cw::KeyModifiers::none;
+        ke.character = character;
+        view->focusManager().handleKeyEvent(ke);
+        if (!cw::View::isAlive(view)) return;
+        ke.kind      = cw::KeyEventKind::up;
+        ke.character = 0;
+        view->focusManager().handleKeyEvent(ke);
+    }
+
+    // Windows that are drawing (a hidden Wayland window stops its renderer).
+    std::vector<cw::View*> shownViews()
+    {
+        std::vector<cw::View*> out;
+        for (cw::View* v : cw::View::all())
+            if (v->renderer()) out.push_back(v);
+        return out;
+    }
 
     Display* dpy()
     {
@@ -228,6 +287,7 @@ namespace
 
     std::string focusedTitle()
     {
+        if (g_wayland) return "n/a";  // not visible to a Wayland client
         ::Window focus = 0; int revert = 0;
         XGetInputFocus(dpy(), &focus, &revert);
         if (!focus || focus == PointerRoot) return "(none)";
@@ -243,6 +303,16 @@ namespace
     // A click at (x, y): logical pixels from the window content's top-left.
     void clickInWindow(const char* title, float x, float y)
     {
+        if (g_wayland)
+        {
+            cw::View* v = g_view_titled(title);
+            if (!v) { std::printf("[demo] no window titled '%s'\n", title); return; }
+            injectPointer(v, cw::PointerEventKind::move, x, y);
+            if (cw::View::isAlive(v)) injectPointer(v, cw::PointerEventKind::down, x, y);
+            if (cw::View::isAlive(v)) injectPointer(v, cw::PointerEventKind::up, x, y);
+            std::printf("[demo] clicked '%s' at (%.0f, %.0f)\n", *title ? title : "(popup)", x, y);
+            return;
+        }
         const ::Window w = windowTitled(title);
         if (!w || !xtest().motion) { std::printf("[demo] no window titled '%s'\n", title); return; }
         int rx = 0, ry = 0;
@@ -259,6 +329,7 @@ namespace
     // Gives `title` keyboard focus, as a window manager does on a click.
     void focusWindow(const char* title)
     {
+        if (g_wayland) return;  // keys are injected into the window's View
         const ::Window w = windowTitled(title);
         if (!w) { std::printf("[demo] no window titled '%s'\n", title); return; }
         XSetInputFocus(dpy(), w, RevertToParent, CurrentTime);
@@ -276,6 +347,15 @@ namespace
     // Keys go to the focused window: focus `title` first (see focusWindow()).
     void typeInWindow(const char* title, const char* text)
     {
+        if (g_wayland)
+        {
+            cw::View* v = g_view_titled(title);
+            if (!v) { std::printf("[demo] no window titled '%s'\n", title); return; }
+            for (const char* c = text; *c && cw::View::isAlive(v); ++c)
+                injectKey(v, cw::KeyCode::unknown, static_cast<unsigned char>(*c));
+            std::printf("[demo] typed '%s' into '%s'\n", text, title);
+            return;
+        }
         if (!xtest().key) return;
         for (const char* c = text; *c; ++c) pressKey(static_cast<KeySym>(*c));
         XFlush(dpy());
@@ -284,6 +364,14 @@ namespace
 
     void pressEscape(const char* title)
     {
+        if (g_wayland)
+        {
+            cw::View* v = g_view_titled(title);
+            if (!v) { std::printf("[demo] no window titled '%s'\n", *title ? title : "(popup)"); return; }
+            injectKey(v, cw::KeyCode::escape, 0);
+            std::printf("[demo] pressed Escape in '%s'\n", *title ? title : "(popup)");
+            return;
+        }
         if (!xtest().key) return;
         pressKey(XK_Escape);
         XFlush(dpy());
@@ -294,6 +382,14 @@ namespace
     // The close button: WM_DELETE_WINDOW, as a window manager sends it.
     void closeWindow(const char* title)
     {
+        if (g_wayland)
+        {
+            std::printf("[demo] closing '%s'\n", title);
+            if (cw::WindowController* c = g_controller_titled(title)) c->requestClose();
+            else if (g_view_titled(title) == cw::View::primary()) raise(SIGUSR1);  // the runner's test hook
+            else std::printf("[demo] no window titled '%s' to close\n", title);
+            return;
+        }
         const ::Window w = windowTitled(title);
         if (!w) { std::printf("[demo] no window titled '%s' to close\n", title); return; }
         XEvent ev{};
@@ -336,6 +432,32 @@ namespace
     {
         const char* dir = std::getenv("CW_MULTIWINDOW_DEMO_DIR");
         if (!dir) return;
+        if (const char* cmd = std::getenv("CW_MULTIWINDOW_SCREENSHOT"))
+        {
+            // The whole screen, by the compositor (e.g. weston-screenshooter
+            // on a headless Weston): where the windows are and how they
+            // stack. `{step}` in the command becomes the step's name. Taken
+            // a moment later, once the step's frames are on screen.
+            std::string command = cmd;
+            if (const auto at = command.find("{step}"); at != std::string::npos) command.replace(at, 6, step);
+            std::thread([command] {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                if (std::system(command.c_str()) != 0) std::printf("[demo] screenshot command failed\n");
+            }).detach();
+        }
+        if (g_wayland)
+        {
+            // Each window's next frame, as its renderer draws it.
+            for (cw::View* v : shownViews())
+            {
+                std::string name = g_title_of_view(v);
+                for (char& c : name) if (c == ' ' || c == '-') c = '_';
+                v->renderer()->requestFrameCapture(std::string(dir) + "/" + step + "_" + name + ".png");
+                v->renderer()->notePaintRequested();
+                v->requestFrame();
+            }
+            return;
+        }
         for (::Window w : ourWindows())
         {
             std::string name = isPopup(w) ? "popup" : titleOf(w);
@@ -368,6 +490,32 @@ class MultiWindowState : public cw::State<MultiWindowApp>
 public:
     void initState() override
     {
+        g_view_titled = [this](const char* title) -> cw::View* {
+            const std::string t = title;
+            if (t == "Multi-window") return cw::View::primary();
+            if (t.empty())
+            {
+                for (cw::View* v : cw::View::all())
+                    if (auto* c = cw::WindowController::forView(v); c && c->kind() == cw::WindowKind::popup) return v;
+                return nullptr;
+            }
+            cw::WindowController* c = g_controller_titled(title);
+            return c && c->platformWindow() ? &c->platformWindow()->view() : nullptr;
+        };
+        g_controller_titled = [this](const char* title) -> cw::WindowController* {
+            const std::string t = title;
+            if (t == "Inspector")   return inspector_.get();
+            if (t == "About")       return about_.get();
+            if (t == "Preferences") return prefs_.get();
+            return nullptr;
+        };
+        g_title_of_view = [this](cw::View* v) -> std::string {
+            if (v == cw::View::primary()) return "Multi-window";
+            for (const char* t : {"Inspector", "About", "Preferences"})
+                if (g_view_titled(t) == v) return t;
+            return "popup";
+        };
+
         const char* demo = std::getenv("CW_MULTIWINDOW_DEMO");
         const char  mode = demo ? *demo : '0';
         if (mode == '1' || mode == '2')
@@ -470,13 +618,13 @@ public:
 private:
     void report(const char* step)
     {
-        const ::Window main  = windowTitled("Multi-window");
-        const ::Window popup = windowTitled("");
+        const ::Window main  = g_wayland ? 0 : windowTitled("Multi-window");
+        const ::Window popup = g_wayland ? 0 : windowTitled("");
         std::printf("[demo] %s: count=%d inspector=%s about=%s prefs=%s menu=%s field='%s' "
                     "windows=%zu focus='%s' main_blocked=%d\n",
                     step, count_, inspector_ ? "open" : "closed", about_ ? "open" : "closed",
                     prefs_ ? "open" : "closed", menu_open_ ? "open" : "closed", field_->text().c_str(),
-                    ourWindows().size(), focusedTitle().c_str(),
+                    g_wayland ? shownViews().size() : ourWindows().size(), focusedTitle().c_str(),
                     cw::View::primary() && cw::View::primary()->isInputBlocked() ? 1 : 0);
         if (popup && main)
         {
@@ -621,6 +769,9 @@ int main()
 {
     // The self-tests' helper thread talks to the X server too.
     XInitThreads();
+    const char* wl = std::getenv("WAYLAND_DISPLAY");
+    g_wayland = wl && *wl;
+    if (g_wayland) setenv("CAMPELLO_WIDGETS_SIGUSR1_CLOSE", "1", 1);
     const int result = cw::runApp("Multi-window", 520, 560, std::make_shared<MultiWindowApp>());
     std::printf("[demo] runApp returned %d\n", result);
     return result;

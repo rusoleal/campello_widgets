@@ -78,11 +78,22 @@ namespace systems::leal::campello_widgets
             /// Call once the native window exists. False if it can't present.
             bool attachSurface(const campello_gpu::LinuxSurfaceInfo& info);
             bool hasSurface() const noexcept { return surface_ != nullptr; }
+            /// Stops rendering and destroys the Surface (its swapchain) now,
+            /// before the native window it presents to goes (a subclass's
+            /// destructor runs before this class's).
+            void releaseSurface();
 
             /// (Re)creates the renderer and raster thread for `root` (nullptr:
             /// no content), and makes it the View's hit-test root.
             void      setRoot(std::shared_ptr<RenderBox> root, Color background = Color::white());
             Renderer* renderer() const noexcept { return renderer_.get(); }
+
+            /// Stops the raster thread and drops the renderer, keeping the
+            /// root: no frame is in flight afterwards (Wayland unmaps a
+            /// window by committing a null buffer, which must not race a
+            /// present). resumeRendering() starts again.
+            void pauseRendering();
+            void resumeRendering();
 
             /// Asks for a frame on the next loop turn.
             void requestFrame();
@@ -123,6 +134,18 @@ namespace systems::leal::campello_widgets
             /// Size or device pixel ratio changed.
             std::function<void()> on_metrics_changed;
 
+        protected:
+            /// True while the window system hasn't asked for the next frame
+            /// yet (a Wayland frame callback is outstanding): drawFrame()
+            /// waits, and the frame stays pending.
+            virtual bool frameThrottled() const { return false; }
+            /// Called on the UI thread just before a built frame goes to the
+            /// raster thread, which presents (commits) it: the place to
+            /// request a Wayland frame callback for that commit.
+            virtual void willSubmitFrame() {}
+
+        public:
+
             /// Live windows, in creation order.
             static const std::vector<LinuxWindow*>& all();
             static bool         isLive(const LinuxWindow* window);
@@ -143,6 +166,7 @@ namespace systems::leal::campello_widgets
             std::shared_ptr<RenderBox>             root_;
             std::shared_ptr<Renderer>              renderer_;
             std::unique_ptr<RasterThread>          raster_;  // stopped before renderer_/surface_ go
+            Color                                  background_ = Color::white();
             bool                                   needs_frame_ = true;
             std::chrono::nanoseconds               min_interval_{0};
             std::chrono::steady_clock::time_point  last_frame_{};

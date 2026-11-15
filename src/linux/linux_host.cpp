@@ -130,10 +130,17 @@ namespace systems::leal::campello_widgets::linux_host
         return surface_ != nullptr;
     }
 
+    void LinuxWindow::releaseSurface()
+    {
+        stopRendering();
+        surface_.reset();
+    }
+
     void LinuxWindow::setRoot(std::shared_ptr<RenderBox> root, Color background)
     {
         stopRendering();
-        root_ = std::move(root);
+        root_       = std::move(root);
+        background_ = background;
         view_.pointerDispatcher().setRoot(root_);
         if (!root_ || !surface_ || !g_device) return;
 
@@ -157,6 +164,18 @@ namespace systems::leal::campello_widgets::linux_host
         requestFrame();
     }
 
+    void LinuxWindow::pauseRendering()
+    {
+        stopRendering();
+    }
+
+    void LinuxWindow::resumeRendering()
+    {
+        if (renderer_ || !root_) return;
+        auto root = root_;
+        setRoot(std::move(root), background_);
+    }
+
     void LinuxWindow::stopRendering()
     {
         raster_.reset();  // stops and joins: no raster work in flight below
@@ -172,7 +191,7 @@ namespace systems::leal::campello_widgets::linux_host
 
     bool LinuxWindow::drawFrame()
     {
-        if (!needs_frame_ || !renderer_ || !raster_ || !isShown()) return false;
+        if (!needs_frame_ || !renderer_ || !raster_ || !isShown() || frameThrottled()) return false;
         const uint32_t w = physicalWidth(), h = physicalHeight();
         if (w == 0 || h == 0) return false;
         const auto now = std::chrono::steady_clock::now();
@@ -190,6 +209,7 @@ namespace systems::leal::campello_widgets::linux_host
         if (!package || !isLive(this) || frame_renderer != renderer_ || !raster_) return false;
         // Acquired and presented on this window's raster thread.
         package->surface = frame_surface;
+        willSubmitFrame();
         raster_->submit(std::move(*package));
         return true;
     }
@@ -243,7 +263,7 @@ namespace systems::leal::campello_widgets::linux_host
         const auto now = std::chrono::steady_clock::now();
         for (LinuxWindow* w : g_windows)
         {
-            if (!w->needs_frame_ || !w->renderer_ || !w->isShown()) continue;
+            if (!w->needs_frame_ || !w->renderer_ || !w->isShown() || w->frameThrottled()) continue;
             const auto due  = w->last_frame_ + w->min_interval_;
             const int  wait = due <= now ? 0 : static_cast<int>(
                 std::chrono::duration_cast<std::chrono::milliseconds>(due - now).count()) + 1;
@@ -255,7 +275,7 @@ namespace systems::leal::campello_widgets::linux_host
     bool LinuxWindow::anyFramePending()
     {
         for (LinuxWindow* w : g_windows)
-            if (w->needs_frame_ && w->renderer_ && w->isShown()) return true;
+            if (w->needs_frame_ && w->renderer_ && w->isShown() && !w->frameThrottled()) return true;
         return false;
     }
 
