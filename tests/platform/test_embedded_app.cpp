@@ -71,9 +71,9 @@ public:
         auto tap    = std::make_shared<cw::GestureDetector>();
         tap->on_tap = [this] { setState([this] { red_ = true; }); };
         tap->child  = cw::mw<cw::ColoredBox>(red_ ? cw::Color::red() : cw::Color::white());
-        // Not the root render object: a root is never attach()ed, so a
-        // GestureDetector there would never register for input.
-        return cw::mw<cw::Padding>(cw::EdgeInsets::all(0.0f), tap);
+        // The tree's root render object: attached by
+        // PointerDispatcher::setRoot() (no parent does it).
+        return tap;
     }
 private:
     bool red_ = false;

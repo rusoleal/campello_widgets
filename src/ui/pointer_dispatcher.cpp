@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <utility>
 #include <unordered_set>
 #include <campello_widgets/ui/view.hpp>
 #include <campello_widgets/ui/gesture_constants.hpp>
@@ -78,11 +79,25 @@ namespace systems::leal::campello_widgets
 
     void PointerDispatcher::setRoot(std::shared_ptr<RenderBox> root) noexcept
     {
-        root_ = std::move(root);
+        std::shared_ptr<RenderBox> old_root = std::exchange(root_, std::move(root));
+        const bool old_attached = std::exchange(root_attached_, false);
         active_pointers_.clear();
         captured_pointers_.clear();
         last_hover_path_.clear();
         arena_.reset();
+
+        // A root is attach()ed here, since no parent will (see the header).
+        if (old_root == root_)
+        {
+            root_attached_ = old_attached;
+            return;
+        }
+        if (old_root && old_attached && !old_root->parent()) old_root->detach();
+        if (root_ && !root_->parent())
+        {
+            root_->attach();
+            root_attached_ = true;
+        }
     }
 
     void PointerDispatcher::addHandler(RenderBox* box, Handler handler)
