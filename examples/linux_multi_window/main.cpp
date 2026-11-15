@@ -1,4 +1,4 @@
-// Multi-window example for Linux / X11 (Phase 17): one app, one widget tree,
+// Multi-window example for Linux, X11 and Wayland (Phase 17): one app, one widget tree,
 // several native windows.
 //
 // The main window opens an "Inspector" (a regular window), an "About"
@@ -15,6 +15,11 @@
 // CW_MULTIWINDOW_DEMO=3  self-test: modal window, popup menu, main-window
 //                        close policy (quit).
 // CW_MULTIWINDOW_DEMO=4  self-test: MainWindowClose::keep_running.
+//
+// Each self-test checks what it observes: a failed check prints
+// "[demo] CHECK FAILED: ..." and the app exits 1; otherwise it prints
+// "[demo] SELF-TEST PASSED". run_self_tests.sh runs modes 2-4 on Xvfb or a
+// headless Weston (CI does both).
 //
 // The self-tests send real X input through the X server's XTest extension
 // (pointer moves, button and key presses), so events reach each window the
@@ -130,6 +135,15 @@ namespace
     // ------------------------------------------------------------------
 
     bool g_wayland = false;
+
+    // Self-test checks: a failed one is printed and makes main() return 1.
+    int g_failures = 0;
+    void expect(bool ok, const char* what)
+    {
+        if (ok) return;
+        ++g_failures;
+        std::printf("[demo] CHECK FAILED: %s\n", what);
+    }
     // Set by the app's State: the View of the window titled `title` ("" is
     // the popup), nullptr if it isn't open; and the window controller (to
     // close a secondary window as its close button would).
@@ -624,7 +638,7 @@ private:
                     "windows=%zu focus='%s' main_blocked=%d\n",
                     step, count_, inspector_ ? "open" : "closed", about_ ? "open" : "closed",
                     prefs_ ? "open" : "closed", menu_open_ ? "open" : "closed", field_->text().c_str(),
-                    g_wayland ? shownViews().size() : ourWindows().size(), focusedTitle().c_str(),
+                    shownWindows(), focusedTitle().c_str(),
                     cw::View::primary() && cw::View::primary()->isInputBlocked() ? 1 : 0);
         if (popup && main)
         {
@@ -638,17 +652,33 @@ private:
     void runSelfTest()
     {
         runScript({
-            [this] { report("start"); captureAllWindows("0_start"); },
+            [this] {
+                report("start"); captureAllWindows("0_start");
+                expect(shownWindows() == 3, "three windows shown");
+            },
             [this] { clickInWindow("Inspector", 180.0f, kInspectorPlusY); },
-            [this] { report("clicked +1 in the inspector"); captureAllWindows("1_after_inspector_click"); },
+            [this] {
+                report("clicked +1 in the inspector"); captureAllWindows("1_after_inspector_click");
+                expect(count_ == 4, "+1 in the inspector counts");
+            },
             [this] { clickInWindow("Inspector", 180.0f, kInspectorFieldY); },
             [this] { focusWindow("Inspector"); typeInWindow("Inspector", "hi"); },
-            [this] { report("typed into the inspector's field"); captureAllWindows("2_after_typing"); },
+            [this] {
+                report("typed into the inspector's field"); captureAllWindows("2_after_typing");
+                expect(field_->text() == "hi", "text typed into the inspector reaches its field");
+            },
             [this] { focusWindow("Multi-window"); typeInWindow("Multi-window", "x"); },  // no text field there
-            [this] { report("typed into the main window"); },
+            [this] {
+                report("typed into the main window");
+                expect(field_->text() == "hi", "text typed into the main window doesn't reach the inspector");
+            },
             [this] { clickInWindow("About", 150.0f, kAboutCloseY); },
-            [this] { report("clicked Close in About"); captureAllWindows("3_after_about_close"); },
+            [this] {
+                report("clicked Close in About"); captureAllWindows("3_after_about_close");
+                expect(!about_ && shownWindows() == 2, "Close destroys the About dialog");
+            },
             [] { closeWindow("Multi-window"); },
+            [] { expect(false, "the app quits when the main window closes"); },
         }, 700);
     }
 
@@ -658,38 +688,61 @@ private:
         runScript({
             [this] { report("start"); captureAllWindows("0_layout"); },
             [] { clickInWindow("Multi-window", 260.0f, kMainPrefsY); },
-            [this] { report("preferences opened"); captureAllWindows("1_modal"); },
+            [this] {
+                report("preferences opened"); captureAllWindows("1_modal");
+                expect(prefs_ && mainBlocked(), "Preferences opens and blocks the main window");
+            },
             [] { clickInWindow("Multi-window", 260.0f, kMainPlusY); },  // blocked
-            [this] { report("clicked +1 in the blocked main window"); },
+            [this] {
+                report("clicked +1 in the blocked main window");
+                expect(count_ == 3, "a click in the blocked main window does nothing");
+            },
             [] { clickInWindow("Preferences", 160.0f, kPrefsPlusTenY); },
-            [this] { report("clicked +10 in Preferences"); },
+            [this] { report("clicked +10 in Preferences"); expect(count_ == 13, "+10 in Preferences counts"); },
             [] { clickInWindow("Preferences", 160.0f, kPrefsDoneY); },
-            [this] { report("preferences closed"); },
+            [this] {
+                report("preferences closed");
+                expect(!prefs_ && !mainBlocked(), "Done closes Preferences and unblocks the main window");
+            },
             [] { clickInWindow("Multi-window", 260.0f, kMainPlusY); },  // works again
-            [this] { report("clicked +1 again"); },
+            [this] { report("clicked +1 again"); expect(count_ == 14, "the main window works again"); },
             [] { clickInWindow("Multi-window", 260.0f, kMainOptionsY); },
-            [this] { report("menu opened"); captureAllWindows("2_menu"); },
+            [this] {
+                report("menu opened"); captureAllWindows("2_menu");
+                expect(menu_open_ && shownWindows() == 2, "Options opens the popup window");
+                if (!g_wayland) expect(popupExtendsBelowMain(), "the popup extends below the main window");
+            },
             [] { clickInWindow("", 190.0f, 24.0f); },  // "+1 from the menu"
-            [this] { report("menu item chosen"); },
+            [this] {
+                report("menu item chosen");
+                expect(count_ == 15 && !menu_open_ && shownWindows() == 1, "a menu item runs and closes the menu");
+            },
             [] { clickInWindow("Multi-window", 260.0f, kMainOptionsY); },
-            [this] { report("menu reopened"); },
+            [this] { report("menu reopened"); expect(menu_open_, "the menu reopens"); },
             [] { clickInWindow("Multi-window", 260.0f, 60.0f); },  // outside it
-            [this] { report("clicked outside the menu"); },
+            [this] { report("clicked outside the menu"); expect(!menu_open_, "a click outside closes the menu"); },
             [] { clickInWindow("Multi-window", 260.0f, kMainOptionsY); },
-            [this] { report("menu reopened"); },
+            [this] { report("menu reopened"); expect(menu_open_, "the menu reopens"); },
             [] { pressEscape(""); },
-            [this] { report("pressed Escape"); },
+            [this] { report("pressed Escape"); expect(!menu_open_, "Escape closes the menu"); },
             [] { clickInWindow("Multi-window", 260.0f, kMainOptionsY); },
-            [this] { report("menu reopened"); },
+            [this] { report("menu reopened"); expect(menu_open_, "the menu reopens"); },
             [] { focusWindow("Multi-window"); },  // focus moves away from the popup
-            [this] { report("popup lost focus"); },
+            [this] {
+                report("popup lost focus");
+                // Wayland: injected input moves no compositor focus.
+                if (!g_wayland) expect(!menu_open_, "the menu closes when it loses focus");
+            },
             [this] { openInspector(); openAbout(); },
             [this] {
                 report("before closing the main window");
                 std::printf("[demo] closing the main window (default policy: quit)\n");
                 closeWindow("Multi-window");
             },
-            [] { std::printf("[demo] STILL RUNNING after closing the main window\n"); },
+            [] {
+                std::printf("[demo] STILL RUNNING after closing the main window\n");
+                expect(false, "the app quits when the main window closes");
+            },
         }, 600);
     }
 
@@ -701,10 +754,31 @@ private:
         runScript({
             [this] { openInspector(); },
             [this] { report("inspector opened"); closeWindow("Multi-window"); },
-            [this] { report("main window closed"); clickInWindow("Inspector", 180.0f, kInspectorPlusY); },
-            [this] { report("clicked +1 in the inspector"); closeWindow("Inspector"); },
-            [] { std::printf("[demo] STILL RUNNING after closing the last window\n"); },
+            [this] {
+                report("main window closed");
+                expect(shownWindows() == 1 && inspector_, "with keep_running the inspector stays open");
+                clickInWindow("Inspector", 180.0f, kInspectorPlusY);
+            },
+            [this] {
+                report("clicked +1 in the inspector");
+                expect(count_ == 4, "the inspector still works");
+                closeWindow("Inspector");
+            },
+            [] {
+                std::printf("[demo] STILL RUNNING after closing the last window\n");
+                expect(false, "the app quits when the last window closes");
+            },
         }, 600);
+    }
+
+    size_t shownWindows() const { return g_wayland ? shownViews().size() : ourWindows().size(); }
+    static bool mainBlocked() { return cw::View::primary() && cw::View::primary()->isInputBlocked(); }
+    static bool popupExtendsBelowMain()
+    {
+        const ::Window main = windowTitled("Multi-window"), popup = windowTitled("");
+        if (!main || !popup) return false;
+        const Geometry p = geometryOf(popup), m = geometryOf(main);
+        return p.y + p.h > m.y + m.h;
     }
 
     void openInspector()
@@ -774,5 +848,12 @@ int main()
     if (g_wayland) setenv("CAMPELLO_WIDGETS_SIGUSR1_CLOSE", "1", 1);
     const int result = cw::runApp("Multi-window", 520, 560, std::make_shared<MultiWindowApp>());
     std::printf("[demo] runApp returned %d\n", result);
+    if (g_failures > 0)
+    {
+        std::printf("[demo] SELF-TEST FAILED: %d check(s)\n", g_failures);
+        return 1;
+    }
+    const char* demo = std::getenv("CW_MULTIWINDOW_DEMO");
+    if (demo && *demo >= '2' && *demo <= '4') std::printf("[demo] SELF-TEST PASSED\n");
     return result;
 }

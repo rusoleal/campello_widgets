@@ -117,6 +117,70 @@ jobs:
             -E "campello_input"
 
   # ---------------------------------------------------------------------------
+  # Linux — multi-window (Phase 17): the linux_multi_window example's
+  # self-tests on X11 (Xvfb, real XTest input) and Wayland (headless Weston,
+  # input injected into each window's View), plus the platform integration
+  # tests (EmbeddedApp, ...). Software Vulkan (lavapipe), no GPU.
+  # ---------------------------------------------------------------------------
+  linux-multi-window:
+    name: Linux / multi-window (X11 + Wayland)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev mesa-vulkan-drivers \
+            libx11-dev libdbus-1-dev libfreetype-dev libharfbuzz-dev libfontconfig1-dev \
+            libwayland-dev libxkbcommon-dev libdecor-0-dev libcurl4-openssl-dev \
+            xvfb xauth libxtst6 weston libdecor-0-plugin-1-gtk
+
+      - name: Cache dependency sources
+        uses: actions/cache@v5
+        with:
+          path: build/linux_multi_window/_deps
+          key: deps-linux-multi-window-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-linux-multi-window-
+
+      - name: Configure
+        run: |
+          cmake -S . -B build/linux_multi_window \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_EXAMPLES=ON \
+            -DBUILD_INTEGRATION_TESTS=ON
+
+      - name: Build
+        run: |
+          cmake --build build/linux_multi_window \
+            --target campello_widgets_multi_window campello_widgets_integration_tests
+
+      - name: Integration tests
+        run: |
+          export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          xvfb-run -a build/linux_multi_window/tests/campello_widgets_integration_tests
+
+      - name: Multi-window self-tests (X11)
+        run: |
+          export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          examples/linux_multi_window/run_self_tests.sh \
+            build/linux_multi_window/campello_widgets_multi_window x11 self-tests/x11
+
+      - name: Multi-window self-tests (Wayland)
+        run: |
+          export VK_ICD_FILENAMES="$(ls /usr/share/vulkan/icd.d/lvp_icd*.json | head -1)"
+          examples/linux_multi_window/run_self_tests.sh \
+            build/linux_multi_window/campello_widgets_multi_window wayland self-tests/wayland
+
+      - name: Upload self-test output
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-multi-window-self-tests
+          path: self-tests/
+
+  # ---------------------------------------------------------------------------
   # iOS — cross-compilation check (Debug & Release, no test execution)
   # ---------------------------------------------------------------------------
   ios:

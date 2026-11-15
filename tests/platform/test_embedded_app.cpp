@@ -5,6 +5,9 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/pointer_event.hpp>
+#include <campello_widgets/ui/text_input_manager.hpp>
+#include <campello_widgets/ui/view.hpp>
+#include <campello_widgets/widgets/gesture_detector.hpp>
 
 #include <campello_gpu/device.hpp>
 #include <campello_gpu/texture.hpp>
@@ -60,7 +63,87 @@ protected:
     std::shared_ptr<gpu::TextureView> view_;
 };
 
+// A box that turns from white to red when tapped (setState).
+class TapToRed;
+class TapToRedState : public cw::State<TapToRed> {
+public:
+    cw::WidgetRef build(cw::BuildContext&) override {
+        auto tap    = std::make_shared<cw::GestureDetector>();
+        tap->on_tap = [this] { setState([this] { red_ = true; }); };
+        tap->child  = cw::mw<cw::ColoredBox>(red_ ? cw::Color::red() : cw::Color::white());
+        // Not the root render object: a root is never attach()ed, so a
+        // GestureDetector there would never register for input.
+        return cw::mw<cw::Padding>(cw::EdgeInsets::all(0.0f), tap);
+    }
+private:
+    bool red_ = false;
+};
+class TapToRed : public cw::StatefulWidget {
+public:
+    std::unique_ptr<cw::StateBase> createState() const override {
+        return std::make_unique<TapToRedState>();
+    }
+};
+
+void tapAt(cw::EmbeddedApp& app, float x, float y) {
+    for (auto kind : {cw::PointerEventKind::down, cw::PointerEventKind::up}) {
+        cw::PointerEvent e;
+        e.kind       = kind;
+        e.pointer_id = 0;
+        e.position   = {x, y};
+        e.pressure   = kind == cw::PointerEventKind::down ? 1.0f : 0.0f;
+        e.button     = cw::PointerButton::primary;
+        app.pointerDispatcher().handlePointerEvent(e);
+    }
+}
+
 } // namespace
+
+TEST_F(EmbeddedAppTest, TreeBelongsToItsOwnPrimaryView) {
+    {
+        cw::EmbeddedApp app(
+            device_, cw::mw<cw::ColoredBox>(cw::Color::white()),
+            static_cast<float>(kWidth), static_cast<float>(kHeight));
+
+        // Phase 17: the tree has a View, made primary, so the legacy
+        // process-wide accessors reach this tree's managers.
+        EXPECT_EQ(cw::View::primary(), &app.view());
+        EXPECT_EQ(&app.pointerDispatcher(), &app.view().pointerDispatcher());
+        EXPECT_EQ(&app.focusManager(), &app.view().focusManager());
+        EXPECT_EQ(cw::PointerDispatcher::activeDispatcher(), &app.pointerDispatcher());
+        EXPECT_EQ(cw::FocusManager::activeManager(), &app.focusManager());
+        EXPECT_EQ(cw::TextInputManager::activeManager(), &app.view().textInputManager());
+        EXPECT_EQ(app.view().renderer(), app.renderer().get());
+    }
+    // Destroying the app clears what it installed.
+    EXPECT_EQ(cw::View::primary(), nullptr);
+    EXPECT_EQ(cw::PointerDispatcher::activeDispatcher(), nullptr);
+    EXPECT_EQ(cw::FocusManager::activeManager(), nullptr);
+}
+
+TEST_F(EmbeddedAppTest, ForwardedTapRebuildsRequestsARedrawAndRepaints) {
+    int redraws = 0;
+    cw::EmbeddedApp app(
+        device_, std::make_shared<TapToRed>(),
+        static_cast<float>(kWidth), static_cast<float>(kHeight),
+        cw::Color::white(), gpu::PixelFormat::rgba8unorm, [&redraws] { ++redraws; });
+    ASSERT_TRUE(app.renderFrame(view_, static_cast<float>(kWidth), static_cast<float>(kHeight)));
+    ASSERT_FALSE(app.renderFrame(view_, static_cast<float>(kWidth), static_cast<float>(kHeight)));
+
+    // The host forwards a tap; setState must reach the host's
+    // on_redraw_needed (through the View's frame request) ...
+    redraws = 0;
+    tapAt(app, kWidth / 2.0f, kHeight / 2.0f);
+    EXPECT_GT(redraws, 0);
+
+    // ... and the next frame draws the new color.
+    ASSERT_TRUE(app.renderFrame(view_, static_cast<float>(kWidth), static_cast<float>(kHeight)));
+    std::vector<uint8_t> pixels(static_cast<size_t>(kWidth) * kHeight * 4);
+    ASSERT_TRUE(texture_->download(0, 0, pixels.data(), pixels.size()));
+    const size_t center = (static_cast<size_t>(kHeight) / 2 * kWidth + kWidth / 2) * 4;
+    EXPECT_GT(pixels[center + 0], 200) << "red channel";
+    EXPECT_LT(pixels[center + 1], 50)  << "green channel";
+}
 
 TEST_F(EmbeddedAppTest, FirstRenderFrameDrawsAndSubsequentIdleFrameDoesNot) {
     cw::EmbeddedApp app(

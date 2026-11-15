@@ -1058,8 +1058,8 @@ device->submit(cmd);
 
 ### M1 — Core: remove per-window singletons (single-window behaviour unchanged)
 
-**Status (2026-11-13): done for macOS, iOS, Android, web and Windows; the
-Linux (X11/Wayland/embedded) and GDK runners still use the legacy path,**
+**Status (2026-11-15): done for macOS, iOS, Android, web, Windows and Linux
+(X11, Wayland, embedded); the GDK runner still uses the legacy path,**
 which keeps working unchanged because nothing was removed. Branch
 `feature/multi-window`.
 
@@ -1128,7 +1128,9 @@ window, in priority order:
       runners: same mechanical migration, but they can't be built on this
       Mac. Do it on the machine used for M0.3/M3.
       - [x] **Windows** (2026-11-13), as part of M3.1 below.
-      - [ ] Linux X11, Wayland, Linux embedded, GDK.
+      - [x] Linux X11 and Wayland (L1/L3, 2026-11-14/15), Linux embedded
+            (L4, 2026-11-15).
+      - [ ] GDK.
 - [x] **M1.9** Vulkan with several raster threads (2026-11-12, `campello_gpu`
       `feature/multi-surface`). **Design choice:** recording is serialized
       per device with a frame lock (from `createCommandEncoder()` until
@@ -1554,8 +1556,31 @@ Milestones:
         the raster thread's presents), and fractional scaling isn't used; a
         popup keeps its size (`setSize` would need `xdg_popup.reposition`);
         key repeat isn't implemented (as before).
-- [ ] **L4** Embedded runner onto a `View` (that change only), docs,
-      CLAUDE.md, Linux CI for the example.
+- [x] **L4** Embedded runner, docs, CI (2026-11-15).
+      - `EmbeddedApp` (`src/linux/embedded_app.cpp`) owns a `View` (made
+        primary, tree mounted and unmounted in its scope, renderer attached),
+        instead of installing its own process-wide managers; `on_redraw_needed`
+        is the View's frame-request callback (so `markNeedsPaint` reaches it,
+        not only `FrameScheduler`); new `EmbeddedApp::view()`. Public API
+        otherwise unchanged. 2 new integration tests (its View is primary and
+        cleared afterwards; a forwarded tap's `setState` requests a redraw and
+        repaints); 6/6 EmbeddedApp tests pass on Intel and on lavapipe.
+      - The example's self-tests check what they observe (`[demo] CHECK
+        FAILED`, exit 1; `SELF-TEST PASSED`), and
+        `examples/linux_multi_window/run_self_tests.sh <bin> x11|wayland`
+        runs modes 2-4 on Xvfb or a headless Weston. All pass on Xvfb, Weston
+        14 and GNOME Wayland; the script reports failure correctly.
+      - CI: new `linux-multi-window` job (ubuntu-latest): builds the example
+        and the integration tests, runs the integration tests under
+        `xvfb-run` and the self-tests on both backends (lavapipe). The package
+        names and Weston flags were checked on Ubuntu 24.04 (Weston 13); the
+        job itself has **not run yet** (nothing pushed).
+      - Docs: CHANGELOG `[Unreleased]`, CLAUDE.md, the protocol XMLs in
+        `protocols/` with regeneration commands in `linux.cmake`.
+      - **Found:** a root render object is never `attach()`ed (attach runs in
+        `setParent()`), so a `GestureDetector` that is the tree's root render
+        object never registers for input, on every runner. Not fixed (core,
+        outside L4); see Known gaps.
 
 ### M4 — Web: several canvases
 
@@ -1856,6 +1881,10 @@ and Android.**
 - [x] Linux: modal, popups and the close policy (X11: L2, Wayland: L3,
       2026-11-15).
       The web and iPad have no main-window close policy (no such concept).
+- [ ] A root render object is never `attach()`ed (only `setParent()` calls
+      it), so a `GestureDetector` (or anything registering in `attach()`)
+      that is a tree's root render object gets no input. Found in L4; every
+      runner. Workaround: any parent (e.g. `Padding`).
 - [ ] An app's main window needs an `Overlay` in its tree for the fallback
       (secondary windows always have one); without it,
       `PopupWindowAnchor` logs a warning.
