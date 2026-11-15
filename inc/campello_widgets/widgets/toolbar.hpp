@@ -28,6 +28,8 @@ namespace systems::leal::campello_widgets
         ToolbarColor color = ToolbarColor::standard;
         Axis direction = Axis::horizontal;
         bool floating = true;
+        bool elevated = false;
+        bool overflow = true;
 
         Toolbar() = default;
 

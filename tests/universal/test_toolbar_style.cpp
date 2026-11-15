@@ -11,6 +11,9 @@
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/colored_box.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
+#include <campello_widgets/widgets/element.hpp>
+
+#include <functional>
 
 namespace cw = systems::leal::campello_widgets;
 
@@ -27,9 +30,31 @@ namespace
         return s;
     }
 
+    // The toolbar mounted (its root is a stateful line): the element tree
+    // and the container it builds (the first DecoratedBox).
+    struct Mounted
+    {
+        std::shared_ptr<cw::Element> root;
+        const cw::DecoratedBox* box = nullptr;
+    };
+    Mounted mount(const cw::ToolbarConfig& cfg, const cw::ToolbarStyle& s)
+    {
+        Mounted m;
+        m.root = cw::buildToolbarWithStyle(cfg, s, true)->createElement();
+        m.root->mount(nullptr);
+        std::function<void(cw::Element*)> walk = [&](cw::Element* e) {
+            if (m.box) return;
+            if (auto* d = dynamic_cast<const cw::DecoratedBox*>(&e->widget())) { m.box = d; return; }
+            e->visitChildren(walk);
+        };
+        walk(m.root.get());
+        return m;
+    }
+
     cw::ToolbarConfig twoGroups()
     {
         cw::ToolbarConfig cfg;
+        cfg.overflow = false;  // the layout itself (overflow: its own test)
         cfg.groups = {{cw::ToolbarConfig::Item{nullptr, "Select", "", [] {}, true, true}},
                       {cw::ToolbarConfig::Item{nullptr, "Wall", "", [] {}, false, true},
                        cw::ToolbarConfig::Item{nullptr, "Door", "", [] {}, false, true}}};
@@ -40,15 +65,15 @@ namespace
 TEST(ToolbarStyle, FloatingIsRoundedAndFlatUnlessElevated)
 {
     auto cfg = twoGroups();
-    const auto widget = cw::buildToolbarWithStyle(cfg, style(), true);
-    const auto box = std::dynamic_pointer_cast<const cw::DecoratedBox>(widget);
+    const auto m = mount(cfg, style());
+    const auto* box = m.box;
     ASSERT_NE(box, nullptr);
     EXPECT_EQ(box->decoration.color, style().container);
     EXPECT_FLOAT_EQ(box->decoration.border_radius, 24.0f);
     EXPECT_TRUE(box->decoration.box_shadow.empty()) << "MD3 floating toolbars: elevation level 0";
     cfg.elevated = true;
-    const auto raised = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(cfg, style(), true));
-    EXPECT_EQ(raised->decoration.box_shadow.size(), 1u);
+    const auto raised = mount(cfg, style());
+    EXPECT_EQ(raised.box->decoration.box_shadow.size(), 1u);
     const auto padded = std::dynamic_pointer_cast<const cw::Padding>(box->child);
     ASSERT_NE(padded, nullptr);
     EXPECT_FLOAT_EQ(padded->padding.left, 8.0f);
@@ -59,7 +84,8 @@ TEST(ToolbarStyle, DockedIsFlat)
     auto cfg = twoGroups();
     cfg.floating = false;
     cfg.elevated = true;  // ignored when docked
-    const auto box = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(cfg, style(), true));
+    const auto m = mount(cfg, style());
+    const auto* box = m.box;
     ASSERT_NE(box, nullptr);
     EXPECT_EQ(box->decoration.color, style().docked_container);
     EXPECT_FLOAT_EQ(box->decoration.border_radius, 0.0f);
@@ -68,8 +94,8 @@ TEST(ToolbarStyle, DockedIsFlat)
 
 TEST(ToolbarStyle, GroupsAreSetApartByGapsAndADivider)
 {
-    const auto box = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(twoGroups(), style(), true));
-    const auto padded = std::dynamic_pointer_cast<const cw::Padding>(box->child);
+    const auto m = mount(twoGroups(), style());
+    const auto padded = std::dynamic_pointer_cast<const cw::Padding>(m.box->child);
     const auto row = std::dynamic_pointer_cast<const cw::Row>(padded->child);
     ASSERT_NE(row, nullptr);
     // Select | gap divider gap | Wall gap Door
@@ -86,8 +112,8 @@ TEST(ToolbarStyle, GroupsAreSetApartByGapsAndADivider)
     // Without a divider colour: one gap between groups.
     auto plain = style();
     plain.divider = cw::Color::transparent();
-    const auto box2 = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(twoGroups(), plain, true));
-    const auto row2 = std::dynamic_pointer_cast<const cw::Row>(std::dynamic_pointer_cast<const cw::Padding>(box2->child)->child);
+    const auto m2 = mount(twoGroups(), plain);
+    const auto row2 = std::dynamic_pointer_cast<const cw::Row>(std::dynamic_pointer_cast<const cw::Padding>(m2.box->child)->child);
     EXPECT_EQ(row2->children.size(), 1u + 1u + 3u);
 }
 
@@ -95,8 +121,8 @@ TEST(ToolbarStyle, VerticalIsAColumn)
 {
     auto cfg = twoGroups();
     cfg.direction = cw::Axis::vertical;
-    const auto box = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(cfg, style(), true));
-    const auto padded = std::dynamic_pointer_cast<const cw::Padding>(box->child);
+    const auto m = mount(cfg, style());
+    const auto padded = std::dynamic_pointer_cast<const cw::Padding>(m.box->child);
     EXPECT_NE(std::dynamic_pointer_cast<const cw::Column>(padded->child), nullptr);
 }
 
@@ -143,6 +169,7 @@ TEST(ToolbarStyle, KeyboardRovesFocusAmongItems)
     };
     cw::ToolbarConfig cfg;
     cfg.groups = {{item(0, false, true)}, {item(1, true, true), item(2, false, false)}, {item(3, false, true)}};
+
     {
         auto keyed = style();
         keyed.focus_ring = cw::Color::black();
@@ -199,4 +226,61 @@ TEST(ToolbarStyle, KeyboardRovesFocusAmongItems)
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
     cw::TickerScheduler::setActive(nullptr);
     cw::FocusManager::setActiveManager(previous);
+}
+
+// Overflow: items that don't fit move, from the end, into a "More" menu.
+#include <campello_widgets/widgets/tooltip.hpp>
+
+TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
+{
+    cw::TickerScheduler ticker;
+    cw::TickerScheduler::setActive(&ticker);
+    cw::PointerDispatcher dispatcher;
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    cw::ToolbarConfig cfg;
+    std::vector<cw::ToolbarConfig::Item> items;
+    for (int i = 0; i < 10; ++i) {
+        cw::ToolbarConfig::Item item;
+        item.tooltip    = "T" + std::to_string(i);
+        item.on_pressed = [] {};
+        item.icon_builder = [](cw::Color c) -> cw::WidgetRef { return std::make_shared<cw::SizedBox>(24.0f, 24.0f); };
+        items.push_back(item);
+    }
+    cfg.groups = {items};
+    auto s = style();  // padding 8, items 48, gap 4
+
+    const auto shown = [&](float width, bool& more) {
+        auto root = cw::buildToolbarWithStyle(cfg, s, true)->createElement();
+        root->mount(nullptr);
+        auto box = std::dynamic_pointer_cast<cw::RenderBox>(root->findDescendantRenderObjectElement()->sharedRenderObject());
+        // LayoutBuilder learns its constraints in layout and rebuilds the
+        // next frame: rebuild and lay out again.
+        // (and the line it builds updates on the build after): settle as
+        // frames would.
+        for (int frame = 0; frame < 3; ++frame) {
+            box->layout(cw::BoxConstraints::loose(width, 200.0f));
+            cw::Element::buildScope();
+        }
+        int count = 0;
+        more = false;
+        std::function<void(cw::Element*)> walk = [&](cw::Element* e) {
+            if (auto* t = dynamic_cast<const cw::Tooltip*>(&e->widget())) {
+                if (t->message == "More") more = true; else ++count;
+            }
+            e->visitChildren(walk);
+        };
+        walk(root.get());
+        root->unmount();
+        return count;
+    };
+    bool more = false;
+    // 16 padding + (4 + 48) for "More" + 48 + 3 x (4 + 48) = 272 <= 300.
+    EXPECT_EQ(shown(300.0f, more), 4);
+    EXPECT_TRUE(more);
+    EXPECT_EQ(shown(1000.0f, more), 10);
+    EXPECT_FALSE(more);
+
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+    cw::TickerScheduler::setActive(nullptr);
 }
