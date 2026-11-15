@@ -312,6 +312,8 @@
 #include <campello_widgets/widgets/list_tile.hpp>
 #include <campello_widgets/widgets/app_bar.hpp>
 #include <campello_widgets/widgets/navigation_bar.hpp>
+#include <campello_widgets/widgets/toolbar.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 #include <campello_widgets/widgets/primary_action_button.hpp>
 #include <campello_widgets/widgets/floating_action_button.hpp>
 #include <campello_widgets/widgets/snack_bar.hpp>

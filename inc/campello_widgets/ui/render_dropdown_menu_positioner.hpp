@@ -28,6 +28,9 @@ namespace systems::leal::campello_widgets
 
         /** @brief The anchor button's size (logical pixels). */
         Size anchor_size;
+        /** @brief Centre the child under (or over) the anchor instead of
+         *  aligning their left edges — tooltips. Still kept on screen. */
+        bool center_horizontally = false;
 
         void performLayout() override;
     };

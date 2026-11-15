@@ -1,4 +1,5 @@
 #include <campello_fluent/fluent_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 #include "fluent_reveal_response.hpp"
 
@@ -1712,5 +1713,39 @@ WidgetRef FluentDesignSystem::buildDataTable(const DataTableConfig& cfg) const
     decorated->child      = col;
     return decorated;
 }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — a CommandBar: 40px items in a layer with 8px corners and a
+    // flyout-level shadow; the selected item a subtle fill; dividers
+    // between groups.
+    // -----------------------------------------------------------------------
+
+    WidgetRef FluentDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary : c.surface;
+        s.docked_container    = c.surface;
+        s.foreground          = vibrant ? c.on_primary : c.on_surface;
+        s.selected_container  = vibrant ? c.on_primary : c.secondary_container;
+        s.selected_foreground = vibrant ? c.primary : c.on_secondary_container;
+        const Color fg        = s.foreground;
+        s.hover_overlay       = Color::fromRGBA(fg.r, fg.g, fg.b, 0.06f);
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_md;
+        s.item_radius         = t.shape.radius_sm;
+        s.padding             = EdgeInsets::all(4.0f);
+        s.item_extent         = 40.0f;
+        s.item_padding        = 12.0f;
+        s.gap                 = 2.0f;
+        s.group_gap           = 4.0f;
+        s.icon_size           = 16.0f;
+        s.label_style         = t.typography.body_medium;
+        s.shadow = {BoxShadow{Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.14f), {0.0f, 8.0f}, 16.0f, 0.0f}};
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
+    }
 
 } // namespace systems::leal::campello_widgets

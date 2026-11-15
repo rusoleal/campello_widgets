@@ -1,5 +1,6 @@
 #pragma once
 
+#include <campello_widgets/ui/axis.hpp>
 #include <campello_widgets/ui/design_tokens.hpp>
 #include <campello_widgets/ui/edge_insets.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
@@ -381,6 +382,47 @@ namespace systems::leal::campello_widgets
         bool enabled = true;
     };
 
+    /// How strongly a toolbar stands out (MD3 Expressive floating
+    /// toolbars: standard on a surface container, vibrant on the primary
+    /// container).
+    enum class ToolbarColor
+    {
+        standard,
+        vibrant,
+    };
+
+    /**
+     * @brief A toolbar of actions in groups (MD3 Expressive floating
+     * toolbar, Fluent CommandBar, a Cupertino capsule toolbar): icon
+     * buttons (square, the design system's touch target) named by their
+     * tooltips, with a selected (toggled) state — a tool palette shows the
+     * active tool selected. An item may carry a label instead of (or next
+     * to) its icon, but toolbars are meant for icons. Groups are set apart
+     * by a gap (and a divider where the design system draws them).
+     * `floating` raises it above the content (rounded, elevated) for use in
+     * a Stack over a viewer; false docks it flat.
+     */
+    struct ToolbarConfig
+    {
+        struct Item
+        {
+            WidgetRef icon;          ///< template Icon (tinted per state) or any widget
+            std::string label;       ///< shown next to the icon, or alone
+            std::string tooltip;     ///< on hover / long press; empty: none
+            std::function<void()> on_pressed;
+            bool selected = false;
+            bool enabled = true;
+            /// The icon drawn in the colour the toolbar gives it for the
+            /// item's state (vector icons: a CustomPaint, a glyph); used
+            /// instead of `icon` when set.
+            std::function<WidgetRef(Color)> icon_builder;
+        };
+        std::vector<std::vector<Item>> groups;
+        ToolbarColor color = ToolbarColor::standard;
+        Axis direction = Axis::horizontal;
+        bool floating = true;
+    };
+
     struct BannerConfig
     {
         WidgetRef content;
@@ -549,6 +591,7 @@ namespace systems::leal::campello_widgets
         virtual WidgetRef buildBanner(const BannerConfig&) const = 0;
         virtual WidgetRef buildNavigationRail(const NavigationRailConfig&) const = 0;
         virtual WidgetRef buildDataTable(const DataTableConfig&) const = 0;
+        virtual WidgetRef buildToolbar(const ToolbarConfig&) const = 0;
     };
 
 } // namespace systems::leal::campello_widgets

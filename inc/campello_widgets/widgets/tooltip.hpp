@@ -29,8 +29,14 @@ namespace systems::leal::campello_widgets
         WidgetRef   child;
         std::string message;
 
-        /// How long to keep the tooltip visible after it appears.
+        /// How long to keep the tooltip visible after a long press shows it.
         double display_duration_ms = 2000.0;
+
+        /// Desktop: also show it while the pointer rests on the child, after
+        /// `wait_duration_ms`, under (or over) it and centred on it; it
+        /// stays until the pointer leaves.
+        bool   show_on_hover    = true;
+        double wait_duration_ms = 500.0;
 
         std::optional<Color> background_color;
         std::optional<Color> text_color;

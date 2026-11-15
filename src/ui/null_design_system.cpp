@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/null_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 // Widgets
 #include <campello_widgets/widgets/align.hpp>
@@ -1402,6 +1403,31 @@ namespace systems::leal::campello_widgets
         decorated->decoration = outer;
         decorated->child      = col;
         return decorated;
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — plain: the shared layout on the surface, no shadow.
+    // -----------------------------------------------------------------------
+
+    WidgetRef NullDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary_container : c.surface;
+        s.docked_container    = c.surface;
+        s.foreground          = vibrant ? c.on_primary_container : c.on_surface;
+        s.selected_container  = c.secondary_container;
+        s.selected_foreground = c.on_secondary_container;
+        const Color fg        = s.foreground;
+        s.hover_overlay       = Color::fromRGBA(fg.r, fg.g, fg.b, 0.08f);
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_md;
+        s.item_radius         = t.shape.radius_sm;
+        s.label_style         = t.typography.label_large;
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
 } // namespace systems::leal::campello_widgets

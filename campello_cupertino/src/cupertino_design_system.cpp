@@ -1,4 +1,5 @@
 #include <campello_cupertino/cupertino_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 
 #include "cupertino_focus_ring.hpp"
 
@@ -2580,6 +2581,39 @@ namespace systems::leal::campello_widgets
         // convention as buildAppBar()/buildBottomSheet(), unlike
         // buildListTile()'s own bounded-card presentation).
         return col;
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — a capsule toolbar (iPadOS / macOS 26): 36pt items on the
+    // surface, a thin outline and a soft shadow; the selected item tinted
+    // with the accent; hairline dividers between groups.
+    // -----------------------------------------------------------------------
+
+    WidgetRef CupertinoDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary : c.surface;
+        s.docked_container    = c.surface;
+        s.foreground          = vibrant ? c.on_primary : c.primary;
+        s.selected_container  = vibrant ? c.on_primary : Color::fromRGBA(c.primary.r, c.primary.g, c.primary.b, 0.15f);
+        s.selected_foreground = vibrant ? c.primary : c.primary;
+        s.hover_overlay       = Color::fromRGBA(c.on_surface.r, c.on_surface.g, c.on_surface.b, 0.06f);
+        s.divider             = c.outline_variant;
+        s.radius              = t.shape.radius_full;
+        s.item_radius         = t.shape.radius_full;
+        s.padding             = EdgeInsets::all(6.0f);
+        s.item_extent         = 36.0f;
+        s.item_padding        = 12.0f;
+        s.gap                 = 2.0f;
+        s.group_gap           = 6.0f;
+        s.icon_size           = 20.0f;
+        s.label_style         = t.typography.label_large;
+        s.shadow = {BoxShadow{Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.12f), {0.0f, 4.0f}, 16.0f, 0.0f}};
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
 } // namespace systems::leal::campello_widgets

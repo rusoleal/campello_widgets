@@ -25,7 +25,10 @@ namespace systems::leal::campello_widgets
         child_->layout(measure);
         const Size menu_size = child_->size();
 
-        const float x = std::clamp(anchor_pos.x, 0.0f,
+        const float left = center_horizontally
+            ? anchor_pos.x + (anchor_size.width - menu_size.width) / 2.0f
+            : anchor_pos.x;
+        const float x = std::clamp(left, 0.0f,
                                     std::max(0.0f, size_.width - menu_size.width));
 
         const float needed      = menu_size.height + kGap;

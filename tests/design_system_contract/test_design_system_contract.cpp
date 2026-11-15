@@ -101,6 +101,7 @@ TEST_P(DesignSystemContractTest, AllBuildersReturnNonNullForDefaultConfig)
     EXPECT_NE(ds->buildBanner(BannerConfig{}), nullptr);
     EXPECT_NE(ds->buildNavigationRail(NavigationRailConfig{}), nullptr);
     EXPECT_NE(ds->buildDataTable(DataTableConfig{}), nullptr);
+    EXPECT_NE(ds->buildToolbar(ToolbarConfig{}), nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,3 +286,29 @@ INSTANTIATE_TEST_SUITE_P(
     DesignSystemContractTest,
     ::testing::Values(Kind::null_ds, Kind::campello_ui, Kind::material, Kind::cupertino),
     kindName);
+
+// ---------------------------------------------------------------------------
+// Toolbar: groups of icon/label items, selected and disabled ones, every
+// colour, both directions, floating or docked
+// ---------------------------------------------------------------------------
+
+TEST_P(DesignSystemContractTest, ToolbarVariantsBuildWidgets)
+{
+    ToolbarConfig cfg;
+    cfg.groups = {
+        {ToolbarConfig::Item{nullptr, "Select", "Select (Esc)", [] {}, true, true}},
+        {ToolbarConfig::Item{nullptr, "Wall", "Wall (W)", [] {}, false, true},
+         ToolbarConfig::Item{nullptr, "Door", "", [] {}, false, false}},
+        {},
+    };
+    for (const auto color : {ToolbarColor::standard, ToolbarColor::vibrant}) {
+        for (const auto direction : {Axis::horizontal, Axis::vertical}) {
+            for (const bool floating : {true, false}) {
+                cfg.color     = color;
+                cfg.direction = direction;
+                cfg.floating  = floating;
+                EXPECT_NE(ds->buildToolbar(cfg), nullptr);
+            }
+        }
+    }
+}

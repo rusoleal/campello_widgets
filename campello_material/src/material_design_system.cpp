@@ -1,4 +1,5 @@
 #include <campello_material/material_design_system.hpp>
+#include <campello_widgets/ui/toolbar_style.hpp>
 #include "material_ink_response.hpp"
 
 // Widgets
@@ -2172,6 +2173,42 @@ namespace systems::leal::campello_widgets
         decorated->decoration = outer;
         decorated->child      = col;
         return decorated;
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Toolbar — MD3 Expressive floating toolbar: a 64dp stadium (8dp padding, 48dp
+    // items, 4dp apart), standard on the surface, vibrant on the primary
+    // container, at elevation level 3; the selected item a tonal pill; no
+    // dividers (groups set apart by space). Docked: flat, surface variant.
+    // -----------------------------------------------------------------------
+
+    WidgetRef MaterialDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
+    {
+        const auto& t = tokens();
+        const auto& c = t.colors;
+        const bool vibrant = cfg.color == ToolbarColor::vibrant;
+        ToolbarStyle s;
+        s.container           = vibrant ? c.primary_container : c.surface;
+        s.docked_container    = c.surface_variant;
+        s.foreground          = vibrant ? c.on_primary_container : c.on_surface_variant;
+        s.selected_container  = vibrant ? c.surface : c.secondary_container;
+        s.selected_foreground = vibrant ? c.on_surface : c.on_secondary_container;
+        const Color fg        = s.foreground;
+        s.hover_overlay       = Color::fromRGBA(fg.r, fg.g, fg.b, 0.08f);
+        s.divider             = Color::transparent();
+        s.radius              = t.shape.radius_full;
+        s.item_radius         = t.shape.radius_full;
+        s.padding             = EdgeInsets::all(8.0f);
+        s.item_extent         = 48.0f;
+        s.item_padding        = 16.0f;
+        s.gap                 = 4.0f;
+        s.group_gap           = 12.0f;
+        s.icon_size           = 24.0f;
+        s.label_style         = t.typography.label_large;
+        s.shadow = {BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.15f), {0.0f, 3.0f}, 8.0f, 3.0f},
+                    BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.30f), {0.0f, 1.0f}, 3.0f, 0.0f}};
+        return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
 } // namespace systems::leal::campello_widgets

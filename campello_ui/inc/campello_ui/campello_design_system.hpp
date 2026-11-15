@@ -63,6 +63,7 @@ namespace systems::leal::campello_widgets
         WidgetRef buildBanner(const BannerConfig&) const override;
         WidgetRef buildNavigationRail(const NavigationRailConfig&) const override;
         WidgetRef buildDataTable(const DataTableConfig&) const override;
+        WidgetRef buildToolbar(const ToolbarConfig&) const override;
 
     private:
         DesignTokens tokens_;
