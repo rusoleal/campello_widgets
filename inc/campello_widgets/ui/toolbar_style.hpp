@@ -28,6 +28,13 @@ namespace systems::leal::campello_widgets
         /// StateTokens: hover 0.08, pressed 0.10).
         float hover_opacity = 0.08f;
         float pressed_opacity = 0.10f;
+        float focus_opacity = 0.10f;      ///< keyboard focus (MD3 StateTokens)
+        /// The keyboard focus ring round the indicator (MD3: 3dp, 2dp
+        /// outside, the secondary colour, the indicator's shape); alpha 0:
+        /// none. Shown only in keyboard highlight mode.
+        Color focus_ring = Color::transparent();
+        float focus_ring_width = 3.0f;
+        float focus_ring_offset = 2.0f;
         Color divider;                    ///< between groups (alpha 0: none)
         float radius = 9999.0f;           ///< container corners (9999: stadium)
         float item_radius = 9999.0f;

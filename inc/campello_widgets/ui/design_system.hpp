@@ -404,6 +404,11 @@ namespace systems::leal::campello_widgets
      * `elevated` adds the design system's shadow to a floating toolbar
      * (MD3 floating toolbars have none: level 0; over busy content such as
      * a 3D view one may want it).
+     *
+     * Keyboard (WAI-ARIA toolbar pattern): Tab enters the toolbar at one
+     * stop (the selected item, else the first enabled one); Left/Right (or
+     * Up/Down when vertical) move between items, wrapping; Home/End go to
+     * the first/last; Space/Enter activate; disabled items are skipped.
      */
     struct ToolbarConfig
     {

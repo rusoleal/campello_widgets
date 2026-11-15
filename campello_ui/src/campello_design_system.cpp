@@ -1856,6 +1856,9 @@ namespace systems::leal::campello_widgets
         s.icon_size           = 22.0f;
         s.label_style         = t.typography.label_large;
         s.shadow = {BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.18f), {0.0f, 2.0f}, 6.0f, 0.0f}};
+        s.focus_ring          = c.primary;
+        s.focus_ring_width    = 2.0f;
+        s.focus_ring_offset   = 2.0f;
         return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 

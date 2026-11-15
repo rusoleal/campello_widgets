@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - Cupertino: a capsule with 36pt items, the accent-tinted selection and hairline dividers.
     - Fluent: CommandBar-like, 40px items in an 8px-corner layer, with dividers.
     - campello_ui and NullDesignSystem have looks of their own.
+  - **Keyboard (WAI-ARIA toolbar pattern):**
+    - Tab enters at one stop: the selected item, else the first enabled one.
+    - Left/Right (Up/Down when vertical) move between items, wrapping and skipping disabled ones. Home/End jump to
+      the first/last. Space/Enter activate.
+    - Each item has a 10% focus state layer and a focus ring, shown for keyboard focus only (`FocusHighlightMode`).
+      Material's ring follows Material Web's `md-focus-ring`: 3dp, 2dp outward, secondary, the indicator's shape.
+      Cupertino, Fluent, campello_ui and NullDesignSystem have rings in their own styles.
   - Shown in the gallery (Controls).
 - **`ColorScheme` surface container roles:** `surface_container_lowest`, `_low`, `surface_container`, `_high` and
   `_highest`. Material uses MD3's baseline values (light and dark); the other design systems map them onto their

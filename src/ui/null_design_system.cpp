@@ -1434,6 +1434,9 @@ namespace systems::leal::campello_widgets
         s.radius              = t.shape.radius_md;
         s.item_radius         = t.shape.radius_sm;
         s.label_style         = t.typography.label_large;
+        s.focus_ring          = c.on_surface;
+        s.focus_ring_width    = 2.0f;
+        s.focus_ring_offset   = 2.0f;
         return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 

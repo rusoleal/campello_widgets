@@ -1764,6 +1764,10 @@ WidgetRef FluentDesignSystem::buildDataTable(const DataTableConfig& cfg) const
         s.icon_size           = 16.0f;
         s.label_style         = t.typography.body_medium;
         s.shadow = {BoxShadow{Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.14f), {0.0f, 8.0f}, 16.0f, 0.0f}};
+        // Keyboard focus: Fluent's focus visual, a 2px stroke just outside.
+        s.focus_ring          = c.on_surface;
+        s.focus_ring_width    = 2.0f;
+        s.focus_ring_offset   = 1.0f;
         return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 

@@ -2232,6 +2232,12 @@ namespace systems::leal::campello_widgets
         // Only with `elevated`: elevation level 2.
         s.shadow = {BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.15f), {0.0f, 2.0f}, 6.0f, 2.0f},
                     BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.30f), {0.0f, 1.0f}, 2.0f, 0.0f}};
+        // Keyboard focus (Material Web md-focus-ring: 3dp, 2dp outward,
+        // secondary, the indicator's shape) and a 0.10 focus state layer.
+        s.focus_ring          = c.secondary;
+        s.focus_ring_width    = 3.0f;
+        s.focus_ring_offset   = 2.0f;
+        s.focus_opacity       = 0.10f;
         return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 

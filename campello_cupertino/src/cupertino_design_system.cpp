@@ -2627,6 +2627,10 @@ namespace systems::leal::campello_widgets
         s.icon_size           = 20.0f;
         s.label_style         = t.typography.label_large;
         s.shadow = {BoxShadow{Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.12f), {0.0f, 4.0f}, 16.0f, 0.0f}};
+        // Keyboard focus: the macOS accent ring, flush with the control.
+        s.focus_ring          = Color::fromRGBA(c.primary.r, c.primary.g, c.primary.b, 0.5f);
+        s.focus_ring_width    = 3.0f;
+        s.focus_ring_offset   = 0.0f;
         return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 
