@@ -125,6 +125,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromARGB(0xFF313033);
             t.colors.inverse_on_surface = Color::fromARGB(0xFFF4EFF4);
             t.colors.inverse_primary    = Color::fromARGB(0xFFD0BCFF);
+            // MD3 baseline surface containers (ColorLightTokens: Neutral100/96/94/92/90).
+            t.colors.surface_container_lowest  = Color::fromARGB(0xFFFFFFFF);
+            t.colors.surface_container_low     = Color::fromARGB(0xFFF7F2FA);
+            t.colors.surface_container         = Color::fromARGB(0xFFF3EDF7);
+            t.colors.surface_container_high    = Color::fromARGB(0xFFECE6F0);
+            t.colors.surface_container_highest = Color::fromARGB(0xFFE6E0E9);
 
             // MD3 shape scale: extra-small/small/medium/large/extra-large.
             t.shape.radius_xs = 4.0f;
@@ -184,6 +190,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromARGB(0xFFE6E1E5);
             t.colors.inverse_on_surface = Color::fromARGB(0xFF313033);
             t.colors.inverse_primary    = Color::fromARGB(0xFF6750A4);
+            // MD3 baseline surface containers (ColorDarkTokens: Neutral4/10/12/17/22).
+            t.colors.surface_container_lowest  = Color::fromARGB(0xFF0F0D13);
+            t.colors.surface_container_low     = Color::fromARGB(0xFF1D1B20);
+            t.colors.surface_container         = Color::fromARGB(0xFF211F26);
+            t.colors.surface_container_high    = Color::fromARGB(0xFF2B2930);
+            t.colors.surface_container_highest = Color::fromARGB(0xFF36343B);
 
             t.shape.radius_xs = 4.0f;
             t.shape.radius_sm = 8.0f;
@@ -2177,10 +2189,19 @@ namespace systems::leal::campello_widgets
 
 
     // -----------------------------------------------------------------------
-    // Toolbar — MD3 Expressive floating toolbar: a 64dp stadium (8dp padding, 48dp
-    // items, 4dp apart), standard on the surface, vibrant on the primary
-    // container, at elevation level 3; the selected item a tonal pill; no
-    // dividers (groups set apart by space). Docked: flat, surface variant.
+    // Toolbar — MD3 Expressive floating toolbar (Compose Material3
+    // FloatingToolbarTokens): a 64dp stadium (ContainerHeight 64,
+    // ContainerShape CornerFull), 8dp leading/trailing space round 48dp
+    // touch targets (24dp icons), 4dp between items (ContainerBetweenSpace),
+    // 12dp between groups (ButtonGroupSmallTokens.BetweenSpace); standard on
+    // SurfaceContainer, vibrant on PrimaryContainer with selected items on
+    // SurfaceContainer / OnSurface (VibrantButtonSelected*); elevation level
+    // 0 (a shadow only when the caller asks for `elevated`). The selected
+    // indicator is the 40dp small icon button container. Standard selected
+    // colours aren't in the toolbar tokens: the tonal secondary container
+    // (as MD3 selection indicators) is used. State layers: hover 0.08,
+    // pressed 0.10 (StateTokens). No dividers. Docked: flat on
+    // SurfaceContainer.
     // -----------------------------------------------------------------------
 
     WidgetRef MaterialDesignSystem::buildToolbar(const ToolbarConfig& cfg) const
@@ -2189,25 +2210,28 @@ namespace systems::leal::campello_widgets
         const auto& c = t.colors;
         const bool vibrant = cfg.color == ToolbarColor::vibrant;
         ToolbarStyle s;
-        s.container           = vibrant ? c.primary_container : c.surface;
-        s.docked_container    = c.surface_variant;
+        s.container           = vibrant ? c.primary_container : c.surface_container;
+        s.docked_container    = c.surface_container;
         s.foreground          = vibrant ? c.on_primary_container : c.on_surface_variant;
-        s.selected_container  = vibrant ? c.surface : c.secondary_container;
+        s.selected_container  = vibrant ? c.surface_container : c.secondary_container;
         s.selected_foreground = vibrant ? c.on_surface : c.on_secondary_container;
-        const Color fg        = s.foreground;
-        s.hover_overlay       = Color::fromRGBA(fg.r, fg.g, fg.b, 0.08f);
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
         s.divider             = Color::transparent();
         s.radius              = t.shape.radius_full;
         s.item_radius         = t.shape.radius_full;
         s.padding             = EdgeInsets::all(8.0f);
         s.item_extent         = 48.0f;
+        s.indicator_extent    = 40.0f;
         s.item_padding        = 16.0f;
         s.gap                 = 4.0f;
         s.group_gap           = 12.0f;
         s.icon_size           = 24.0f;
+        s.disabled_opacity    = 0.38f;
         s.label_style         = t.typography.label_large;
-        s.shadow = {BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.15f), {0.0f, 3.0f}, 8.0f, 3.0f},
-                    BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.30f), {0.0f, 1.0f}, 3.0f, 0.0f}};
+        // Only with `elevated`: elevation level 2.
+        s.shadow = {BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.15f), {0.0f, 2.0f}, 6.0f, 2.0f},
+                    BoxShadow{Color::fromRGBA(c.shadow.r, c.shadow.g, c.shadow.b, 0.30f), {0.0f, 1.0f}, 2.0f, 0.0f}};
         return buildToolbarWithStyle(cfg, s, prefersPointerCursorOnHover());
     }
 

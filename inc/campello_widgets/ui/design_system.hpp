@@ -399,8 +399,11 @@ namespace systems::leal::campello_widgets
      * active tool selected. An item may carry a label instead of (or next
      * to) its icon, but toolbars are meant for icons. Groups are set apart
      * by a gap (and a divider where the design system draws them).
-     * `floating` raises it above the content (rounded, elevated) for use in
-     * a Stack over a viewer; false docks it flat.
+     * `floating` shapes it to float over the content (rounded, set in from
+     * the edges by its user) in a Stack over a viewer; false docks it flat.
+     * `elevated` adds the design system's shadow to a floating toolbar
+     * (MD3 floating toolbars have none: level 0; over busy content such as
+     * a 3D view one may want it).
      */
     struct ToolbarConfig
     {
@@ -421,6 +424,7 @@ namespace systems::leal::campello_widgets
         ToolbarColor color = ToolbarColor::standard;
         Axis direction = Axis::horizontal;
         bool floating = true;
+        bool elevated = false;
     };
 
     struct BannerConfig

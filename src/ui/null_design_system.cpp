@@ -88,6 +88,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromRGB(0.10f, 0.10f, 0.10f);
             t.colors.inverse_on_surface = Color::white();
             t.colors.inverse_primary    = Color::fromRGB(0.75f, 0.75f, 0.75f);
+            // Surface containers: this design system's surface, then its variant.
+            t.colors.surface_container_lowest  = t.colors.surface;
+            t.colors.surface_container_low     = t.colors.surface;
+            t.colors.surface_container         = t.colors.surface;
+            t.colors.surface_container_high    = t.colors.surface_variant;
+            t.colors.surface_container_highest = t.colors.surface_variant;
 
             // No shadows, no rounding — radius_full stays default (9999) so
             // inherently-circular shapes (FAB, switch thumb) still work.
@@ -1421,8 +1427,9 @@ namespace systems::leal::campello_widgets
         s.foreground          = vibrant ? c.on_primary_container : c.on_surface;
         s.selected_container  = c.secondary_container;
         s.selected_foreground = c.on_secondary_container;
-        const Color fg        = s.foreground;
-        s.hover_overlay       = Color::fromRGBA(fg.r, fg.g, fg.b, 0.08f);
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 40.0f;
         s.divider             = c.outline_variant;
         s.radius              = t.shape.radius_md;
         s.item_radius         = t.shape.radius_sm;

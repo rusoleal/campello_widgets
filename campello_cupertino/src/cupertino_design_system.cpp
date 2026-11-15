@@ -127,6 +127,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromARGB(0xFF1C1C1E);
             t.colors.inverse_on_surface = Color::fromARGB(0xFFFFFFFF);
             t.colors.inverse_primary    = Color::fromARGB(0xFF0A84FF);
+            // Surface containers: this design system's surface, then its variant.
+            t.colors.surface_container_lowest  = t.colors.surface;
+            t.colors.surface_container_low     = t.colors.surface;
+            t.colors.surface_container         = t.colors.surface;
+            t.colors.surface_container_high    = t.colors.surface_variant;
+            t.colors.surface_container_highest = t.colors.surface_variant;
 
             // iOS shape scale — deliberately not MD3's stadium-heavy scale.
             t.shape.radius_xs = 6.0f;  // popovers/tooltips
@@ -181,6 +187,12 @@ namespace systems::leal::campello_widgets
             t.colors.inverse_surface    = Color::fromARGB(0xFFF2F2F7);
             t.colors.inverse_on_surface = Color::fromARGB(0xFF000000);
             t.colors.inverse_primary    = Color::fromARGB(0xFF007AFF);
+            // Surface containers: this design system's surface, then its variant.
+            t.colors.surface_container_lowest  = t.colors.surface;
+            t.colors.surface_container_low     = t.colors.surface;
+            t.colors.surface_container         = t.colors.surface;
+            t.colors.surface_container_high    = t.colors.surface_variant;
+            t.colors.surface_container_highest = t.colors.surface_variant;
 
             t.shape.radius_xs = 6.0f;
             t.shape.radius_sm = 8.0f;
@@ -2601,7 +2613,9 @@ namespace systems::leal::campello_widgets
         s.foreground          = vibrant ? c.on_primary : c.primary;
         s.selected_container  = vibrant ? c.on_primary : Color::fromRGBA(c.primary.r, c.primary.g, c.primary.b, 0.15f);
         s.selected_foreground = vibrant ? c.primary : c.primary;
-        s.hover_overlay       = Color::fromRGBA(c.on_surface.r, c.on_surface.g, c.on_surface.b, 0.06f);
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 30.0f;
         s.divider             = c.outline_variant;
         s.radius              = t.shape.radius_full;
         s.item_radius         = t.shape.radius_full;

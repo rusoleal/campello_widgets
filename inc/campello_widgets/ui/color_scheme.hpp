@@ -33,6 +33,15 @@ namespace systems::leal::campello_widgets
         Color surface;
         Color on_surface;
         Color surface_variant;
+        /// MD3 surface container roles, lowest to highest emphasis (tonal
+        /// fills for containers on the surface: cards, sheets, toolbars,
+        /// navigation). Design systems without them map them onto their
+        /// surface and surface variant.
+        Color surface_container_lowest;
+        Color surface_container_low;
+        Color surface_container;
+        Color surface_container_high;
+        Color surface_container_highest;
         Color on_surface_variant;
         Color background;
         Color on_background;

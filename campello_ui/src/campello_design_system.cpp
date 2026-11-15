@@ -149,6 +149,12 @@ namespace systems::leal::campello_widgets
         t.colors.inverse_surface = Color::fromRGB(0.118f, 0.129f, 0.149f);
         t.colors.inverse_on_surface = Color::fromRGB(0.980f, 0.973f, 0.961f);
         t.colors.inverse_primary = Color::fromRGB(0.494f, 0.835f, 0.839f);
+        // Surface containers: this design system's surface, then its variant.
+        t.colors.surface_container_lowest  = t.colors.surface;
+        t.colors.surface_container_low     = t.colors.surface;
+        t.colors.surface_container         = t.colors.surface;
+        t.colors.surface_container_high    = t.colors.surface_variant;
+        t.colors.surface_container_highest = t.colors.surface_variant;
 
         t.elevation = ElevationTokens{};
         t.shape = ShapeTokens{};
@@ -196,6 +202,12 @@ namespace systems::leal::campello_widgets
         t.colors.inverse_surface = Color::fromRGB(0.980f, 0.973f, 0.961f);
         t.colors.inverse_on_surface = Color::fromRGB(0.118f, 0.129f, 0.149f);
         t.colors.inverse_primary = Color::fromRGB(0.051f, 0.545f, 0.553f);
+        // Surface containers: this design system's surface, then its variant.
+        t.colors.surface_container_lowest  = t.colors.surface;
+        t.colors.surface_container_low     = t.colors.surface;
+        t.colors.surface_container         = t.colors.surface;
+        t.colors.surface_container_high    = t.colors.surface_variant;
+        t.colors.surface_container_highest = t.colors.surface_variant;
 
         t.elevation = ElevationTokens{};
         t.shape = ShapeTokens{};
@@ -1830,8 +1842,9 @@ namespace systems::leal::campello_widgets
         s.foreground          = vibrant ? c.on_primary_container : c.on_surface;
         s.selected_container  = vibrant ? c.primary : c.primary_container;
         s.selected_foreground = vibrant ? c.on_primary : c.on_primary_container;
-        const Color fg        = s.foreground;
-        s.hover_overlay       = Color::fromRGBA(fg.r, fg.g, fg.b, 0.08f);
+        s.hover_opacity       = 0.08f;
+        s.pressed_opacity     = 0.10f;
+        s.indicator_extent    = 36.0f;
         s.divider             = c.outline_variant;
         s.radius              = t.shape.radius_lg;
         s.item_radius         = t.shape.radius_md;

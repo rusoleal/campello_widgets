@@ -68,46 +68,56 @@ namespace systems::leal::campello_widgets
                 row->cross_axis_alignment = CrossAxisAlignment::center;
                 row->children             = std::move(content);
 
-                // Icon only: a square item (the touch target, the icon
-                // centred: (extent - icon) / 2 all round); with a label:
-                // padded along.
-                auto box    = std::make_shared<SizedBox>();
-                box->height = s.item_extent;
+                // The indicator: the selected fill and the state layers
+                // (hover, pressed) in the content colour, `indicator_extent`
+                // tall, centred in the `item_extent` touch target. Icon
+                // only: a square (a circle with full corners); with a
+                // label: padded along it.
+                const float stateOpacity = !active ? 0.0f : pressed_ ? s.pressed_opacity : hovered_ ? s.hover_opacity : 0.0f;
+                WidgetRef inner;
                 if (it.label.empty()) {
-                    box->width = s.item_extent;
-                    box->child = std::make_shared<Center>(row);
+                    inner = std::make_shared<SizedBox>(s.indicator_extent, s.indicator_extent, std::make_shared<Center>(row));
                 } else {
-                    // No Center here: it would take all the width offered
-                    // (a whole Row's); the row centres itself vertically in
-                    // the box's fixed height.
+                    // No Center around the row: it would take all the
+                    // width offered (a whole Row's).
                     auto padded     = std::make_shared<Padding>();
                     padded->padding = EdgeInsets::symmetric(0.0f, s.item_padding);
                     padded->child   = row;
-                    box->child      = padded;
+                    inner = std::make_shared<SizedBox>(std::nullopt, s.indicator_extent, padded);
                 }
-
                 BoxDecoration overlay;
-                overlay.color         = hovered_ && active ? s.hover_overlay : Color::transparent();
+                overlay.color         = Color::fromRGBA(fg.r, fg.g, fg.b, fg.a * stateOpacity);
                 overlay.border_radius = s.item_radius;
-                auto hover        = std::make_shared<DecoratedBox>();
-                hover->decoration = overlay;
-                hover->child      = box;
+                auto layer        = std::make_shared<DecoratedBox>();
+                layer->decoration = overlay;
+                layer->child      = inner;
 
                 BoxDecoration fill;
                 fill.color         = it.selected ? s.selected_container : Color::transparent();
                 fill.border_radius = s.item_radius;
                 auto pill        = std::make_shared<DecoratedBox>();
                 pill->decoration = fill;
-                pill->child      = hover;
+                pill->child      = layer;
+
+                // The touch target round it.
+                auto target    = std::make_shared<SizedBox>();
+                target->height = s.item_extent;
+                if (it.label.empty()) target->width = s.item_extent;
+                target->child  = std::make_shared<Center>(pill);
 
                 auto gesture    = std::make_shared<GestureDetector>();
                 gesture->on_tap = active ? it.on_pressed : nullptr;
-                gesture->child  = pill;
+                if (active) {
+                    gesture->on_tap_down   = [this](TapDownDetails) { setState([this] { pressed_ = true; }); };
+                    gesture->on_tap_up     = [this](TapUpDetails) { setState([this] { pressed_ = false; }); };
+                    gesture->on_tap_cancel = [this]() { setState([this] { pressed_ = false; }); };
+                }
+                gesture->child  = target;
 
                 auto region      = std::make_shared<MouseRegion>();
                 region->cursor   = active && w.pointer_cursor ? SystemMouseCursor::pointer : SystemMouseCursor::arrow;
                 region->on_enter = [this]() { setState([this] { hovered_ = true; }); };
-                region->on_exit  = [this]() { setState([this] { hovered_ = false; }); };
+                region->on_exit  = [this]() { setState([this] { hovered_ = false; pressed_ = false; }); };
                 region->child    = gesture;
 
                 WidgetRef result = region;
@@ -125,6 +135,7 @@ namespace systems::leal::campello_widgets
 
         private:
             bool hovered_ = false;
+            bool pressed_ = false;
         };
 
         std::unique_ptr<StateBase> ToolbarItemWidget::createState() const
@@ -188,7 +199,7 @@ namespace systems::leal::campello_widgets
         BoxDecoration deco;
         deco.color         = config.floating ? style.container : style.docked_container;
         deco.border_radius = config.floating ? style.radius : 0.0f;
-        if (config.floating) deco.box_shadow = style.shadow;
+        if (config.floating && config.elevated) deco.box_shadow = style.shadow;
         auto container        = std::make_shared<DecoratedBox>();
         container->decoration = deco;
         container->child      = padded;

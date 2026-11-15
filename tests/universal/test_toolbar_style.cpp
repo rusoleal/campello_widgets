@@ -37,14 +37,18 @@ namespace
     }
 }
 
-TEST(ToolbarStyle, FloatingIsRoundedAndRaised)
+TEST(ToolbarStyle, FloatingIsRoundedAndFlatUnlessElevated)
 {
-    const auto widget = cw::buildToolbarWithStyle(twoGroups(), style(), true);
+    auto cfg = twoGroups();
+    const auto widget = cw::buildToolbarWithStyle(cfg, style(), true);
     const auto box = std::dynamic_pointer_cast<const cw::DecoratedBox>(widget);
     ASSERT_NE(box, nullptr);
     EXPECT_EQ(box->decoration.color, style().container);
     EXPECT_FLOAT_EQ(box->decoration.border_radius, 24.0f);
-    EXPECT_EQ(box->decoration.box_shadow.size(), 1u);
+    EXPECT_TRUE(box->decoration.box_shadow.empty()) << "MD3 floating toolbars: elevation level 0";
+    cfg.elevated = true;
+    const auto raised = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(cfg, style(), true));
+    EXPECT_EQ(raised->decoration.box_shadow.size(), 1u);
     const auto padded = std::dynamic_pointer_cast<const cw::Padding>(box->child);
     ASSERT_NE(padded, nullptr);
     EXPECT_FLOAT_EQ(padded->padding.left, 8.0f);
@@ -54,6 +58,7 @@ TEST(ToolbarStyle, DockedIsFlat)
 {
     auto cfg = twoGroups();
     cfg.floating = false;
+    cfg.elevated = true;  // ignored when docked
     const auto box = std::dynamic_pointer_cast<const cw::DecoratedBox>(cw::buildToolbarWithStyle(cfg, style(), true));
     ASSERT_NE(box, nullptr);
     EXPECT_EQ(box->decoration.color, style().docked_container);

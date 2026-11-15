@@ -11,18 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Toolbar** (`DesignSystem::buildToolbar(ToolbarConfig)`, adaptive `Toolbar` widget). A toolbar of icon buttons
   in groups, named by their tooltips, with a selected state for tool palettes (the active tool).
-  - **Colour and placement:** standard or vibrant colour, horizontal or vertical, floating (rounded, elevated, for a
-    `Stack` over a viewer) or docked (flat).
-  - **Items:** an icon (a template `Icon`, recoloured per state), an `icon_builder` that draws any widget in the
-    state's colour (vector icons, glyphs), or a label.
+  - **Colour and placement:** standard or vibrant; horizontal or vertical; floating (rounded, for a `Stack` over a
+    viewer) or docked (flat). `elevated` opts into a shadow.
+  - **Items:** a template `Icon` (recoloured per state), an `icon_builder` drawing any widget in the state's colour
+    (vector icons, glyphs), or a label.
+  - **Indicator:** the selected fill and the hover/pressed state layers (in the item's content colour) are an
+    indicator centred in each touch target.
   - **Each design system** supplies its look to one shared layout (`buildToolbarWithStyle`, `ToolbarStyle`):
-    - Material: MD3 Expressive floating toolbar. A 64dp stadium, 48dp items 4dp apart, a tonal circle for the
-      selected one, elevation level 3, no dividers.
+    - **Material: MD3 Expressive floating toolbar, per Compose Material3's `FloatingToolbarTokens`.**
+      - A 64dp stadium, 8dp round 48dp targets (24dp icons), 40dp indicators.
+      - 4dp between items (`ContainerBetweenSpace`), 12dp between groups (`ButtonGroupSmallTokens.BetweenSpace`).
+      - Standard on SurfaceContainer. Vibrant on PrimaryContainer, with selected items on SurfaceContainer /
+        OnSurface.
+      - Elevation level 0 (the shadow only with `elevated`). State layers 0.08 / 0.10. No dividers.
     - Cupertino: a capsule with 36pt items, the accent-tinted selection and hairline dividers.
     - Fluent: CommandBar-like, 40px items in an 8px-corner layer, with dividers.
     - campello_ui and NullDesignSystem have looks of their own.
-  - Items show a hover overlay and the pointer cursor (where the design system wants it).
   - Shown in the gallery (Controls).
+- **`ColorScheme` surface container roles:** `surface_container_lowest`, `_low`, `surface_container`, `_high` and
+  `_highest`. Material uses MD3's baseline values (light and dark); the other design systems map them onto their
+  surface and surface variant.
 - **`Tooltip` shows on hover** (desktop), after `wait_duration_ms` (500 ms). It's centred under its child, or over
   it with no room below, and stays until the pointer leaves. `show_on_hover` turns this off. Long-press still works,
   now anchored to the child too. The bubble ignores the pointer.
