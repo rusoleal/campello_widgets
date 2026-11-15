@@ -1577,10 +1577,10 @@ Milestones:
         job itself has **not run yet** (nothing pushed).
       - Docs: CHANGELOG `[Unreleased]`, CLAUDE.md, the protocol XMLs in
         `protocols/` with regeneration commands in `linux.cmake`.
-      - **Found:** a root render object is never `attach()`ed (attach runs in
-        `setParent()`), so a `GestureDetector` that is the tree's root render
-        object never registers for input, on every runner. Not fixed (core,
-        outside L4); see Known gaps.
+      - **Found:** a root render object was never `attach()`ed (attach runs in
+        `setParent()`), so a `GestureDetector` that was the tree's root render
+        object never registered for input, on every runner. Fixed right after
+        (see Known gaps).
 
 ### M4 — Web: several canvases
 
@@ -1881,10 +1881,12 @@ and Android.**
 - [x] Linux: modal, popups and the close policy (X11: L2, Wayland: L3,
       2026-11-15).
       The web and iPad have no main-window close policy (no such concept).
-- [ ] A root render object is never `attach()`ed (only `setParent()` calls
+- [x] A root render object was never `attach()`ed (only `setParent()` calls
       it), so a `GestureDetector` (or anything registering in `attach()`)
-      that is a tree's root render object gets no input. Found in L4; every
-      runner. Workaround: any parent (e.g. `Padding`).
+      that was a tree's root render object got no input, on every runner.
+      Found in L4; fixed 2026-11-15: `PointerDispatcher::setRoot()` attaches
+      a parentless root and detaches the one it replaces (every platform
+      installs its windows' roots there). 5 unit tests.
 - [ ] An app's main window needs an `Overlay` in its tree for the fallback
       (secondary windows always have one); without it,
       `PopupWindowAnchor` logs a warning.

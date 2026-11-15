@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A tree's root render object was never attached, so a `GestureDetector` (or anything else that
+  registers in `attach()`) at the very root of a window's tree got no input, on every platform.
+  `PointerDispatcher::setRoot()` now attaches a parentless root and detaches the one it replaces.
 - Wayland: pointer events over libdecor's title bar reached the widget tree in title-bar coordinates;
   `MediaQuery` never updated on resize.
 - X11: a resize left a stale, cropped frame until the next change; uncovered areas stayed blank

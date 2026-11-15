@@ -39,6 +39,8 @@ namespace systems::leal::campello_widgets
         using Handler     = std::function<void(const PointerEvent&)>;
         using TickHandler = std::function<void(uint64_t now_ms)>;
 
+        /// Unlike setRoot(), doesn't attach() `root` (tests that build a
+        /// render tree by hand attach it themselves).
         explicit PointerDispatcher(std::shared_ptr<RenderBox> root = nullptr);
         ~PointerDispatcher();
 
@@ -60,6 +62,12 @@ namespace systems::leal::campello_widgets
          * Call after the widget tree is mounted and the root RenderBox is known.
          * Clears all active pointer state (captured pointers, hover path, etc.)
          * because the old hit-test tree is no longer valid.
+         *
+         * A root has no parent, and a render object is otherwise attach()ed
+         * only when it gets one (RenderObject::setParent()), so this attaches
+         * a parentless root (its pointer handlers, focus node, ... register
+         * there) and detaches the root it replaces. Every platform installs
+         * its windows' roots here.
          */
         void setRoot(std::shared_ptr<RenderBox> root) noexcept;
 
@@ -230,6 +238,8 @@ namespace systems::leal::campello_widgets
         static bool isBoxAlive(RenderBox* box) noexcept;
 
         std::shared_ptr<RenderBox>                       root_;
+        /// setRoot() attach()ed root_ (it had no parent to do it).
+        bool                                             root_attached_ = false;
         std::unordered_map<int32_t, ActivePointer>       active_pointers_;
         std::unordered_map<RenderBox*, Handler>          handlers_;
         std::unordered_map<RenderBox*, TickHandler>      tick_handlers_;
