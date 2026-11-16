@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-11-16
+
 ### Added
 
 - `WidgetsLocalizations` (`ui/widgets_localizations.hpp`): the library's own texts (the toolbar's "More", Cancel,
