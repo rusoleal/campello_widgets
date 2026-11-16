@@ -17,12 +17,14 @@
 #include <campello_widgets/widgets/inherited_element.hpp>
 #include <campello_widgets/widgets/media_query.hpp>
 #include <campello_widgets/widgets/theme.hpp>
+#include <campello_widgets/widgets/localizations.hpp>
 
 // Design System
 #include <campello_widgets/ui/brightness.hpp>
 #include <campello_widgets/ui/color_scheme.hpp>
 #include <campello_widgets/ui/design_tokens.hpp>
 #include <campello_widgets/ui/design_system.hpp>
+#include <campello_widgets/ui/locale.hpp>
 #include <campello_widgets/ui/null_design_system.hpp>
 
 // Layout
