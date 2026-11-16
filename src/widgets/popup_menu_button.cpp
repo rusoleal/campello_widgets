@@ -154,7 +154,7 @@ namespace systems::leal::campello_widgets
                 }
 
                 auto padded = std::make_shared<Padding>();
-                padded->padding = EdgeInsets::symmetric(12.0f, 0.0f);
+                padded->padding = EdgeInsets::symmetric(0.0f, 12.0f);  // (vertical, horizontal): M3 menu items, 12dp each side
                 padded->child   = label;
 
                 // Real M3 DropdownMenuItem rows are 48dp tall regardless of

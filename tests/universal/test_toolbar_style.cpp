@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <campello_widgets/ui/toolbar_style.hpp>
+#include <campello_widgets/widgets/localizations.hpp>
 #include <campello_widgets/widgets/decorated_box.hpp>
 #include <campello_widgets/widgets/padding.hpp>
 #include <campello_widgets/widgets/row.hpp>
@@ -250,8 +251,9 @@ TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
     cfg.groups = {items};
     auto s = style();  // padding 8, items 48, gap 4
 
+    std::string language = "en";
     const auto shown = [&](float width, bool& more) {
-        auto root = cw::buildToolbarWithStyle(cfg, s, true)->createElement();
+        auto root = std::make_shared<cw::Localizations>(cw::Locale{language, "", ""}, cw::buildToolbarWithStyle(cfg, s, true))->createElement();
         root->mount(nullptr);
         auto box = std::dynamic_pointer_cast<cw::RenderBox>(root->findDescendantRenderObjectElement()->sharedRenderObject());
         // LayoutBuilder learns its constraints in layout and rebuilds the
@@ -266,7 +268,7 @@ TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
         more = false;
         std::function<void(cw::Element*)> walk = [&](cw::Element* e) {
             if (auto* t = dynamic_cast<const cw::Tooltip*>(&e->widget())) {
-                if (t->message == "More") more = true; else ++count;
+                if (t->message == (language == "es" ? "M\u00E1s" : "More")) more = true; else ++count;
             }
             e->visitChildren(walk);
         };
@@ -280,6 +282,10 @@ TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
     EXPECT_TRUE(more);
     EXPECT_EQ(shown(1000.0f, more), 10);
     EXPECT_FALSE(more);
+    // The overflow button's tooltip in the Localizations' language.
+    language = "es";
+    EXPECT_EQ(shown(300.0f, more), 4);
+    EXPECT_TRUE(more) << "\"M\u00E1s\" in Spanish";
 
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
     cw::TickerScheduler::setActive(nullptr);

@@ -25,6 +25,7 @@
 #include <campello_widgets/ui/design_tokens.hpp>
 #include <campello_widgets/ui/design_system.hpp>
 #include <campello_widgets/ui/locale.hpp>
+#include <campello_widgets/ui/widgets_localizations.hpp>
 #include <campello_widgets/ui/null_design_system.hpp>
 
 // Layout
