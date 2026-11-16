@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.13.2] - 2026-11-16
 
+### Changed
+
+- campello_gpu v0.30.1 (v0.30.0 adds `TemporalUpscaler`, which nothing here uses yet; v0.30.1 lets projects that
+  don't enable OBJCXX, like this one, configure with it again).
+
 ### Fixed
 
 - **Stroked paths are antialiased.** `Canvas::drawPath` with a stroke paint drew flat triangles (the batched route's
