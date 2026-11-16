@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`setOpenFilesHandler()`** (`ui/open_files.hpp`): files the platform asks the app to open. On macOS these are
+  documents double-clicked in Finder, dropped on the Dock icon or opened with `open -a`, which don't arrive in argv
+  (`application:openURLs:`). They're queued until the handler is set.
 - `Toolbar::dividers` / `ToolbarConfig::dividers`: a divider between groups even where the design system's toolbars
   set groups apart by a gap only (Material: outline variant). Design systems that always draw one ignore it.
 
