@@ -64,6 +64,7 @@ namespace systems::leal::campello_widgets
         ro->on_scroll      = on_scroll;
         ro->on_press_change = on_press_change;
         ro->on_focus_change = on_focus_change;
+        ro->focus_on_tap    = focus_on_tap;
         ro->setFocusConfig(focus_node, autofocus, focusable);
         return ro;
     }
@@ -127,6 +128,7 @@ namespace systems::leal::campello_widgets
         ro.on_scroll       = on_scroll;
         ro.on_press_change = on_press_change;
         ro.on_focus_change = on_focus_change;
+        ro.focus_on_tap    = focus_on_tap;
         ro.setFocusConfig(focus_node, autofocus, focusable);
     }
 

@@ -181,6 +181,7 @@ namespace systems::leal::campello_widgets
         std::function<void(Offset)>     on_scroll;
         std::function<void(bool)>       on_press_change;
         std::function<void(bool)>       on_focus_change;
+        bool                            focus_on_tap = true;  ///< see GestureDetector::focus_on_tap
 
         RenderGestureDetector();
         ~RenderGestureDetector();

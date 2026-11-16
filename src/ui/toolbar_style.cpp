@@ -4,6 +4,10 @@
 #include <campello_widgets/ui/box_decoration.hpp>
 #include <campello_widgets/ui/focus_manager.hpp>
 #include <campello_widgets/ui/focus_node.hpp>
+#include <campello_widgets/ui/rrect.hpp>
+#include <campello_widgets/ui/canvas.hpp>
+#include <campello_widgets/ui/custom_painter.hpp>
+#include <campello_widgets/widgets/raw_custom_paint.hpp>
 #include <campello_widgets/ui/key_event.hpp>
 #include <campello_widgets/widgets/positioned.hpp>
 #include <campello_widgets/widgets/stack.hpp>
@@ -73,6 +77,27 @@ namespace systems::leal::campello_widgets
             bool tab_stop = false;  ///< the toolbar's one Tab stop
 
             std::unique_ptr<StateBase> createState() const override;
+        };
+
+        // The keyboard focus ring: a rounded outline `offset` outside the
+        // box it's given (the indicator), `width` wide; drawn past its own
+        // bounds, so it never takes room or shifts the item.
+        class FocusRingPainter : public CustomPainter
+        {
+        public:
+            Color color;
+            float width  = 3.0f;
+            float offset = 2.0f;
+            float radius = 20.0f;
+
+            void paint(Canvas& canvas, Size size) override
+            {
+                const float out = offset + width / 2.0f;
+                Paint stroke = Paint::stroked(color, width);
+                canvas.drawRRect(RRect(Rect::fromLTWH(-out, -out, size.width + 2.0f * out, size.height + 2.0f * out), radius + out), stroke);
+            }
+
+            bool shouldRepaint(const CustomPainter&) const override { return true; }
         };
 
         class ToolbarItemState : public State<ToolbarItemWidget>
@@ -172,15 +197,16 @@ namespace systems::leal::campello_widgets
                 // The focus ring: `focus_ring_width` wide, `focus_ring_offset`
                 // outside the indicator, its shape (may reach past the
                 // touch target: the Stack doesn't clip).
+                // Painted, not laid out: it can't move the indicator.
                 WidgetRef indicator = pill;
                 if (ring && s.focus_ring.a > 0.0f) {
-                    const float out = s.focus_ring_offset + s.focus_ring_width;
-                    BoxDecoration border;
-                    border.border        = BoxBorder::all(s.focus_ring, s.focus_ring_width);
-                    border.border_radius = s.item_radius;
-                    auto outline        = std::make_shared<DecoratedBox>();
-                    outline->decoration = border;
-                    indicator = Stack::create({pill, std::make_shared<Positioned>(-out, -out, -out, -out, std::nullopt, std::nullopt, outline)});
+                    auto painter    = std::make_shared<FocusRingPainter>();
+                    painter->color  = s.focus_ring;
+                    painter->width  = s.focus_ring_width;
+                    painter->offset = s.focus_ring_offset;
+                    painter->radius = s.item_radius;
+                    indicator = Stack::create({pill, std::make_shared<Positioned>(0.0f, 0.0f, 0.0f, 0.0f, std::nullopt, std::nullopt,
+                                                                                    RawCustomPaint::create(painter))});
                 }
 
                 // The touch target round it. A label item is centred
@@ -206,6 +232,7 @@ namespace systems::leal::campello_widgets
                 }
                 gesture->child  = target;
                 gesture->focusable       = active;
+                gesture->focus_on_tap    = false;  // a click doesn't keep focus here (nor show a ring when keys are used next)
                 gesture->focus_node      = node_;
                 gesture->on_focus_change = [this](bool has_focus) { setState([this, has_focus] { focused_ = has_focus; }); };
 
