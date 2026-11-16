@@ -18,6 +18,7 @@
 #include <campello_widgets/widgets/focus.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/widgets/layout_builder.hpp>
+#include <campello_widgets/widgets/listener.hpp>
 #include <campello_widgets/widgets/popup_menu_button.hpp>
 #include <campello_widgets/widgets/icon.hpp>
 #include <campello_widgets/widgets/mouse_region.hpp>
@@ -286,37 +287,94 @@ namespace systems::leal::campello_widgets
 
     namespace
     {
-        // The overflow ("more") button: an item's look, a vertical
-        // ellipsis, selected when the selected item is in its menu; a
-        // popup menu of the hidden items.
-        WidgetRef overflowButton(const std::vector<ToolbarConfig::Item>& hidden, const ToolbarStyle& s, const std::string& more)
+        // The overflow ("more") button: an item's look (its hover and
+        // pressed state layers, its pointer cursor), a vertical ellipsis,
+        // selected when the selected item is in its menu; a popup menu of
+        // the hidden items.
+        class OverflowButtonWidget : public StatefulWidget
         {
-            bool selected = false;
-            std::vector<PopupMenuItem> items;
-            for (const auto& it : hidden) {
-                selected = selected || it.selected;
-                PopupMenuItem entry;
-                entry.label   = !it.label.empty() ? it.label : it.tooltip;
-                entry.enabled = it.enabled && static_cast<bool>(it.on_pressed);
-                entry.on_tap  = it.on_pressed;
-                items.push_back(std::move(entry));
+        public:
+            std::vector<ToolbarConfig::Item> hidden;
+            ToolbarStyle style;
+            bool pointer_cursor = true;
+            std::string more;
+
+            std::unique_ptr<StateBase> createState() const override;
+        };
+
+        class OverflowButtonState : public State<OverflowButtonWidget>
+        {
+        public:
+            WidgetRef build(BuildContext&) override
+            {
+                const auto& w = widget();
+                const auto& s = w.style;
+                bool selected = false;
+                std::vector<PopupMenuItem> items;
+                for (const auto& it : w.hidden) {
+                    selected = selected || it.selected;
+                    PopupMenuItem entry;
+                    entry.label   = !it.label.empty() ? it.label : it.tooltip;
+                    entry.enabled = it.enabled && static_cast<bool>(it.on_pressed);
+                    entry.on_tap  = it.on_pressed;
+                    items.push_back(std::move(entry));
+                }
+                const Color fg = selected ? s.selected_foreground : s.foreground;
+                TextStyle glyph = s.label_style;
+                glyph.font_size = s.icon_size;
+                glyph.withColor(fg);
+                const float stateOpacity = pressed_ ? s.pressed_opacity : hovered_ ? s.hover_opacity : 0.0f;
+                BoxDecoration overlay;
+                overlay.color         = Color::fromRGBA(fg.r, fg.g, fg.b, fg.a * stateOpacity);
+                overlay.border_radius = s.item_radius;
+                auto layer        = std::make_shared<DecoratedBox>();
+                layer->decoration = overlay;
+                layer->child      = std::make_shared<SizedBox>(s.indicator_extent, s.indicator_extent,
+                                                               std::make_shared<Center>(std::make_shared<Text>("\u22EE", glyph)));
+                BoxDecoration fill;
+                fill.color         = selected ? s.selected_container : Color::transparent();
+                fill.border_radius = s.item_radius;
+                auto pill        = std::make_shared<DecoratedBox>();
+                pill->decoration = fill;
+                pill->child      = layer;
+                auto menu   = std::make_shared<PopupMenuButton>();
+                menu->items = std::move(items);
+                menu->child = std::make_shared<SizedBox>(s.item_extent, s.item_extent, std::make_shared<Center>(pill));
+
+                // Pressed while a pointer is down on it (the menu takes the tap).
+                auto press              = std::make_shared<Listener>();
+                press->on_pointer_down   = [this](const PointerEvent&) { setState([this] { pressed_ = true; }); };
+                press->on_pointer_up     = [this](const PointerEvent&) { setState([this] { pressed_ = false; }); };
+                press->on_pointer_cancel = [this](const PointerEvent&) { setState([this] { pressed_ = false; }); };
+                press->child             = menu;
+
+                auto region      = std::make_shared<MouseRegion>();
+                region->cursor   = w.pointer_cursor ? SystemMouseCursor::pointer : SystemMouseCursor::arrow;
+                region->on_enter = [this]() { setState([this] { hovered_ = true; }); };
+                region->on_exit  = [this]() { setState([this] { hovered_ = false; pressed_ = false; }); };
+                region->child    = press;
+                return std::make_shared<Tooltip>(w.more, region);
             }
-            const Color fg = selected ? s.selected_foreground : s.foreground;
-            TextStyle glyph = s.label_style;
-            glyph.font_size = s.icon_size;
-            glyph.withColor(fg);
-            BoxDecoration fill;
-            fill.color         = selected ? s.selected_container : Color::transparent();
-            fill.border_radius = s.item_radius;
-            auto pill        = std::make_shared<DecoratedBox>();
-            pill->decoration = fill;
-            pill->child      = std::make_shared<SizedBox>(s.indicator_extent, s.indicator_extent,
-                                                          std::make_shared<Center>(std::make_shared<Text>("\u22EE", glyph)));
-            auto menu   = std::make_shared<PopupMenuButton>();
-            menu->items = std::move(items);
-            menu->child = std::make_shared<SizedBox>(s.item_extent, s.item_extent, std::make_shared<Center>(pill));
-            auto tip = std::make_shared<Tooltip>(more, menu);
-            return tip;
+
+        private:
+            bool hovered_ = false;
+            bool pressed_ = false;
+        };
+
+        std::unique_ptr<StateBase> OverflowButtonWidget::createState() const
+        {
+            return std::make_unique<OverflowButtonState>();
+        }
+
+        WidgetRef overflowButton(const std::vector<ToolbarConfig::Item>& hidden, const ToolbarStyle& s, bool pointer_cursor,
+                                 const std::string& more)
+        {
+            auto button            = std::make_shared<OverflowButtonWidget>();
+            button->hidden         = hidden;
+            button->style          = s;
+            button->pointer_cursor = pointer_cursor;
+            button->more           = more;
+            return button;
         }
 
         // An item's extent along the toolbar: icon items exactly (their
@@ -390,7 +448,7 @@ namespace systems::leal::campello_widgets
 
             if (!hidden.empty()) {
                 children.push_back(gap(style.gap));
-                children.push_back(overflowButton(hidden, style, more));
+                children.push_back(overflowButton(hidden, style, pointer_cursor, more));
             }
 
             WidgetRef line;

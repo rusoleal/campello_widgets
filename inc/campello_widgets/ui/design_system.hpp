@@ -434,6 +434,10 @@ namespace systems::leal::campello_widgets
         /// overflow menu (a "more" button, MD3 toolbars' overflow), named
         /// by their labels or tooltips; false: laid out whole.
         bool overflow = true;
+        /// A divider between groups even where the design system's
+        /// toolbars separate them by a gap only (Material); those that
+        /// always draw one ignore it.
+        bool dividers = false;
     };
 
     struct BannerConfig

@@ -5,7 +5,10 @@
 #include <campello_widgets/widgets/card.hpp>
 #include <campello_widgets/widgets/checkbox.hpp>
 #include <campello_widgets/widgets/circular_progress_indicator.hpp>
+#include <campello_widgets/widgets/colored_box.hpp>
 #include <campello_widgets/widgets/decorated_box.hpp>
+#include <campello_widgets/widgets/element.hpp>
+#include <functional>
 #include <campello_widgets/widgets/dialog.hpp>
 #include <campello_widgets/widgets/divider.hpp>
 #include <campello_widgets/widgets/floating_action_button.hpp>
@@ -285,4 +288,33 @@ TEST(MaterialDesignSystem, SelectedChipUsesSecondaryContainer)
     auto decorated = std::dynamic_pointer_cast<const DecoratedBox>(gesture->child);
     ASSERT_NE(decorated, nullptr);
     EXPECT_EQ(decorated->decoration.color, ds.tokens().colors.secondary_container);
+}
+
+// Material toolbars set groups apart by a gap only; `dividers` adds a
+// divider (outline variant) between them.
+TEST(MaterialDesignSystem, ToolbarDividersOnRequest)
+{
+    MaterialDesignSystem ds(MaterialDesignSystem::light());
+    const auto dividers = [&](bool on) {
+        ToolbarConfig cfg;
+        cfg.overflow = false;
+        cfg.dividers = on;
+        cfg.groups   = {{ToolbarConfig::Item{nullptr, "Orbit", "", [] {}, true, true},
+                         ToolbarConfig::Item{nullptr, "Walk", "", [] {}, false, true}},
+                        {ToolbarConfig::Item{nullptr, "Sun", "", [] {}, false, true}}};
+        auto root = ds.buildToolbar(cfg)->createElement();
+        root->mount(nullptr);
+        int count = 0;
+        std::function<void(Element*)> walk = [&](Element* e) {
+            if (auto* box = dynamic_cast<const ColoredBox*>(&e->widget())) {
+                if (box->color.a > 0.0f) ++count;
+            }
+            e->visitChildren(walk);
+        };
+        walk(root.get());
+        root->unmount();
+        return count;
+    };
+    EXPECT_EQ(dividers(false), 0);
+    EXPECT_EQ(dividers(true), 1);
 }

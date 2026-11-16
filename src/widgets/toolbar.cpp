@@ -16,6 +16,7 @@ namespace systems::leal::campello_widgets
         cfg.floating  = floating;
         cfg.elevated  = elevated;
         cfg.overflow  = overflow;
+        cfg.dividers  = dividers;
         return ds->buildToolbar(cfg);
     }
 

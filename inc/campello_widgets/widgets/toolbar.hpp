@@ -30,6 +30,7 @@ namespace systems::leal::campello_widgets
         bool floating = true;
         bool elevated = false;
         bool overflow = true;
+        bool dividers = false;  ///< see ToolbarConfig::dividers
 
         Toolbar() = default;
 
