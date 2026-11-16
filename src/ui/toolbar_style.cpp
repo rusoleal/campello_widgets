@@ -1,3 +1,4 @@
+#include <campello_widgets/ui/widgets_localizations.hpp>
 #include <campello_widgets/ui/toolbar_style.hpp>
 
 #include <campello_widgets/ui/box_decoration.hpp>
@@ -250,7 +251,7 @@ namespace systems::leal::campello_widgets
         // The overflow ("more") button: an item's look, a vertical
         // ellipsis, selected when the selected item is in its menu; a
         // popup menu of the hidden items.
-        WidgetRef overflowButton(const std::vector<ToolbarConfig::Item>& hidden, const ToolbarStyle& s)
+        WidgetRef overflowButton(const std::vector<ToolbarConfig::Item>& hidden, const ToolbarStyle& s, const std::string& more)
         {
             bool selected = false;
             std::vector<PopupMenuItem> items;
@@ -276,7 +277,7 @@ namespace systems::leal::campello_widgets
             auto menu   = std::make_shared<PopupMenuButton>();
             menu->items = std::move(items);
             menu->child = std::make_shared<SizedBox>(s.item_extent, s.item_extent, std::make_shared<Center>(pill));
-            auto tip = std::make_shared<Tooltip>("More", menu);
+            auto tip = std::make_shared<Tooltip>(more, menu);
             return tip;
         }
 
@@ -291,7 +292,8 @@ namespace systems::leal::campello_widgets
         }
 
         WidgetRef buildToolbarLine(const ToolbarConfig& config, const ToolbarStyle& style, bool pointer_cursor,
-                                   const std::vector<ToolbarConfig::Item>& hidden, const std::shared_ptr<ToolbarFocusGroup>& focus)
+                                   const std::vector<ToolbarConfig::Item>& hidden, const std::shared_ptr<ToolbarFocusGroup>& focus,
+                                   const std::string& more)
         {
             const bool horizontal = config.direction == Axis::horizontal;
             // Fixed both ways (from_width() would stretch across the toolbar's
@@ -350,7 +352,7 @@ namespace systems::leal::campello_widgets
 
             if (!hidden.empty()) {
                 children.push_back(gap(style.gap));
-                children.push_back(overflowButton(hidden, style));
+                children.push_back(overflowButton(hidden, style, more));
             }
 
             WidgetRef line;
@@ -404,16 +406,17 @@ namespace systems::leal::campello_widgets
         class ToolbarLineState : public State<ToolbarLine>
         {
         public:
-            WidgetRef build(BuildContext&) override
+            WidgetRef build(BuildContext& context) override
             {
                 const auto& w = widget();
-                if (!w.config.overflow) return buildToolbarLine(w.config, w.style, w.pointer_cursor, {}, focus_);
+                const std::string more = WidgetsLocalizations::of(context).more;  // the overflow tooltip
+                if (!w.config.overflow) return buildToolbarLine(w.config, w.style, w.pointer_cursor, {}, focus_, more);
                 // What fits the space given; the rest in the overflow menu.
                 return std::make_shared<LayoutBuilder>(
-                    [config = w.config, style = w.style, pointer = w.pointer_cursor, focus = focus_](BuildContext&, BoxConstraints c) -> WidgetRef {
+                    [config = w.config, style = w.style, pointer = w.pointer_cursor, focus = focus_, more](BuildContext&, BoxConstraints c) -> WidgetRef {
                         const float available = config.direction == Axis::horizontal ? c.max_width : c.max_height;
                         auto [kept, hidden] = splitForOverflow(config, style, available);
-                        return buildToolbarLine(kept, style, pointer, hidden, focus);
+                        return buildToolbarLine(kept, style, pointer, hidden, focus, more);
                     });
             }
 

@@ -69,3 +69,12 @@ TEST(Localizations, ProvidesTheLocaleBelowIt)
     EXPECT_TRUE(a.updateShouldNotify(b));
     EXPECT_FALSE(a.updateShouldNotify(c));
 }
+
+#include <campello_widgets/ui/widgets_localizations.hpp>
+
+TEST(WidgetsLocalizations, EnglishSpanishAndFallback)
+{
+    EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"en", "", ""}).more, "More");
+    EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"es", "", "MX"}).more, "M\xC3\xA1s");
+    EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"ja", "", ""}).cancel, "Cancel");
+}

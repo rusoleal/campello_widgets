@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `WidgetsLocalizations` (`ui/widgets_localizations.hpp`): the library's own texts (the toolbar's "More", Cancel,
+  Close, Search, Cut/Copy/Paste/Select All) in the nearest `Localizations`' language; English and Spanish so far.
+
+### Fixed
+
+- **Toolbar overflow tooltip** in the app's language ("Más" in Spanish) instead of always "More".
+- **Popup menu items had no side padding** (`EdgeInsets::symmetric` takes vertical first; the 12dp went above and
+  below): labels touched the menu's edges. Now 12dp each side, as M3.
+
 ## [0.14.0] - 2026-11-16
 
 ### Added
