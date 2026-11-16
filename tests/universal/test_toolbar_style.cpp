@@ -268,7 +268,7 @@ TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
         more = false;
         std::function<void(cw::Element*)> walk = [&](cw::Element* e) {
             if (auto* t = dynamic_cast<const cw::Tooltip*>(&e->widget())) {
-                if (t->message == (language == "es" ? "M\u00E1s" : "More")) more = true; else ++count;
+                if (t->message == (language == "es" ? "M\xC3\xA1s" : "More")) more = true; else ++count;
             }
             e->visitChildren(walk);
         };
@@ -285,7 +285,7 @@ TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
     // The overflow button's tooltip in the Localizations' language.
     language = "es";
     EXPECT_EQ(shown(300.0f, more), 4);
-    EXPECT_TRUE(more) << "\"M\u00E1s\" in Spanish";
+    EXPECT_TRUE(more) << "\"M\xC3\xA1s\" in Spanish";
 
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
     cw::TickerScheduler::setActive(nullptr);

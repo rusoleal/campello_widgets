@@ -75,6 +75,6 @@ TEST(Localizations, ProvidesTheLocaleBelowIt)
 TEST(WidgetsLocalizations, EnglishSpanishAndFallback)
 {
     EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"en", "", ""}).more, "More");
-    EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"es", "", "MX"}).more, "M\u00E1s");
+    EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"es", "", "MX"}).more, "M\xC3\xA1s");
     EXPECT_EQ(cw::WidgetsLocalizations::forLocale({"ja", "", ""}).cancel, "Cancel");
 }
