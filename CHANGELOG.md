@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Localization** (Flutter's `Locale` / `Localizations`):
+  - `Locale` (`ui/locale.hpp`): language, script and region; `Locale::parse()` reads BCP 47 tags ("es-ES",
+    "zh-Hans-CN") and POSIX names ("es_ES.UTF-8@euro", "C").
+  - `Locale::systemLocales()`: the user's preferred locales, most preferred first, from each platform (macOS/iOS
+    `NSLocale.preferredLanguages`, Windows preferred UI languages, Linux `LANGUAGE`/`LC_ALL`/`LC_MESSAGES`/`LANG`,
+    web `navigator.languages`, Android the activity configuration, GDK the user's locale). Never empty.
+  - `resolveLocale(preferred, supported)`: the best supported match (exact, then same language and script or
+    region, then same language; else the first supported).
+  - `Localizations` widget: provides the locale below it; `Localizations::localeOf(context)` reads it (English
+    without one) and rebuilds dependents when it changes.
+
 ## [0.13.2] - 2026-11-16
 
 ### Changed

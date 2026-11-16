@@ -15,6 +15,7 @@
 // shows it again.
 
 #include <campello_widgets/android/run_app.hpp>
+#include "android_locale.hpp"
 #include <campello_widgets/campello_widgets.hpp>
 #include <campello_widgets/widgets/element.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
@@ -649,6 +650,14 @@ struct ActivityHost
     void updateConfig()
     {
         AConfiguration_fromAssetManager(config, activity->assetManager);
+        // The locale, for Locale::systemLocales().
+        char language[3] = {};
+        char country[3] = {};
+        AConfiguration_getLanguage(config, language);
+        AConfiguration_getCountry(config, country);
+        std::string tag(language, language[0] ? (language[1] ? 2u : 1u) : 0u);
+        if (country[0]) tag += "-" + std::string(country, country[1] ? 2u : 1u);
+        Widgets::detail::setAndroidSystemLocale(tag);
         int32_t density = AConfiguration_getDensity(config);
         if (density <= 0) density = ACONFIGURATION_DENSITY_DEFAULT;
         dpr = static_cast<float>(density) / 160.0f;  // mdpi baseline
