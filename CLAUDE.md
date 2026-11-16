@@ -23,7 +23,7 @@ tests/
   platform/             # Platform integration tests
 examples/               # One subdirectory per platform
 dependencies/           # *.cmake FetchContent wrappers
-  campello_gpu.cmake    # pinned to v0.29.1
+  campello_gpu.cmake    # pinned to v0.30.1
   campello_input.cmake  # pinned to v0.2.1
   vector_math.cmake
   googletest.cmake

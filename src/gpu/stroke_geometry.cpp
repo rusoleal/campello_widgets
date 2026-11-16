@@ -1,5 +1,7 @@
 #include "gpu/stroke_geometry.hpp"
 
+#include <algorithm>
+
 #include <cmath>
 
 namespace systems::leal::campello_widgets
@@ -146,6 +148,95 @@ StrokeGeometry buildStrokeGeometry(
         out.circles.push_back({points.back()});
     }
 
+    return out;
+}
+
+std::vector<FillAAVertex> buildStrokeAAVertices(
+    const std::vector<Offset>& points,
+    bool closed,
+    float half_width,
+    StrokeCap cap,
+    StrokeJoin join,
+    float miter_limit,
+    float aa_width_local)
+{
+    const StrokeGeometry geo = buildStrokeGeometry(points, closed, half_width, cap, join, miter_limit);
+    const float aa = aa_width_local > 0.0f ? aa_width_local : 1.0f;
+    std::vector<FillAAVertex> out;
+    out.reserve(geo.segments.size() * 18 + geo.circles.size() * 24 * 9 + geo.wedges.size() * 6);
+    const auto tri = [&out](Offset a, float aa_a, Offset b, float aa_b, Offset c, float aa_c) {
+        out.push_back({a, aa_a});
+        out.push_back({b, aa_b});
+        out.push_back({c, aa_c});
+    };
+    const auto quad = [&tri](Offset a, float alpha_a, Offset b, float alpha_b, Offset c, float alpha_c, Offset d, float alpha_d) {
+        // a-b-c-d in order round the quad.
+        tri(a, alpha_a, b, alpha_b, c, alpha_c);
+        tri(a, alpha_a, c, alpha_c, d, alpha_d);
+    };
+
+    // The fringe straddles the true edge (half a pixel in, half out), so
+    // the stroke keeps its width; a stroke under a pixel wide keeps a
+    // pixel-wide core at its coverage instead (a hairline stays a hairline,
+    // fainter, rather than vanishing or thickening).
+    const float inner     = std::max(0.0f, half_width - aa * 0.5f);
+    const float outer     = std::max(half_width + aa * 0.5f, inner + aa);
+    const float coreAlpha = std::min(1.0f, (2.0f * half_width) / aa);
+
+    // Segment bodies: the core, then a fringe each side.
+    for (const auto& seg : geo.segments)
+    {
+        const float dx  = seg.p1.x - seg.p0.x;
+        const float dy  = seg.p1.y - seg.p0.y;
+        const float len = std::sqrt(dx * dx + dy * dy);
+        if (len < 1e-6f) continue;
+        const float nx = -dy / len;
+        const float ny =  dx / len;
+        const auto off = [&](const Offset& p, float d) { return Offset{p.x + nx * d, p.y + ny * d}; };
+        const Offset in0 = off(seg.p0,  inner), in1 = off(seg.p1,  inner);
+        const Offset on0 = off(seg.p0, -inner), on1 = off(seg.p1, -inner);
+        quad(on0, coreAlpha, in0, coreAlpha, in1, coreAlpha, on1, coreAlpha);
+        const Offset fo0 = off(seg.p0,  outer), fo1 = off(seg.p1,  outer);
+        quad(in0, coreAlpha, fo0, 0.0f, fo1, 0.0f, in1, coreAlpha);
+        const Offset gn0 = off(seg.p0, -outer), gn1 = off(seg.p1, -outer);
+        quad(on0, coreAlpha, on1, coreAlpha, gn1, 0.0f, gn0, 0.0f);
+    }
+
+    // Round caps and joins: a disc and a fading ring, enough sides to look
+    // round at the size (at least 12).
+    const float kPi = 3.14159265358979323846f;
+    const float radius_px = half_width / aa;
+    const int sides = std::max(12, std::min(64, static_cast<int>(std::ceil(radius_px * 2.0f * kPi / 3.0f))));
+    for (const auto& circ : geo.circles)
+    {
+        for (int i = 0; i < sides; ++i)
+        {
+            const float a0 = 2.0f * kPi * static_cast<float>(i) / static_cast<float>(sides);
+            const float a1 = 2.0f * kPi * static_cast<float>(i + 1) / static_cast<float>(sides);
+            const Offset d0{std::cos(a0), std::sin(a0)};
+            const Offset d1{std::cos(a1), std::sin(a1)};
+            const Offset r0{circ.center.x + d0.x * inner, circ.center.y + d0.y * inner};
+            const Offset r1{circ.center.x + d1.x * inner, circ.center.y + d1.y * inner};
+            const Offset f0{circ.center.x + d0.x * outer, circ.center.y + d0.y * outer};
+            const Offset f1{circ.center.x + d1.x * outer, circ.center.y + d1.y * outer};
+            tri(circ.center, coreAlpha, r0, coreAlpha, r1, coreAlpha);
+            quad(r0, coreAlpha, f0, 0.0f, f1, 0.0f, r1, coreAlpha);
+        }
+    }
+
+    // Bevel/miter wedges: solid (they sit inside the segments' fringes).
+    for (const auto& w : geo.wedges)
+    {
+        if (w.has_miter_point)
+        {
+            tri(w.hub, coreAlpha, w.outer_a, coreAlpha, w.miter_point, coreAlpha);
+            tri(w.hub, coreAlpha, w.miter_point, coreAlpha, w.outer_b, coreAlpha);
+        }
+        else
+        {
+            tri(w.hub, coreAlpha, w.outer_a, coreAlpha, w.outer_b, coreAlpha);
+        }
+    }
     return out;
 }
 

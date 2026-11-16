@@ -164,3 +164,68 @@ TEST(StrokeGeometry, ConsecutiveDuplicatePointsAreDeduped)
     auto g = cw::buildStrokeGeometry(pts, false, 5.0f, cw::StrokeCap::butt, cw::StrokeJoin::miter, 4.0f);
     ASSERT_EQ(g.segments.size(), 2u); // not 3 -- the duplicate collapses away
 }
+
+// ---------------------------------------------------------------------------
+// buildStrokeAAVertices: a solid core and a fringe straddling the true
+// edge, so the stroke keeps its width with soft edges.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // Coverage-weighted area of the triangles (alpha linear across each).
+    float coveredArea(const std::vector<cw::FillAAVertex>& v)
+    {
+        float area = 0.0f;
+        for (std::size_t i = 0; i + 2 < v.size(); i += 3)
+        {
+            const auto& a = v[i];
+            const auto& b = v[i + 1];
+            const auto& c = v[i + 2];
+            const float t = std::fabs((b.pos.x - a.pos.x) * (c.pos.y - a.pos.y) - (c.pos.x - a.pos.x) * (b.pos.y - a.pos.y)) * 0.5f;
+            area += t * (a.alpha + b.alpha + c.alpha) / 3.0f;
+        }
+        return area;
+    }
+}
+
+TEST(StrokeAAVertices, StraightSegmentKeepsItsWidthWithSoftEdges)
+{
+    // A 100 x 4 butt-capped segment, a pixel of AA: core 3 wide (alpha 1),
+    // a fringe each side from 1.5 to 2.5 off the centre line.
+    const auto v = cw::buildStrokeAAVertices({{0.0f, 0.0f}, {100.0f, 0.0f}}, false, 2.0f, cw::StrokeCap::butt, cw::StrokeJoin::miter, 4.0f, 1.0f);
+    ASSERT_EQ(v.size() % 3, 0u);
+    float maxOff = 0.0f;
+    bool soft = false;
+    for (const auto& p : v)
+    {
+        maxOff = std::max(maxOff, std::fabs(p.pos.y));
+        if (std::fabs(std::fabs(p.pos.y) - 2.5f) < 1e-4f) { EXPECT_FLOAT_EQ(p.alpha, 0.0f); soft = true; }
+        if (std::fabs(std::fabs(p.pos.y) - 1.5f) < 1e-4f) EXPECT_FLOAT_EQ(p.alpha, 1.0f);
+    }
+    EXPECT_FLOAT_EQ(maxOff, 2.5f);
+    EXPECT_TRUE(soft);
+    // Coverage integrates to the stroke's own area: 100 x 4.
+    EXPECT_NEAR(coveredArea(v), 400.0f, 1e-2f);
+}
+
+TEST(StrokeAAVertices, HairlineIsAFainterPixel)
+{
+    // Half a pixel wide: a pixel-wide core at half coverage, same total ink.
+    const auto v = cw::buildStrokeAAVertices({{0.0f, 0.0f}, {10.0f, 0.0f}}, false, 0.25f, cw::StrokeCap::butt, cw::StrokeJoin::miter, 4.0f, 1.0f);
+    EXPECT_NEAR(coveredArea(v), 10.0f * 0.5f, 1e-3f);
+    for (const auto& p : v) EXPECT_LE(p.alpha, 0.5f + 1e-6f);
+}
+
+TEST(StrokeAAVertices, RoundCapsAndJoinsAreSoftDiscs)
+{
+    const auto v = cw::buildStrokeAAVertices({{0.0f, 0.0f}, {10.0f, 0.0f}, {10.0f, 10.0f}}, false, 2.0f, cw::StrokeCap::round, cw::StrokeJoin::round, 4.0f,
+                                             1.0f);
+    // A cap's fading ring reaches 2.5 from the start point, at alpha 0.
+    bool ring = false;
+    for (const auto& p : v)
+    {
+        const float d = std::hypot(p.pos.x, p.pos.y);
+        if (std::fabs(d - 2.5f) < 1e-3f && p.alpha == 0.0f) ring = true;
+    }
+    EXPECT_TRUE(ring);
+}
