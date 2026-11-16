@@ -658,6 +658,7 @@ struct ActivityHost
         std::string tag(language, language[0] ? (language[1] ? 2u : 1u) : 0u);
         if (country[0]) tag += "-" + std::string(country, country[1] ? 2u : 1u);
         Widgets::detail::setAndroidSystemLocale(tag);
+        if (activity->internalDataPath) Widgets::detail::setAndroidDataPath(activity->internalDataPath);
         int32_t density = AConfiguration_getDensity(config);
         if (density <= 0) density = ACONFIGURATION_DENSITY_DEFAULT;
         dpr = static_cast<float>(density) / 160.0f;  // mdpi baseline

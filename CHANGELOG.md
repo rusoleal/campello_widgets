@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SharedPreferences`** (`ui/shared_preferences.hpp`, Flutter's `shared_preferences`): small settings remembered
+  between runs, by key: `getBool/getInt/getDouble/getString`, `setBool/setInt/setDouble/setString`, `remove`,
+  `clear`, `containsKey`, `keys`. Read once, every change written at once (synchronous).
+  - Kept by the platform: `NSUserDefaults` on macOS and iOS, `localStorage` on the web, and a file in the app's data
+    folder on Windows (`%APPDATA%`), Linux (`$XDG_DATA_HOME` or `~/.local/share`), Android (the activity's internal
+    data path) and GDK (`%LOCALAPPDATA%`), under the executable's name.
+  - Each platform only loads and saves one text; a `SharedPreferences(Store)` takes any other store (tests).
+
 ## [0.14.2] - 2026-11-16
 
 ### Added
