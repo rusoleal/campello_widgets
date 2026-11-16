@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-16
+
 ### Added
 
 - **`SharedPreferences`** (`ui/shared_preferences.hpp`, Flutter's `shared_preferences`): small settings remembered
