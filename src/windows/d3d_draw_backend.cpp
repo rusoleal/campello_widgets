@@ -1327,6 +1327,60 @@ void D3DDrawBackend::strokePolyline(
     }
 }
 
+void D3DDrawBackend::drawCircle(
+    const DrawCircleCmd&    cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto tc = transform * vm::Vector4<float>(cmd.center.x, cmd.center.y, 0.0f, 1.0f);
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r = cmd.radius * scale;
+
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
+    drawShape(tc.x() - r, tc.y() - r, r * 2.0f, r * 2.0f,
+              0.0f, sw, 1.0f, cmd.paint.color, encoder);
+}
+
+void D3DDrawBackend::drawOval(
+    const DrawOvalCmd&      cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto tl = transform * vm::Vector4<float>(cmd.rect.left(), cmd.rect.top(), 0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.rect.right(), cmd.rect.bottom(), 0.0f, 1.0f);
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width : 0.0f;
+    drawShape(tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
+              0.0f, sw, 1.0f, cmd.paint.color, encoder);
+}
+
+void D3DDrawBackend::drawRRect(
+    const DrawRRectCmd&     cmd,
+    const Matrix4&          transform,
+    const Rect&             clip,
+    GPU::RenderPassEncoder& encoder)
+{
+    if (!shape_pipeline_) return;
+    if (!applyScissor(clip, encoder)) return;
+
+    auto tl = transform * vm::Vector4<float>(cmd.rrect.rect.left(), cmd.rrect.rect.top(), 0.0f, 1.0f);
+    auto br = transform * vm::Vector4<float>(cmd.rrect.rect.right(), cmd.rrect.rect.bottom(), 0.0f, 1.0f);
+    auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+    float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+    float r  = (cmd.rrect.radius_x + cmd.rrect.radius_y) * 0.5f * scale;
+    float sw = (cmd.paint.style == PaintStyle::stroke) ? cmd.paint.stroke_width * scale : 0.0f;
+    drawShape(tl.x(), tl.y(), br.x() - tl.x(), br.y() - tl.y(),
+              r, sw, 0.0f, cmd.paint.color, encoder);
+}
+
 // ---------------------------------------------------------------------------
 // drawLine
 // ---------------------------------------------------------------------------
