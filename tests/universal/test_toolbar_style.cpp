@@ -17,6 +17,9 @@
 #include <campello_widgets/widgets/column.hpp>
 #include <campello_widgets/widgets/colored_box.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
+#include <campello_widgets/widgets/listener.hpp>
+#include <campello_widgets/widgets/tooltip.hpp>
 #include <campello_widgets/widgets/element.hpp>
 
 #include <functional>
@@ -323,6 +326,80 @@ TEST(ToolbarStyle, ItemsThatDontFitOverflowIntoAMenu)
     EXPECT_EQ(shown(300.0f, more), 4);
     EXPECT_TRUE(more) << "\"M\xC3\xA1s\" in Spanish";
 
+    cw::PointerDispatcher::setActiveDispatcher(nullptr);
+    cw::TickerScheduler::setActive(nullptr);
+}
+
+// The overflow button looks like an item: a pointer cursor and a hover
+// state layer.
+TEST(ToolbarStyle, OverflowButtonHasAHoverLayer)
+{
+    cw::TickerScheduler ticker;
+    cw::TickerScheduler::setActive(&ticker);
+    cw::PointerDispatcher dispatcher;
+    cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+
+    cw::ToolbarConfig cfg;
+    std::vector<cw::ToolbarConfig::Item> items;
+    for (int i = 0; i < 10; ++i) {
+        cw::ToolbarConfig::Item item;
+        item.tooltip      = "T" + std::to_string(i);
+        item.on_pressed   = [] {};
+        item.icon_builder = [](cw::Color) -> cw::WidgetRef { return std::make_shared<cw::SizedBox>(24.0f, 24.0f); };
+        items.push_back(item);
+    }
+    cfg.groups = {items};
+    auto s = style();
+    s.foreground    = cw::Color::black();
+    s.hover_opacity = 0.08f;
+
+    auto root = std::make_shared<cw::Localizations>(cw::Locale{"en", "", ""}, cw::buildToolbarWithStyle(cfg, s, true))->createElement();
+    root->mount(nullptr);
+    auto box = std::dynamic_pointer_cast<cw::RenderBox>(root->findDescendantRenderObjectElement()->sharedRenderObject());
+    for (int frame = 0; frame < 3; ++frame) {
+        box->layout(cw::BoxConstraints::loose(300.0f, 200.0f));
+        cw::Element::buildScope();
+    }
+    // Inside the "More" tooltip: its mouse region and its state layer
+    // (a DecoratedBox whose colour is the foreground at some opacity).
+    const auto inMore = [&](const std::function<void(cw::Element*)>& visit) {
+        std::function<void(cw::Element*, bool)> walk = [&](cw::Element* e, bool in) {
+            if (auto* t = dynamic_cast<const cw::Tooltip*>(&e->widget())) in = t->message == "More";
+            if (in) visit(e);
+            e->visitChildren([&](cw::Element* c) { walk(c, in); });
+        };
+        walk(root.get(), false);
+    };
+    const auto layerAlpha = [&] {
+        float alpha = 0.0f;
+        inMore([&](cw::Element* e) {
+            if (auto* d = dynamic_cast<const cw::DecoratedBox*>(&e->widget())) {
+                if (d->decoration.color) alpha = std::max(alpha, d->decoration.color->a);
+            }
+        });
+        return alpha;
+    };
+    const cw::MouseRegion* region = nullptr;
+    inMore([&](cw::Element* e) {
+        auto* r = dynamic_cast<const cw::MouseRegion*>(&e->widget());
+        if (r && std::dynamic_pointer_cast<const cw::Listener>(r->child)) region = r;  // the button's, not the tooltip's
+    });
+    ASSERT_NE(region, nullptr) << "the overflow button has a mouse region";
+    EXPECT_EQ(region->cursor, cw::SystemMouseCursor::pointer);
+    EXPECT_FLOAT_EQ(layerAlpha(), 0.0f);
+    region->on_enter();
+    cw::Element::buildScope();
+    EXPECT_NEAR(layerAlpha(), 0.08f, 1e-4f) << "hovered: the state layer shows";
+    region = nullptr;
+    inMore([&](cw::Element* e) {
+        auto* r = dynamic_cast<const cw::MouseRegion*>(&e->widget());
+        if (r && std::dynamic_pointer_cast<const cw::Listener>(r->child)) region = r;  // the button's, not the tooltip's
+    });
+    region->on_exit();
+    cw::Element::buildScope();
+    EXPECT_FLOAT_EQ(layerAlpha(), 0.0f);
+
+    root->unmount();
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
     cw::TickerScheduler::setActive(nullptr);
 }

@@ -54,9 +54,14 @@ namespace systems::leal::campello_widgets
         // fields (AnimatedSwitcher's child, AnimatedAlign's alignment,
         // AnimatedBuilder's animation controller, ...) undefined behavior.
         WidgetRef old_widget = widget_;
-        Element::update(std::move(new_widget));
+        widget_ = std::move(new_widget);
+        // The state sees the new widget (and its didUpdateWidget runs)
+        // before the rebuild, which markNeedsBuild() may run at once
+        // (tests without a frame callback): building first read the
+        // old widget's configuration.
         state_->current_widget_ = widget_.get();
         state_->didUpdateWidget(*old_widget);
+        markNeedsBuild();
     }
 
     void StatefulElement::scheduleBuild()

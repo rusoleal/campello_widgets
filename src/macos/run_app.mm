@@ -5,6 +5,7 @@
 #import <campello_widgets/widgets/element.hpp>
 #import <campello_widgets/widgets/render_object_element.hpp>
 #import <campello_widgets/widgets/platform_menu_delegate.hpp>
+#include <campello_widgets/ui/open_files.hpp>
 #import <campello_widgets/ui/renderer.hpp>
 #import <campello_widgets/ui/render_box.hpp>
 #import <campello_widgets/ui/pointer_event.hpp>
@@ -1251,6 +1252,18 @@ static float macosScreenRefreshHz(NSScreen* screen)
     {
         dispatch_async(dispatch_get_main_queue(), ^{ [NSApp terminate:nil]; });
     }
+}
+
+// Documents opened from Finder, the Dock or `open -a` (not argv): to the
+// app's open-files handler, queued until it sets one.
+- (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls
+{
+    (void)application;
+    std::vector<std::string> paths;
+    for (NSURL* url in urls) {
+        if (url.isFileURL && url.path) paths.emplace_back(url.path.UTF8String);
+    }
+    Widgets::deliverOpenFiles(paths);
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender

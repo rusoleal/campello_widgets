@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`setOpenFilesHandler()`** (`ui/open_files.hpp`): files the platform asks the app to open. On macOS these are
+  documents double-clicked in Finder, dropped on the Dock icon or opened with `open -a`, which don't arrive in argv
+  (`application:openURLs:`). They're queued until the handler is set.
+- `Toolbar::dividers` / `ToolbarConfig::dividers`: a divider between groups even where the design system's toolbars
+  set groups apart by a gap only (Material: outline variant). Design systems that always draw one ignore it.
+
+### Fixed
+
+- **The toolbar's overflow ("more") button looks like its items**: hover and pressed state layers and a pointer
+  cursor. It had none.
+- **A stateful widget rebuilt by its parent built with its old configuration** when the rebuild ran at once (tests
+  without a frame callback): `StatefulElement::update()` now gives the state its new widget and calls
+  `didUpdateWidget()` before marking it for a build, as in Flutter.
+
 ## [0.15.1] - 2026-11-16
 
 ### Added

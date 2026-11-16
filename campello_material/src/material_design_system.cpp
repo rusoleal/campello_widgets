@@ -2217,7 +2217,7 @@ namespace systems::leal::campello_widgets
         s.selected_foreground = vibrant ? c.on_surface : c.on_secondary_container;
         s.hover_opacity       = 0.08f;
         s.pressed_opacity     = 0.10f;
-        s.divider             = Color::transparent();
+        s.divider             = cfg.dividers ? c.outline_variant : Color::transparent();
         s.radius              = t.shape.radius_full;
         s.item_radius         = t.shape.radius_full;
         s.padding             = EdgeInsets::all(8.0f);
