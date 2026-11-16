@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <campello_widgets/ui/toolbar_style.hpp>
+#include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/widgets/render_object_element.hpp>
 #include <campello_widgets/widgets/gesture_detector.hpp>
 #include <campello_widgets/ui/render_gesture_detector.hpp>
@@ -229,6 +230,19 @@ TEST(ToolbarStyle, KeyboardRovesFocusAmongItems)
 
         press(cw::KeyCode::tab);
         EXPECT_EQ(rings(), 1) << "keyboard focus: one ring";
+        // A pointer press (anywhere) hides the ring, keeping the focus; keys
+        // show it again.
+        cw::PointerEvent down;
+        down.kind = cw::PointerEventKind::down;
+        down.position = {700.0f, 150.0f};
+        dispatcher.handlePointerEvent(down);
+        EXPECT_EQ(rings(), 0) << "a press hides the ring";
+        cw::PointerEvent up = down;
+        up.kind = cw::PointerEventKind::up;
+        dispatcher.handlePointerEvent(up);
+        press(cw::KeyCode::right);
+        press(cw::KeyCode::left);
+        EXPECT_EQ(rings(), 1) << "keys show it again";
         EXPECT_EQ(activate(), 1) << "Tab enters at the selected item";
         press(cw::KeyCode::right);
         EXPECT_EQ(activate(), 3) << "the disabled item is skipped";

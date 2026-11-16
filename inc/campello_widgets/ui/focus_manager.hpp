@@ -179,11 +179,17 @@ namespace systems::leal::campello_widgets
          *  key event reaching handleKeyEvent(). */
         static void noteKeyboardInteraction() noexcept;
 
-        /** @brief Switches highlight mode to `touch`, suppressing the focus
-         *  ring for the focus grab that's about to follow. Called by a
-         *  pointer-driven focus request (e.g. RenderGestureDetector on a
-         *  completed tap) before requesting focus. */
+        /** @brief Switches highlight mode to `touch`: focus rings hide.
+         *  Called for every pointer press (PointerDispatcher), as Flutter's
+         *  highlight mode follows the last input of either kind, and by a
+         *  pointer-driven focus request before it focuses. */
         static void notePointerInteraction() noexcept;
+
+        /** @brief Called (UI thread) whenever the highlight mode changes:
+         *  widgets showing a focus ring rebuild for it. Returns an id for
+         *  removeHighlightModeListener(). */
+        static int addHighlightModeListener(std::function<void(FocusHighlightMode)> listener);
+        static void removeHighlightModeListener(int id);
 
         /** @brief The current highlight mode -- theme focus-ring painters
          *  check this alongside FocusNode::hasFocus() before drawing a ring. */
@@ -269,6 +275,7 @@ namespace systems::leal::campello_widgets
 
         static std::atomic<FocusManager*> s_active_manager_;
         static std::atomic<FocusHighlightMode> s_highlight_mode_;
+        static void setHighlightMode(FocusHighlightMode mode);
 
         static std::mutex                            s_global_handler_mutex_;
         static std::function<bool(const KeyEvent&)>  s_global_key_handler_;

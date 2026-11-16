@@ -112,6 +112,16 @@ namespace systems::leal::campello_widgets
                 keys_ = std::make_shared<FocusNode>();
                 keys_->setCanRequestFocus(false);
                 keys_->setSkipTraversal(true);
+                // The ring shows for keyboard focus only: a press elsewhere
+                // (or keys again) changes that without a focus change.
+                highlight_listener_ = FocusManager::addHighlightModeListener([this](FocusHighlightMode) {
+                    if (focused_) setState([] {});
+                });
+            }
+
+            void dispose() override
+            {
+                FocusManager::removeHighlightModeListener(highlight_listener_);
             }
 
             WidgetRef build(BuildContext&) override
@@ -262,6 +272,7 @@ namespace systems::leal::campello_widgets
         private:
             std::shared_ptr<FocusNode> node_;
             std::shared_ptr<FocusNode> keys_;
+            int highlight_listener_ = 0;
             bool hovered_ = false;
             bool pressed_ = false;
             bool focused_ = false;
