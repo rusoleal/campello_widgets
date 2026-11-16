@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `FocusManager::addHighlightModeListener()` / `removeHighlightModeListener()`: called when the focus highlight mode
+  changes, so widgets showing a focus ring can rebuild.
+
+### Fixed
+
+- **A pointer press hides keyboard focus rings**, as in Flutter: the highlight mode follows the last kind of input.
+  `PointerDispatcher` switches it on every press. Before, a press only did so when it focused a control, so after
+  arrowing into a toolbar its ring stayed visible however many items were clicked. The focus itself stays, and keys
+  show the ring again. Toolbar items rebuild on the change.
+
 ## [0.15.0] - 2026-11-16
 
 ### Added

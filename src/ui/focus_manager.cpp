@@ -3,6 +3,8 @@
 #include <cmath>
 #include <unordered_map>
 #include <campello_widgets/ui/focus_manager.hpp>
+#include <functional>
+#include <vector>
 #include <campello_widgets/ui/focus_node.hpp>
 #include <campello_widgets/ui/focus_traversal_policy.hpp>
 #include <campello_widgets/ui/hardware_keyboard.hpp>
@@ -58,14 +60,48 @@ namespace systems::leal::campello_widgets
         return s_active_manager_.load(std::memory_order_acquire);
     }
 
+    namespace
+    {
+        // Highlight mode listeners (UI thread only).
+        std::vector<std::pair<int, std::function<void(FocusHighlightMode)>>>& highlightListeners()
+        {
+            static std::vector<std::pair<int, std::function<void(FocusHighlightMode)>>> listeners;
+            return listeners;
+        }
+        int s_next_highlight_listener = 1;
+    }
+
+    void FocusManager::setHighlightMode(FocusHighlightMode mode)
+    {
+        if (s_highlight_mode_.exchange(mode, std::memory_order_relaxed) == mode) return;
+        // A copy: a listener may remove itself (a rebuild disposing it).
+        const auto listeners = highlightListeners();
+        for (const auto& [id, listener] : listeners)
+            if (listener) listener(mode);
+    }
+
     void FocusManager::noteKeyboardInteraction() noexcept
     {
-        s_highlight_mode_.store(FocusHighlightMode::keyboard, std::memory_order_relaxed);
+        setHighlightMode(FocusHighlightMode::keyboard);
     }
 
     void FocusManager::notePointerInteraction() noexcept
     {
-        s_highlight_mode_.store(FocusHighlightMode::touch, std::memory_order_relaxed);
+        setHighlightMode(FocusHighlightMode::touch);
+    }
+
+    int FocusManager::addHighlightModeListener(std::function<void(FocusHighlightMode)> listener)
+    {
+        const int id = s_next_highlight_listener++;
+        highlightListeners().emplace_back(id, std::move(listener));
+        return id;
+    }
+
+    void FocusManager::removeHighlightModeListener(int id)
+    {
+        auto& listeners = highlightListeners();
+        listeners.erase(std::remove_if(listeners.begin(), listeners.end(), [id](const auto& l) { return l.first == id; }),
+                        listeners.end());
     }
 
     FocusHighlightMode FocusManager::highlightMode() noexcept

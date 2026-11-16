@@ -1,4 +1,5 @@
 #include <campello_widgets/ui/pointer_dispatcher.hpp>
+#include <campello_widgets/ui/focus_manager.hpp>
 #include <utility>
 #include <unordered_set>
 #include <campello_widgets/ui/view.hpp>
@@ -208,6 +209,11 @@ namespace systems::leal::campello_widgets
         PointerEvent stamped = event;
         if (stamped.timestamp_ms == 0)
             stamped.timestamp_ms = currentMonotonicMs();
+
+        // A press hides keyboard focus rings (the highlight mode follows the
+        // last kind of input, as Flutter's).
+        if (stamped.kind == PointerEventKind::down)
+            FocusManager::notePointerInteraction();
 
         if (stamped.kind == PointerEventKind::down && !down_observers_.empty())
         {
