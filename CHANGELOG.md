@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `GestureDetector::focus_on_tap` (default true): whether a completed tap focuses a focusable control.
+
+### Fixed
+
+- **Toolbar items no longer keep focus after a click.** A clicked item took keyboard focus, so the next keys (an app's
+  arrow keys, say) switched to keyboard highlighting and drew the focus ring on it. Items are still reached with Tab
+  and the arrows, with the ring, as M3 says.
+- **The toolbar focus ring was misplaced**: drawn as a `Positioned` with negative offsets in a `Stack`. It's now
+  painted around the indicator, outside its bounds, so it can't move it.
+
 ## [0.14.1] - 2026-11-16
 
 ### Added

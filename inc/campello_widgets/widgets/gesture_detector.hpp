@@ -132,6 +132,11 @@ namespace systems::leal::campello_widgets
         std::shared_ptr<FocusNode>     focus_node;
         bool                           autofocus = false;
         bool                           focusable = false;
+        /// A completed tap focuses the control (when `focusable`). Off for
+        /// controls reached by keyboard but not meant to keep focus after a
+        /// click (toolbar items: the keys go on to the content, and no ring
+        /// appears when they're used).
+        bool                           focus_on_tap = true;
         std::function<void(bool)>      on_focus_change;
 
         GestureDetector() = default;

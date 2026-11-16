@@ -5,6 +5,10 @@
 #include <gtest/gtest.h>
 
 #include <campello_widgets/ui/toolbar_style.hpp>
+#include <campello_widgets/widgets/render_object_element.hpp>
+#include <campello_widgets/widgets/gesture_detector.hpp>
+#include <campello_widgets/ui/render_gesture_detector.hpp>
+#include <campello_widgets/widgets/raw_custom_paint.hpp>
 #include <campello_widgets/widgets/localizations.hpp>
 #include <campello_widgets/widgets/decorated_box.hpp>
 #include <campello_widgets/widgets/padding.hpp>
@@ -197,13 +201,31 @@ TEST(ToolbarStyle, KeyboardRovesFocusAmongItems)
             cw::Element::buildScope();
             int count = 0;
             std::function<void(cw::Element*)> walk = [&](cw::Element* e) {
-                if (auto* d = dynamic_cast<const cw::DecoratedBox*>(&e->widget()); d && d->decoration.border) ++count;
+                if (dynamic_cast<const cw::RawCustomPaint*>(&e->widget())) ++count;  // the ring is painted
                 e->visitChildren(walk);
             };
             walk(root.get());
             return count;
         };
         EXPECT_EQ(rings(), 0);
+
+        // A click doesn't keep focus on an item (the keys go on to the
+        // content, and no ring appears when they're used).
+        std::function<void(cw::Element*)> tapAll = [&](cw::Element* e) {
+            if (auto* roe = dynamic_cast<cw::RenderObjectElement*>(e)) {
+                if (auto* g = dynamic_cast<cw::RenderGestureDetector*>(roe->renderObject())) g->requestFocusOnTap();
+            }
+            e->visitChildren(tapAll);
+        };
+        tapAll(root.get());
+        EXPECT_EQ(rings(), 0);
+        bool anyFocused = false;
+        std::function<void(cw::Element*)> focused = [&](cw::Element* e) {
+            if (auto* g = dynamic_cast<const cw::GestureDetector*>(&e->widget()); g && g->focus_node && g->focus_node->hasFocus()) anyFocused = true;
+            e->visitChildren(focused);
+        };
+        focused(root.get());
+        EXPECT_FALSE(anyFocused) << "a tap doesn't focus a toolbar item";
 
         press(cw::KeyCode::tab);
         EXPECT_EQ(rings(), 1) << "keyboard focus: one ring";

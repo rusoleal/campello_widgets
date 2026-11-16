@@ -200,7 +200,7 @@ namespace systems::leal::campello_widgets
         // pointer-driven so a theme's focus-ring painter doesn't draw a
         // ring just because a click happened to also focus this control
         // (see FocusHighlightMode's doc comment).
-        if (registered_node_)
+        if (registered_node_ && focus_on_tap)
         {
             FocusManager::notePointerInteraction();
             registered_node_->requestFocus();
