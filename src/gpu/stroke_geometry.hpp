@@ -2,6 +2,7 @@
 
 #include <campello_widgets/ui/offset.hpp>
 #include <campello_widgets/ui/paint.hpp>
+#include "gpu/path_fill_aa.hpp"
 #include <vector>
 
 namespace systems::leal::campello_widgets
@@ -61,5 +62,30 @@ namespace systems::leal::campello_widgets
         StrokeCap cap,
         StrokeJoin join,
         float miter_limit);
+
+    /**
+     * @brief An antialiased stroke as coverage triangles (FillAAVertex:
+     * position, alpha), for backends to draw with their fill-skirt
+     * (per-vertex alpha) pipeline -- stroked paths in one draw call, like
+     * the old flat batched triangles, but with soft edges.
+     *
+     * From buildStrokeGeometry(): each segment body is a solid core
+     * (alpha 1) plus a fringe `aa_width_local` wide each side, straddling
+     * the true edge (`half_width` from the centre line), fading to alpha 0,
+     * so the stroke keeps its width; each round cap or join a solid disc
+     * plus a fading ring; bevel/miter wedges solid. Under a pixel wide, the
+     * core is a pixel wide at the stroke's coverage (a fainter hairline). Where
+     * parts overlap (joins) the fringes blend twice: a slightly firmer edge
+     * there, never a hole. `aa_width_local` is one device pixel in the
+     * points' space (1 / the transform's scale).
+     */
+    std::vector<FillAAVertex> buildStrokeAAVertices(
+        const std::vector<Offset>& points,
+        bool closed,
+        float half_width,
+        StrokeCap cap,
+        StrokeJoin join,
+        float miter_limit,
+        float aa_width_local);
 
 } // namespace systems::leal::campello_widgets

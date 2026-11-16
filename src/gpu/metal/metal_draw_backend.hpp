@@ -359,16 +359,6 @@ private:
         const Paint& paint, const Rect& clip, const Matrix4& transform,
         campello_gpu::RenderPassEncoder& encoder);
 
-    // Same decomposition as strokePolyline(), but appends flat (non-AA)
-    // triangles to `verts` instead of issuing per-primitive draw calls —
-    // preserves drawPath()'s existing "one draw call regardless of segment
-    // count" property for potentially long flattened curves. Round caps/
-    // joins are approximated as a small triangle fan (no SDF available in
-    // this batched context).
-    void appendStrokePolylineBatched(
-        const std::vector<Offset>& points, bool closed,
-        const Paint& paint, const Matrix4& transform,
-        std::vector<RectVertex>& verts);
 
     // `cached_bind_group`, if non-null, is reused as-is instead of building a
     // fresh BindGroup for `texture` (see Renderer::text_texture_cache_'s doc

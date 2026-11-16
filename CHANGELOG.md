@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-11-16
+
+### Fixed
+
+- **Stroked paths are antialiased.** `Canvas::drawPath` with a stroke paint drew flat triangles (the batched route's
+  own comment said "no SDF available"), so diagonals and curves were jagged, very visibly so at 1x and on small
+  icons. Lines and rectangles were already smooth.
+  - Strokes are now coverage triangles from the new shared `buildStrokeAAVertices()`: a solid core and a one-pixel
+    fringe straddling the true edge, so the stroke keeps its width. Round caps and joins are soft discs; strokes under
+    a pixel wide become fainter hairlines.
+  - They're drawn with each backend's fill-skirt (per-vertex alpha) pipeline, still in one draw call per path, on
+    Metal, Vulkan and Direct3D.
+  - `appendStrokePolylineBatched()` is gone.
+
 ## [0.13.1] - 2026-11-15
 
 ### Added

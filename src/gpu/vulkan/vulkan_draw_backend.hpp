@@ -253,9 +253,7 @@ public:
 
     // Per-vertex projected position (no UV) for colored_quad_pipeline_ —
     // was previously redefined identically as a local struct inside
-    // drawRect()/drawArc()/drawPath(); hoisted here so
-    // appendStrokePolylineBatched() can share it with drawPath()'s own
-    // vertex vector.
+    // drawRect()/drawArc()/drawPath(); hoisted here so they share it.
     struct ColoredQuadVertex { float x, y, w; };
 
     // Same layout as ColoredQuadVertex plus a per-vertex alpha, for
@@ -372,16 +370,6 @@ private:
         const Paint& paint, const Rect& clip, const Matrix4& transform,
         campello_gpu::RenderPassEncoder& encoder);
 
-    // Same decomposition as strokePolyline(), but appends flat (non-AA)
-    // triangles to `verts` instead of issuing per-primitive draw calls —
-    // preserves drawPath()'s existing "one draw call regardless of segment
-    // count" property for potentially long flattened curves. Round caps/
-    // joins are approximated as a small triangle fan (no SDF available in
-    // this batched context).
-    void appendStrokePolylineBatched(
-        const std::vector<Offset>& points, bool closed,
-        const Paint& paint, const Matrix4& transform,
-        std::vector<ColoredQuadVertex>& verts);
 
     void runBlurPass(
         std::shared_ptr<campello_gpu::Texture> src,

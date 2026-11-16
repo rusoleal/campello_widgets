@@ -1564,70 +1564,6 @@ void VulkanDrawBackend::strokePolyline(
     }
 }
 
-void VulkanDrawBackend::appendStrokePolylineBatched(
-    const std::vector<Offset>& points, bool closed,
-    const Paint& paint, const Matrix4& transform,
-    std::vector<ColoredQuadVertex>& verts)
-{
-    namespace vm = systems::leal::vector_math;
-
-    const float half_width = std::max(0.5f, paint.stroke_width * 0.5f);
-    auto geo = buildStrokeGeometry(points, closed, half_width,
-                                    paint.stroke_cap, paint.stroke_join, paint.stroke_miter_limit);
-
-    auto pushPt = [&](const Offset& o) {
-        auto p = transform * vm::Vector4<float>(o.x, o.y, 0.0f, 1.0f);
-        verts.push_back({p.x(), p.y(), p.w()});
-    };
-
-    // Segment bodies: 2 triangles per segment (same shape the pre-existing
-    // per-segment loop built, just now sourced from buildStrokeGeometry()).
-    for (const auto& seg : geo.segments)
-    {
-        const float dx  = seg.p1.x - seg.p0.x;
-        const float dy  = seg.p1.y - seg.p0.y;
-        const float len = std::sqrt(dx * dx + dy * dy);
-        if (len < 1e-4f) continue;
-        const float nx = -dy / len * half_width;
-        const float ny =  dx / len * half_width;
-        const Offset a{seg.p0.x + nx, seg.p0.y + ny};
-        const Offset b{seg.p0.x - nx, seg.p0.y - ny};
-        const Offset c{seg.p1.x + nx, seg.p1.y + ny};
-        const Offset d{seg.p1.x - nx, seg.p1.y - ny};
-        pushPt(b); pushPt(a); pushPt(d);
-        pushPt(d); pushPt(a); pushPt(c);
-    }
-
-    // Round caps/joins: approximated as a small triangle fan -- no SDF
-    // available in this flat/batched context (see this method's header doc).
-    constexpr int kFanSegments = 12;
-    for (const auto& circ : geo.circles)
-    {
-        for (int i = 0; i < kFanSegments; ++i)
-        {
-            const float a0 = (2.0f * static_cast<float>(M_PI) * i) / kFanSegments;
-            const float a1 = (2.0f * static_cast<float>(M_PI) * (i + 1)) / kFanSegments;
-            pushPt(circ.center);
-            pushPt({circ.center.x + half_width * std::cos(a0), circ.center.y + half_width * std::sin(a0)});
-            pushPt({circ.center.x + half_width * std::cos(a1), circ.center.y + half_width * std::sin(a1)});
-        }
-    }
-
-    // Bevel/miter join wedges.
-    for (const auto& w : geo.wedges)
-    {
-        if (w.has_miter_point)
-        {
-            pushPt(w.hub); pushPt(w.outer_a); pushPt(w.miter_point);
-            pushPt(w.hub); pushPt(w.miter_point); pushPt(w.outer_b);
-        }
-        else
-        {
-            pushPt(w.hub); pushPt(w.outer_a); pushPt(w.outer_b);
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // drawLine
 // ---------------------------------------------------------------------------
@@ -1793,6 +1729,11 @@ void VulkanDrawBackend::drawPath(
 
     if (cmd.paint.style == PaintStyle::stroke)
     {
+        // One device pixel in the path's own space.
+        auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
+        const float scale = std::sqrt(tv.x() * tv.x() + tv.y() * tv.y());
+        const float aa_width_local = (scale > 1e-4f) ? (1.0f / scale) : 1.0f;
+        std::vector<RectAAVertex> aa_verts;
         for (const auto& contour : contours)
         {
             std::vector<Offset> pts;
@@ -1812,8 +1753,38 @@ void VulkanDrawBackend::drawPath(
                 closed = (dx * dx + dy * dy) < 1e-6f;
             }
 
-            appendStrokePolylineBatched(pts, closed, cmd.paint, transform, verts);
+            // Antialiased (buildStrokeAAVertices(): a solid core, a
+            // fading fringe), drawn with the fill skirt's coverage pipeline.
+            const float half_width = std::max(0.5f, cmd.paint.stroke_width * 0.5f);
+            for (const auto& sv : buildStrokeAAVertices(pts, closed, half_width, cmd.paint.stroke_cap, cmd.paint.stroke_join,
+                                                        cmd.paint.stroke_miter_limit, aa_width_local))
+            {
+                auto p = transform * vm::Vector4<float>(sv.pos.x, sv.pos.y, 0.0f, 1.0f);
+                aa_verts.push_back({p.x(), p.y(), p.w(), sv.alpha});
+            }
         }
+        if (aa_verts.empty() || !rect_aa_pipeline_) return;
+        applyScissor(clip, encoder);
+        auto aa_vbuf = colored_quad_vertex_pool_.acquire(
+            *device_, aa_verts.size() * sizeof(RectAAVertex), aa_verts.data());
+        if (!aa_vbuf) return;
+        RectUniforms su{};
+        su.color[0]    = cmd.paint.color.r;
+        su.color[1]    = cmd.paint.color.g;
+        su.color[2]    = cmd.paint.color.b;
+        su.color[3]    = cmd.paint.color.a;
+        su.viewport[0] = vp_w_;
+        su.viewport[1] = vp_h_;
+        encoder.setPipeline(pipelineForBlendMode(
+            cmd.paint.blend_mode, rect_aa_pipeline_, rect_aa_blend_pipelines_));
+        encoder.setPushConstants(
+            static_cast<GPU::ShaderStage>(
+                static_cast<int>(GPU::ShaderStage::vertex) |
+                static_cast<int>(GPU::ShaderStage::fragment)),
+            0, sizeof(RectUniforms), &su);
+        encoder.setVertexBuffer(0, aa_vbuf);
+        encoder.draw(static_cast<uint32_t>(aa_verts.size()));
+        return;
     }
     else
     {
@@ -1857,8 +1828,8 @@ void VulkanDrawBackend::drawPath(
     // Fill antialiasing "skirt" -- see src/gpu/path_fill_aa.hpp. Interior
     // fill above is untouched; this adds one further draw call (regardless
     // of contour/point count) for a thin antialiased band along each
-    // contour's own boundary. Stroke fills don't need this: they're
-    // already antialiased via appendStrokePolylineBatched().
+    // contour's own boundary. (Strokes return above, antialiased by
+    // buildStrokeAAVertices().)
     if (cmd.paint.style != PaintStyle::stroke && rect_aa_pipeline_)
     {
         auto tv = transform * vm::Vector4<float>(1.0f, 0.0f, 0.0f, 0.0f);
