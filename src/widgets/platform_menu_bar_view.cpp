@@ -18,6 +18,7 @@
 #include <campello_widgets/widgets/positioned.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
 #include <campello_widgets/widgets/text.hpp>
+#include <campello_widgets/ui/post_frame_callbacks.hpp>
 #include <campello_widgets/widgets/opacity.hpp>
 #include <campello_widgets/widgets/stack.hpp>
 #include <campello_widgets/widgets/single_child_render_object_widget.hpp>
@@ -290,16 +291,25 @@ namespace systems::leal::campello_widgets
         // dropdown panel below.
         float measureTopBarItemExtent()
         {
-            float w = 40.0f;
-            auto* backend = RenderObject::activeBackend();
-            if (!backend) return w;
-
-            w = 0.0f;
             TextStyle ts;
             ts.color = on_surface_;
+            auto* backend = RenderObject::activeBackend();
+            float w = 0.0f;
             for (const auto& menu : current_menus_) {
                 if (!menu) continue;
-                w = std::max(w, backend->measureText(TextSpan{menu->label, ts}).width);
+                // Before the first layout (the first build, on the web) there
+                // is no backend to measure with: estimate as RenderText does,
+                // and measure again once a frame has run, so the titles get
+                // their real widths instead of overlapping in a fixed slot.
+                w = std::max(w, backend ? backend->measureText(TextSpan{menu->label, ts}).width
+                                        : ts.font_size * 0.6f * static_cast<float>(menu->label.size()));
+            }
+            if (!backend && !remeasure_scheduled_) {
+                remeasure_scheduled_ = true;
+                std::weak_ptr<bool> alive = alive_;
+                PostFrameCallbacks::schedule([this, alive]() {
+                    if (alive.lock()) setState([]() {});
+                });
             }
             return w + 24.0f; // 12px padding each side, matching buildTopLabel
         }
@@ -653,6 +663,8 @@ namespace systems::leal::campello_widgets
         }
 
         bool renders_in_window_ = false;
+        bool remeasure_scheduled_ = false;
+        std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);  // gone with the state
         int  open_top_index_    = -1;
         std::function<bool(const KeyEvent&)> previous_key_handler_;
 
