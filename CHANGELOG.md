@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-11-17
+
+### Fixed
+
+- **In-window menu bar titles overlapped** (the web): `PlatformMenuBarView` measured the titles on its first build, before the first layout, when no draw backend is active, so every slot fell back to 40 px. It now estimates as `RenderText` does and measures again after the first frame.
+
 ## [0.16.0] - 2026-11-16
 
 ### Added
