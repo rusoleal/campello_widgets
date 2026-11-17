@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-11-17
+
+### Fixed
+
+- **GPU hang on Apple GPUs in the browser (WebGPU), out-of-bounds writes on Vulkan.** The draw backend's vertex and index pools reuse a buffer per slot and uploaded this frame's draw into it whatever its size; pools are shared by fixed quads and variable-length shapes (arcs, paths), so a slot sized for 3 vertices could later get 240. WebGPU rejected the draw, and in normal pipelined runs an M2 in Chrome hung (device lost) on the first frames or after a resize. A slot too small is now replaced (at least doubled), as the Metal backend already did.
+
 ## [0.16.1] - 2026-11-17
 
 ### Fixed
