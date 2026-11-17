@@ -1121,6 +1121,19 @@ std::shared_ptr<GPU::Buffer> VulkanDrawBackend::UniformBufferPool::acquire(
                 static_cast<int>(GPU::BufferUsage::copyDst) |
                 static_cast<int>(GPU::BufferUsage::mapWrite)),
             const_cast<void*>(data)));
+    else if (buffers[idx]->getLength() < size)
+        // Slot idx served a smaller draw in an earlier frame: uploading into
+        // it would write past its end (rejected on WebGPU, which then failed
+        // the draw; out of bounds elsewhere, which hung Apple GPUs). Replace
+        // it, at least doubled so a growing draw doesn't reallocate each frame.
+    {
+        buffers[idx] = device.createBuffer(std::max<uint64_t>(size, 2 * buffers[idx]->getLength()),
+            static_cast<GPU::BufferUsage>(
+                static_cast<int>(GPU::BufferUsage::vertex) |
+                static_cast<int>(GPU::BufferUsage::copyDst) |
+                static_cast<int>(GPU::BufferUsage::mapWrite)));
+        buffers[idx]->upload(0, size, const_cast<void*>(data));
+    }
     else
         buffers[idx]->upload(0, size, const_cast<void*>(data));
 
@@ -1148,6 +1161,16 @@ std::shared_ptr<GPU::Buffer> VulkanDrawBackend::IndexBufferPool::acquire(
                 static_cast<int>(GPU::BufferUsage::copyDst) |
                 static_cast<int>(GPU::BufferUsage::mapWrite)),
             const_cast<void*>(data)));
+    else if (buffers[idx]->getLength() < size)
+        // Too small for this frame's draw at idx (see UniformBufferPool).
+    {
+        buffers[idx] = device.createBuffer(std::max<uint64_t>(size, 2 * buffers[idx]->getLength()),
+            static_cast<GPU::BufferUsage>(
+                static_cast<int>(GPU::BufferUsage::index) |
+                static_cast<int>(GPU::BufferUsage::copyDst) |
+                static_cast<int>(GPU::BufferUsage::mapWrite)));
+        buffers[idx]->upload(0, size, const_cast<void*>(data));
+    }
     else
         buffers[idx]->upload(0, size, const_cast<void*>(data));
 
