@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-18
+
 ### Added
 - **Touch input on the web.** `WebCanvas` listens for touch events: each finger is its own pointer (`device_kind` touch, id = touch identifier + 1), so finger drags and multi-finger gestures (pan, scale) work on tablets and phones. Before, only mouse events were read: a tap arrived as the browser's emulated click, a drag not at all.
 - `RenderDropdownMenuPositioner::beside` (and `beside_inset`): places the child beside the anchor, to the right or else the left, instead of below it.
