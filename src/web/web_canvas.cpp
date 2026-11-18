@@ -183,12 +183,10 @@ namespace systems::leal::campello_widgets
             deliver(c, e);
         }
 
-        // mousedown, on each canvas.
-        static EM_BOOL onDown(int, const EmscriptenMouseEvent* ev, void* user)
+        // A press starts on `c` (mouse button or first finger). False when a
+        // modal window blocks `c` (the press goes nowhere).
+        static bool beginPress(WebCanvas* c)
         {
-            auto* c = static_cast<WebCanvas*>(user);
-            if (!isLive(c)) return EM_FALSE;
-
             // Popups close when the user presses anywhere else.
             const std::vector<WebCanvas*> canvases = canvasRegistry();
             for (WebCanvas* other : canvases)
@@ -203,12 +201,21 @@ namespace systems::leal::campello_widgets
             if (c->view_.isInputBlocked())
             {
                 if (WebCanvas* modal = forView(c->view_.inputBlocker())) modal->makeKey();
-                return EM_TRUE;
+                return false;
             }
+            c->makeKey();
+            return true;
+        }
+
+        // mousedown, on each canvas.
+        static EM_BOOL onDown(int, const EmscriptenMouseEvent* ev, void* user)
+        {
+            auto* c = static_cast<WebCanvas*>(user);
+            if (!isLive(c)) return EM_FALSE;
+            if (!beginPress(c)) return EM_TRUE;
             if (g_hovered && g_hovered != c && isLive(g_hovered)) leave(g_hovered);
             g_hovered = c;
             g_pressed = c;
-            c->makeKey();
             PointerEvent e = mouseEvent(c, ev);
             e.kind     = PointerEventKind::down;
             e.pressure = 1.0f;
@@ -269,6 +276,48 @@ namespace systems::leal::campello_widgets
                 deliver(target, e);
             }
             return EM_FALSE;
+        }
+
+        // Touches, on each canvas (a touch keeps its target while the finger
+        // moves, even off the canvas). Tablets and phones send no mouse moves
+        // for a finger drag, only a click after a tap. Each finger is its own
+        // pointer: the touch identifier + 1 (the mouse is pointer 0).
+        static EM_BOOL onTouch(int type, const EmscriptenTouchEvent* ev, void* user)
+        {
+            auto* c = static_cast<WebCanvas*>(user);
+            if (!isLive(c)) return EM_FALSE;
+            PointerEventKind kind = PointerEventKind::move;
+            switch (type) {
+                case EMSCRIPTEN_EVENT_TOUCHSTART:  kind = PointerEventKind::down;   break;
+                case EMSCRIPTEN_EVENT_TOUCHEND:    kind = PointerEventKind::up;     break;
+                case EMSCRIPTEN_EVENT_TOUCHCANCEL: kind = PointerEventKind::cancel; break;
+                default: break;
+            }
+            // The first finger down is a press (popups close, modals block).
+            if (kind == PointerEventKind::down) {
+                int down = 0;
+                for (int i = 0; i < ev->numTouches; ++i)
+                    if (ev->touches[i].onTarget) ++down;
+                int changed = 0;
+                for (int i = 0; i < ev->numTouches; ++i)
+                    if (ev->touches[i].isChanged) ++changed;
+                if (down == changed && !beginPress(c)) return EM_TRUE;
+            }
+            for (int i = 0; i < ev->numTouches; ++i) {
+                const EmscriptenTouchPoint& t = ev->touches[i];
+                if (!t.isChanged) continue;
+                PointerEvent e;
+                e.kind         = kind;
+                e.pointer_id   = static_cast<int32_t>(t.identifier) + 1;
+                e.device_kind  = PointerDeviceKind::touch;
+                e.position     = { static_cast<float>(t.clientX) - c->origin_x_,
+                                   static_cast<float>(t.clientY) - c->origin_y_ };
+                e.pressure     = kind == PointerEventKind::down || kind == PointerEventKind::move ? 1.0f : 0.0f;
+                e.timestamp_ms = nowMs();
+                deliver(c, e);
+            }
+            // Handled: no emulated mouse events, no page scroll or zoom.
+            return EM_TRUE;
         }
 
         static EM_BOOL onWheel(int, const EmscriptenWheelEvent* ev, void* user)
@@ -382,6 +431,10 @@ namespace systems::leal::campello_widgets
         const char* target = selector_.c_str();
         emscripten_set_mousedown_callback(target, this, EM_TRUE, &Input::onDown);
         emscripten_set_wheel_callback(target, this, EM_TRUE, &Input::onWheel);
+        emscripten_set_touchstart_callback(target, this, EM_TRUE, &Input::onTouch);
+        emscripten_set_touchmove_callback(target, this, EM_TRUE, &Input::onTouch);
+        emscripten_set_touchend_callback(target, this, EM_TRUE, &Input::onTouch);
+        emscripten_set_touchcancel_callback(target, this, EM_TRUE, &Input::onTouch);
         if (!host_window_.empty()) {
             const char* win = host_window_.c_str();
             emscripten_set_mousemove_callback(win, this, EM_TRUE, &Input::onWindowMouse);
@@ -398,6 +451,10 @@ namespace systems::leal::campello_widgets
             const char* target = selector_.c_str();
             emscripten_set_mousedown_callback(target, nullptr, EM_TRUE, nullptr);
             emscripten_set_wheel_callback(target, nullptr, EM_TRUE, nullptr);
+            emscripten_set_touchstart_callback(target, nullptr, EM_TRUE, nullptr);
+            emscripten_set_touchmove_callback(target, nullptr, EM_TRUE, nullptr);
+            emscripten_set_touchend_callback(target, nullptr, EM_TRUE, nullptr);
+            emscripten_set_touchcancel_callback(target, nullptr, EM_TRUE, nullptr);
             if (!host_window_.empty()) {
                 const char* win = host_window_.c_str();
                 emscripten_set_mousemove_callback(win, nullptr, EM_TRUE, nullptr);

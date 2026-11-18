@@ -13,7 +13,7 @@
 #include <campello_widgets/widgets/row.hpp>
 #include <campello_widgets/widgets/expanded.hpp>
 #include <campello_widgets/widgets/center.hpp>
-#include <campello_widgets/widgets/list_view.hpp>
+#include <campello_widgets/widgets/mouse_region.hpp>
 #include <campello_widgets/widgets/divider.hpp>
 #include <campello_widgets/widgets/positioned.hpp>
 #include <campello_widgets/widgets/sized_box.hpp>
@@ -37,6 +37,7 @@
 #include <campello_widgets/ui/key.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cctype>
 #include <set>
 #include <unordered_map>
@@ -135,20 +136,26 @@ namespace systems::leal::campello_widgets
         public:
             Offset anchor_pos;
             Size   anchor_size;
+            bool   beside       = false;  // a submenu, beside its row
+            float  beside_inset = 0.0f;
 
             std::shared_ptr<RenderObject> createRenderObject() const override
             {
                 auto r = std::make_shared<RenderDropdownMenuPositioner>();
-                r->anchor_pos  = anchor_pos;
-                r->anchor_size = anchor_size;
+                r->anchor_pos   = anchor_pos;
+                r->anchor_size  = anchor_size;
+                r->beside       = beside;
+                r->beside_inset = beside_inset;
                 return r;
             }
 
             void updateRenderObject(RenderObject& ro) const override
             {
                 auto& r = static_cast<RenderDropdownMenuPositioner&>(ro);
-                r.anchor_pos  = anchor_pos;
-                r.anchor_size = anchor_size;
+                r.anchor_pos   = anchor_pos;
+                r.anchor_size  = anchor_size;
+                r.beside       = beside;
+                r.beside_inset = beside_inset;
                 r.markNeedsLayout();
             }
         };
@@ -190,12 +197,16 @@ namespace systems::leal::campello_widgets
         // strip regardless of font metrics (ascent/descent vary per glyph
         // set — e.g. a label with no descenders would otherwise sit
         // slightly high in a height that hugs the text exactly).
-        constexpr float kMenuBarHeight = 32.0f;
+        constexpr float kMenuBarHeight = 28.0f;
+        constexpr float kTopItemHPad   = 10.0f;  // each side of a title
 
-        // Gap reserved after the widest label in the open menu, before any
-        // trailing shortcut/submenu-arrow content — see
-        // PlatformMenuBarViewState::measured_label_width_.
-        constexpr float kMenuItemGap = 24.0f;
+        // Menu panels, as compact as native menus: row padding, the panel's
+        // top and bottom padding, and the gap between the widest label and
+        // the trailing column (shortcuts, submenu arrows).
+        constexpr float kRowHPad     = 12.0f;
+        constexpr float kRowVPad     = 3.0f;
+        constexpr float kPanelVPad   = 4.0f;
+        constexpr float kMenuItemGap = 20.0f;
     } // namespace
 
     // -------------------------------------------------------------------------
@@ -242,36 +253,33 @@ namespace systems::leal::campello_widgets
             on_surface_          = tokens->colors.on_surface;
             on_surface_variant_  = tokens->colors.on_surface_variant;
             highlight_color_     = tokens->colors.surface_variant;
+            separator_color_     = tokens->colors.outline_variant;
 
             while (anchor_keys_.size() < current_menus_.size())
                 anchor_keys_.push_back(std::make_shared<GlobalKey>());
 
             if (open_top_index_ >= static_cast<int>(current_menus_.size())) {
                 open_top_index_ = -1;
-                expanded_submenus_.clear();
+                open_path_.clear();
+                hovered_ = nullptr;
                 removeOverlayEntry();
             }
 
-            // A horizontal, fixed-extent ListView rather than a Row: each
-            // item gets a genuinely tight (item_extent × bar height) box to
-            // lay out into, so Center below fills only *that* box instead
-            // of the whole bar (the bug with a Row, where a loose
-            // cross-axis-center child fills all the way to the row's own
-            // resolved width). It also scrolls instead of overflowing if
-            // there isn't enough space for every menu.
-            auto list = std::make_shared<ListView>();
-            list->scroll_axis = Axis::horizontal;
-            list->item_count  = static_cast<int>(current_menus_.size());
-            list->item_extent = measureTopBarItemExtent();
-            list->builder     = [this](BuildContext&, int i) { return buildTopLabel(i); };
+            // A Row of titles, each as wide as its own text (as native menu
+            // bars): each item is a tight SizedBox, so its Center fills only
+            // that item.
+            std::vector<WidgetRef> titles;
+            for (int i = 0; i < static_cast<int>(current_menus_.size()); ++i)
+                titles.push_back(buildTopLabel(i));
+            auto row = std::make_shared<Row>(std::move(titles));
 
-            auto sized_list = SizedBox::from_height(kMenuBarHeight, list);
+            auto sized_row = SizedBox::from_height(kMenuBarHeight, row);
 
             BoxDecoration bar_deco;
             bar_deco.color = bg_color_;
             auto bar = std::make_shared<DecoratedBox>();
             bar->decoration = bar_deco;
-            bar->child       = sized_list;
+            bar->child       = sized_row;
 
             auto col = std::make_shared<Column>();
             col->main_axis_size = MainAxisSize::min;
@@ -284,26 +292,19 @@ namespace systems::leal::campello_widgets
         // Top-level bar
         // ------------------------------------------------------------------
 
-        // Reserves enough per-item width for the longest menu name, plus
-        // horizontal padding — ListView requires one uniform item_extent
-        // (see build()), so this is computed from real text metrics rather
-        // than guessed, the same way measureColumnWidths() sizes the
-        // dropdown panel below.
-        float measureTopBarItemExtent()
+        // A title's width: its text, measured, plus padding on each side.
+        float topItemWidth(int index)
         {
+            const auto& menu = current_menus_[static_cast<size_t>(index)];
+            const std::string label = menu ? menu->label : std::string();
             TextStyle ts;
             ts.color = on_surface_;
             auto* backend = RenderObject::activeBackend();
-            float w = 0.0f;
-            for (const auto& menu : current_menus_) {
-                if (!menu) continue;
-                // Before the first layout (the first build, on the web) there
-                // is no backend to measure with: estimate as RenderText does,
-                // and measure again once a frame has run, so the titles get
-                // their real widths instead of overlapping in a fixed slot.
-                w = std::max(w, backend ? backend->measureText(TextSpan{menu->label, ts}).width
-                                        : ts.font_size * 0.6f * static_cast<float>(menu->label.size()));
-            }
+            // Before the first layout (the first build, on the web) there is
+            // no backend to measure with: estimate as RenderText does, and
+            // measure again once a frame has run.
+            const float w = backend ? backend->measureText(TextSpan{label, ts}).width
+                                    : ts.font_size * 0.6f * static_cast<float>(label.size());
             if (!backend && !remeasure_scheduled_) {
                 remeasure_scheduled_ = true;
                 std::weak_ptr<bool> alive = alive_;
@@ -311,7 +312,7 @@ namespace systems::leal::campello_widgets
                     if (alive.lock()) setState([]() {});
                 });
             }
-            return w + 24.0f; // 12px padding each side, matching buildTopLabel
+            return std::ceil(w) + 2.0f * kTopItemHPad;
         }
 
         WidgetRef buildTopLabel(int index)
@@ -320,29 +321,19 @@ namespace systems::leal::campello_widgets
 
             TextStyle ts;
             ts.color = on_surface_;
-            auto text = std::make_shared<Text>(menu->label, ts);
-
-            auto h_padded = std::make_shared<Padding>();
-            h_padded->padding = EdgeInsets::symmetric(0.0f, 12.0f);
-            h_padded->child   = text;
-
-            // Safe here (unlike wrapping the whole bar row in Center):
-            // ListView hands each item a genuinely tight item_extent-wide
-            // box, so "fill to max available" fills only this one item's
-            // slot, not the bar's full resolved width.
-            auto centered = std::make_shared<Center>(h_padded);
+            auto text = std::make_shared<Text>(menu ? menu->label : std::string(), ts);
 
             BoxDecoration deco;
             deco.color = (open_top_index_ == index) ? highlight_color_ : Color::transparent();
             auto deco_box = std::make_shared<DecoratedBox>();
             deco_box->decoration = deco;
-            deco_box->child      = centered;
+            deco_box->child      = std::make_shared<Center>(text);
 
             auto gesture = std::make_shared<GestureDetector>();
             gesture->key    = anchor_keys_[static_cast<size_t>(index)];
             gesture->on_tap = [this, index]() { toggleTopMenu(index); };
             gesture->child  = deco_box;
-            return gesture;
+            return std::make_shared<SizedBox>(topItemWidth(index), kMenuBarHeight, gesture);
         }
 
         void toggleTopMenu(int index)
@@ -350,7 +341,21 @@ namespace systems::leal::campello_widgets
             const bool was_open_here = (open_top_index_ == index);
             setState([this, index, was_open_here]() {
                 open_top_index_ = was_open_here ? -1 : index;
-                expanded_submenus_.clear();
+                open_path_.clear();
+                hovered_ = nullptr;
+            });
+            refreshOverlay();
+        }
+
+        // With a menu open, the pointer moved onto another title: that menu
+        // opens instead (as native menu bars).
+        void switchTopMenu(int index)
+        {
+            if (open_top_index_ < 0 || open_top_index_ == index) return;
+            setState([this, index]() {
+                open_top_index_ = index;
+                open_path_.clear();
+                hovered_ = nullptr;
             });
             refreshOverlay();
         }
@@ -359,7 +364,8 @@ namespace systems::leal::campello_widgets
         {
             setState([this]() {
                 open_top_index_ = -1;
-                expanded_submenus_.clear();
+                open_path_.clear();
+                hovered_ = nullptr;
             });
             removeOverlayEntry();
         }
@@ -368,6 +374,26 @@ namespace systems::leal::campello_widgets
         // Dropdown overlay
         // ------------------------------------------------------------------
 
+        // Where a keyed GestureDetector is on screen (false before its first
+        // layout; only gesture detectors track their global offset).
+        static bool rectOf(const std::shared_ptr<GlobalKey>& key, Offset& pos, Size& size)
+        {
+            if (!key) return false;
+            auto* element = key->currentElement();
+            if (!element) return false;
+            auto* roe = element->findDescendantRenderObjectElement();
+            if (!roe) return false;
+            auto box = std::dynamic_pointer_cast<RenderGestureDetector>(roe->sharedRenderObject());
+            if (!box) return false;
+            pos  = box->globalOffset();
+            size = box->size();
+            return size.width > 0.0f && size.height > 0.0f;
+        }
+
+        // The overlay: a barrier that closes the menus on an outside press;
+        // the bar's titles again, above it (moving onto one switches menus,
+        // a tap on the open one closes it); the open menu below its title;
+        // each open submenu beside its row.
         void refreshOverlay()
         {
             if (open_top_index_ < 0) {
@@ -375,43 +401,50 @@ namespace systems::leal::campello_widgets
                 return;
             }
 
+            std::vector<WidgetRef> layers;
+            layers.push_back(ModalBarrier::create(Color::transparent(), true, [this]() { closeAll(); }));
+
+            for (int i = 0; i < static_cast<int>(current_menus_.size()); ++i) {
+                Offset pos;
+                Size   size = Size::zero();
+                if (!rectOf(anchor_keys_[static_cast<size_t>(i)], pos, size)) continue;
+                auto tap = std::make_shared<GestureDetector>();
+                tap->on_tap = [this, i]() { toggleTopMenu(i); };
+                tap->child  = std::make_shared<SizedBox>(size.width, size.height);
+                auto hover = std::make_shared<MouseRegion>();
+                hover->on_enter = [this, i]() { switchTopMenu(i); };
+                hover->child    = tap;
+                layers.push_back(std::make_shared<Positioned>(pos.x, pos.y, std::nullopt, std::nullopt,
+                                                              size.width, size.height, hover));
+            }
+
             Offset anchor_pos;
             Size   anchor_size = Size::zero();
-            if (auto& key = anchor_keys_[static_cast<size_t>(open_top_index_)]) {
-                if (auto* element = key->currentElement()) {
-                    if (auto* roe = element->findDescendantRenderObjectElement()) {
-                        auto box = std::dynamic_pointer_cast<RenderGestureDetector>(roe->sharedRenderObject());
-                        if (box) {
-                            anchor_pos  = box->globalOffset();
-                            anchor_size = box->size();
-                        }
-                    }
+            rectOf(anchor_keys_[static_cast<size_t>(open_top_index_)], anchor_pos, anchor_size);
+            auto top = std::make_shared<MenuDropdownPositionerWidget>();
+            top->anchor_pos  = anchor_pos;
+            top->anchor_size = anchor_size;
+            top->child       = buildDropdownPanel(current_menus_[static_cast<size_t>(open_top_index_)]->items, 0);
+            layers.push_back(Positioned::fill(top));
+
+            for (size_t d = 0; d < open_path_.size(); ++d) {
+                Offset pos;
+                Size   size = Size::zero();
+                auto key = submenu_keys_.find(open_path_[d]);
+                if (key == submenu_keys_.end() || !rectOf(key->second, pos, size)) {
+                    open_path_.resize(d);
+                    break;
                 }
+                auto beside = std::make_shared<MenuDropdownPositionerWidget>();
+                beside->anchor_pos   = pos;
+                beside->anchor_size  = size;
+                beside->beside       = true;
+                beside->beside_inset = kPanelVPad;
+                beside->child        = buildDropdownPanel(open_path_[d]->items, static_cast<int>(d) + 1);
+                layers.push_back(Positioned::fill(beside));
             }
 
-            // Floors rather than 0: if there's no active draw backend yet
-            // (shouldn't happen once the app is actually on screen, but
-            // cheap to guard) a zero-width panel would render nothing
-            // instead of just skipping alignment.
-            measured_label_width_    = 40.0f;
-            measured_shortcut_width_ = 0.0f;
-            if (auto* backend = RenderObject::activeBackend()) {
-                measured_label_width_ = 0.0f;
-                measureColumnWidths(backend, current_menus_[static_cast<size_t>(open_top_index_)]->items);
-            }
-
-            auto panel = buildDropdownPanel(current_menus_[static_cast<size_t>(open_top_index_)]->items, 0);
-
-            auto positioner = std::make_shared<MenuDropdownPositionerWidget>();
-            positioner->anchor_pos  = anchor_pos;
-            positioner->anchor_size = anchor_size;
-            positioner->child       = panel;
-
-            auto dismiss = [this]() { closeAll(); };
-            auto barrier = ModalBarrier::create(Color::transparent(), true, dismiss);
-
-            std::vector<WidgetRef> stack_children = {barrier, Positioned::fill(positioner)};
-            auto stack = Stack::create(stack_children);
+            auto stack = Stack::create(layers);
             stack->fit = StackFit::expand;
 
             if (menu_entry_) {
@@ -431,38 +464,44 @@ namespace systems::leal::campello_widgets
             }
         }
 
-        // Measures every label/submenu-title and every shortcut/arrow in
-        // `items` (recursively, so a still-collapsed submenu's content
-        // doesn't shift the panel width when later expanded), growing
-        // measured_label_width_/measured_shortcut_width_ to fit the widest
-        // of each. buildDropdownPanel sizes the whole panel from these two
-        // numbers, and each row is a [label][Expanded spacer][trailing] Row
-        // that fills that established width — trailing content lands
-        // flush against the panel's right edge on every row, using real
-        // font metrics via the active draw backend rather than a guess.
-        void measureColumnWidths(IDrawBackend* backend, const std::vector<PlatformMenuItemRef>& items)
+        // The widest label (with its check mark) and widest trailing text
+        // (shortcut, or a submenu's arrow) among `items`: one panel's
+        // columns. Each row is [label][Expanded spacer][trailing] at the
+        // panel's width, so trailing text lines up on the right.
+        void measureColumnWidths(const std::vector<PlatformMenuItemRef>& items,
+                                 float& label_width, float& trailing_width)
         {
+            label_width = 0.0f;
+            trailing_width = 0.0f;
+            auto* backend = RenderObject::activeBackend();
             TextStyle ts;
             ts.color = on_surface_;
             TextStyle sts;
             sts.color = on_surface_variant_;
+            auto measure = [backend](const std::string& text, const TextStyle& style) {
+                return backend ? backend->measureText(TextSpan{text, style}).width
+                               : style.font_size * 0.6f * static_cast<float>(text.size());
+            };
             for (const auto& item : items) {
                 if (!item) continue;
                 if (auto* label = dynamic_cast<PlatformMenuItemLabel*>(item.get())) {
-                    const std::string prefix = label->checked ? "✓ " : "";
-                    measured_label_width_ = std::max(measured_label_width_,
-                        backend->measureText(TextSpan{prefix + label->label, ts}).width);
+                    label_width = std::max(label_width, measure(checkPrefix(label) + label->label, ts));
                     if (!label->shortcut.empty())
-                        measured_shortcut_width_ = std::max(measured_shortcut_width_,
-                            backend->measureText(TextSpan{label->shortcut, sts}).width);
+                        trailing_width = std::max(trailing_width, measure(label->shortcut, sts));
                 } else if (auto* submenu = dynamic_cast<PlatformMenuItemSubmenu*>(item.get())) {
-                    measured_label_width_ = std::max(measured_label_width_,
-                        backend->measureText(TextSpan{submenu->label, ts}).width);
-                    measured_shortcut_width_ = std::max(measured_shortcut_width_,
-                        backend->measureText(TextSpan{"▾", sts}).width);
-                    measureColumnWidths(backend, submenu->items);
+                    label_width    = std::max(label_width, measure(submenu->label, ts));
+                    trailing_width = std::max(trailing_width, measure("▸", sts));
+                } else if (auto* provided = dynamic_cast<PlatformProvidedMenuItem*>(item.get())) {
+                    label_width = std::max(label_width, measure(providedItemLabel(provided->type), ts));
                 }
             }
+            label_width = std::ceil(label_width);
+            trailing_width = std::ceil(trailing_width);
+        }
+
+        static std::string checkPrefix(const PlatformMenuItemLabel* item)
+        {
+            return item->checked ? "✓ " : "";
         }
 
         WidgetRef buildDropdownPanel(const std::vector<PlatformMenuItemRef>& items, int depth)
@@ -470,41 +509,33 @@ namespace systems::leal::campello_widgets
             std::vector<WidgetRef> rows;
             for (const auto& item : items) {
                 if (!item) continue;
-
                 if (dynamic_cast<PlatformMenuItemSeparator*>(item.get())) {
-                    rows.push_back(std::make_shared<Divider>());
+                    rows.push_back(buildSeparator(depth));
                 } else if (auto* label = dynamic_cast<PlatformMenuItemLabel*>(item.get())) {
                     rows.push_back(buildLabelRow(label, depth));
                 } else if (auto* submenu = dynamic_cast<PlatformMenuItemSubmenu*>(item.get())) {
                     rows.push_back(buildSubmenuRow(submenu, depth));
-                    if (expanded_submenus_.count(submenu) > 0)
-                        rows.push_back(buildDropdownPanel(submenu->items, depth + 1));
                 } else if (auto* provided = dynamic_cast<PlatformProvidedMenuItem*>(item.get())) {
                     rows.push_back(buildProvidedRow(provided, depth));
                 }
             }
 
-            // stretch: safe here because every row is explicitly sized to
-            // panel_width below (a definite, finite value from real text
-            // metrics) rather than to whatever RenderDropdownMenuPositioner
-            // offers — the panel would otherwise span the full overlay/
-            // viewport width (RenderDropdownMenuPositioner hands its child
-            // a max-width constraint equal to that), the same trap
-            // DropdownButton's own positioner usage documents. stretch is
-            // what makes every row share panel_width, so each row's
-            // [label][Expanded][trailing] can right-justify its trailing
-            // content against a common edge.
+            // stretch: every row is as wide as the panel (a definite width
+            // from the measured columns, not what the positioner offers —
+            // the whole overlay), so trailing texts share the right edge.
             auto col = std::make_shared<Column>();
             col->main_axis_size       = MainAxisSize::min;
             col->cross_axis_alignment = CrossAxisAlignment::stretch;
             col->children             = std::move(rows);
 
-            if (depth > 0) return col;
+            float label_width = 0.0f, trailing_width = 0.0f;
+            measureColumnWidths(items, label_width, trailing_width);
+            const float gap = trailing_width > 0.0f ? kMenuItemGap : 0.0f;
+            const float panel_width = kRowHPad + label_width + gap + trailing_width + kRowHPad;
 
-            constexpr float kPanelHPad = 12.0f;
-            const float panel_width = kPanelHPad + measured_label_width_ + kMenuItemGap
-                                     + measured_shortcut_width_ + kPanelHPad;
-            auto sized_col = SizedBox::from_width(panel_width, col);
+            auto padded = std::make_shared<Padding>();
+            padded->padding = EdgeInsets::symmetric(kPanelVPad, 0.0f);
+            padded->child   = SizedBox::from_width(panel_width, col);
 
             BoxDecoration deco;
             deco.color         = bg_color_;
@@ -513,93 +544,135 @@ namespace systems::leal::campello_widgets
 
             auto box = std::make_shared<DecoratedBox>();
             box->decoration = deco;
-            box->child       = sized_col;
+            box->child       = padded;
             return box;
+        }
+
+        // The pointer is on a row of the panel at `depth`: it's highlighted,
+        // and submenus open from deeper panels close (as native menus).
+        void hoverRow(const void* item, int depth)
+        {
+            const bool deeper_open = open_path_.size() > static_cast<size_t>(depth);
+            if (hovered_ == item && !deeper_open) return;
+            hovered_ = item;
+            if (deeper_open) open_path_.resize(static_cast<size_t>(depth));
+            refreshOverlay();
+        }
+
+        void leaveRow(const void* item)
+        {
+            if (hovered_ != item) return;
+            hovered_ = nullptr;
+            refreshOverlay();
+        }
+
+        // Opens `submenu` from the panel at `depth` (hovering or tapping its
+        // row); a tap on an open one closes it.
+        void openSubmenu(PlatformMenuItemSubmenu* submenu, int depth, bool toggle)
+        {
+            const size_t d = static_cast<size_t>(depth);
+            const bool open = open_path_.size() > d && open_path_[d] == submenu;
+            if (open && !toggle && open_path_.size() == d + 1 && hovered_ == submenu) return;
+            hovered_ = submenu;
+            open_path_.resize(d);
+            if (!open || !toggle) open_path_.push_back(submenu);
+            refreshOverlay();
+        }
+
+        // A row's box: padding, the highlight, hover and tap handling.
+        WidgetRef rowBox(const void* item, int depth, WidgetRef content, bool enabled, bool highlighted,
+                         std::function<void()> on_tap, std::function<void()> on_enter = nullptr,
+                         std::shared_ptr<GlobalKey> key = nullptr)
+        {
+            auto padded = std::make_shared<Padding>();
+            padded->padding = EdgeInsets::symmetric(kRowVPad, kRowHPad);
+            padded->child   = std::move(content);
+
+            WidgetRef body = padded;
+            if (!enabled) {
+                auto faded     = std::make_shared<Opacity>();
+                faded->opacity = 0.4f;
+                faded->child   = body;
+                body = faded;
+            }
+
+            BoxDecoration deco;
+            deco.color = highlighted && enabled ? highlight_color_ : Color::transparent();
+            auto box = std::make_shared<DecoratedBox>();
+            box->decoration = deco;
+            box->child      = body;
+
+            auto tap = std::make_shared<GestureDetector>();
+            tap->key   = std::move(key);
+            if (enabled) tap->on_tap = std::move(on_tap);
+            tap->child = box;
+
+            auto hover = std::make_shared<MouseRegion>();
+            hover->on_enter = on_enter ? std::move(on_enter) : std::function<void()>([this, item, depth]() { hoverRow(item, depth); });
+            hover->on_exit  = [this, item]() { leaveRow(item); };
+            hover->child    = tap;
+            return hover;
+        }
+
+        WidgetRef buildSeparator(int depth)
+        {
+            // Hovering the gap still closes deeper submenus.
+            auto hover = std::make_shared<MouseRegion>();
+            hover->on_enter = [this, depth]() { hoverRow(nullptr, depth); };
+            // A hairline with a little space around it, as native menus (a
+            // Divider takes the design system's taller list spacing).
+            BoxDecoration line;
+            line.color = separator_color_;
+            auto rule = std::make_shared<DecoratedBox>();
+            rule->decoration = line;
+            rule->child      = SizedBox::from_height(1.0f);
+            hover->child    = std::make_shared<Padding>(EdgeInsets::symmetric(kPanelVPad, 0.0f), rule);
+            return hover;
+        }
+
+        WidgetRef columns(WidgetRef label, WidgetRef trailing)
+        {
+            auto row = std::make_shared<Row>();
+            row->children = {
+                std::move(label),
+                std::make_shared<Expanded>(std::make_shared<SizedBox>()),
+                std::move(trailing),
+            };
+            return row;
         }
 
         WidgetRef buildLabelRow(PlatformMenuItemLabel* item, int depth)
         {
             TextStyle ts;
             ts.color = on_surface_;
-            const std::string prefix = item->checked ? "✓ " : "";
-            auto label_text = std::make_shared<Text>(prefix + item->label, ts);
-
             TextStyle sts;
             sts.color = on_surface_variant_;
-            auto shortcut_text = std::make_shared<Text>(item->shortcut, sts);
-
-            // [label][Expanded spacer][shortcut]: the row is stretched to
-            // panel_width by the parent Column (see buildDropdownPanel), so
-            // the spacer absorbs whatever's left over and pushes the
-            // shortcut flush against the row's — and so every row's —
-            // right edge, regardless of how long this row's own label is.
-            // (An empty shortcut_text just collapses to zero width.)
-            auto row = std::make_shared<Row>();
-            row->children = {
-                label_text,
-                std::make_shared<Expanded>(std::make_shared<SizedBox>()),
-                shortcut_text,
-            };
-
-            auto padded = std::make_shared<Padding>();
-            padded->padding = EdgeInsets::only(12.0f + static_cast<float>(depth) * 16.0f, 8.0f, 12.0f, 8.0f);
-            padded->child   = row;
-
-            if (item->enabled) {
-                auto callback = item->on_selected;
-                auto g    = std::make_shared<GestureDetector>();
-                g->on_tap = [this, callback]() {
-                    closeAll();
-                    if (callback) callback();
-                };
-                g->child = padded;
-                return g;
-            }
-
-            auto faded     = std::make_shared<Opacity>();
-            faded->opacity = 0.4f;
-            faded->child   = padded;
-            return faded;
+            auto content = columns(std::make_shared<Text>(checkPrefix(item) + item->label, ts),
+                                   std::make_shared<Text>(item->shortcut, sts));
+            auto callback = item->on_selected;
+            return rowBox(item, depth, content, item->enabled, hovered_ == item, [this, callback]() {
+                closeAll();
+                if (callback) callback();
+            });
         }
 
         WidgetRef buildSubmenuRow(PlatformMenuItemSubmenu* item, int depth)
         {
-            const bool expanded = expanded_submenus_.count(item) > 0;
+            auto& key = submenu_keys_[item];
+            if (!key) key = std::make_shared<GlobalKey>();
+            const bool open = std::find(open_path_.begin(), open_path_.end(), item) != open_path_.end();
 
             TextStyle ts;
             ts.color = on_surface_;
-            auto label_text = std::make_shared<Text>(item->label, ts);
-
             TextStyle arrow_ts;
             arrow_ts.color = on_surface_variant_;
-            auto arrow = std::make_shared<Text>(expanded ? "▾" : "▸", arrow_ts);
-
-            auto row = std::make_shared<Row>();
-            row->children = {
-                label_text,
-                std::make_shared<Expanded>(std::make_shared<SizedBox>()),
-                arrow,
-            };
-
-            auto padded = std::make_shared<Padding>();
-            padded->padding = EdgeInsets::only(12.0f + static_cast<float>(depth) * 16.0f, 8.0f, 12.0f, 8.0f);
-            padded->child   = row;
-
-            if (item->enabled) {
-                auto g    = std::make_shared<GestureDetector>();
-                g->on_tap = [this, item]() {
-                    if (expanded_submenus_.count(item) > 0) expanded_submenus_.erase(item);
-                    else expanded_submenus_.insert(item);
-                    refreshOverlay();
-                };
-                g->child = padded;
-                return g;
-            }
-
-            auto faded     = std::make_shared<Opacity>();
-            faded->opacity = 0.4f;
-            faded->child   = padded;
-            return faded;
+            auto content = columns(std::make_shared<Text>(item->label, ts), std::make_shared<Text>("▸", arrow_ts));
+            if (!item->enabled)
+                return rowBox(item, depth, content, false, false, nullptr, nullptr, key);
+            return rowBox(item, depth, content, true, open || hovered_ == item,
+                          [this, item, depth]() { openSubmenu(item, depth, true); },
+                          [this, item, depth]() { openSubmenu(item, depth, false); },
+                          key);
         }
 
         WidgetRef buildProvidedRow(PlatformProvidedMenuItem* item, int depth)
@@ -612,16 +685,7 @@ namespace systems::leal::campello_widgets
             // on_selected callback instead.
             TextStyle ts;
             ts.color = on_surface_variant_;
-            auto label_text = std::make_shared<Text>(providedItemLabel(item->type), ts);
-
-            auto padded = std::make_shared<Padding>();
-            padded->padding = EdgeInsets::only(12.0f + static_cast<float>(depth) * 16.0f, 8.0f, 12.0f, 8.0f);
-            padded->child   = label_text;
-
-            auto faded     = std::make_shared<Opacity>();
-            faded->opacity = 0.4f;
-            faded->child   = padded;
-            return faded;
+            return rowBox(item, depth, std::make_shared<Text>(providedItemLabel(item->type), ts), false, false, nullptr);
         }
 
         // ------------------------------------------------------------------
@@ -670,15 +734,16 @@ namespace systems::leal::campello_widgets
 
         std::vector<PlatformMenuRef>       current_menus_;
         std::vector<std::shared_ptr<GlobalKey>> anchor_keys_;
-        std::set<PlatformMenuItemSubmenu*> expanded_submenus_;
+        std::vector<PlatformMenuItemSubmenu*> open_path_;  // open submenus, outermost first
+        std::unordered_map<const PlatformMenuItemSubmenu*, std::shared_ptr<GlobalKey>> submenu_keys_;
+        const void*                        hovered_ = nullptr;  // the row under the pointer
         std::shared_ptr<OverlayEntry>      menu_entry_;
-        float                               measured_label_width_    = 0.0f;
-        float                               measured_shortcut_width_ = 0.0f;
 
         Color bg_color_           = Color::white();
         Color on_surface_         = Color::black();
         Color on_surface_variant_ = Color::black();
         Color highlight_color_    = Color::transparent();
+        Color separator_color_    = Color::fromRGBA(0.0f, 0.0f, 0.0f, 0.12f);
     };
 
     // -------------------------------------------------------------------------

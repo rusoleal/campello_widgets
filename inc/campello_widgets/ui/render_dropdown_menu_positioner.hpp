@@ -32,6 +32,13 @@ namespace systems::leal::campello_widgets
          *  aligning their left edges — tooltips. Still kept on screen. */
         bool center_horizontally = false;
 
+        /// Beside the anchor instead of below it (a submenu by its row): to
+        /// the right, or to the left when it doesn't fit; its top at the
+        /// anchor's, less `beside_inset` (the panel's own top padding, so
+        /// its first row lines up with the anchor row).
+        bool  beside       = false;
+        float beside_inset = 0.0f;
+
         void performLayout() override;
     };
 
