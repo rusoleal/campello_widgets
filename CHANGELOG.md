@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Touch input on the web.** `WebCanvas` listens for touch events: each finger is its own pointer (`device_kind` touch, id = touch identifier + 1), so finger drags and multi-finger gestures (pan, scale) work on tablets and phones. Before, only mouse events were read: a tap arrived as the browser's emulated click, a drag not at all.
+- `RenderDropdownMenuPositioner::beside` (and `beside_inset`): places the child beside the anchor, to the right or else the left, instead of below it.
+
+### Changed
+- **In-window menu bar (web, Linux, Windows) behaves like a native one.**
+  - With a menu open, moving onto another title opens that menu.
+  - Submenus open beside their row on hover (or a tap), and close when another row of the parent is hovered; the hovered row is highlighted.
+  - It's compact: each title is as wide as its own text, the bar is 28 px, rows have 3 px of vertical padding, and separators are a hairline.
+
 ## [0.16.2] - 2026-11-17
 
 ### Fixed
