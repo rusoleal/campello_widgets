@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Dependencies upgraded:** campello_gpu v0.30.1 → v0.33.1, campello_image v0.5.1 → v0.6.0.
+  - campello_gpu v0.32.0 changes what `setBindGroup()` means on D3D12: it takes the bind group index, as on the other backends, instead of the root parameter index. Widgets' D3D12 layouts only have a sampler in their last group, so they bind exactly as before.
+  - campello_image v0.6.0 adds KTX2 encoding, which campello_renderer v0.27 needs. With both libraries in one app, this pin used to win and broke the renderer's build (`texture_encoder.hpp` not found).
+
 ## [0.17.0] - 2026-11-18
 
 ### Added
