@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **WebAssembly builds use SIMD** (`-msimd128`), on by default: every browser with WebGPU supports it. The option `CAMPELLO_WIDGETS_WASM_SIMD` turns it off. It applies to the library and its design-system libraries and Clipper2 and is passed on to consumers (compile and link, so wasm-opt accepts the SIMD instructions).
+
 ## [0.17.1] - 2026-11-19
 
 ### Changed

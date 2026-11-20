@@ -13,6 +13,15 @@ option(BUILD_INTEGRATION_TESTS "Build platform-specific integration tests"   OFF
 option(BUILD_EXAMPLES         "Build example applications"                    OFF)
 option(ENABLE_UNITY_BUILD     "Enable Unity Build for faster compilation"     ON)
 option(CAMPELLO_GPU_VALIDATION "Enable Vulkan validation layers (debug only)" OFF)
+
+# WebAssembly SIMD (-msimd128), on by default: every browser with WebGPU has
+# it. Compiles this directory with it (the library and the third-party code it
+# builds); the target passes it on to its consumers below.
+option(CAMPELLO_WIDGETS_WASM_SIMD "WebAssembly builds: use SIMD (-msimd128)" ON)
+if(EMSCRIPTEN AND CAMPELLO_WIDGETS_WASM_SIMD)
+    add_compile_options(-msimd128)
+    add_link_options(-msimd128)
+endif()
 option(BUILD_MATERIAL  "Build the campello_material design system library"  ON)
 option(BUILD_CUPERTINO "Build the campello_cupertino design system library" ON)
 option(BUILD_UI        "Build the campello_ui design system library"       ON)
@@ -84,6 +93,12 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     include(linux.cmake)
 else()
     message(FATAL_ERROR "Unsupported platform: ${CMAKE_SYSTEM_NAME}")
+endif()
+
+# Consumers compile and link with SIMD too (the link tells wasm-opt to accept it).
+if(EMSCRIPTEN AND CAMPELLO_WIDGETS_WASM_SIMD)
+    target_compile_options(campello_widgets INTERFACE -msimd128)
+    target_link_options(campello_widgets INTERFACE -msimd128)
 endif()
 
 # ---------------------------------------------------------------------------
