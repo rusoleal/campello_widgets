@@ -190,6 +190,18 @@ namespace systems::leal::campello_widgets
         void requestFrameCapture(std::string png_path);
 
         /**
+         * @brief Queues GPU work for the next frame: `upload` is recorded
+         * into that frame's command encoder on the raster thread, before
+         * any render pass, so whatever it writes (e.g. a video frame copied
+         * into a texture) is ready when the frame samples it, without the
+         * UI thread waiting on the GPU. UI thread only (e.g. from a ticker,
+         * which runs inside buildFrame()). Discarded, never run, if the
+         * frame is never rasterized: release resources in the captures'
+         * destructors, not in `upload`.
+         */
+        void scheduleGpuUpload(std::function<void(campello_gpu::CommandEncoder&)> upload);
+
+        /**
          * @brief Renders one frame to `target` — `buildFrame()` followed by
          *        `rasterFrame()` on the calling thread.
          *
@@ -1097,6 +1109,9 @@ namespace systems::leal::campello_widgets
         // UI-thread side: the path for the next built frame, and the
         // environment-variable request waiting for its frame tick.
         std::string pending_capture_path_;
+
+        // scheduleGpuUpload(), moved into the next FramePackage.
+        std::vector<std::function<void(campello_gpu::CommandEncoder&)>> pending_gpu_uploads_;
         std::string env_capture_path_;
         uint64_t    env_capture_tick_  = 0;
         uint64_t    build_ticks_       = 0;
