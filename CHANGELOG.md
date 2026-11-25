@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-25
+
 ### Added
 - **Web video playback.** `VideoPlayerController` on the web plays from a hidden `<video>` element (the browser decodes) instead of never becoming ready. `setSource()` takes a URL, relative to the page or absolute (cross-origin sources must allow CORS). The web gallery's Video tab plays `sample_video.mp4`, copied next to the page.
 - `RenderVideoPlayer::queueExternalFrame()` (recorded into the next frame) and `copyExternalFrame()` (synchronous), plus `supportsExternalFrames()`: platform players hand decoder frames (`campello_gpu::ExternalImage`) to the GPU.
