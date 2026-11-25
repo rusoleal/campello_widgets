@@ -19,7 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Android: the decoder renders into an `AImageReader` whose `AHardwareBuffer`s the GPU samples, instead of decoding into CPU buffers converted to BGRA pixel by pixel on the CPU. This also sidesteps the UBWC-compressed buffers that broke CPU reads on Qualcomm devices. Checked on an Adreno 618 (Redmi Note 10 Pro): the app's CPU use while playing dropped from about 134% to 82%.
   - Web: each new frame (`requestVideoFrameCallback()`) is copied as a `webImageSource`, so frames never pass through wasm memory.
   - Each falls back to the previous path if the device can't import the frames.
-- Needs campello_gpu with external images (0.38.0).
+- campello_gpu v0.38.0 (external images), campello_image v0.11.1 (static on the web).
+
+### Fixed
+- **Web builds with emsdk 7.** Clipper2 2.0.1's `clipper.core.h` uses `std::back_inserter` without including `<iterator>`, which emsdk 7's libc++ no longer pulls in through other headers. Clipper2 is compiled with `<iterator>` included, as is `path_combine.cpp` before it includes Clipper2.
+- **Web apps are a single `.wasm` again.** campello_image 0.7.0 was a `SHARED` library under Emscripten, which emsdk 7 builds as a `libcampello_image.so` side module the page had to fetch. Every library in the web build is now static.
 
 ## [0.18.0] - 2026-11-20
 

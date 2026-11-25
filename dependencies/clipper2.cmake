@@ -29,5 +29,12 @@ if(NOT clipper2_POPULATED)
     # avoids introducing a new class of unity-merge risk this session already hit once).
     if(TARGET Clipper2)
         set_target_properties(Clipper2 PROPERTIES UNITY_BUILD OFF)
+        # clipper.core.h uses std::back_inserter without including <iterator>;
+        # newer libc++ (emsdk 7) no longer pulls it in through other headers.
+        # Still the case on Clipper2's main branch. Consumers include
+        # <iterator> before <clipper2/clipper.h> (see src/ui/path_combine.cpp).
+        if(NOT MSVC)
+            target_compile_options(Clipper2 PRIVATE "SHELL:-include iterator")
+        endif()
     endif()
 endif()
