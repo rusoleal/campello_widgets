@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Web video playback.** `VideoPlayerController` on the web plays from a hidden `<video>` element (the browser decodes) instead of never becoming ready. `setSource()` takes a URL, relative to the page or absolute (cross-origin sources must allow CORS). The web gallery's Video tab plays `sample_video.mp4`, copied next to the page.
+- `RenderVideoPlayer::queueExternalFrame()` (recorded into the next frame) and `copyExternalFrame()` (synchronous), plus `supportsExternalFrames()`: platform players hand decoder frames (`campello_gpu::ExternalImage`) to the GPU.
+- `Renderer::scheduleGpuUpload()` and `FramePackage::gpu_uploads`: GPU work a render object queues from the UI thread, recorded at the start of the next frame's command encoder on the raster thread.
+- `IDrawBackend::gpuDevice()`: the campello_gpu device a backend draws with (Metal and Vulkan backends).
+
+### Changed
+- **Video frames go to the GPU without a CPU copy** on macOS/iOS, Android and the web, through campello_gpu's `copyExternalImageToTexture()` recorded into the frame's command encoder (the UI thread doesn't wait for the GPU). YUV to RGB conversion moves to a shader.
+  - macOS/iOS: AVFoundation hands over NV12 `CVPixelBuffer`s (what the decoder produces) instead of BGRA, which were then read on the CPU, repacked and uploaded.
+  - Android: the decoder renders into an `AImageReader` whose `AHardwareBuffer`s the GPU samples, instead of decoding into CPU buffers converted to BGRA pixel by pixel on the CPU. This also sidesteps the UBWC-compressed buffers that broke CPU reads on Qualcomm devices. Checked on an Adreno 618 (Redmi Note 10 Pro): the app's CPU use while playing dropped from about 134% to 82%.
+  - Web: each new frame (`requestVideoFrameCallback()`) is copied as a `webImageSource`, so frames never pass through wasm memory.
+  - Each falls back to the previous path if the device can't import the frames.
+- Needs campello_gpu with external images (0.38.0).
+
 ## [0.18.0] - 2026-11-20
 
 ### Changed
