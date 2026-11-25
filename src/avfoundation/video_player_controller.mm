@@ -24,7 +24,34 @@ namespace systems::leal::campello_widgets
         // observer's block) becomes invalid, i.e. no later than the
         // destructor.
         id<NSObject>              end_observer = nil;
+        // Frames go to the GPU as NV12 CVPixelBuffers through
+        // RenderVideoPlayer::copyExternalFrame(), with no CPU copy. Cleared
+        // (and the output swapped for a BGRA one feeding uploadFrame()) the
+        // first time that copy fails.
+        bool                      zero_copy    = true;
     };
+
+    namespace
+    {
+        // NV12 ('420v', what the decoders produce, so AVFoundation doesn't
+        // convert) and Metal-compatible for the zero-copy path; otherwise
+        // BGRA so the CPU copy matches the offscreen texture's format
+        // (bgra8unorm — see IDrawBackend::offscreenPixelFormat()) with no
+        // color-space conversion.
+        AVPlayerItemVideoOutput* makeVideoOutput(bool zero_copy)
+        {
+            NSDictionary* attrs = zero_copy
+                ? @{
+                      (NSString*)kCVPixelBufferPixelFormatTypeKey :
+                          @(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange),
+                      (NSString*)kCVPixelBufferMetalCompatibilityKey : @YES,
+                  }
+                : @{
+                      (NSString*)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
+                  };
+            return [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:attrs];
+        }
+    }
 
     VideoPlayerController::VideoPlayerController()
         : impl_(std::make_unique<Impl>())
@@ -51,14 +78,13 @@ namespace systems::leal::campello_widgets
             AVURLAsset*   asset = [AVURLAsset URLAssetWithURL:url options:nil];
             AVPlayerItem* item  = [AVPlayerItem playerItemWithAsset:asset];
 
-            // BGRA so the CPU copy in onTick() below matches the offscreen
-            // texture's format (bgra8unorm — see IDrawBackend::
-            // offscreenPixelFormat()) with no color-space conversion.
-            NSDictionary* attrs = @{
-                (NSString*)kCVPixelBufferPixelFormatTypeKey : @(kCVPixelFormatType_32BGRA),
-            };
-            impl_->video_output =
-                [[AVPlayerItemVideoOutput alloc] initWithPixelBufferAttributes:attrs];
+            // No backend yet (setSource() before the first frame) means
+            // the Metal one is coming, which can import CVPixelBuffers.
+            impl_->zero_copy =
+                !RenderObject::activeBackend() ||
+                RenderVideoPlayer::supportsExternalFrames(
+                    campello_gpu::ExternalImageType::cvPixelBuffer);
+            impl_->video_output = makeVideoOutput(impl_->zero_copy);
             [item addOutput:impl_->video_output];
 
             if (impl_->player)
@@ -185,7 +211,30 @@ namespace systems::leal::campello_widgets
                 CVPixelBufferRef pixel_buffer =
                     [impl_->video_output copyPixelBufferForItemTime:item_time
                                                    itemTimeForDisplay:NULL];
-                if (pixel_buffer)
+                if (pixel_buffer && impl_->zero_copy)
+                {
+                    campello_gpu::ExternalImage frame;
+                    frame.type   = campello_gpu::ExternalImageType::cvPixelBuffer;
+                    frame.handle = pixel_buffer;
+                    const uint32_t width  = static_cast<uint32_t>(CVPixelBufferGetWidth(pixel_buffer));
+                    const uint32_t height = static_cast<uint32_t>(CVPixelBufferGetHeight(pixel_buffer));
+                    // Recorded into the next frame. The retain covers the
+                    // wait for that; campello_gpu then retains the buffer
+                    // until the GPU is done with it.
+                    std::shared_ptr<void> keep_alive(CVPixelBufferRetain(pixel_buffer),
+                                                     [](void* p) { CVPixelBufferRelease(static_cast<CVPixelBufferRef>(p)); });
+                    if (!attached_->queueExternalFrame(width, height, frame, {}, std::move(keep_alive)))
+                    {
+                        // Shows nothing this frame; BGRA ones from the next.
+                        impl_->zero_copy = false;
+                        AVPlayerItemVideoOutput* bgra = makeVideoOutput(false);
+                        [item removeOutput:impl_->video_output];
+                        [item addOutput:bgra];
+                        impl_->video_output = bgra;
+                    }
+                    CVPixelBufferRelease(pixel_buffer);
+                }
+                else if (pixel_buffer)
                 {
                     CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
 
