@@ -1,6 +1,7 @@
 #include <campello_widgets/ui/path.hpp>
 #include "gpu/path_tessellation.hpp"
 
+#include <iterator>   // before Clipper2, whose clipper.core.h needs it (see dependencies/clipper2.cmake)
 #include <clipper2/clipper.h>
 
 namespace systems::leal::campello_widgets

@@ -6,12 +6,15 @@
 #include <campello_widgets/ui/color.hpp>
 
 #include <cstdint>
+#include <functional>
+#include <vector>
 #include <memory>
 
 namespace systems::leal::campello_gpu
 {
     class TextureView;
     class Surface;
+    class CommandEncoder;
 }
 
 namespace systems::leal::campello_widgets
@@ -76,6 +79,11 @@ namespace systems::leal::campello_widgets
         // non-empty, rasterFrame() also draws this frame into an offscreen
         // texture and saves it to this PNG path. Empty on normal frames.
         std::string capture_path;
+
+        // GPU work render objects queued for this frame (see
+        // Renderer::scheduleGpuUpload()), recorded at the start of its
+        // command encoder, before any pass that samples what they write.
+        std::vector<std::function<void(campello_gpu::CommandEncoder&)>> gpu_uploads;
     };
 
 } // namespace systems::leal::campello_widgets

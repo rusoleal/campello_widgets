@@ -9,6 +9,8 @@ int main()
     cw::DebugFlags::paintSizeEnabled           = false;
     cw::DebugFlags::showDebugBanner            = false;
     cw::DebugFlags::printRasterSubPhaseTimings = false;
+    // A URL relative to the page; CMakeLists.txt copies the file next to it.
+    cw::setSampleVideoPath("sample_video.mp4");
     // Returns once the first frame is scheduled; the browser runs the app.
     return cw::runApp("campello_widgets — Gallery", cw::buildGalleryApp());
 }

@@ -1942,11 +1942,25 @@ and Android.**
 - [x] **Gesture arena (Flutter-equivalent gesture arbitration)** — see dedicated section below
 - [~] **Video playback widget** (requested 2026-08-15) — macOS first slice
       done same day (see the dedicated section below); Android/Windows/Linux
-      backends, zero-copy texture import, and `DesignSystem`-level playback
+      backends, and `DesignSystem`-level playback
       controls chrome remain, deliberately deferred — see that section's
       "explicitly out of scope" note for why, and TODO.md's own git history
       for the original, broader per-platform scoping this entry started
       from.
+      - [x] Zero-copy frames (2026-11-25) through campello_gpu's
+        `copyExternalImageToTexture()`, recorded into the frame's encoder
+        (`RenderVideoPlayer::queueExternalFrame()`,
+        `Renderer::scheduleGpuUpload()`): macOS/iOS (NV12
+        `CVPixelBuffer`s), Android (`AImageReader` `AHardwareBuffer`s,
+        verified on an Adreno 618) and a new web player (`<video>`,
+        `webImageSource`, verified in Chrome).
+        `tests/platform/test_video_frames.mm` checks both calls against
+        AVFoundation's BGRA output on macOS.
+      - [ ] Android test for the zero-copy path (today only checked by
+        hand in the gallery).
+      - [ ] Audio on Android (video track only) and the web (muted, so
+        playback can start without a user gesture); AVPlayer plays it on
+        macOS/iOS.
 - [x] **Performance overlay: add a real FPS counter** (found 2026-07-24,
       done 2026-07-25) — new `Renderer::present_fps_sampler_`/
       `recordPresentSample()` measures the wall-clock cadence between

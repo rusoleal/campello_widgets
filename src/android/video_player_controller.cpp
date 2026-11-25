@@ -6,6 +6,9 @@
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaExtractor.h>
 #include <media/NdkMediaFormat.h>
+#include <media/NdkImageReader.h>
+#include <android/hardware_buffer.h>
+#include <android/native_window.h>
 
 #include <android/log.h>
 
@@ -17,6 +20,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <cstdint>
 #include <cstring>
 #include <mutex>
@@ -27,6 +31,7 @@
 
 #define CW_LOG_TAG "campello_widgets/video"
 #define CW_LOGE(...) __android_log_print(ANDROID_LOG_ERROR, CW_LOG_TAG, __VA_ARGS__)
+#define CW_LOGI(...) __android_log_print(ANDROID_LOG_INFO, CW_LOG_TAG, __VA_ARGS__)
 
 namespace systems::leal::campello_widgets
 {
@@ -157,6 +162,19 @@ namespace systems::leal::campello_widgets
             AMediaExtractor* extractor = nullptr;
             AMediaCodec*     codec     = nullptr;
 
+            // Zero-copy path: the codec renders into this reader's
+            // Surface, and onTick() hands the newest image's
+            // AHardwareBuffer to RenderVideoPlayer::copyExternalFrame().
+            // The GPU samples the buffer (UBWC-compressed or not — see
+            // convertYuvBufferToBgra()'s doc comment for why the CPU
+            // can't), so nothing is copied or converted on the CPU. Null
+            // in the byte-buffer path below.
+            AImageReader* reader = nullptr;
+            // Images whose copies were queued recently: the GPU may still be
+            // sampling them, so they go back to the codec only a few video
+            // frames later (UI thread only).
+            std::deque<std::shared_ptr<AImage>> images_in_flight;
+
             // The video's logical display dimensions (from the container
             // track format) — set once in setSource(), read-only from
             // decodeLoop() afterward, safe without synchronization since
@@ -274,7 +292,19 @@ namespace systems::leal::campello_widgets
                     if (target_wall > now)
                         std::this_thread::sleep_until(target_wall);
 
-                    if (info.size > 0)
+                    if (state->reader)
+                    {
+                        // Renders the frame into the reader's Surface (when
+                        // there is one), now that it's due.
+                        AMediaCodec_releaseOutputBuffer(state->codec, out_idx, info.size > 0);
+                        if (info.size > 0)
+                        {
+                            std::lock_guard<std::mutex> lock(state->mutex);
+                            state->latest_position_ms = info.presentationTimeUs / 1000.0;
+                            state->generation++;
+                        }
+                    }
+                    else if (info.size > 0)
                     {
                         size_t buf_size = 0;
                         uint8_t* buf = AMediaCodec_getOutputBuffer(state->codec, out_idx, &buf_size);
@@ -300,7 +330,8 @@ namespace systems::leal::campello_widgets
 
                     // No output Surface in this decode mode — nothing to
                     // render to, just return the buffer to the codec.
-                    AMediaCodec_releaseOutputBuffer(state->codec, out_idx, false);
+                    if (!state->reader)
+                        AMediaCodec_releaseOutputBuffer(state->codec, out_idx, false);
 
                     if (info.flags & AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM)
                     {
@@ -331,7 +362,45 @@ namespace systems::leal::campello_widgets
     struct VideoPlayerController::Impl
     {
         std::unique_ptr<AndroidVideoState> state = std::make_unique<AndroidVideoState>();
+        std::string path;
+        // Set when a zero-copy frame couldn't be copied; setSource() then
+        // decodes to CPU buffers instead (see onTick()).
+        bool cpu_frames = false;
     };
+
+    namespace
+    {
+        void releaseDecoder(AndroidVideoState* state)
+        {
+            if (state->codec) { AMediaCodec_stop(state->codec); AMediaCodec_delete(state->codec); state->codec = nullptr; }
+            state->images_in_flight.clear();   // before their reader
+            if (state->reader) { AImageReader_delete(state->reader); state->reader = nullptr; }
+            if (state->extractor) { AMediaExtractor_delete(state->extractor); state->extractor = nullptr; }
+        }
+
+        // Decoded frames as GPU-sampled AHardwareBuffers. Null when the
+        // device can't take them (then the byte-buffer path decodes).
+        constexpr int32_t kImagesInFlight = 3;
+
+        AImageReader* makeFrameReader(int32_t width, int32_t height)
+        {
+            // No backend yet (setSource() before the first frame): try, and
+            // fall back in onTick() if the copy fails.
+            if (RenderObject::activeBackend() &&
+                !RenderVideoPlayer::supportsExternalFrames(
+                    campello_gpu::ExternalImageType::androidHardwareBuffer))
+                return nullptr;
+            AImageReader* reader = nullptr;
+            // kImagesInFlight held for the GPU, one being acquired, two
+            // for the codec.
+            if (AImageReader_newWithUsage(width, height, AIMAGE_FORMAT_PRIVATE,
+                                          AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE,
+                                          kImagesInFlight + 3,
+                                          &reader) != AMEDIA_OK)
+                return nullptr;
+            return reader;
+        }
+    }
 
     VideoPlayerController::VideoPlayerController()
         : impl_(std::make_unique<Impl>())
@@ -356,12 +425,7 @@ namespace systems::leal::campello_widgets
             state->decode_thread.join();
         }
 
-        if (state->codec)
-        {
-            AMediaCodec_stop(state->codec);
-            AMediaCodec_delete(state->codec);
-        }
-        if (state->extractor) AMediaExtractor_delete(state->extractor);
+        releaseDecoder(state);
     }
 
     void VideoPlayerController::setSource(std::string path)
@@ -381,8 +445,9 @@ namespace systems::leal::campello_widgets
             state->decode_thread.join();
             state->stop_requested = false;
         }
-        if (state->codec) { AMediaCodec_stop(state->codec); AMediaCodec_delete(state->codec); state->codec = nullptr; }
-        if (state->extractor) { AMediaExtractor_delete(state->extractor); state->extractor = nullptr; }
+        releaseDecoder(state);
+        if (impl_->path != path) impl_->cpu_frames = false;
+        impl_->path = path;
 
         playing_     = false;
         ready_       = false;
@@ -463,14 +528,35 @@ namespace systems::leal::campello_widgets
         const char* mime = nullptr;
         AMediaFormat_getString(format, AMEDIAFORMAT_KEY_MIME, &mime);
         state->codec = AMediaCodec_createDecoderByType(mime);
-        // No output Surface (nullptr) — byte-buffer decode mode. See
-        // convertYuvBufferToBgra()'s doc comment for why: a Surface +
-        // AImageReader CPU-read path turned out to hand back a
-        // UBWC-compressed buffer on real Qualcomm hardware, not linear
-        // YUV, even when explicitly requesting CPU-read usage.
-        AMediaCodec_configure(state->codec, format, nullptr, nullptr, 0);
+        ANativeWindow* window = nullptr;
+        if (!impl_->cpu_frames)
+        {
+            state->reader = makeFrameReader(state->crop_width, state->crop_height);
+            if (state->reader && AImageReader_getWindow(state->reader, &window) != AMEDIA_OK)
+            {
+                AImageReader_delete(state->reader);
+                state->reader = nullptr;
+                window = nullptr;
+            }
+        }
+        // Without a reader: no output Surface (nullptr), byte-buffer
+        // decode mode. A Surface + AImageReader *CPU*-read path hands back
+        // a UBWC-compressed buffer on real Qualcomm hardware, not linear
+        // YUV, even when explicitly requesting CPU-read usage (see
+        // convertYuvBufferToBgra()'s doc comment); the reader above is
+        // only ever sampled by the GPU.
+        if (AMediaCodec_configure(state->codec, format, window, nullptr, 0) != AMEDIA_OK && window)
+        {
+            CW_LOGE("AMediaCodec_configure with a Surface failed; decoding to CPU buffers");
+            AImageReader_delete(state->reader);
+            state->reader = nullptr;
+            AMediaCodec_configure(state->codec, format, nullptr, nullptr, 0);
+        }
         AMediaCodec_start(state->codec);
-        AMediaFormat_delete(format);
+        CW_LOGI("%dx%d %s: frames %s", state->crop_width, state->crop_height, mime ? mime : "?",
+                state->reader ? "sampled by the GPU (AHardwareBuffer, zero-copy)"
+                              : "converted on the CPU");
+        AMediaFormat_delete(format);   // owns `mime`
 
         ready_ = true;
 
@@ -538,6 +624,64 @@ namespace systems::leal::campello_widgets
         notifyListeners();
     }
 
+    namespace
+    {
+        enum class ReaderFrame { presented, notYet, failed };
+
+        // Copies the reader's newest image into `target`'s texture.
+        ReaderFrame presentReaderFrame(AndroidVideoState* state, RenderVideoPlayer* target)
+        {
+            AImage* image = nullptr;
+            int fence = -1;
+            const media_status_t status =
+                AImageReader_acquireLatestImageAsync(state->reader, &image, &fence);
+            if (status == AMEDIA_IMGREADER_NO_BUFFER_AVAILABLE) return ReaderFrame::notYet;
+            if (status != AMEDIA_OK || !image)
+            {
+                if (fence >= 0) close(fence);
+                return ReaderFrame::failed;
+            }
+
+            AHardwareBuffer* buffer = nullptr;
+            AImageCropRect crop{};
+            AHardwareBuffer_Desc desc{};
+            bool ok = AImage_getHardwareBuffer(image, &buffer) == AMEDIA_OK && buffer;
+            if (ok) AHardwareBuffer_describe(buffer, &desc);
+            if (ok && AImage_getCropRect(image, &crop) != AMEDIA_OK)
+                crop = {0, 0, int32_t(desc.width), int32_t(desc.height)};
+            const int32_t w = crop.right - crop.left, h = crop.bottom - crop.top;
+            ok = ok && w > 0 && h > 0 && desc.width > 0 && desc.height > 0;
+            if (!ok)
+            {
+                if (fence >= 0) close(fence);
+                AImage_delete(image);
+                return ReaderFrame::failed;
+            }
+
+            campello_gpu::ExternalImage frame;
+            frame.type           = campello_gpu::ExternalImageType::androidHardwareBuffer;
+            frame.handle         = buffer;
+            frame.acquireFenceFd = fence;   // the copy waits on it and closes it
+            // Decoders allocate aligned buffers (e.g. 1088 rows for 1080p);
+            // only the crop rectangle is picture.
+            const float W = float(desc.width), H = float(desc.height);
+            const float uv[6] = {w / W, 0.0f, crop.left / W,
+                                 0.0f, h / H, crop.top / H};
+            campello_gpu::ExternalImageCopyOptions options;
+            options.uvTransform = uv;
+            // Recorded into the next frame, no waiting. campello_gpu keeps
+            // the AHardwareBuffer alive, but the codec may write into it again
+            // once the image is deleted, so the image stays held here (never
+            // in the queued copy: it must not outlive its reader) for a few
+            // more video frames, more than the GPU has in flight.
+            ok = target->queueExternalFrame(uint32_t(w), uint32_t(h), frame, options);
+            state->images_in_flight.emplace_back(image, AImage_delete);
+            while (state->images_in_flight.size() > kImagesInFlight)
+                state->images_in_flight.pop_front();
+            return ok ? ReaderFrame::presented : ReaderFrame::failed;
+        }
+    }
+
     void VideoPlayerController::ensureTicking()
     {
         if (ticker_id_ != 0) return;
@@ -567,7 +711,31 @@ namespace systems::leal::campello_widgets
                 gen = state->generation;
             }
 
-            if (gen != state->uploaded_generation)
+            if (gen != state->uploaded_generation && state->reader)
+            {
+                const ReaderFrame result = presentReaderFrame(state, attached_);
+                if (result == ReaderFrame::failed)
+                {
+                    CW_LOGE("zero-copy video frame failed; decoding to CPU buffers");
+                    impl_->cpu_frames = true;
+                    const double position = position_ms_;
+                    setSource(impl_->path);
+                    seekTo(position);
+                    play();
+                    return;
+                }
+                if (result == ReaderFrame::presented)
+                {
+                    attached_->markNeedsPaint();
+                    std::lock_guard<std::mutex> lock(state->mutex);
+                    position_ms_ = state->latest_position_ms;
+                    state->uploaded_generation = gen;
+                }
+                // notYet: the codec has released it, the reader hasn't got
+                // it yet; next tick.
+                if (result == ReaderFrame::presented) notifyListeners();
+            }
+            else if (gen != state->uploaded_generation)
             {
                 std::vector<uint8_t> frame;
                 uint32_t width = 0, height = 0;

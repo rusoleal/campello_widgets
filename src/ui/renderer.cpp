@@ -299,6 +299,7 @@ namespace systems::leal::campello_widgets
         package.max_sigma_x         = max_sigma_x_;
         package.max_sigma_y         = max_sigma_y_;
         package.capture_path        = std::exchange(pending_capture_path_, std::string{});
+        package.gpu_uploads         = std::exchange(pending_gpu_uploads_, {});
 
         // Consume-and-clear the pending drawable, mirroring the old
         // single-threaded contract exactly. Wrapped in a non-owning
@@ -314,6 +315,11 @@ namespace systems::leal::campello_widgets
 
         PostFrameCallbacks::runPending();
         return package;
+    }
+
+    void Renderer::scheduleGpuUpload(std::function<void(campello_gpu::CommandEncoder&)> upload)
+    {
+        if (upload) pending_gpu_uploads_.push_back(std::move(upload));
     }
 
     bool Renderer::rasterFrame(const FramePackage& package)
@@ -376,6 +382,8 @@ namespace systems::leal::campello_widgets
         auto encoder = device_->createCommandEncoder();
         markSubPhase("create encoder");
         if (!encoder) { std::fprintf(stderr, "[raster] createCommandEncoder returned null\n"); return false; }
+
+        for (const auto& upload : package.gpu_uploads) upload(*encoder);
 
         // Store frame-scoped context so flushDrawList can restart render passes.
         frame_encoder_ = encoder.get();

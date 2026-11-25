@@ -124,6 +124,13 @@ if(BUILD_INTEGRATION_TESTS)
         # .mm files must be compiled as Objective-C++ and cannot participate in unity build
         if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
             set_target_properties(campello_widgets_integration_tests PROPERTIES UNITY_BUILD OFF)
+            # test_video_frames.mm decodes the gallery's sample video.
+            set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/platform/test_video_frames.mm
+                PROPERTIES COMPILE_OPTIONS -fobjc-arc)
+            target_compile_definitions(campello_widgets_integration_tests PRIVATE
+                CAMPELLO_WIDGETS_SAMPLE_VIDEO="${CMAKE_CURRENT_SOURCE_DIR}/../examples/gallery/assets/sample_video.mp4")
+            target_link_libraries(campello_widgets_integration_tests PRIVATE
+                "-framework AVFoundation" "-framework CoreMedia" "-framework CoreVideo")
         endif()
         include(GoogleTest)
         gtest_discover_tests(campello_widgets_integration_tests)

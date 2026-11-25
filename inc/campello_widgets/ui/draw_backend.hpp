@@ -13,6 +13,7 @@ namespace systems::leal::campello_gpu
 {
     class RenderPassEncoder;
     class CommandEncoder;
+    class Device;
     class Texture;
     class BindGroup;
 }
@@ -371,6 +372,16 @@ namespace systems::leal::campello_widgets
         {
             return createOffscreenTexture(width, height);
         }
+
+        /**
+         * @brief The campello_gpu device this backend draws with, or nullptr
+         * for a backend that has none.
+         *
+         * For render objects that hand the GPU work the backend doesn't
+         * wrap, e.g. `RenderVideoPlayer` copying a decoder's frames into its
+         * texture with `Device::copyExternalImageToTexture()`.
+         */
+        virtual std::shared_ptr<campello_gpu::Device> gpuDevice() const noexcept { return nullptr; }
 
         /**
          * @brief Begins a render pass that targets `tex`.

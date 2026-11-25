@@ -25,3 +25,7 @@ target_link_options(campello_widgets_gallery PRIVATE
 )
 set_property(TARGET campello_widgets_gallery APPEND PROPERTY LINK_DEPENDS
     ${CMAKE_CURRENT_SOURCE_DIR}/shell.html)
+
+# The Video tab's sample, served next to the page (see main.cpp).
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/../assets/sample_video.mp4
+               ${CMAKE_BINARY_DIR}/sample_video.mp4 COPYONLY)

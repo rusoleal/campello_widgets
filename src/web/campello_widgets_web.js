@@ -269,4 +269,92 @@ addToLibrary({
       HEAPU8[outPtr + p + 3] = alpha;
     }
   },
+
+  // VideoPlayerController (src/web/video_player_controller.cpp): one hidden
+  // <video> per controller. Frames reach the GPU through campello_gpu's
+  // webImageSource (copyExternalImageToTexture), never through wasm memory.
+  $CWVideo: { next: 1, players: {} },
+
+  cw_web_video_open__deps: ['$CWVideo'],
+  cw_web_video_open: function (urlPtr) {
+    var v = document.createElement('video');
+    v.muted = true;          // no audio in this player; also lets play() autostart
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.crossOrigin = 'anonymous';  // a cross-origin source must allow CORS to be copied
+    // In the document and (barely) visible: browsers may stop decoding a
+    // video that isn't, and requestVideoFrameCallback() needs presentation.
+    v.style.cssText = 'position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none;';
+    var p = { video: v, frames: 0, failed: false, ended: false, open: true };
+    v.addEventListener('error', function () { p.failed = true; });
+    v.addEventListener('ended', function () { p.ended = true; });
+    if (v.requestVideoFrameCallback) {
+      var onFrame = function () { p.frames++; if (p.open) v.requestVideoFrameCallback(onFrame); };
+      v.requestVideoFrameCallback(onFrame);
+    } else {
+      v.addEventListener('timeupdate', function () { p.frames++; });
+    }
+    v.src = UTF8ToString(urlPtr);
+    document.body.appendChild(v);
+    var id = CWVideo.next++;
+    CWVideo.players[id] = p;
+    return id;
+  },
+
+  // out (8 doubles): ready, duration ms, position ms, frames presented,
+  // width, height, ended (reported once), failed.
+  cw_web_video_state__deps: ['$CWVideo'],
+  cw_web_video_state: function (id, out) {
+    var p = CWVideo.players[id];
+    var o = out >> 3;
+    if (!p) { HEAPF64.fill(0, o, o + 8); HEAPF64[o + 7] = 1; return; }
+    var v = p.video;
+    HEAPF64[o] = (v.readyState >= 2 && v.videoWidth > 0) ? 1 : 0;
+    HEAPF64[o + 1] = isFinite(v.duration) ? v.duration * 1000 : 0;
+    HEAPF64[o + 2] = v.currentTime * 1000;
+    HEAPF64[o + 3] = p.frames;
+    HEAPF64[o + 4] = v.videoWidth;
+    HEAPF64[o + 5] = v.videoHeight;
+    HEAPF64[o + 6] = p.ended ? 1 : 0;
+    HEAPF64[o + 7] = p.failed ? 1 : 0;
+    p.ended = false;
+  },
+
+  cw_web_video_play__deps: ['$CWVideo'],
+  cw_web_video_play: function (id) {
+    var p = CWVideo.players[id];
+    if (p) p.video.play().catch(function (e) { console.warn('VideoPlayerController: play() failed:', e); });
+  },
+
+  cw_web_video_pause__deps: ['$CWVideo'],
+  cw_web_video_pause: function (id) {
+    var p = CWVideo.players[id];
+    if (p) p.video.pause();
+  },
+
+  cw_web_video_seek__deps: ['$CWVideo'],
+  cw_web_video_seek: function (id, ms) {
+    var p = CWVideo.players[id];
+    if (p) p.video.currentTime = ms / 1000;
+  },
+
+  cw_web_video_close__deps: ['$CWVideo'],
+  cw_web_video_close: function (id) {
+    var p = CWVideo.players[id];
+    if (!p) return;
+    p.open = false;
+    p.video.pause();
+    p.video.removeAttribute('src');
+    p.video.load();
+    p.video.remove();
+    delete CWVideo.players[id];
+  },
+
+  // A campello_gpu webImageSource handle for the current frame, or 0.
+  cw_web_video_import__deps: ['$CWVideo'],
+  cw_web_video_import: function (id) {
+    var p = CWVideo.players[id];
+    if (!p || p.video.readyState < 2 || !Module['campelloGpu']) return 0;
+    return Module['campelloGpu']['importExternalImage'](p.video);
+  },
 });
