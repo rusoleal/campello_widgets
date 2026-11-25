@@ -317,3 +317,81 @@ jobs:
       - name: Build
         shell: bash
         run: cmake --build build_gdk --config Release --target campello_widgets
+
+  # ---------------------------------------------------------------------------
+  # Web / WebAssembly (Emscripten + WebGPU): build the library and examples,
+  # check that the app is one self-contained .wasm (no SHARED library turned
+  # into a .so side module the page would have to fetch: emsdk 7 builds those
+  # for add_library(SHARED)), then run the gallery in headless Chrome on
+  # SwiftShader (tests/web/gallery_smoke.mjs: no errors, no failed or .so
+  # requests, and the Video tab plays through the zero-copy frame path).
+  # ---------------------------------------------------------------------------
+  web:
+    name: Web / WASM (emsdk ${{ matrix.emsdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The release development uses; campello_gpu needs >= 4.0.10.
+        emsdk: [7.0.1]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ matrix.emsdk }}
+          actions-cache-folder: emsdk-cache
+
+      # gallery_smoke.mjs needs Node >= 22 (global WebSocket).
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Cache dependency sources
+        uses: actions/cache@v5
+        with:
+          path: build/web/_deps
+          key: deps-web-${{ matrix.emsdk }}-${{ hashFiles('dependencies/*.cmake') }}
+          restore-keys: deps-web-${{ matrix.emsdk }}-
+
+      - name: Configure (emcmake)
+        run: emcmake cmake -S . -B build/web -DCMAKE_BUILD_TYPE=Release -DBUILD_EXAMPLES=ON -DBUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build/web --config Release -j4
+
+      - name: Every library is static
+        run: |
+          # A .so in the build tree (outside fetched sources) is a SHARED
+          # library emsdk built as a side module; the page would fetch it.
+          sos=$(find build/web -path 'build/web/_deps/*-src' -prune -o -name '*.so' -print)
+          if [ -n "$sos" ]; then echo "Side modules in the build:"; echo "$sos"; exit 1; fi
+          for js in build/web/*.js; do
+            if grep -qE '"[^"]+\.so"' "$js"; then echo "$js loads a dynamic library:"; grep -oE '"[^"]+\.so"' "$js" | sort -u; exit 1; fi
+          done
+          ls -la build/web/*.html build/web/*.js build/web/*.wasm
+
+      # The universal suite under Node (CMake's cross-compiling emulator).
+      # Excluded: VisualFidelity* render through WebGPU, which Node lacks
+      # (the gallery smoke test covers rendering in Chrome); RasterThread.*
+      # and ImageLoader.ConcurrentLoads* start std::threads, and the web build
+      # has no pthreads.
+      - name: Unit tests (Node)
+        run: >
+          ctest --test-dir build/web --output-on-failure --timeout 300 -j4
+          -E "^VisualFidelity|^RasterThread\\.|^ImageLoader\\.ConcurrentLoads"
+
+      - name: Gallery smoke test (headless Chrome, SwiftShader)
+        env:
+          CHROME_FLAGS: >-
+            --no-sandbox
+            --use-webgpu-adapter=swiftshader
+            --enable-features=Vulkan
+            --use-vulkan=swiftshader
+            --use-angle=swiftshader
+        run: |
+          export CHROME_PATH="$(command -v google-chrome)"
+          "$CHROME_PATH" --version
+          node tests/web/gallery_smoke.mjs build/web

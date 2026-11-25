@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RenderVideoPlayer::queueExternalFrame()` (recorded into the next frame) and `copyExternalFrame()` (synchronous), plus `supportsExternalFrames()`: platform players hand decoder frames (`campello_gpu::ExternalImage`) to the GPU.
 - `Renderer::scheduleGpuUpload()` and `FramePackage::gpu_uploads`: GPU work a render object queues from the UI thread, recorded at the start of the next frame's command encoder on the raster thread.
 - `IDrawBackend::gpuDevice()`: the campello_gpu device a backend draws with (Metal and Vulkan backends).
+- **Web CI job** (emsdk 7.0.1): builds the library and examples, fails if any library ends up as a `.so` side module, runs the universal tests under Node, and runs the gallery in headless Chrome on SwiftShader (`tests/web/gallery_smoke.mjs`: no errors or failed loads, and the Video tab plays through the zero-copy frame path).
 
 ### Changed
 - **Video frames go to the GPU without a CPU copy** on macOS/iOS, Android and the web, through campello_gpu's `copyExternalImageToTexture()` recorded into the frame's command encoder (the UI thread doesn't wait for the GPU). YUV to RGB conversion moves to a shader.
