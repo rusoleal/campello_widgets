@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A console error on every web start.** `VulkanDrawBackend`, which the web host uses too, printed a summary of its pipelines to stderr each time it started, and Emscripten shows stderr as `console.error`. It now prints only when a pipeline is missing (`[VulkanDrawBackend] missing pipelines: ...`). Pipelines that fail to build are still reported, as before.
+
 ## [0.19.0] - 2026-11-25
 
 ### Added
