@@ -1048,9 +1048,16 @@ VulkanDrawBackend::VulkanDrawBackend(
         }
     }
 
-    std::fprintf(stderr, "[VulkanDrawBackend] pipelines: rect=%d cq=%d rrect=%d line=%d quad=%d quad_aa=%d clip=%d shader_mask=%d blur=%d\n",
-        !!rect_pipeline_, !!colored_quad_pipeline_, !!rrect_pipeline_, !!line_pipeline_,
-        !!quad_pipeline_, !!quad_aa_pipeline_, !!clip_shape_pipeline_, !!shader_mask_pipeline_, !!blur_pipeline_);
+    // Only when a pipeline is missing: stderr is console.error on the web, so
+    // a summary on every successful start would read as an error there.
+    const bool all = rect_pipeline_ && colored_quad_pipeline_ && rrect_pipeline_ && line_pipeline_ &&
+                     quad_pipeline_ && quad_aa_pipeline_ && clip_shape_pipeline_ && shader_mask_pipeline_ &&
+                     blur_pipeline_;
+    if (!all) {
+        std::fprintf(stderr, "[VulkanDrawBackend] missing pipelines: rect=%d cq=%d rrect=%d line=%d quad=%d quad_aa=%d clip=%d shader_mask=%d blur=%d\n",
+            !!rect_pipeline_, !!colored_quad_pipeline_, !!rrect_pipeline_, !!line_pipeline_,
+            !!quad_pipeline_, !!quad_aa_pipeline_, !!clip_shape_pipeline_, !!shader_mask_pipeline_, !!blur_pipeline_);
+    }
 }
 
 // ---------------------------------------------------------------------------
