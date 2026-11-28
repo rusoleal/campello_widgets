@@ -536,6 +536,16 @@ static float macosScreenRefreshHz(NSScreen* screen)
     e.device_kind    = Widgets::PointerDeviceKind::mouse;
     e.scroll_delta_x = -(float)event.scrollingDeltaX;
     e.scroll_delta_y = -(float)event.scrollingDeltaY;
+    // Trackpad / Magic Mouse gestures carry phases; a classic wheel has
+    // NSEventPhaseNone for both. See Widgets::ScrollPhase.
+    if (event.momentumPhase != NSEventPhaseNone)
+        e.scroll_phase = Widgets::ScrollPhase::momentum;
+    else if (event.phase & (NSEventPhaseMayBegin | NSEventPhaseBegan))
+        e.scroll_phase = Widgets::ScrollPhase::began;
+    else if (event.phase & NSEventPhaseChanged)
+        e.scroll_phase = Widgets::ScrollPhase::update;
+    else if (event.phase & (NSEventPhaseEnded | NSEventPhaseCancelled))
+        e.scroll_phase = Widgets::ScrollPhase::ended;
     _dispatcher->handlePointerEvent(e);
 }
 

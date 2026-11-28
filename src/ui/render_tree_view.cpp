@@ -478,11 +478,38 @@ namespace systems::leal::campello_widgets
 
         case PointerEventKind::scroll:
         {
+            // Phased trackpad / Magic Mouse gesture — see ScrollPhase.
+            if (event.scroll_phase == ScrollPhase::momentum)
+                break; // our own fling (started on `ended`) replaces it
+            if (event.scroll_phase == ScrollPhase::began)
+            {
+                velocity_x_ = velocity_y_ = 0.0f;
+                wheel_momentum_pending_ = false;
+                wheel_velocity_tracker_x_.reset();
+                wheel_velocity_tracker_y_.reset();
+            }
+            else if (event.scroll_phase == ScrollPhase::ended)
+            {
+                // Fling clock — see RenderListView's `ended` handling.
+                const uint64_t last_delta_ms = std::max(wheel_velocity_tracker_x_.newestTimestampMs(),
+                                                        wheel_velocity_tracker_y_.newestTimestampMs());
+                velocity_x_ = physics_->flingVelocity(
+                    wheel_velocity_tracker_x_.getVelocity(event.timestamp_ms));
+                velocity_y_ = physics_->flingVelocity(
+                    wheel_velocity_tracker_y_.getVelocity(event.timestamp_ms));
+                wheel_velocity_tracker_x_.reset();
+                wheel_velocity_tracker_y_.reset();
+                wheel_momentum_pending_ = false;
+                last_scroll_event_ms_   = 0;
+                last_tick_ms_           = std::max(last_tick_ms_, last_delta_ms);
+                FrameScheduler::scheduleFrame();
+                break;
+            }
             applyScrollDelta(event.scroll_delta_x, event.scroll_delta_y);
             // See RenderListView::applyScrollDelta()'s doc on wheel_velocity_tracker_.
             wheel_velocity_tracker_x_.addPosition(event.timestamp_ms, scrollX());
             wheel_velocity_tracker_y_.addPosition(event.timestamp_ms, scrollY());
-            wheel_momentum_pending_ = true;
+            wheel_momentum_pending_ = (event.scroll_phase == ScrollPhase::none);
             // Out of scope for the VelocityTracker timestamp-injection fix
             // (see gesture_constants.hpp's currentMonotonicMs() doc / the
             // plan this change came from) -- kept on its own independent

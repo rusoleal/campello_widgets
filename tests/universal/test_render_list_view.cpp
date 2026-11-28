@@ -6,6 +6,7 @@
 #include <campello_widgets/ui/pointer_event.hpp>
 #include <campello_widgets/ui/scroll_controller.hpp>
 #include <chrono>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -738,4 +739,156 @@ TEST(RenderListView, MomentumIsNotRedirectedEvenWithHookSet)
 
     lv.detach();
     cw::PointerDispatcher::setActiveDispatcher(nullptr);
+}
+
+// ---------------------------------------------------------------------------
+// Phased trackpad / Magic Mouse scrolling (macOS NSEvent phases) — handled
+// like a drag, as Flutter does: finger-up starts our own fling and the OS's
+// momentum events are ignored. Applying both made a fling slow down, speed
+// up again, then slow down a second time.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    struct PhasedScrollFixture
+    {
+        cw::RenderListView lv;
+        std::shared_ptr<cw::RenderBox> root{&lv, [](cw::RenderBox*){}};
+        cw::PointerDispatcher dispatcher{root};
+        std::shared_ptr<cw::ScrollController> controller = std::make_shared<cw::ScrollController>();
+        uint64_t t = 10'000;
+
+        PhasedScrollFixture()
+        {
+            cw::PointerDispatcher::setActiveDispatcher(&dispatcher);
+            lv.setController(controller);
+            lv.item_count  = 1000;
+            lv.item_extent = 50.0f;
+            doLayout(lv, 400.0f, 200.0f);
+            lv.attach();
+        }
+        ~PhasedScrollFixture()
+        {
+            lv.detach();
+            cw::PointerDispatcher::setActiveDispatcher(nullptr);
+        }
+
+        void scroll(cw::ScrollPhase phase, float dy)
+        {
+            cw::PointerEvent e;
+            e.kind           = cw::PointerEventKind::scroll;
+            e.position       = {100.0f, 100.0f};
+            e.device_kind    = cw::PointerDeviceKind::mouse;
+            e.scroll_delta_y = dy;
+            e.scroll_phase   = phase;
+            e.timestamp_ms   = t;
+            dispatcher.handlePointerEvent(e);
+        }
+
+        // Fingers moving at 20px / 8ms = 2500 px/s, then lifted.
+        void swipe()
+        {
+            scroll(cw::ScrollPhase::began, 0.0f);
+            for (int i = 0; i < 8; ++i) { t += 8; scroll(cw::ScrollPhase::update, 20.0f); }
+            t += 4;
+            scroll(cw::ScrollPhase::ended, 0.0f);
+        }
+
+        float offset() const { return controller->offset(); }
+    };
+}
+
+TEST(RenderListView, PhasedScrollFlingsOnFingerUp)
+{
+    PhasedScrollFixture f;
+    f.swipe();
+    const float at_release = f.offset();
+    EXPECT_NEAR(at_release, 160.0f, 0.01f);
+
+    // First frame after release continues at the finger's ~2500 px/s. No
+    // frame ran during the swipe, so the fling clock starts at the last
+    // applied delta (4ms before `ended`): this tick covers 4 + 16 = 20ms.
+    f.t += 16;
+    f.dispatcher.tick(f.t);
+    const float first = f.offset() - at_release;
+    EXPECT_NEAR(first / 0.020f, 2500.0f, 2500.0f * 0.15f);
+}
+
+TEST(RenderListView, PhasedScrollReleaseFrameHasNoDipOrSpike)
+{
+    // Frames tick during the swipe (as in the real app). `ended` arrives
+    // 10ms after the last delta; the first frame after it must move one
+    // frame's worth at the release velocity — the fling clock starts at the
+    // previously drawn frame, not at `ended` (dip) nor by catching the gap
+    // up in one frame (spike).
+    PhasedScrollFixture f;
+    f.scroll(cw::ScrollPhase::began, 0.0f);
+    uint64_t next_frame = f.t + 16;
+    for (int i = 0; i < 8; ++i)
+    {
+        f.t += 8;
+        if (f.t >= next_frame) { f.dispatcher.tick(next_frame); next_frame += 16; }
+        f.scroll(cw::ScrollPhase::update, 20.0f);
+    }
+    f.dispatcher.tick(next_frame); // a frame with no new delta (fingers lifting)
+    const uint64_t drawn = next_frame; next_frame += 16;
+    f.t = drawn + 2;
+    f.scroll(cw::ScrollPhase::ended, 0.0f);
+    const float before = f.offset();
+    f.dispatcher.tick(next_frame);
+    const float step_speed = (f.offset() - before) / 0.016f;
+    // Old clock-at-`ended` behaviour gives ~2190 here (14ms of motion).
+    EXPECT_NEAR(step_speed, 2500.0f, 2500.0f * 0.05f);
+}
+
+TEST(RenderListView, PhasedScrollIgnoresOsMomentumAndNeverReaccelerates)
+{
+    PhasedScrollFixture f;
+    f.swipe();
+
+    float prev_offset = f.offset();
+    float prev_step   = std::numeric_limits<float>::max();
+    for (int frame = 0; frame < 120; ++frame)
+    {
+        f.t += 16;
+        // The OS keeps sending its own (sizable) momentum deltas — they
+        // must not move the list on top of our fling.
+        const float before = f.offset();
+        f.scroll(cw::ScrollPhase::momentum, 15.0f);
+        EXPECT_FLOAT_EQ(f.offset(), before) << "momentum-phase delta was applied";
+
+        f.dispatcher.tick(f.t);
+        const float step = f.offset() - prev_offset;
+        EXPECT_LE(step, prev_step + 0.01f) << "fling re-accelerated at frame " << frame;
+        prev_step   = step;
+        prev_offset = f.offset();
+    }
+}
+
+TEST(RenderListView, PhasedScrollFingerDownCatchesFling)
+{
+    PhasedScrollFixture f;
+    f.swipe();
+    f.t += 16; f.dispatcher.tick(f.t);
+    f.t += 16; f.dispatcher.tick(f.t);
+
+    f.t += 5;
+    f.scroll(cw::ScrollPhase::began, 0.0f);
+    const float caught_at = f.offset();
+    f.t += 16; f.dispatcher.tick(f.t);
+    f.t += 16; f.dispatcher.tick(f.t);
+    EXPECT_FLOAT_EQ(f.offset(), caught_at);
+}
+
+TEST(RenderListView, PhasedScrollRestBeforeLiftDoesNotFling)
+{
+    PhasedScrollFixture f;
+    f.scroll(cw::ScrollPhase::began, 0.0f);
+    for (int i = 0; i < 8; ++i) { f.t += 8; f.scroll(cw::ScrollPhase::update, 20.0f); }
+    f.t += 200; // fingers rest, then lift
+    f.scroll(cw::ScrollPhase::ended, 0.0f);
+    const float at_release = f.offset();
+    f.t += 16; f.dispatcher.tick(f.t);
+    f.t += 16; f.dispatcher.tick(f.t);
+    EXPECT_FLOAT_EQ(f.offset(), at_release);
 }

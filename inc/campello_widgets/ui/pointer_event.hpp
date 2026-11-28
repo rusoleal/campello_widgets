@@ -25,6 +25,35 @@ namespace systems::leal::campello_widgets
     };
 
     /**
+     * @brief Gesture phase of a scroll event (PointerEventKind::scroll).
+     *
+     * Hosts that know when the fingers touch and leave a scroll surface
+     * (macOS trackpad / Magic Mouse via NSEvent.phase/momentumPhase) report
+     * it so scrollables can treat the gesture like a drag, as Flutter does
+     * (its PointerPanZoomStart/Update/End): deltas follow the fingers,
+     * finger-up starts the framework's own fling from the velocity measured
+     * while the fingers moved, and the OS's own momentum events are ignored.
+     * Applying the OS momentum *and* handing off to our own momentum made
+     * flings slow down, speed up again, and slow down a second time.
+     *
+     *  none     — no phase information (classic mouse wheel, or a host that
+     *             doesn't report phases); scrollables fall back to inferring
+     *             the end of the gesture from a gap in events.
+     *  began    — fingers touched the surface (stops a running fling).
+     *  update   — fingers moving; apply the delta.
+     *  ended    — fingers lifted (or the gesture was cancelled): start the fling.
+     *  momentum — OS-generated inertia after `ended`; ignored.
+     */
+    enum class ScrollPhase : uint8_t
+    {
+        none,
+        began,
+        update,
+        ended,
+        momentum,
+    };
+
+    /**
      * @brief The kind of input device that produced a PointerEvent.
      *
      * Mirrors Flutter's `PointerDeviceKind`. Used to pick gesture slop
@@ -119,6 +148,11 @@ namespace systems::leal::campello_widgets
         /// inserted, since some platform adapters (e.g. macOS's run_app.mm)
         /// construct PointerEvents via positional aggregate init.
         uint64_t          timestamp_ms   = 0;
+
+        /// Scroll events only: gesture phase — see ScrollPhase. Appended
+        /// last for the same positional-aggregate-init reason as
+        /// timestamp_ms.
+        ScrollPhase       scroll_phase   = ScrollPhase::none;
     };
 
 } // namespace systems::leal::campello_widgets
