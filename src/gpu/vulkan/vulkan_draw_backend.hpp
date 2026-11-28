@@ -4,6 +4,7 @@
 #include <campello_widgets/ui/color.hpp>
 #include <campello_widgets/ui/paint.hpp>
 #include <campello_gpu/constants/pixel_format.hpp>
+#include <campello_gpu/texture_view.hpp>
 #include <array>
 #include <map>
 #include <memory>
