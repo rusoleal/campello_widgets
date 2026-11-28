@@ -330,7 +330,8 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::up:
             pointer_down_ = false;
             if (panning_ && physics_->allowsMomentum())
-                velocity_px_s_ = -velocity_tracker_.getVelocity();
+                velocity_px_s_ = physics_->flingVelocity(
+                    -velocity_tracker_.getVelocity(event.timestamp_ms));
             panning_ = false;
             arena_entry_.reset();
             // Releasing while overscrolled (spring-back) or with residual
@@ -471,8 +472,11 @@ namespace systems::leal::campello_widgets
             return;
         }
 
-        applyScrollDelta(velocity_px_s_ * dt_s, "momentum");
-        velocity_px_s_ = physics_->applyFriction(velocity_px_s_, dt_s);
+        // Exact step of the physics' fling simulation (see
+        // ScrollPhysics::advanceMomentum) — not `v * dt` followed by a
+        // separate friction step, which overshoots each frame and jumps
+        // on a dropped frame.
+        applyScrollDelta(physics_->advanceMomentum(velocity_px_s_, dt_s), "momentum");
         if (std::abs(velocity_px_s_) >= kMinVelocity)
             FrameScheduler::scheduleFrame();
     }

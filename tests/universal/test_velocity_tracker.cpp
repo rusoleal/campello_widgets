@@ -98,3 +98,79 @@ TEST(VelocityTracker, ResetClearsHistory)
     t.reset();
     EXPECT_FLOAT_EQ(t.getVelocity(), 0.0f);
 }
+
+// ---------------------------------------------------------------------------
+// Flutter-parity behaviour (degree-2 fit, pause detection).
+// ---------------------------------------------------------------------------
+
+namespace
+{
+    // A flick that accelerates up to release: v(t) = 300 + 2700·(t/T)²
+    // px/s over T = 120ms, sampled at 120Hz with millisecond timestamps.
+    // Returns the true finger velocity at the last sample.
+    float feedAcceleratingFlick(cw::VelocityTracker& t)
+    {
+        const double T = 0.12, hz = 120.0;
+        double pos = 0.0, v = 0.0;
+        for (int i = 0; i <= static_cast<int>(T * hz); ++i)
+        {
+            const double s = i / hz;
+            v = 300.0 + 2700.0 * (s / T) * (s / T);
+            if (i > 0) pos += v / hz;
+            t.addPosition(1'000 + static_cast<uint64_t>(std::llround(s * 1000.0)),
+                          static_cast<float>(pos));
+        }
+        return static_cast<float>(v);
+    }
+}
+
+TEST(VelocityTracker, AcceleratingFlickReportsReleaseVelocityNotWindowAverage)
+{
+    // A straight-line fit reports the 100ms-window *average* (~47% of the
+    // release speed for this flick), making momentum start visibly slower
+    // than the finger. The quadratic fit must land close to the real
+    // release speed.
+    cw::VelocityTracker t;
+    const float release_v = feedAcceleratingFlick(t);
+    EXPECT_NEAR(t.getVelocity(), release_v, release_v * 0.10f);
+}
+
+TEST(VelocityTracker, ConstantAccelerationIsRecoveredExactly)
+{
+    // p(t) = 0.5·a·t² with a = 20000 px/s²: velocity at t is a·t.
+    cw::VelocityTracker t;
+    for (int ms = 0; ms <= 80; ms += 8)
+    {
+        const double s = ms / 1000.0;
+        t.addPosition(1'000 + ms, static_cast<float>(0.5 * 20000.0 * s * s));
+    }
+    EXPECT_NEAR(t.getVelocity(), 20000.0f * 0.080f, 5.0f);
+}
+
+TEST(VelocityTracker, HoldBeforeReleaseReportsZero)
+{
+    // Drag fast, then hold still: no more move events arrive, then the
+    // finger lifts 200ms later. Flutter treats >40ms without a sample as
+    // "pointer stopped" — releasing must not fling with stale velocity.
+    cw::VelocityTracker t;
+    for (int i = 0; i <= 5; i++)
+        t.addPosition(1'000 + i * 10, 20.0f * i);
+    ASSERT_GT(t.getVelocity(), 1000.0f);
+    EXPECT_FLOAT_EQ(t.getVelocity(1'050 + 200), 0.0f);
+    // A release right after the last move still flings.
+    EXPECT_GT(t.getVelocity(1'050 + 8), 1000.0f);
+}
+
+TEST(VelocityTracker, SamplesBeforeAPauseAreIgnored)
+{
+    cw::VelocityTracker t;
+    // Fast motion, then a 60ms pause (no events), then slow motion.
+    t.addPosition(1'000, 0.0f);
+    t.addPosition(1'010, 50.0f);
+    t.addPosition(1'020, 100.0f);
+    t.addPosition(1'080, 101.0f);
+    t.addPosition(1'090, 102.0f);
+    t.addPosition(1'100, 103.0f);
+    // Only the slow ~100 px/s motion after the pause counts.
+    EXPECT_NEAR(t.getVelocity(), 100.0f, 20.0f);
+}

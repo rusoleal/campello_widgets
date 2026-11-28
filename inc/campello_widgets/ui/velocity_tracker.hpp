@@ -10,38 +10,48 @@ namespace systems::leal::campello_widgets
 
     /**
      * @brief Estimates a gesture's release velocity from a short history of
-     * (time, position) samples, mirroring Flutter's `VelocityTracker`.
+     * (time, position) samples, mirroring Flutter's `VelocityTracker`
+     * (`packages/flutter/lib/src/gestures/velocity_tracker.dart`).
      *
-     * A naive "delta between the last two samples, divided by the time
-     * between them" estimate is fragile in two common ways: platform event
-     * delivery can batch several pointer-move callbacks together (Wayland,
-     * X11, and others all do this under load), leaving near-zero wall-clock
-     * time between the last few samples even though the underlying gesture
-     * spans tens of milliseconds; and ordinary human deceleration right
-     * before lifting a finger can make the very last sample-to-sample delta
-     * small even when the gesture carried real momentum a few samples
-     * earlier. Both leave a fling feeling like it "immediately stops."
+     * Units: positions are logical pixels (every platform host divides raw
+     * device coordinates by the device pixel ratio before building a
+     * PointerEvent), so the result is logical px/s — the same density-
+     * independent unit as Flutter's `pixelsPerSecond`, Android's dp/s and
+     * iOS's pt/s.
      *
-     * This instead fits a line (least squares) through the samples still
-     * within a short trailing time window of the newest one, which is far
-     * more robust to both problems.
+     * Algorithm (same as Flutter):
+     *  - Walk backward from the newest sample, keeping samples while they
+     *    are within kHorizonMs (100ms) of the newest one AND no gap between
+     *    consecutive samples exceeds kAssumePointerMoveStoppedMs (40ms) —
+     *    a longer gap means the pointer paused, so motion before it is not
+     *    part of the fling.
+     *  - Fit a degree-2 polynomial p(t) = a + b·t + c·t² (least squares,
+     *    t = age relative to the newest sample, so t = 0 is "now") and
+     *    return b, the slope *at the newest sample*.
      *
-     * Samples are timestamped in milliseconds (matching PointerEvent::
-     * timestamp_ms and this codebase's other time plumbing, e.g.
-     * PointerDispatcher::tick()/currentMonotonicMs()) rather than a
-     * std::chrono::steady_clock::time_point -- callers pass the triggering
-     * PointerEvent's own timestamp_ms directly, instead of each call site
-     * calling steady_clock::now() itself. Calling now() deep inside a
-     * recognizer's own event-handling code meant the "timestamp" reflected
-     * whatever unrelated processing overhead ran before that line executed,
-     * not when the input actually occurred -- harmless in an optimized
-     * build, but enough to dilute a fast flick's computed velocity toward
-     * zero in an unoptimized Debug build under a loaded CI runner (the
-     * horizon window below aging out the real samples before release).
+     * A degree-1 (straight line) fit returns the *average* velocity over
+     * the window — roughly the speed ~50ms before release. Real flicks
+     * accelerate right up to lift-off, so a linear fit systematically
+     * under-reports the release speed (by ~50% for a typical flick),
+     * making momentum start visibly slower than the finger was moving.
+     * The quadratic fit tracks that acceleration and reports the speed at
+     * the instant of release, so momentum continues the finger's motion
+     * without a velocity discontinuity.
+     *
+     * Robustness to bursty delivery (several moves stamped with the same
+     * or nearly the same time) comes from fitting over every sample in
+     * the window instead of the last delta.
+     *
+     * Samples are timestamped with the triggering PointerEvent's own
+     * timestamp_ms rather than steady_clock::now() at the call site, so
+     * processing overhead before the call does not distort the timing.
      */
     class VelocityTracker
     {
     public:
+        /// Gap (ms) after which the pointer is considered to have stopped.
+        static constexpr uint64_t kAssumePointerMoveStoppedMs = 40;
+
         void reset() noexcept
         {
             count_ = 0;
@@ -56,48 +66,80 @@ namespace systems::leal::campello_widgets
         }
 
         /**
-         * @brief Least-squares velocity, in position units per second, over
-         * the retained window. Returns 0 with fewer than two usable samples.
+         * @brief Velocity, in logical px/s, at the newest sample.
+         *
+         * @param now_ms Optional timestamp of the event that ends the
+         *     gesture (e.g. the pointer-up's timestamp_ms). If it is more
+         *     than kAssumePointerMoveStoppedMs after the newest sample the
+         *     pointer was held still before release, and the result is 0
+         *     (Flutter's `_sinceLastSample` check). Ignored when 0 or not
+         *     later than the newest sample.
+         *
+         * Returns 0 with fewer than two usable samples. With exactly two
+         * (or when the quadratic system is degenerate), falls back to the
+         * straight-line slope.
          */
-        float getVelocity() const noexcept
+        float getVelocity(uint64_t now_ms = 0) const noexcept
         {
             if (count_ < 2) return 0.0f;
 
             const std::size_t newest_index = (head_ + kMaxSamples - 1) % kMaxSamples;
-            const uint64_t     newest_ms    = samples_[newest_index].timestamp_ms;
+            const uint64_t    newest_ms    = samples_[newest_index].timestamp_ms;
 
-            // Accumulate a linear regression of position against "seconds
-            // before the newest sample" (so the newest sample sits at x=0),
-            // walking backward from the newest sample and stopping once a
-            // sample falls outside the trailing window — an old, slow part
-            // of a long drag shouldn't dilute the velocity of a fast flick
-            // at the very end.
-            double sum_t = 0.0, sum_p = 0.0, sum_tt = 0.0, sum_tp = 0.0;
+            if (now_ms > newest_ms && now_ms - newest_ms > kAssumePointerMoveStoppedMs)
+                return 0.0f;
+
+            // Power sums for the normal equations, with t in milliseconds
+            // (t <= 0, newest sample at t = 0). Positions are taken
+            // relative to the newest sample to keep the sums well scaled.
+            const double p0 = samples_[newest_index].position;
+            double s0 = 0, s1 = 0, s2 = 0, s3 = 0, s4 = 0;
+            double y0 = 0, y1 = 0, y2 = 0;
             int n = 0;
+            uint64_t previous_ms = newest_ms;
             for (std::size_t i = 0; i < count_; ++i)
             {
                 const std::size_t idx = (head_ + kMaxSamples - 1 - i) % kMaxSamples;
                 const Sample& s = samples_[idx];
-                const double t  = static_cast<double>(newest_ms - s.timestamp_ms) / 1000.0;
-                if (t > kHorizonSeconds) break;
+                if (s.timestamp_ms > newest_ms) break; // clock went backwards
+                const uint64_t age = newest_ms - s.timestamp_ms;
+                const uint64_t gap = previous_ms - s.timestamp_ms;
+                if (age > kHorizonMs || gap > kAssumePointerMoveStoppedMs) break;
+                previous_ms = s.timestamp_ms;
 
-                sum_t  += t;
-                sum_p  += s.position;
-                sum_tt += t * t;
-                sum_tp += t * s.position;
+                const double t  = -static_cast<double>(age);
+                const double y  = static_cast<double>(s.position) - p0;
+                const double t2 = t * t;
+                s0 += 1.0;  s1 += t;  s2 += t2;  s3 += t2 * t;  s4 += t2 * t2;
+                y0 += y;    y1 += t * y;  y2 += t2 * y;
                 ++n;
             }
             if (n < 2) return 0.0f;
 
-            const double mean_t = sum_t / n;
-            const double mean_p = sum_p / n;
-            const double denom  = sum_tt - n * mean_t * mean_t;
-            if (std::abs(denom) < 1e-9) return 0.0f;
+            if (n >= 3)
+            {
+                // Solve [s0 s1 s2; s1 s2 s3; s2 s3 s4]·[a b c] = [y0 y1 y2]
+                // for b by Cramer's rule.
+                const double det = s0 * (s2 * s4 - s3 * s3)
+                                 - s1 * (s1 * s4 - s3 * s2)
+                                 + s2 * (s1 * s3 - s2 * s2);
+                // Scale-aware degeneracy check (e.g. only two distinct
+                // timestamps among the samples).
+                const double scale = s0 * s2 * s4;
+                if (scale > 0.0 && std::abs(det) > 1e-9 * scale)
+                {
+                    const double det_b = s0 * (y1 * s4 - s3 * y2)
+                                       - y0 * (s1 * s4 - s3 * s2)
+                                       + s2 * (s1 * y2 - y1 * s2);
+                    return static_cast<float>(det_b / det * 1000.0);
+                }
+            }
 
-            // Slope of position over t, where t counts backward from "now"
-            // (t=0) — negate to get the forward-time velocity.
-            const double slope = (sum_tp - n * mean_t * mean_p) / denom;
-            return static_cast<float>(-slope);
+            // Linear fallback.
+            const double denom = s0 * s2 - s1 * s1;
+            if (std::abs(denom) < 1e-9) return 0.0f;
+            const double slope = (s0 * y1 - s1 * y0) / denom;
+            return static_cast<float>(slope * 1000.0);
         }
 
     private:
@@ -107,8 +149,8 @@ namespace systems::leal::campello_widgets
             float    position     = 0.0f;
         };
 
-        static constexpr std::size_t kMaxSamples     = 20;
-        static constexpr double      kHorizonSeconds = 0.1; // 100ms, matches Flutter's default.
+        static constexpr std::size_t kMaxSamples = 20;  // Flutter's _historySize.
+        static constexpr uint64_t    kHorizonMs  = 100; // Flutter's _horizonMilliseconds.
 
         std::array<Sample, kMaxSamples> samples_{};
         std::size_t                     head_  = 0;
