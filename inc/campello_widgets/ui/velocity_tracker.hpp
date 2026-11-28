@@ -65,6 +65,12 @@ namespace systems::leal::campello_widgets
             if (count_ < kMaxSamples) ++count_;
         }
 
+        /// Timestamp (ms) of the newest sample, or 0 when there are none.
+        uint64_t newestTimestampMs() const noexcept
+        {
+            return count_ == 0 ? 0 : samples_[(head_ + kMaxSamples - 1) % kMaxSamples].timestamp_ms;
+        }
+
         /**
          * @brief Velocity, in logical px/s, at the newest sample.
          *

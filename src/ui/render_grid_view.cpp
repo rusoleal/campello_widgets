@@ -414,6 +414,41 @@ namespace systems::leal::campello_widgets
             const float delta    = event.scroll_delta_y;
             const bool  dominant = std::abs(event.scroll_delta_y) >= std::abs(event.scroll_delta_x);
             last_pointer_timestamp_ms_ = event.timestamp_ms;
+            // Phased trackpad / Magic Mouse gesture — see ScrollPhase.
+            if (event.scroll_phase == ScrollPhase::momentum)
+                break; // our own fling (started on `ended`) replaces it
+            if (event.scroll_phase == ScrollPhase::began)
+            {
+                // Fingers down: catch any running fling, like a touch-down.
+                velocity_px_s_          = 0.0f;
+                wheel_momentum_pending_ = false;
+                wheel_velocity_tracker_.reset();
+            }
+            else if (event.scroll_phase == ScrollPhase::ended)
+            {
+                // Fingers up: fling from the velocity measured while they
+                // moved (0 if they rested >40ms first). Only the scrollable
+                // that applied this gesture's deltas has tracker samples.
+                // Fling clock: the later of the last applied delta and the
+                // last frame already drawn (onTick keeps last_tick_ms_ at
+                // the previous frame during the gesture). Starting it at
+                // `ended` — which macOS delivers some ms after the last
+                // delta — left that gap with no motion: a dip in speed
+                // right at release. Starting it at the last delta instead
+                // made the first frame catch the whole gap up at once: a
+                // spike. This way the first frame after release moves
+                // exactly one frame's worth at the release velocity.
+                const uint64_t last_delta_ms = wheel_velocity_tracker_.newestTimestampMs();
+                velocity_px_s_ = physics_->flingVelocity(
+                    wheel_velocity_tracker_.getVelocity(event.timestamp_ms));
+                wheel_velocity_tracker_.reset();
+                wheel_momentum_pending_ = false;
+                last_scroll_event_ms_   = 0;                  // open onTick's gate now
+                last_tick_ms_           = std::max(last_tick_ms_, last_delta_ms);
+                if (raw_offset_ < min_extent_ || raw_offset_ > max_extent_ || std::abs(velocity_px_s_) >= kMinVelocity)
+                    FrameScheduler::scheduleFrame();
+                break;
+            }
             // See RenderListView::onPointerEvent()'s scroll case doc —
             // while overscrolled, drop trailing sub-threshold deltas
             // (macOS's own momentum-tail trickle) entirely rather than
@@ -432,7 +467,8 @@ namespace systems::leal::campello_widgets
                     last_scroll_event_ms_ = static_cast<uint64_t>(
                         std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now().time_since_epoch()).count());
-                    wheel_momentum_pending_ = true;
+                    // Phased gestures start their fling on `ended` instead.
+                    wheel_momentum_pending_ = (event.scroll_phase == ScrollPhase::none);
                 }
                 d->signalResolver().registerHandler([this, delta] { applyScrollDelta(delta, "wheel"); }, dominant);
             }

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Flings started slower than the finger and stopped too soon.** The release velocity was the average speed over the last 100 ms (a straight-line fit), which is about half the real speed on a flick that speeds up before lift-off. `VelocityTracker` now fits a degree-2 curve and reads the speed at the moment of release, as Flutter's does, and ignores motion before a pause of more than 40 ms: `getVelocity(up_timestamp)` returns 0 when the finger rested before lifting.
+- **Momentum decayed about 2.3 times faster than Flutter.** `ClampingScrollPhysics` now follows Flutter's `ClampingScrollSimulation` (Android's spline fling, which stops at a fixed end time) and `BouncingScrollPhysics` follows `FrictionSimulation(0.135)` (iOS's deceleration rate). Each frame steps the simulation exactly, so the curve no longer depends on the frame rate or on dropped frames.
+- **Magic Mouse and trackpad flings on macOS slowed down, sped up again, then slowed down a second time.** After the fingers lifted, the scroll views applied macOS's own momentum events and then started their own momentum on top of them. As in Flutter, a phased scroll gesture is now handled like a drag: fingers down stops a running fling, deltas follow the fingers, and fingers up starts the framework's fling from the speed measured while they moved. The OS momentum events are ignored. The first frame after release moves one frame's worth at the release speed, so there is no dip or jump at the moment of release.
+- `vulkan_draw_backend.hpp` didn't include `campello_gpu/texture_view.hpp` and only compiled when another file in the same Unity Build batch did.
+
+### Added
+- `ScrollPhase` and `PointerEvent::scroll_phase` (`none`, `began`, `update`, `ended`, `momentum`). The macOS host fills it from `NSEvent.phase` and `momentumPhase`. Scroll events without phases (mouse wheels, other platforms) behave as before.
+- `ScrollPhysics::minFlingVelocity()`, `maxFlingVelocity()` and `flingVelocity()`. No fling below 50 px/s (100 for `BouncingScrollPhysics`); speed is capped at 8000 px/s, as in Flutter.
+- `VelocityTracker::newestTimestampMs()`.
+
+### Changed
+- **Breaking:** `ScrollPhysics::applyFriction(velocity, dt)` is replaced by `advanceMomentum(velocity&, dt)`, which returns the distance travelled and updates the velocity. Custom `ScrollPhysics` subclasses must implement it.
+- Scroll velocities are documented as logical px/s. Every platform host already divides by the device pixel ratio, so the physics is the same at any screen density.
+
 ## [0.19.1] - 2026-11-26
 
 ### Fixed
