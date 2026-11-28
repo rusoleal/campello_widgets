@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-28
+
 ### Fixed
 - **Flings started slower than the finger and stopped too soon.** The release velocity was the average speed over the last 100 ms (a straight-line fit), which is about half the real speed on a flick that speeds up before lift-off. `VelocityTracker` now fits a degree-2 curve and reads the speed at the moment of release, as Flutter's does, and ignores motion before a pause of more than 40 ms: `getVelocity(up_timestamp)` returns 0 when the finger rested before lifting.
 - **Momentum decayed about 2.3 times faster than Flutter.** `ClampingScrollPhysics` now follows Flutter's `ClampingScrollSimulation` (Android's spline fling, which stops at a fixed end time) and `BouncingScrollPhysics` follows `FrictionSimulation(0.135)` (iOS's deceleration rate). Each frame steps the simulation exactly, so the curve no longer depends on the frame rate or on dropped frames.
