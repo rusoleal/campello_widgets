@@ -699,8 +699,7 @@ namespace systems::leal::campello_widgets
         }
         else if (std::abs(velocity_x_) >= kMinVelocity)
         {
-            velocity_x_ = physics_->applyFriction(velocity_x_, dt_s);
-            delta_x     = velocity_x_ * dt_s;
+            delta_x     = physics_->advanceMomentum(velocity_x_, dt_s);
         }
         else
         {
@@ -717,8 +716,7 @@ namespace systems::leal::campello_widgets
         }
         else if (std::abs(velocity_y_) >= kMinVelocity)
         {
-            velocity_y_ = physics_->applyFriction(velocity_y_, dt_s);
-            delta_y     = velocity_y_ * dt_s;
+            delta_y     = physics_->advanceMomentum(velocity_y_, dt_s);
         }
         else
         {

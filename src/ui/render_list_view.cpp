@@ -436,7 +436,8 @@ namespace systems::leal::campello_widgets
                 // Negated to match applyScrollDelta(-delta)'s sign
                 // convention in the move handler above — the tracker
                 // reports the finger's own raw velocity, not the content's.
-                velocity_px_s_ = -velocity_tracker_.getVelocity();
+                velocity_px_s_ = physics_->flingVelocity(
+                    -velocity_tracker_.getVelocity(event.timestamp_ms));
             panning_ = false;
             arena_entry_.reset();
             // Releasing while overscrolled (spring-back) or with residual
@@ -607,8 +608,11 @@ namespace systems::leal::campello_widgets
 
         if (std::abs(velocity_px_s_) < kMinVelocity) { velocity_px_s_ = 0.0f; return; }
 
-        applyScrollDelta(velocity_px_s_ * dt_s, "momentum");
-        velocity_px_s_ = physics_->applyFriction(velocity_px_s_, dt_s);
+        // Exact step of the physics' fling simulation (see
+        // ScrollPhysics::advanceMomentum) — not `v * dt` followed by a
+        // separate friction step, which overshoots each frame and jumps
+        // on a dropped frame.
+        applyScrollDelta(physics_->advanceMomentum(velocity_px_s_, dt_s), "momentum");
         // Same reasoning as the spring-back branch above: without
         // self-requesting the next frame, momentum only ever applies once
         // — whatever frame was already in flight when the pointer lifted —

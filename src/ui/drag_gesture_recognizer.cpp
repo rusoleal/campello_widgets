@@ -101,7 +101,10 @@ namespace systems::leal::campello_widgets
         case PointerEventKind::up:
             if (dragging_)
             {
-                const Offset velocity{vx_.getVelocity(), vy_.getVelocity()};
+                // The up's timestamp lets the tracker report 0 when the pointer
+                // was held still before release (see VelocityTracker::getVelocity).
+                const Offset velocity{vx_.getVelocity(event.timestamp_ms),
+                                      vy_.getVelocity(event.timestamp_ms)};
                 fireEnd(DragEndDetails{velocity, primaryVelocityOf(velocity)});
             }
             has_down_ = false;

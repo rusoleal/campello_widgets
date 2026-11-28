@@ -461,8 +461,10 @@ namespace systems::leal::campello_widgets
             pointer_down_ = false;
             if (panning_ && physics_->allowsMomentum())
             {
-                velocity_x_ = -velocity_tracker_x_.getVelocity();
-                velocity_y_ = -velocity_tracker_y_.getVelocity();
+                velocity_x_ = physics_->flingVelocity(
+                    -velocity_tracker_x_.getVelocity(event.timestamp_ms));
+                velocity_y_ = physics_->flingVelocity(
+                    -velocity_tracker_y_.getVelocity(event.timestamp_ms));
             }
             panning_ = false;
             arena_entry_.reset();
@@ -573,8 +575,7 @@ namespace systems::leal::campello_widgets
         }
         else if (std::abs(velocity_x_) >= kMinVelocity)
         {
-            velocity_x_  = physics_->applyFriction(velocity_x_, dt_s);
-            delta_x      = velocity_x_ * dt_s;
+            delta_x      = physics_->advanceMomentum(velocity_x_, dt_s);
             needs_update = true;
         }
         else
@@ -593,8 +594,7 @@ namespace systems::leal::campello_widgets
         }
         else if (std::abs(velocity_y_) >= kMinVelocity)
         {
-            velocity_y_  = physics_->applyFriction(velocity_y_, dt_s);
-            delta_y      = velocity_y_ * dt_s;
+            delta_y      = physics_->advanceMomentum(velocity_y_, dt_s);
             needs_update = true;
         }
         else

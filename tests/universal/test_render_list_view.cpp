@@ -319,6 +319,11 @@ TEST(RenderListView, MomentumContinuesAfterRelease)
 
     cw::PointerEvent up;
     up.kind = cw::PointerEventKind::up;
+    // Same synthetic clock as the moves above: an unset timestamp would be
+    // stamped with real monotonic time by the dispatcher, which reads as
+    // "pointer held still for ages before release" (VelocityTracker's
+    // 40ms pause check) and correctly suppresses the fling.
+    up.timestamp_ms = t + 8;
     dispatcher.handlePointerEvent(up);
 
     const int index_at_release = lv.firstVisibleIndex();
@@ -711,6 +716,11 @@ TEST(RenderListView, MomentumIsNotRedirectedEvenWithHookSet)
 
     cw::PointerEvent up;
     up.kind = cw::PointerEventKind::up;
+    // Same synthetic clock as the moves above: an unset timestamp would be
+    // stamped with real monotonic time by the dispatcher, which reads as
+    // "pointer held still for ages before release" (VelocityTracker's
+    // 40ms pause check) and correctly suppresses the fling.
+    up.timestamp_ms = t + 8;
     dispatcher.handlePointerEvent(up);
 
     // velocity_px_s_ was seeded from the drag above; drive real ticks the

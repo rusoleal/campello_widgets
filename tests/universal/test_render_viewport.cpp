@@ -448,6 +448,11 @@ TEST(RenderViewport, MomentumContinuesAfterRelease)
 
     cw::PointerEvent up;
     up.kind = cw::PointerEventKind::up;
+    // Same synthetic clock as the moves above: an unset timestamp would be
+    // stamped with real monotonic time by the dispatcher, which reads as
+    // "pointer held still for ages before release" (VelocityTracker's
+    // 40ms pause check) and correctly suppresses the fling.
+    up.timestamp_ms = t + 8;
     dispatcher.handlePointerEvent(up);
 
     const float offset_at_release = controller->offset();
@@ -870,6 +875,11 @@ TEST(RenderViewport, MomentumIsNotRedirectedEvenWithHookSet)
 
     cw::PointerEvent up;
     up.kind = cw::PointerEventKind::up;
+    // Same synthetic clock as the moves above: an unset timestamp would be
+    // stamped with real monotonic time by the dispatcher, which reads as
+    // "pointer held still for ages before release" (VelocityTracker's
+    // 40ms pause check) and correctly suppresses the fling.
+    up.timestamp_ms = t + 8;
     dispatcher.handlePointerEvent(up);
 
     dispatcher.tick(nowMs());

@@ -12,7 +12,8 @@ namespace systems::leal::campello_widgets
      *
      * A ScrollPhysics object is a stateless strategy that governs how a
      * scrollable render object responds to boundary conditions and how its
-     * momentum decays over time.
+     * momentum decays over time. Distances are logical pixels and
+     * velocities logical px/s (density-independent, like Flutter).
      *
      * Standard implementations:
      *  - ClampingScrollPhysics         — hard clamp, no overscroll (default)
@@ -38,13 +39,43 @@ namespace systems::leal::campello_widgets
             float max_scroll_extent) const noexcept = 0;
 
         /**
-         * @brief Decays a scroll velocity over one tick.
+         * @brief Advances the momentum (ballistic) phase by one tick.
          *
-         * @param velocity   Current velocity in logical pixels per second.
-         * @param dt_seconds Elapsed time since the last tick, in seconds.
-         * @return New velocity after friction is applied.
+         * Integrates this physics' fling simulation exactly over
+         * `dt_seconds`, starting from `velocity`: returns the distance
+         * travelled during the interval and replaces `velocity` with the
+         * velocity at its end. Every simulation used here is memoryless
+         * (its future depends only on the current velocity, not on when
+         * the fling started), so stepping tick by tick traces exactly the
+         * same curve as evaluating Flutter's `Simulation.x(t)` from the
+         * release instant, independent of frame rate or dropped frames.
+         *
+         * Units: logical px and logical px/s (density-independent).
          */
-        virtual float applyFriction(float velocity, float dt_seconds) const noexcept = 0;
+        virtual float advanceMomentum(float& velocity, float dt_seconds) const noexcept = 0;
+
+        /// Release speeds below this (logical px/s) do not fling (Flutter's minFlingVelocity).
+        virtual float minFlingVelocity() const noexcept { return kDefaultMinFlingVelocity; }
+
+        /// Release speeds are clamped to this (logical px/s) (Flutter's maxFlingVelocity).
+        virtual float maxFlingVelocity() const noexcept { return kDefaultMaxFlingVelocity; }
+
+        /**
+         * @brief Turns a raw drag-release velocity into the fling's start
+         * velocity: 0 below minFlingVelocity(), clamped to ±maxFlingVelocity().
+         */
+        float flingVelocity(float release_velocity) const noexcept
+        {
+            if (!allowsMomentum()) return 0.0f;
+            if (std::abs(release_velocity) < minFlingVelocity()) return 0.0f;
+            const float max_v = maxFlingVelocity();
+            return std::clamp(release_velocity, -max_v, max_v);
+        }
+
+        /// Flutter's kMinFlingVelocity (gestures/constants.dart).
+        static constexpr float kDefaultMinFlingVelocity = 50.0f;
+        /// Flutter's kMaxFlingVelocity (gestures/constants.dart).
+        static constexpr float kDefaultMaxFlingVelocity = 8000.0f;
 
         /** @brief Whether momentum scrolling is allowed at all. */
         virtual bool allowsMomentum() const noexcept = 0;
@@ -53,14 +84,23 @@ namespace systems::leal::campello_widgets
     // -------------------------------------------------------------------------
 
     /**
-     * @brief Hard-clamped physics — no overscroll.
+     * @brief Hard-clamped physics — no overscroll (Android feel).
      *
-     * Position is clamped to [min, max]. Momentum decays exponentially and
-     * stops immediately at boundaries.
+     * Position is clamped to [min, max]. Momentum follows Flutter's
+     * `ClampingScrollSimulation`, itself a port of Android's
+     * `OverScroller` spline fling: for a fling starting at velocity v the
+     * total duration is T(v) = D_RATE·INFLEXION·(|v|/v_ref)^(1/(D_RATE−1))
+     * and the position follows x(t) = D·(1 − (1 − t/T)^D_RATE), so the
+     * velocity is v(t) = v·(1 − t/T)^(D_RATE−1) — starting exactly at the
+     * release velocity and reaching zero at t = T (a fling has a definite
+     * end instead of fading out exponentially).
      */
     class ClampingScrollPhysics final : public ScrollPhysics
     {
     public:
+        /// Android's mFlingFriction / ViewConfiguration.getScrollFriction().
+        static constexpr double kFriction = 0.015;
+
         float applyBoundaryConditions(
             float position,
             float min_scroll_extent,
@@ -69,13 +109,48 @@ namespace systems::leal::campello_widgets
             return std::clamp(position, min_scroll_extent, max_scroll_extent);
         }
 
-        float applyFriction(float velocity, float dt_seconds) const noexcept override
+        float advanceMomentum(float& velocity, float dt_seconds) const noexcept override
         {
-            // Exponential decay — roughly halves every ~0.15 s.
-            return velocity * std::pow(0.01f, dt_seconds);
+            const double v = velocity;
+            if (v == 0.0 || dt_seconds <= 0.0f) return 0.0f;
+
+            const double duration = flingDuration(v);
+            const double distance = v * duration / kDecelerationRate;
+            if (dt_seconds >= duration)
+            {
+                velocity = 0.0f;
+                return static_cast<float>(distance);
+            }
+            const double remaining = 1.0 - dt_seconds / duration;
+            velocity = static_cast<float>(v * std::pow(remaining, kDecelerationRate - 1.0));
+            return static_cast<float>(distance * (1.0 - std::pow(remaining, kDecelerationRate)));
         }
 
         bool allowsMomentum() const noexcept override { return true; }
+
+        /// Total duration (s) of a fling starting at `velocity` (logical px/s).
+        static double flingDuration(double velocity) noexcept
+        {
+            const double reference_velocity = kFriction * kPhysicalCoeff / kInflexion;
+            const double android_duration =
+                std::pow(std::abs(velocity) / reference_velocity, 1.0 / (kDecelerationRate - 1.0));
+            // Flutter finishes a bit sooner than Android to travel the same distance.
+            return kDecelerationRate * kInflexion * android_duration;
+        }
+
+        /// Total distance (logical px, signed) of a fling starting at `velocity`.
+        static double flingDistance(double velocity) noexcept
+        {
+            return velocity * flingDuration(velocity) / kDecelerationRate;
+        }
+
+    private:
+        // Android's DECELERATION_RATE = log(0.78) / log(0.9) ≈ 2.358.
+        static constexpr double kDecelerationRate = 2.3582018154259448;
+        // Android's INFLEXION.
+        static constexpr double kInflexion = 0.35;
+        // Android's mPhysicalCoeff in logical px/s²: g · in/m · px/in(160) · 0.84.
+        static constexpr double kPhysicalCoeff = 9.80665 * 39.37 * 160.0 * 0.84;
     };
 
     // -------------------------------------------------------------------------
@@ -132,10 +207,28 @@ namespace systems::leal::campello_widgets
                    (kMaxOverscroll + kRubberBandCoefficient * over);
         }
 
-        float applyFriction(float velocity, float dt_seconds) const noexcept override
+    public:
+        /// UIScrollView.decelerationRate .normal (0.998 per ms): 0.998^1000 ≈ 0.135 per second.
+        static constexpr double kDrag = 0.135;
+
+        /**
+         * Flutter's `FrictionSimulation(0.135, …)` as used by
+         * `BouncingScrollSimulation`: v(t) = v·0.135^t and
+         * x(t) = v·(0.135^t − 1)/ln(0.135) — exponential decay at the
+         * same rate as a native iOS scroll view.
+         */
+        float advanceMomentum(float& velocity, float dt_seconds) const noexcept override
         {
-            return velocity * std::pow(0.01f, dt_seconds);
+            const double v = velocity;
+            if (v == 0.0 || dt_seconds <= 0.0f) return 0.0f;
+            const double decay = std::pow(kDrag, static_cast<double>(dt_seconds));
+            velocity = static_cast<float>(v * decay);
+            return static_cast<float>(v * (decay - 1.0) / std::log(kDrag));
         }
+
+        /// Flutter: kMinFlingVelocity · 2 — this simulation glides further,
+        /// so it needs a more deliberate flick to start.
+        float minFlingVelocity() const noexcept override { return kDefaultMinFlingVelocity * 2.0f; }
 
         bool allowsMomentum() const noexcept override { return true; }
     };
@@ -156,8 +249,9 @@ namespace systems::leal::campello_widgets
             return min_scroll_extent;
         }
 
-        float applyFriction(float /*velocity*/, float /*dt_seconds*/) const noexcept override
+        float advanceMomentum(float& velocity, float /*dt_seconds*/) const noexcept override
         {
+            velocity = 0.0f;
             return 0.0f;
         }
 
